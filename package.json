@@ -4,7 +4,7 @@
   "main": "web/Index/server.js",
   "license": "UNLICENSED",
   "engines": {
-    "node": "20.10.x",
+    "node": "20.19.x",
     "npm": "10.x"
   },
   "scripts": {
