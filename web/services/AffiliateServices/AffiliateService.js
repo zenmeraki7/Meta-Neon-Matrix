@@ -4,7 +4,7 @@
 // import { sendEmail } from "../../utils/emailHelper.js";
 // import { generateReferralCode } from "../../utils/referralUtils.js";
 // import { OAuth2Client } from "google-auth-library";
-// import { getReferralWelcomeEmailContent } from "../../Config/templates/referralTemplate.js";
+// import { getReferralWelcomeEmailContent } from "../../config/templates/referralTemplate.js";
 
 // export class ReferralService {
 //   constructor() {}

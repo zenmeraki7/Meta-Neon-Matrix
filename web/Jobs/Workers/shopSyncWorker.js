@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import { prisma } from "../../config/database.js";
 import logger from "../../utils/loggerUtils.js";
 import { getSession } from "../../utils/sessionHandler.js";

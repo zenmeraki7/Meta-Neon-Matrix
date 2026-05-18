@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import moment from "moment-timezone";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 import logger from "../../utils/loggerUtils.js";

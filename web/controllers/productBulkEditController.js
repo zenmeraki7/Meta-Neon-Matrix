@@ -1,4 +1,4 @@
-import { translatedEditHistoryStatuses } from "../Config/constants.js";
+import { translatedEditHistoryStatuses } from "../config/constants.js";
 import UndoEditService from "../services/productService/productBulkUndoService.js";
 import ProductBulkService from "../services/productService/productBulkEditService.js";
 import { Services } from "../services/productService/productFilterService.js";

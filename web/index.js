@@ -33,7 +33,7 @@ import metricsRoute from "./routes/metricsRoute.js";
 
 // DB + Redis
 import prisma from "./config/database.js";
-import { connection as redis } from "./Config/redis.js";
+import { connection as redis } from "./config/redis.js";
 
 // Socket
 import { initSocket } from "./socket.js";

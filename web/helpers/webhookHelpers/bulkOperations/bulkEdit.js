@@ -3,7 +3,7 @@ import {
   getSession,
   getShopOwnerEmailAddress,
 } from "../../../utils/sessionHandler.js";
-import { productEditConfirmationEmailHTML } from "../../../Config/templates/productEditConfirmationTemplate.js";
+import { productEditConfirmationEmailHTML } from "../../../config/templates/productEditConfirmationTemplate.js";
 import { sendEmail } from "../../../utils/emailHelper.js";
 import { addbulkUndoJob } from "../../../Jobs/Queues/bulkUndoJob.js";
 import { addbulkEditJob } from "../../../Jobs/Queues/bulkEditJob.js";

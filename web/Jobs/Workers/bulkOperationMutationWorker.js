@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import { handleProductEditOperation } from "../../helpers/webhookHelpers/bulkOperations/bulkEdit.js";
 import { logWebhookError } from "../../utils/errorLogUtils.js";
 import logger from "../../utils/loggerUtils.js";

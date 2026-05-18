@@ -12,7 +12,7 @@ import { getUpdatedProducts } from "../../helpers/productBulkOperationHelpers/pr
 import { addbulkEditJob } from "../../Jobs/Queues/bulkEditJob.js";
 import CacheService from "../../utils/cacheService.js";
 import { createMultiLanguage } from "../../utils/googleTranslator.js";
-import { FIELD_TRANSLATIONS } from "../../Config/constants.js";
+import { FIELD_TRANSLATIONS } from "../../config/constants.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { FIELD_CONFIGS } from "../../helpers/productBulkOperationHelpers/constants.js";
 import { prisma } from "../../config/database.js";

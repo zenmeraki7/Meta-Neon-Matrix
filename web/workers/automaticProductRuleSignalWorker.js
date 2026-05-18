@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { connection } from "../Config/redis.js";
+import { connection } from "../config/redis.js";
 import {
   AUTOMATIC_PRODUCT_RULE_SIGNAL_QUEUE,
   reserveAutomaticProductRuleRunFromSignal,
