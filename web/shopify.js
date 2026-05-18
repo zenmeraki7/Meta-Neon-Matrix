@@ -1,8 +1,4 @@
-import {
-  BillingInterval,
-  LATEST_API_VERSION,
-  DeliveryMethod,
-} from "@shopify/shopify-api";
+import { BillingInterval } from "@shopify/shopify-api";
 import { shopifyApp } from "@shopify/shopify-app-express";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import dotenv from "dotenv";
@@ -10,16 +6,16 @@ import PrivacyWebhookHandlers from "./privacy.js";
 
 dotenv.config();
 
-// Set SSL environment variables that pg will pick up
-process.env.PGSSLMODE = 'require';
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+process.env.PGSSLMODE = "require";
 
 const DATABASE_URL = process.env.DATABASE_URL;
+
 if (!DATABASE_URL) {
-  throw new Error("DATABASE_URL is not defined – required for Shopify session storage");
+  throw new Error(
+    "DATABASE_URL is not defined – required for Shopify session storage"
+  );
 }
 
-// Just pass the connection string - the environment variables will handle SSL
 const sessionStorage = new PostgreSQLSessionStorage(DATABASE_URL);
 
 export const billingConfig = {
@@ -47,7 +43,7 @@ export const billingConfig = {
 
 const shopify = shopifyApp({
   api: {
-    apiVersion: LATEST_API_VERSION,
+    apiVersion: "2025-10",
     future: {
       customerAddressDefaultFix: true,
       lineItemBilling: true,
