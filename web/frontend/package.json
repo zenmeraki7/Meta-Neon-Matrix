@@ -11,10 +11,10 @@
     "coverage": "vitest run --coverage"
   },
   "type": "module",
-  "engines": {
-    "node": "20.10.x",
-    "npm": "10.x"
-  },
+ "engines": {
+  "node": "22.x",
+  "npm": "10.x"
+},
   "dependencies": {
     "@emotion/react": "^11.13.3",
     "@emotion/styled": "^11.13.0",

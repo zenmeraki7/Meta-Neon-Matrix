@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "main": "web/Index/server.js",
   "license": "UNLICENSED",
-  "engines": {
-    "node": "20.19.x",
-    "npm": "10.x"
-  },
+"engines": {
+  "node": "22.x",
+  "npm": "10.x"
+},
   "scripts": {
     "shopify": "shopify",
     "build": "npm install -g @shopify/cli @shopify/app && cd web && npm install && npm run build",
