@@ -189,21 +189,29 @@ async function upsertReconcileSignal({
 }) {
   if (!shop || !entityType || !entityId) return;
 
+  const normalizedEntityId = String(entityId);
+
   const signalId = `mrs_${hashStableId(
-  JSON.stringify({
-    shop,
-    entityType,
-    entityId,
-  })
-)}`;
+    JSON.stringify({
+      shop,
+      entityType,
+      entityId: normalizedEntityId,
+    })
+  )}`;
 
   await prisma.mirrorReconcileSignal.upsert({
-    where: { id: signalId },
+    where: {
+      shop_entityType_entityId: {
+        shop,
+        entityType,
+        entityId: normalizedEntityId,
+      },
+    },
     create: {
       id: signalId,
       shop,
       entityType,
-      entityId,
+      entityId: normalizedEntityId,
       topic,
       status: "pending",
       signalCount: 1,
