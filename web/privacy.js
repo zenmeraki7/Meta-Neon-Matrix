@@ -39,12 +39,45 @@ function normalizeWebhookEntityId(payload) {
   );
 }
 
+function hashStableId(value) {
+  return crypto
+    .createHash("sha256")
+    .update(String(value || "unknown"))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function buildWebhookIdentityParts({ topic, shop, webhookId, entityId }) {
+  return JSON.stringify({
+    topic: topic || "UNKNOWN_TOPIC",
+    shop: shop || "UNKNOWN_SHOP",
+    webhookId: webhookId || null,
+    entityId: entityId || null,
+  });
+}
+
 function buildWebhookDeliveryId({ topic, shop, webhookId, entityId }) {
-  return webhookId || `${topic}:${shop}:${entityId || "unknown"}`;
+  const rawIdentity =
+    webhookId ||
+    buildWebhookIdentityParts({
+      topic,
+      shop,
+      webhookId,
+      entityId,
+    });
+
+  return `wh_${hashStableId(rawIdentity)}`;
 }
 
 function buildWebhookDedupeKey({ topic, shop, webhookId, entityId }) {
-  return `webhook:${topic}:${shop}:${webhookId || entityId || "unknown"}`;
+  return `wh_dedupe_${hashStableId(
+    buildWebhookIdentityParts({
+      topic,
+      shop,
+      webhookId,
+      entityId,
+    })
+  )}`;
 }
 
 async function reserveWebhookDelivery({
@@ -59,13 +92,40 @@ async function reserveWebhookDelivery({
   const payloadHash = createPayloadHash(payload);
 
   try {
+    const existing = await prisma.webhookDelivery.findUnique({
+      where: { dedupeKey },
+      select: {
+        id: true,
+        status: true,
+        payloadHash: true,
+      },
+    });
+
+    if (existing) {
+     await prisma.webhookDelivery
+  .update({
+    where: { dedupeKey },
+    data: {
+      attemptCount: { increment: 1 },
+      updatedAt: new Date(),
+    },
+  })
+  .catch(() => {});
+
+      return {
+        accepted: false,
+        deliveryId: existing.id,
+        payloadHash,
+      };
+    }
+
     await prisma.webhookDelivery.create({
       data: {
         id,
         topic,
         shop,
         webhookId: webhookId || null,
-        entityId: entityId || null,
+        entityId: entityId ? String(entityId) : null,
         dedupeKey,
         payloadHash,
         status: "RECEIVED",
@@ -75,6 +135,14 @@ async function reserveWebhookDelivery({
 
     return { accepted: true, deliveryId: id, payloadHash };
   } catch (error) {
+    logger.error("Webhook reservation failed", {
+      topic,
+      shop,
+      webhookId,
+      entityId,
+      message: error.message,
+    });
+
     return { accepted: false, deliveryId: id, payloadHash };
   }
 }
@@ -121,7 +189,13 @@ async function upsertReconcileSignal({
 }) {
   if (!shop || !entityType || !entityId) return;
 
-  const signalId = `${shop}:${entityType}:${entityId}`;
+  const signalId = `mrs_${hashStableId(
+  JSON.stringify({
+    shop,
+    entityType,
+    entityId,
+  })
+)}`;
 
   await prisma.mirrorReconcileSignal.upsert({
     where: { id: signalId },

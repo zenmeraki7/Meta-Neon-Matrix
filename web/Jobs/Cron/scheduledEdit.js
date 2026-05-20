@@ -12,7 +12,7 @@ import {
   buildExecutionError,
   normalizeUndoState,
 } from "../../services/bulkEditExecutionStateService.js";
-
+import {joinSafeJobId} from "../../utils/jobQueueUtils.js";
 // ✅ Prisma
 import { prisma } from "../../config/database.js";
 
@@ -134,7 +134,12 @@ export const updateProducts = async (historyId, isUndo, shopFromJob = null) => {
             { historyId: history.id, shop: history.shop },
             {
               delay: 60_000,
-              jobId: `scheduled-undo-retry:${history.shop}:${history.id}:${Date.now()}`,
+              jobId: joinSafeJobId(
+  "scheduled-undo-retry",
+  history.shop,
+  history.id,
+  Date.now()
+),
             },
           );
 

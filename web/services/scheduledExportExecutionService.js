@@ -21,6 +21,7 @@ import {
   releaseExclusiveShopWork,
 } from "./shopWorkLeaseService.js";
 import { EXPORT_EXECUTION_STATES } from "./exportExecutionStateService.js";
+import { joinSafeJobId } from "../utils/jobQueueUtils.js";
 
 export const SCHEDULED_EXPORT_EXECUTION_QUEUE =
   process.env.SCHEDULED_EXPORT_EXECUTION_QUEUE || "scheduled-export-execution";
@@ -125,7 +126,7 @@ async function deferScheduledExportRun(runId, shop, reason, delay = 60_000) {
     runId,
     shop,
     delay,
-    jobId: `${runId}:retry`
+    jobId: joinSafeJobId(runId, "retry")
   });
 
   return {

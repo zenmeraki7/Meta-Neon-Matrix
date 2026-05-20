@@ -3,6 +3,8 @@ import { connection } from "../../config/redis.js";
 import {
   buildDefaultJobOptions,
   mergeJobOptions,
+  joinSafeJobId,
+
 } from "../../utils/jobQueueUtils.js";
 
 const QUEUE_NAME = process.env.EDIT_QUEUE || "bulk-edit";
@@ -30,7 +32,7 @@ export async function addbulkEditJob(data, options = {}) {
     data,
     mergeJobOptions(defaultJobOptions, {
       ...options,
-      jobId: options.jobId || `bulk-edit:${data.historyId}`,
+      jobId: options.jobId || joinSafeJobId("bulk-edit", data.historyId),
     }),
   );
 }

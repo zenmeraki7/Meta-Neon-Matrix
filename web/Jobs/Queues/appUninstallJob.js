@@ -3,6 +3,7 @@ import { connection } from "../../config/redis.js";
 import {
   buildDefaultJobOptions,
   mergeJobOptions,
+  joinSafeJobId,
 } from "../../utils/jobQueueUtils.js";
 
 const QUEUE_NAME = "appUninstall";
@@ -21,7 +22,7 @@ export const appUninstallQueue = new Queue(QUEUE_NAME, {
 });
 
 export async function addAppUninstallJob(data, options = {}) {
-  const jobId = options.jobId || `app-uninstall:${data?.shop}`;
+  const jobId = options.jobId || joinSafeJobId("app-uninstall", data?.shop);
 
   return appUninstallQueue.add(
     "app-uninstall",

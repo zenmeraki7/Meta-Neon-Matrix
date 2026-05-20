@@ -26,7 +26,7 @@ import {
   acquireExclusiveShopWork,
   releaseExclusiveShopWork,
 } from "./shopWorkLeaseService.js";
-
+import {joinSafeJobId} from "../utils/jobQueueUtils.js"
 export const AUTOMATIC_PRODUCT_RULE_EXECUTION_QUEUE =
   process.env.AUTOMATIC_PRODUCT_RULE_EXECUTION_QUEUE || "automatic-product-rule-execution";
 export const AUTOMATIC_PRODUCT_RULE_SIGNAL_QUEUE =
@@ -282,7 +282,7 @@ export async function enqueueAutomaticProductRuleSignalJob({
     "automatic-product-rule-signal",
     { shop, productIds, triggerReference, triggerSource },
     {
-      jobId: `${shop}:${signalFingerprint}`,
+      jobId: joinSafeJobId("automatic-rule-signal", shop, signalFingerprint),
       removeOnComplete: 200,
       removeOnFail: 200,
       attempts: 8,

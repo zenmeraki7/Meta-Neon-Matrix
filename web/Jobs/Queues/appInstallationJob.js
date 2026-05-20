@@ -3,6 +3,8 @@ import { connection } from "../../config/redis.js";
 import {
   buildDefaultJobOptions,
   mergeJobOptions,
+  joinSafeJobId,
+
 } from "../../utils/jobQueueUtils.js";
 
 const QUEUE_NAME = process.env.APP_INSTALLATION_QUEUE;
@@ -21,7 +23,7 @@ export const appInstallationQueue = new Queue(QUEUE_NAME, {
 });
 
 export async function addAppInstallationJob(data, options = {}) {
-  const jobId = options.jobId || `app-install:${data?.shop}`;
+  const jobId = options.jobId || joinSafeJobId("app-install", data?.shop);
 
   return appInstallationQueue.add(
     "app-installation",

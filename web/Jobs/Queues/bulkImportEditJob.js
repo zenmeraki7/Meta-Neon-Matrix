@@ -3,6 +3,7 @@ import { connection } from "../../config/redis.js";
 import {
   buildDefaultJobOptions,
   mergeJobOptions,
+  joinSafeJobId,
 } from "../../utils/jobQueueUtils.js";
 
 const QUEUE_NAME = process.env.IMPORT_EDIT_QUEUE || "importEdit";
@@ -25,7 +26,7 @@ export async function addbulkImportEditJob(data, options = {}) {
     throw new Error("bulk import edit job requires historyId, shop, and filePath");
   }
 
-  const jobId = options.jobId || `import-edit:${data?.historyId}`;
+  const jobId = options.jobId || joinSafeJobId("import-edit", data?.historyId);
 
   return bulkImportEditQueue.add(
     "bulk-import-edit",

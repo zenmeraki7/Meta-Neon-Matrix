@@ -6,6 +6,16 @@ function normalizeDelay(delay) {
   return Math.floor(delay);
 }
 
+export function safeJobId(value) {
+  return String(value || "unknown")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 180);
+}
+
+export function joinSafeJobId(...parts) {
+  return safeJobId(parts.filter(Boolean).join("__"));
+}
+
 export function buildJobBackoff(delay = 5_000) {
   return {
     type: "exponential",
@@ -58,10 +68,10 @@ export function mergeJobOptions(baseOptions = {}, overrideOptions = {}) {
 }
 
 export function buildWebhookJobId({ topic, webhookId, shop, entityId }) {
-  if (webhookId) {
-    return `webhook:${topic}:${shop}:${webhookId}`;
-  }
-
-  return `webhook:${topic}:${shop}:${entityId || "unknown"}`;
+  return joinSafeJobId(
+    "webhook",
+    topic,
+    shop,
+    webhookId || entityId || "unknown"
+  );
 }
-

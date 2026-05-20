@@ -2,6 +2,7 @@ import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
   buildDefaultJobOptions,
+  joinSafeJobId,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
 
@@ -21,7 +22,8 @@ export const shopSyncQueue = new Queue(QUEUE_NAME, {
 });
 
 export async function addShopSyncJob(data, options = {}) {
-  const jobId = options.jobId || `shop-sync:${data?.syncType}:${data?.shop}`;
+  const jobId =
+  options.jobId || joinSafeJobId("shop-sync", data?.syncType, data?.shop);
 
   return shopSyncQueue.add(
     "shop-sync-trigger",
