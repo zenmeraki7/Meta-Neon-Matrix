@@ -38,24 +38,6 @@ import { connection as redis } from "./config/redis.js";
 // Socket
 import { initSocket } from "./socket.js";
 
-// Workers
-import "./Jobs/Workers/bulkEditWorker.js";
-import "./Jobs/Workers/bulkExportWorker.js";
-import "./Jobs/Workers/bulkUndoWorker.js";
-import "./Jobs/Workers/bulkOperationMutationWorker.js";
-import "./Jobs/Workers/bulkOperationQueryWorker.js";
-import "./Jobs/Workers/appInstallationWorker.js";
-import "./Jobs/Workers/scheduledEditWorker.js";
-import "./Jobs/Workers/appUninstallWorker.js";
-import "./Jobs/Workers/bulkImportEditWorker.js";
-import "./Jobs/Workers/shopSyncWorker.js";
-import "./workers/recurringEditExecutionWorker.js";
-import "./workers/recurringEditSchedulerWorker.js";
-import "./workers/scheduledExportExecutionWorker.js";
-import "./workers/scheduledExportSchedulerWorker.js";
-import "./workers/automaticProductRuleExecutionWorker.js";
-import "./workers/automaticProductRuleSchedulerWorker.js";
-import "./workers/automaticProductRuleSignalWorker.js";
 
 
 // Utils / Middleware
