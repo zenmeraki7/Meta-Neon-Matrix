@@ -5,40 +5,77 @@ dotenv.config();
 import { prisma } from "./config/database.js";
 import { handleProductEditOperation } from "./helpers/webhookHelpers/bulkOperations/bulkEdit.js";
 
+const cutoff = new Date(Date.now() - 3 * 60 * 1000);
+
 const stuck = await prisma.editHistory.findMany({
   where: {
-    status: "processing",
-    executionState: "awaiting_shopify",
-    bulkOperationId: { not: null },
-    updatedAt: {
-      lt: new Date(Date.now() - 3 * 60 * 1000),
-    },
+    OR: [
+      {
+        status: "processing",
+        executionState: "awaiting_shopify",
+        bulkOperationId: { not: null },
+        updatedAt: { lt: cutoff },
+      },
+      {
+        undo: {
+          path: ["status"],
+          equals: "processing",
+        },
+        updatedAt: { lt: cutoff },
+      },
+    ],
   },
   select: {
     id: true,
     shop: true,
+    status: true,
+    executionState: true,
     bulkOperationId: true,
+    undo: true,
+    updatedAt: true,
   },
   orderBy: { updatedAt: "asc" },
   take: 25,
 });
 
-console.log(`Found ${stuck.length} stuck edits`);
+console.log(`Found ${stuck.length} stuck edit/undo histories`);
 
 for (const history of stuck) {
-  console.log("Recovering", history.id, history.bulkOperationId);
+  const undo = history.undo || {};
+
+  const bulkOperationId =
+    undo?.status === "processing" &&
+    undo?.state === "awaiting_shopify" &&
+    undo?.bulkOperationId
+      ? undo.bulkOperationId
+      : history.bulkOperationId;
+
+  if (!bulkOperationId) {
+    console.log("Skipping missing bulkOperationId", history.id);
+    continue;
+  }
+
+  console.log("Recovering", {
+    id: history.id,
+    shop: history.shop,
+    bulkOperationId,
+    mode:
+      undo?.status === "processing" && undo?.state === "awaiting_shopify"
+        ? "undo"
+        : "edit",
+  });
 
   try {
     const result = await handleProductEditOperation({
       shop: history.shop,
-      bulkOperationId: history.bulkOperationId,
+      bulkOperationId,
     });
 
     console.log("Result", history.id, result);
   } catch (error) {
     console.error("Failed", {
       id: history.id,
-      bulkOperationId: history.bulkOperationId,
+      bulkOperationId,
       message: error.message,
     });
   }
