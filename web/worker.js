@@ -13,13 +13,13 @@ import "./Jobs/Workers/appUninstallWorker.js";
 import "./Jobs/Workers/bulkImportEditWorker.js";
 import "./Jobs/Workers/shopSyncWorker.js";
 
-import "./workers/recurringEditExecutionWorker.js";
-import "./workers/recurringEditSchedulerWorker.js";
-import "./workers/scheduledExportExecutionWorker.js";
-import "./workers/scheduledExportSchedulerWorker.js";
-import "./workers/automaticProductRuleExecutionWorker.js";
-import "./workers/automaticProductRuleSchedulerWorker.js";
-import "./workers/automaticProductRuleSignalWorker.js";
+import "./Jobs/Workers/recurringEditExecutionWorker.js";
+import "./Jobs/Workers/recurringEditSchedulerWorker.js";
+import "./Jobs/Workers/scheduledExportExecutionWorker.js";
+import "./Jobs/Workers/scheduledExportSchedulerWorker.js";
+import "./Jobs/Workers/automaticProductRuleExecutionWorker.js";
+import "./Jobs/Workers/automaticProductRuleSchedulerWorker.js";
+import "./Jobs/Workers/automaticProductRuleSignalWorker.js";
 
 console.log(`🚀 Worker process ${process.pid} started`);
 
