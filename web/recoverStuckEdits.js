@@ -1,4 +1,4 @@
-// web/recoverStuckEdits.js for undo
+// web/recoverStuckEdits.js
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -43,12 +43,12 @@ console.log(`Found ${stuck.length} stuck edit/undo histories`);
 for (const history of stuck) {
   const undo = history.undo || {};
 
-  const bulkOperationId =
+  const isUndo =
     undo?.status === "processing" &&
     undo?.state === "awaiting_shopify" &&
-    undo?.bulkOperationId
-      ? undo.bulkOperationId
-      : history.bulkOperationId;
+    undo?.bulkOperationId;
+
+  const bulkOperationId = isUndo ? undo.bulkOperationId : history.bulkOperationId;
 
   if (!bulkOperationId) {
     console.log("Skipping missing bulkOperationId", history.id);
@@ -59,10 +59,7 @@ for (const history of stuck) {
     id: history.id,
     shop: history.shop,
     bulkOperationId,
-    mode:
-      undo?.status === "processing" && undo?.state === "awaiting_shopify"
-        ? "undo"
-        : "edit",
+    mode: isUndo ? "undo" : "edit",
   });
 
   try {
