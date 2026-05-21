@@ -56,6 +56,7 @@ await import("./Jobs/Workers/scheduledExportSchedulerWorker.js");
 await import("./Jobs/Workers/automaticProductRuleExecutionWorker.js");
 await import("./Jobs/Workers/automaticProductRuleSchedulerWorker.js");
 await import("./Jobs/Workers/automaticProductRuleSignalWorker.js");
+await import("./Jobs/Workers/stuckBulkMutationRecoveryWorker.js");
 
 console.log(`✅ Worker process ${process.pid} started`);
 
