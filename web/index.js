@@ -197,7 +197,7 @@ server.listen(PORT, () => {
     try {
 
       console.log(
-        `🚀 Worker ${process.pid} running at http://localhost:${PORT}`
+        `🚀 Server ${process.pid} running at http://localhost:${PORT}`
       );
 
     } catch (err) {
