@@ -1,4 +1,4 @@
-// web/recoverStuckEdits.js
+// web/recoverStuckEdits.js for undo
 import dotenv from "dotenv";
 dotenv.config();
 
