@@ -1,5 +1,5 @@
-import { scheduleDueScheduledExportRuns } from "../services/scheduledExportExecutionService.js";
-import logger from "../utils/loggerUtils.js";
+import { scheduleDueScheduledExportRuns } from "../../services/scheduledExportExecutionService.js";
+import logger from "../../utils/loggerUtils.js";
 
 const SCHEDULE_INTERVAL_MS = 10_000;
 

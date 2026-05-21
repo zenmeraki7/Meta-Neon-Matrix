@@ -1,15 +1,15 @@
 import { Worker } from "bullmq";
-import { connection } from "../config/redis.js";
+import { connection } from "../../config/redis.js";
 import {
   AUTOMATIC_PRODUCT_RULE_EXECUTION_QUEUE,
   executeAutomaticProductRuleRun,
-} from "../services/automaticProductRuleExecutionService.js";
-import logger from "../utils/loggerUtils.js";
+} from "../../services/automaticProductRuleExecutionService.js";
+import logger from "../../utils/loggerUtils.js";
 import {
   getJobAttempt,
   isRetryExhausted,
   recordRetryExhausted,
-} from "../utils/workerTelemetry.js";
+} from "../../utils/workerTelemetry.js";
 
 const automaticProductRuleExecutionWorker = new Worker(
   AUTOMATIC_PRODUCT_RULE_EXECUTION_QUEUE,

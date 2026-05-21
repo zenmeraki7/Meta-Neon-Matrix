@@ -1,4 +1,4 @@
-// web/Config/redis.js
+// web/config/redis.js
 import IORedis from "ioredis";
 import { Counter, Histogram } from "prom-client";
 

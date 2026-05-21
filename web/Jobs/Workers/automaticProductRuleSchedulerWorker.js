@@ -1,5 +1,5 @@
-import logger from "../utils/loggerUtils.js";
-import { scheduleDueAutomaticProductRuleRuns } from "../services/automaticProductRuleExecutionService.js";
+import logger from "../../utils/loggerUtils.js";
+import { scheduleDueAutomaticProductRuleRuns } from "../../services/automaticProductRuleExecutionService.js";
 
 const POLL_INTERVAL_MS = 60_000;
 
