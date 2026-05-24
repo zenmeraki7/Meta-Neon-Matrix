@@ -26,11 +26,13 @@ import {
 import {
   checkEditStatus,
   getProductFilterValues,
+  getFilterRegistry,
   getProductTypes,
   getProductsWithQuery,
 } from "../controllers/productQueryController.js";
 import {
   importCsvController,
+  previewCsvController,
 } from "../controllers/productImportController.js";
 import {
   createRecurringEditController,
@@ -105,6 +107,7 @@ router.post("/resume-export/:id", subscriptionMiddleware, resumePausedExportOper
 
 router.get("/product-type-all", getProductTypes);
 router.get("/filter-values/:field", getProductFilterValues);
+router.get("/filter-registry", getFilterRegistry);
 router.get("/product-type-refresh", clearProductTypes);
 router.post("/edit-preview", subscriptionMiddleware, validateBody(bulkEditPreviewSchema), trackEditPreview);
 router.get("/bulk-edit-status/:id", checkEditStatus);
@@ -152,6 +155,11 @@ router.post(
   uploadCsv.single("file"),
   validateBody(importRequestSchema),
   importCsvController,
+);
+router.get(
+  "/csv/preview",
+  subscriptionMiddleware,
+  previewCsvController,
 );
 
 

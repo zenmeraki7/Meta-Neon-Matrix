@@ -1,151 +1,100 @@
-import React, { useState, useCallback, useMemo } from "react";
-import { Card, Banner, Toast, BlockStack } from "@shopify/polaris";
-import { historyService } from "../services/historyService";
-import { useHistoryList } from "../hooks/useHistoryList";
-import { useHistorySearch } from "../hooks/useHistorySearch";
-import HistoryTable from "../components/HistoryTable";
-import RecurringHistoryTable from "../components/RecurringHistoryTable";
-import HistoryFilters from "../components/HistoryFilters";
-import SaveViewModal from "../components/SaveViewModal";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { Banner, Toast, BlockStack } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
-import { KEY_TO_TYPE } from "../hooks/useHistoryList";
+import HistoryTable from "../components/HistoryTable";
+import { historyService } from "../services/historyService";
+
+const DEFAULT_QUERY = {
+  cursor: null,
+  limit: 20,
+  search: "",
+  type: "Manual edit",
+  status: "",
+  frequency: "",
+  sortKey: "createdAt",
+  sortDirection: "desc",
+};
 
 const HistoryComponent = () => {
-  const { t } = useTranslation();
-  const [toastState, setToastState] = useState({
-    active: false,
-    message: "",
-    error: false,
+  const { t, i18n } = useTranslation();
+  const [toastState, setToastState] = useState({ active: false, message: "", error: false });
+  const [query, setQuery] = useState(DEFAULT_QUERY);
+  const [histories, setHistories] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    hasPreviousPage: false,
+    nextCursor: null,
+    previousCursor: null,
   });
-  const [showSaveViewModal, setShowSaveViewModal] = useState(false);
 
-  const tabs = useMemo(
-    () => [
-      { id: "manual-edits", content: t("ManualEdit") },
-      { id: "scheduled-edits", content: t("ScheduledEdit") },
-      { id: "recurring-edits", content: t("RecurringEdit") },
-    ],
-    [t],
-  );
-
-  const {
-    histories,
-    pagination,
-    filters,
-    isLoading,
-    isLoadingMore,
-    error,
-    handleTabChange,
-    loadMore,
-    refetch,
-  } = useHistoryList();
-
-  const { searchValue, debouncedSearchChange } = useHistorySearch();
-
-  const selectedTabIndex = tabs.findIndex(
-    (tab) =>
-      tab.content ===
-      t(Object.keys(KEY_TO_TYPE).find((key) => KEY_TO_TYPE[key] === filters.type) || "ManualEdit"),
-  );
-
-  const handleExport = useCallback(async () => {
+  const fetchHistory = useCallback(async (nextQuery) => {
     try {
-      const blob = await historyService.exportHistory(filters);
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", `history-export-${new Date().toISOString().split("T")[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-
-      setToastState({
-        active: true,
-        message: t("exportStarted") || "Export started. Your file will download shortly.",
-        error: false,
+      setIsLoading(true);
+      setError(null);
+      const response = await historyService.getHistories(
+        { ...nextQuery, lang: i18n.language || "en" },
+        undefined,
+      );
+      const items = response.items || response.data || [];
+      const info = response.pageInfo || response.meta?.pageInfo || {};
+      setHistories(items);
+      setPageInfo({
+        hasNextPage: Boolean(info.hasNextPage),
+        hasPreviousPage: Boolean(info.hasPreviousPage),
+        nextCursor: info.nextCursor || info.endCursor || null,
+        previousCursor: info.previousCursor || null,
       });
-    } catch {
-      setToastState({
-        active: true,
-        message: t("exportFailed") || "Failed to export history. Please try again.",
-        error: true,
-      });
+    } catch (err) {
+      setError(err?.message || "Failed to fetch histories");
+    } finally {
+      setIsLoading(false);
     }
-  }, [filters, t]);
+  }, [i18n.language]);
 
-  const getEmptyStateMessage = useCallback(() => {
-    switch (filters.type) {
-      case "Manual edit":
-        return t("noManualEdits") || "No manual edits found. Try editing some products first.";
-      case "Scheduled edit":
-        return t("noScheduledEdits") || "No scheduled edits found. Try scheduling an edit.";
-      case "Recurring edit":
-        return t("noRecurringEdits") || "No recurring edits found. Try setting up a recurring edit.";
-      default:
-        return t("noHistory") || "No history items found.";
-    }
-  }, [filters.type, t]);
+  useEffect(() => {
+    fetchHistory(query);
+  }, [query, fetchHistory]);
 
-  const isRecurringEditTab = filters.type === "Recurring edit";
+  const onQueryChange = useCallback((patch) => {
+    setQuery((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const onQueryClear = useCallback(() => {
+    setQuery((current) => ({ ...current, search: "", status: "", type: "", cursor: null }));
+  }, []);
+
+  const onNext = useCallback(() => {
+    if (!pageInfo.hasNextPage || !pageInfo.nextCursor) return;
+    setQuery((current) => ({ ...current, cursor: pageInfo.nextCursor }));
+  }, [pageInfo]);
+
+  const onPrevious = useCallback(() => {
+    if (!pageInfo.hasPreviousPage || !pageInfo.previousCursor) return;
+    setQuery((current) => ({ ...current, cursor: pageInfo.previousCursor }));
+  }, [pageInfo]);
+
+  const emptyStateMessage = useMemo(() => t("noHistory") || "No history items found.", [t]);
 
   return (
     <BlockStack gap="400">
-      <Card>
-        <HistoryFilters
-          searchValue={searchValue}
-          onSearchChange={debouncedSearchChange}
-          onExport={handleExport}
-          onSaveView={() => setShowSaveViewModal(true)}
-          selectedTabIndex={selectedTabIndex}
-          onTabChange={(index) => {
-            if (!isLoading) {
-              handleTabChange(index, tabs);
-            }
-          }}
-          tabs={tabs}
-        />
-      </Card>
-
       {error && (
         <Banner tone="critical">
           <p>{error}</p>
         </Banner>
       )}
 
-      <Card padding="0">
-        {isRecurringEditTab ? (
-          <RecurringHistoryTable
-            histories={histories}
-            isLoading={isLoading}
-            isLoadingMore={isLoadingMore}
-            hasMore={pagination.hasNextPage}
-            emptyStateMessage={getEmptyStateMessage()}
-            onLoadMore={loadMore}
-            onRefresh={refetch}
-          />
-        ) : (
-          <HistoryTable
-            histories={histories}
-            isLoading={isLoading}
-            isLoadingMore={isLoadingMore}
-            hasMore={pagination.hasNextPage}
-            emptyStateMessage={getEmptyStateMessage()}
-            onLoadMore={loadMore}
-          />
-        )}
-      </Card>
-
-      <SaveViewModal
-        isOpen={showSaveViewModal}
-        onClose={() => setShowSaveViewModal(false)}
-        onSave={(viewData) => {
-          setToastState({
-            active: true,
-            message: `View "${viewData.name}" saved successfully.`,
-            error: false,
-          });
-        }}
-        currentFilters={filters}
+      <HistoryTable
+        histories={histories}
+        isLoading={isLoading}
+        pageInfo={pageInfo}
+        query={query}
+        onQueryChange={onQueryChange}
+        onQueryClear={onQueryClear}
+        onNext={onNext}
+        onPrevious={onPrevious}
+        emptyStateMessage={emptyStateMessage}
       />
 
       {toastState.active && (

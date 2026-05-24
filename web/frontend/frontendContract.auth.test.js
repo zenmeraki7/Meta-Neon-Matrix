@@ -2,6 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  setAuthenticatedFetch,
+  getAuthenticatedFetch,
+} from "./api/authenticatedFetchRegistry.js";
+import { bootstrapAuthenticatedFetch } from "./bootstrap/appBridgeBootstrap.js";
 
 const ROOT = process.cwd();
 
@@ -60,9 +65,43 @@ test("bulk edit flow avoids native confirm and enforces modal/location/fresh-pre
   assert.equal(editPreview.includes("confirmModalOpen"), true, "Broad target confirmation modal guard missing");
   assert.equal(editPreview.includes("hasRequiredLocation"), true, "Location-required guard missing");
   assert.equal(editPreview.includes("buildCurrentPreviewSignature"), true, "Fresh preview signature guard missing");
+  assert.equal(
+    editPreview.includes("hasPreviewRegistryMismatch"),
+    true,
+    "Registry mismatch stale-preview guard missing",
+  );
+  assert.equal(
+    editPreview.includes("previewFieldRegistryVersion"),
+    true,
+    "Execute payload missing previewFieldRegistryVersion",
+  );
+  assert.equal(
+    editPreview.includes("previewOperatorRegistryVersion"),
+    true,
+    "Execute payload missing previewOperatorRegistryVersion",
+  );
 });
 
 test("tailwind primitive import removed from app.css", () => {
   const appCss = read("web/frontend/app.css");
   assert.equal(/@import\s+["']tailwindcss["']/.test(appCss), false, "Tailwind primitive import should be removed");
+});
+
+test("authenticated fetch bootstrap remains usable across mount/unmount lifecycle", () => {
+  const firstFetch = async () => ({ ok: true });
+  const secondFetch = async () => ({ ok: true });
+
+  const cleanupFirst = bootstrapAuthenticatedFetch(firstFetch);
+  assert.equal(getAuthenticatedFetch(), firstFetch);
+
+  const cleanupSecond = bootstrapAuthenticatedFetch(secondFetch);
+  assert.equal(getAuthenticatedFetch(), secondFetch);
+
+  cleanupFirst();
+  assert.equal(getAuthenticatedFetch(), secondFetch);
+
+  cleanupSecond();
+  assert.equal(getAuthenticatedFetch(), null);
+
+  setAuthenticatedFetch(null);
 });

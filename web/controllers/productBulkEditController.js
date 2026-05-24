@@ -13,6 +13,7 @@ import {
   resumeEditOperation,
 } from "../services/operationPauseResumeService.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import { getTargetingVersionBundle } from "../services/targeting/versioning.js";
 
 function normalizeBulkEditExecuteBody(body = {}, query = {}) {
   return {
@@ -29,6 +30,14 @@ function normalizeBulkEditExecuteBody(body = {}, query = {}) {
     previewFilterHash: body.previewFilterHash ?? body.previewFingerprint?.filterHash ?? null,
     previewMirrorBatchId:
       body.previewMirrorBatchId ?? body.previewFingerprint?.mirrorBatchId ?? null,
+    previewFieldRegistryVersion:
+      body.previewFieldRegistryVersion ??
+      body.previewFingerprint?.fieldRegistryVersion ??
+      null,
+    previewOperatorRegistryVersion:
+      body.previewOperatorRegistryVersion ??
+      body.previewFingerprint?.operatorRegistryVersion ??
+      null,
     confirmBroadTarget: body.confirmBroadTarget === true,
     criticalConfirmationText: body.criticalConfirmationText ?? null,
     operationKey: body.operationKey ?? null,
@@ -67,6 +76,27 @@ function assertExecutePreviewFingerprint(command = {}) {
   if (!command.previewFilterHash) {
     const error = new Error("PREVIEW_FINGERPRINT_REQUIRED");
     error.code = "VALIDATION_FAILED";
+    throw error;
+  }
+  if (!command.previewFieldRegistryVersion || !command.previewOperatorRegistryVersion) {
+    const error = new Error("PREVIEW_REGISTRY_VERSION_REQUIRED");
+    error.code = "VALIDATION_FAILED";
+    throw error;
+  }
+}
+
+function assertPreviewRegistryVersionMatches(command = {}) {
+  const current = getTargetingVersionBundle();
+  const fieldMatch =
+    String(command.previewFieldRegistryVersion || "") ===
+    String(current.fieldRegistryVersion || "");
+  const operatorMatch =
+    String(command.previewOperatorRegistryVersion || "") ===
+    String(current.operatorRegistryVersion || "");
+
+  if (!fieldMatch || !operatorMatch) {
+    const error = new Error("PREVIEW_REGISTRY_VERSION_MISMATCH");
+    error.code = "PREVIEW_REGISTRY_VERSION_MISMATCH";
     throw error;
   }
 }
@@ -155,6 +185,7 @@ export const handleBulkEditProduct = async (req, res) => {
 
     const command = normalizeBulkEditExecuteBody(req.body, req.query);
     assertExecutePreviewFingerprint(command);
+    assertPreviewRegistryVersionMatches(command);
     const actor = buildActorContext({
       req,
       session,

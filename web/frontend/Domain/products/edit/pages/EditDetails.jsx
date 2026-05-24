@@ -6,7 +6,8 @@ import {
   Card,
   Text,
   Badge,
-  DataTable,
+  IndexTable,
+  Pagination,
   Banner,
   InlineStack,
   ProgressBar,
@@ -27,6 +28,8 @@ import {
 } from "@shopify/polaris-icons";
 import Papa from "papaparse";
 import { useTranslation } from "react-i18next";
+import { buildOperationTimeline } from "../utils/operationTimeline";
+import { operationStatusBadge } from "../../shared/components/StatusBadge";
 
 const FALLBACK_IMAGE = "https://www.otithee.com/img/fallback/fallback-2.png";
 
@@ -314,6 +317,7 @@ const response = await fetch(
         image: productImage,
         title: productTitle,
         scope: t("scope.product"),
+        status: String(change?.status || historyItem?.primaryStatus?.key || historyItem?.status || "pending"),
         field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }),  // ✅ translate
         oldValue:
           fieldChange?.oldValue !== undefined && fieldChange?.oldValue !== null
@@ -336,6 +340,7 @@ const response = await fetch(
           image: productImage,
           title: `${productTitle} - ${variantChange?.variantTitle || "Default Title"}`,
           scope: t("scope.variant"),
+        status: String(change?.status || historyItem?.primaryStatus?.key || historyItem?.status || "pending"),
           field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }),  // ✅ translate
           oldValue:
             fieldChange?.oldValue !== undefined && fieldChange?.oldValue !== null
@@ -352,40 +357,7 @@ const response = await fetch(
 
       return [...productRows, ...variantRows];
     });
-  }, [changes, changeField, t]);
-
-  const tableRows = useMemo(
-    () =>
-      flattenedRows.map((item, index) => [
-        <InlineStack key={`product-cell-${index}`} gap="300" wrap={false}>
-          <Thumbnail
-            source={item.image || FALLBACK_IMAGE}
-            alt={item.title || "product"}
-            size="small"
-          />
-          <BlockStack inlineAlign="start">
-            <div style={{ maxWidth: "220px" }}>
-              <Text truncate fontWeight="semibold">
-                {item.title}
-              </Text>
-            </div>
-            <Text tone="subdued" variant="bodySm">
-              {item.scope}
-            </Text>
-          </BlockStack>
-        </InlineStack>,
-        <Text key={`field-${index}`} fontWeight="semibold">
-          {item.field}
-        </Text>,
-        <BlockStack key={`change-${index}`}>
-          <Text variant="bodyMd" tone="subdued" as="span">
-            <s>{item.oldValue}</s>
-          </Text>
-          <Text>{item.newValue}</Text>
-        </BlockStack>,
-      ]),
-    [flattenedRows],
-  );
+  }, [changes, changeField, t, historyItem?.primaryStatus?.key, historyItem?.status]);
 
   const handleDownloadLogs = useCallback(() => {
     if (!historyItem?.id || flattenedRows.length === 0) return;
@@ -524,6 +496,12 @@ const undoBadge = undoStatus
   const transparencyUndo = transparency.undoAvailability || {};
   const transparencyShopifySubmission = transparency.shopifySubmission || {};
   const transparencyShopifyStatus = transparency.shopifyBulkOperationStatus || "UNKNOWN";
+  const lifecycleState =
+    historyItem?.executionState ||
+    historyItem?.supportStatus?.executionState ||
+    historyItem?.status ||
+    "UNKNOWN";
+  const operationTimeline = buildOperationTimeline(lifecycleState);
 
   return (
     <Page
@@ -605,6 +583,32 @@ const undoBadge = undoStatus
                     </BlockStack>
                   </Banner>
                 ) : null}
+              </BlockStack>
+            </Box>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <Box padding="400">
+              <BlockStack gap="200">
+                <Text variant="headingMd">{t("operationLifecycleTitle", { defaultValue: "Operation lifecycle" })}</Text>
+                {operationTimeline.stages.map((stage) => {
+                  const tone =
+                    stage.status === "completed"
+                      ? "success"
+                      : stage.status === "active"
+                        ? "info"
+                        : "attention";
+                  return (
+                    <InlineStack key={stage.key} align="space-between" blockAlign="center">
+                      <Text tone={stage.status === "pending" ? "subdued" : undefined}>
+                        {t(stage.labelKey, { defaultValue: stage.defaultLabel })}
+                      </Text>
+                      <Badge tone={tone}>{stage.status}</Badge>
+                    </InlineStack>
+                  );
+                })}
               </BlockStack>
             </Box>
           </Card>
@@ -741,35 +745,62 @@ const undoBadge = undoStatus
               <Box padding="400">
                 <Banner tone="critical">{changesError}</Banner>
               </Box>
-            ) : tableRows.length > 0 ? (
+            ) : flattenedRows.length > 0 ? (
               <>
               <Box paddingInlineStart="60">
-                <DataTable
-                  columnContentTypes={["text", "text", "text"]}
-                  headings={[t("table.product"), t("table.field"), t("table.change")]}
-                  rows={tableRows}
-                /></Box>
+                <IndexTable
+                  resourceName={{ singular: "change", plural: "changes" }}
+                  itemCount={flattenedRows.length}
+                  selectable={false}
+                  headings={[
+                    { title: "Product" },
+                    { title: "Scope" },
+                    { title: "Field" },
+                    { title: "Old value" },
+                    { title: "New value" },
+                    { title: "Status" },
+                  ]}
+                >
+                  {flattenedRows.map((item, index) => (
+                    <IndexTable.Row id={String(index)} key={String(index)} position={index}>
+                      <IndexTable.Cell>
+                        <InlineStack gap="300" wrap={false}>
+                          <Thumbnail
+                            source={item.image || FALLBACK_IMAGE}
+                            alt={item.title || "product"}
+                            size="small"
+                          />
+                          <Text as="span" fontWeight="semibold">{item.title}</Text>
+                        </InlineStack>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>{item.scope}</IndexTable.Cell>
+                      <IndexTable.Cell>{item.field}</IndexTable.Cell>
+                      <IndexTable.Cell>{item.oldValue}</IndexTable.Cell>
+                      <IndexTable.Cell>{item.newValue}</IndexTable.Cell>
+                      <IndexTable.Cell>
+                        {operationStatusBadge(
+                          item.status,
+                          t(`historyStatus.${String(item.status || "pending").toLowerCase()}`, {
+                            defaultValue: String(item.status || "pending"),
+                          }),
+                        )}
+                      </IndexTable.Cell>
+                    </IndexTable.Row>
+                  ))}
+                </IndexTable></Box>
 
                 {totalPages > 1 ? (
                   <Box padding="400">
-                    <InlineStack align="center" gap="300">
-                      <Button
-                        disabled={currentPage === 1}
-                        onClick={() => fetchChanges(currentPage - 1)}
-                      >
-                        {t("Previous")}
-                      </Button>
-
+                    <InlineStack align="space-between" blockAlign="center">
                       <Text>
                         {t("Page")} {currentPage} {t("of")} {totalPages}
                       </Text>
-
-                      <Button
-                        disabled={currentPage === totalPages}
-                        onClick={() => fetchChanges(currentPage + 1)}
-                      >
-                        {t("Next")}
-                      </Button>
+                      <Pagination
+                        hasPrevious={currentPage > 1}
+                        hasNext={currentPage < totalPages}
+                        onPrevious={() => fetchChanges(currentPage - 1)}
+                        onNext={() => fetchChanges(currentPage + 1)}
+                      />
                     </InlineStack>
                   </Box>
                 ) : null}
@@ -783,3 +814,9 @@ const undoBadge = undoStatus
     </Page>
   );
 }
+
+
+
+
+
+

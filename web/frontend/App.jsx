@@ -5,8 +5,7 @@ import { useEffect, useState } from "react";
 import Routes from "./Routes";
 import { QueryProvider, PolarisProvider } from "./components";
 import { Link } from "react-router-dom";
-import { useAuthenticatedFetch } from "./hooks/useAuthenticatedFetch";
-import { setAuthenticatedFetch } from "./api/authenticatedFetchRegistry";
+import { AuthenticatedFetchProvider } from "./components/providers";
 
 import "./app.css";
 
@@ -14,7 +13,6 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const pages = import.meta.glob("./pages/**/!(*.test.[jt]sx)*.([jt]sx)");
   const { t, i18n } = useTranslation();
-  const authenticatedFetch = useAuthenticatedFetch();
 
   useEffect(() => {
   const savedLang = localStorage.getItem("appLanguage");
@@ -23,15 +21,12 @@ export default function App() {
   }
 }, []);
 
-  useEffect(() => {
-    setAuthenticatedFetch(authenticatedFetch);
-  }, [authenticatedFetch]);
-
   return (
     <BrowserRouter>
       <PolarisProvider>
-        <QueryProvider>
-         <NavMenu>
+        <AuthenticatedFetchProvider>
+          <QueryProvider>
+            <NavMenu>
   <Link to="/" rel="home">{t("Home")}</Link>
   {!isSyncing && (
     <>
@@ -45,8 +40,9 @@ export default function App() {
   )}
 </NavMenu>
 
-          <Routes pages={pages} data={{ setIsSyncing }} />
-        </QueryProvider>
+            <Routes pages={pages} data={{ setIsSyncing }} />
+          </QueryProvider>
+        </AuthenticatedFetchProvider>
       </PolarisProvider>
     </BrowserRouter>
   );

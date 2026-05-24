@@ -19,8 +19,8 @@ import { getTranslatedOperatorLabel } from "../utils/filterUtils";
 import ProductsFilters from "../components/ProductsFilters";
 import ProductsTable from "../components/ProductsTable";
 import useProducts from "../hooks/useProducts";
+import { useFilterRegistry } from "../hooks/useFilterRegistry";
 import { useApiClient } from "../../../../hooks/useApiClient";
-import { getFilterByKey } from "../constants";
 
 import {
   selectProducts,
@@ -47,6 +47,10 @@ export default function ProductsPage() {
   const page = useSelector(selectPage);
   const search = useSelector(selectSearch);
 const { t } = useTranslation();
+const {
+  filters: availableFilters,
+  getFilterByKey,
+} = useFilterRegistry();
 
 const [debouncedSearch, setDebouncedSearch] = useState(search || "");
 
@@ -211,7 +215,7 @@ const appliedFilters = useMemo(
             dispatch(setFilters(filterState.filter((f) => f.field !== field))),
         };
       }),
-  [filterState, dispatch, t]
+  [filterState, dispatch, t, getFilterByKey]
 );
 
   const isSyncInProgress =
@@ -341,6 +345,7 @@ const appliedFilters = useMemo(
                 onQueryChange={(value) => dispatch(setSearch(value))}
                 onQueryClear={() => dispatch(setSearch(""))}
                 onClearAll={onClearAll}
+                availableFilters={availableFilters}
               />
             </Box>
           </Card>

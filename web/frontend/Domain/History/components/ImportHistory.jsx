@@ -5,139 +5,52 @@ import {
   Text,
   BlockStack,
   InlineStack,
-  Badge,
   Button,
   Spinner,
   EmptyState,
   Pagination,
-  DataTable,
   Box,
-  Icon,
-  useBreakpoints,
+  IndexTable,
 } from "@shopify/polaris";
-import {
-  CheckCircleIcon,
-  AlertCircleIcon,
-  ClockIcon,
-  ViewIcon,
-} from "@shopify/polaris-icons";
+import { importStatusBadge } from "../../shared/components/StatusBadge";
 
 export default function ImportHistory() {
-  const [importHistory, setImportHistory] = useState([]);
+  const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [cursorStack, setCursorStack] = useState([null]);
-  const [currentCursor, setCurrentCursor] = useState(null);
-  const [nextCursor, setNextCursor] = useState(null);
-  const [hasNextPage, setHasNextPage] = useState(false);
-  const { mdDown } = useBreakpoints();
+  const [cursor, setCursor] = useState(null);
+  const [pageInfo, setPageInfo] = useState({
+    hasNextPage: false,
+    hasPreviousPage: false,
+    nextCursor: null,
+    previousCursor: null,
+  });
 
-  const fetchData = useCallback(async (cursor = null) => {
+  const fetchData = useCallback(async (nextCursor = null) => {
     try {
       setLoading(true);
       const params = new URLSearchParams({ limit: "10" });
-      if (cursor) {
-        params.set("cursor", cursor);
-      }
-
+      if (nextCursor) params.set("cursor", nextCursor);
       const res = await fetch(`/api/history/get-shop-importhistory?${params.toString()}`);
       const result = await res.json();
-
       if (result.success) {
-        setImportHistory(result.data || []);
-        const pageInfo = result.pageInfo || {};
-        setHasNextPage(Boolean(pageInfo.hasNextPage));
-        setNextCursor(pageInfo.endCursor || null);
+        const payload = result.items || result.data || [];
+        const info = result.pageInfo || {};
+        setItems(payload);
+        setPageInfo({
+          hasNextPage: Boolean(info.hasNextPage),
+          hasPreviousPage: Boolean(info.hasPreviousPage),
+          nextCursor: info.nextCursor || info.endCursor || null,
+          previousCursor: info.previousCursor || null,
+        });
       }
-    } catch (err) {
-      console.error("Error fetching import history:", err);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchData(currentCursor);
-  }, [currentCursor, fetchData]);
-
-  const getStatusBadge = (status, processedRows, totalRows, errorRows) => {
-    switch (status) {
-      case "completed":
-        return errorRows > 0 ? (
-          <Badge tone="warning" icon={AlertCircleIcon}>
-            Completed with errors
-          </Badge>
-        ) : (
-          <Badge tone="success" icon={CheckCircleIcon}>
-            Completed
-          </Badge>
-        );
-      case "failed":
-        return (
-          <Badge tone="critical" icon={AlertCircleIcon}>
-            Failed
-          </Badge>
-        );
-      case "pending":
-      case "processing":
-        return (
-          <Badge tone="attention" icon={ClockIcon}>
-            {status === "pending" ? "Pending" : "Processing"}
-          </Badge>
-        );
-      default:
-        return <Badge tone="subdued">Unknown</Badge>;
-    }
-  };
-
-  const formatDate = (dateString) =>
-    new Date(dateString).toLocaleString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-  const handleViewDetails = useCallback((id) => {
-    void id;
-  }, []);
-
-  const ActionButtons = ({ item }) => (
-    <InlineStack align="end" gap="200">
-      <Button variant="plain" size="slim" onClick={() => handleViewDetails(item.id)}>
-        <Icon source={ViewIcon} />
-      </Button>
-    </InlineStack>
-  );
-
-  const goNext = () => {
-    if (!hasNextPage || !nextCursor) return;
-    setCursorStack((prev) => [...prev, nextCursor]);
-    setCurrentCursor(nextCursor);
-  };
-
-  const goPrevious = () => {
-    if (cursorStack.length <= 1) return;
-    const nextStack = cursorStack.slice(0, -1);
-    setCursorStack(nextStack);
-    setCurrentCursor(nextStack[nextStack.length - 1] || null);
-  };
-
-  const MobileCardView = ({ data }) => (
-    <BlockStack gap="300">
-      {data.map((item) => (
-        <Card key={item.id} padding="400">
-          <BlockStack gap="200">
-            <Text as="h3" variant="headingSm">{item.filename}</Text>
-            <InlineStack align="space-between"><Text as="p" tone="subdued">Status:</Text>{getStatusBadge(item.status, item.processedRows, item.totalRows, item.errorRows)}</InlineStack>
-            <InlineStack align="space-between"><Text as="p" tone="subdued">Total Rows:</Text><Text as="p">{item.totalRows}</Text></InlineStack>
-            <InlineStack align="space-between"><Text as="p" tone="subdued">Date:</Text><Text as="p">{formatDate(item.createdAt)}</Text></InlineStack>
-            <InlineStack align="end"><Button variant="plain" size="slim" onClick={() => handleViewDetails(item.id)}><Icon source={ViewIcon} /></Button></InlineStack>
-          </BlockStack>
-        </Card>
-      ))}
-    </BlockStack>
-  );
+    fetchData(cursor);
+  }, [cursor, fetchData]);
 
   if (loading) {
     return (
@@ -145,68 +58,83 @@ export default function ImportHistory() {
         <Card>
           <Box padding="800" textAlign="center">
             <Spinner size="large" />
-            <Box paddingBlockStart="200"><Text as="p" variant="bodyMd">Loading import history...</Text></Box>
           </Box>
         </Card>
       </Page>
     );
   }
 
-  const emptyState = importHistory.length === 0 ? (
-    <EmptyState
-      heading="No import history found"
-      description="When you import CSV files, they will appear here with their status and details."
-      image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-    >
-      <Button variant="primary" url="/Spreadsheet">Import Products</Button>
-    </EmptyState>
-  ) : null;
-
   return (
-    <Page title="Import History" subtitle="View and manage your product import history" compactTitle fullWidth primaryAction={{ content: "Import Products", url: "/import" }}>
+    <Page title="Import History" subtitle="View and manage your product import history" compactTitle fullWidth>
       <BlockStack gap="500">
         <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Recent Imports</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">Track the status and progress of your CSV imports</Text>
-              </BlockStack>
-              <Text as="p" variant="bodySm" tone="subdued">{importHistory.length} import{importHistory.length !== 1 ? "s" : ""} found</Text>
-            </InlineStack>
+          {items.length === 0 ? (
+            <EmptyState heading="No import history found">
+              <p>When you import CSV files, they will appear here.</p>
+            </EmptyState>
+          ) : (
+            <>
+              <Box paddingInlineStart="600">
+                <IndexTable
+                  resourceName={{ singular: "import", plural: "imports" }}
+                  itemCount={items.length}
+                  selectable={false}
+                  headings={[
+                    { title: "File Name" },
+                    { title: "Status" },
+                    { title: "Total Rows" },
+                    { title: "Date" },
+                    { title: "Actions" },
+                  ]}
+                >
+                  {items.map((item, index) => (
+                    <IndexTable.Row id={String(item.id || index)} key={String(item.id || index)} position={index}>
+                      <IndexTable.Cell>
+                        <BlockStack gap="050">
+                          <Text as="span" variant="bodyMd" fontWeight="medium">
+                            {item.filename || "Untitled import"}
+                          </Text>
+                          <Text as="span" variant="bodySm" tone="subdued">
+                            {String(item.id || "-")}
+                          </Text>
+                        </BlockStack>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        {importStatusBadge(item.status, String(item.status || "Unknown"))}
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <InlineStack gap="100" blockAlign="center">
+                          <Text as="span">{Number(item.totalRows || 0).toLocaleString()}</Text>
+                          <Text as="span" tone="subdued" variant="bodySm">
+                            rows
+                          </Text>
+                        </InlineStack>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Text as="span" variant="bodySm">
+                          {item.createdAt ? new Date(item.createdAt).toLocaleString() : "-"}
+                        </Text>
+                      </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <Button variant="plain" size="slim">View</Button>
+                      </IndexTable.Cell>
+                    </IndexTable.Row>
+                  ))}
+                </IndexTable>
+              </Box>
 
-            {emptyState}
-
-            {importHistory.length > 0 && (
-              <>
-                {mdDown ? (
-                  <MobileCardView data={importHistory} />
-                ) : (
-                  <DataTable
-                    columnContentTypes={["text", "text", "numeric", "text", "text"]}
-                    headings={["File Name", "Status", "Total Rows", "Date", "Actions"]}
-                    rows={importHistory.map((item) => [
-                      item.filename,
-                      getStatusBadge(item.status, item.processedRows, item.totalRows, item.errorRows),
-                      item.totalRows.toLocaleString(),
-                      formatDate(item.createdAt),
-                      <ActionButtons item={item} key={item.id} />,
-                    ])}
-                  />
-                )}
-
-                <InlineStack align="center" blockAlign="center">
+              <Box padding="400">
+                <InlineStack align="center">
                   <Pagination
-                    hasPrevious={cursorStack.length > 1}
-                    onPrevious={goPrevious}
-                    hasNext={hasNextPage}
-                    onNext={goNext}
-                    label={`Page ${cursorStack.length}`}
+                    hasPrevious={pageInfo.hasPreviousPage}
+                    hasNext={pageInfo.hasNextPage}
+                    onPrevious={() => setCursor(pageInfo.previousCursor || null)}
+                    onNext={() => setCursor(pageInfo.nextCursor || null)}
                   />
                 </InlineStack>
-              </>
-            )}
-          </BlockStack>
+              </Box>
+            </>
+          )}
         </Card>
       </BlockStack>
     </Page>

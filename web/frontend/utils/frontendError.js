@@ -13,7 +13,5 @@ export function toSafeErrorMessage(error, fallback = GENERIC_ERROR_MESSAGE) {
     error?.details?.message;
   if (detailMessage && typeof detailMessage === "string") return detailMessage;
 
-  if (error.message && typeof error.message === "string") return error.message;
   return fallback;
 }
-

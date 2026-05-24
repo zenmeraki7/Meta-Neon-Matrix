@@ -3,13 +3,9 @@ import { toSafeErrorMessage } from "../../../utils/frontendError";
 
 async function authRequest(url, options = {}) {
   const authFetch = getAuthenticatedFetch();
-  if (!authFetch) {
-    throw new Error("Authenticated fetch is not initialized");
-  }
+  if (!authFetch) throw new Error("Authenticated fetch is not initialized");
   const response = await authFetch(url, options);
-  if (!response) {
-    throw new Error("Authentication required");
-  }
+  if (!response) throw new Error("Authentication required");
 
   const contentType = response.headers.get("content-type") || "";
   const isJson = contentType.includes("application/json");
@@ -27,19 +23,33 @@ async function authRequest(url, options = {}) {
   return payload;
 }
 
-export const historyService = {
-  async getHistories(type, cursor, limit, search, signal, lang) {
-    const queryParams = new URLSearchParams();
-    if (type) queryParams.append("type", type);
-    if (limit) queryParams.append("limit", limit);
-    if (search) queryParams.append("search", search);
-    if (lang) queryParams.append("lang", lang);
-    if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
-      queryParams.append("cursor", cursor);
-    }
+function buildQuery(params = {}) {
+  const queryParams = new URLSearchParams();
+  const allowed = [
+    "type",
+    "cursor",
+    "limit",
+    "search",
+    "lang",
+    "status",
+    "frequency",
+    "sortKey",
+    "sortDirection",
+  ];
 
+  for (const key of allowed) {
+    const value = params[key];
+    if (value == null || value === "") continue;
+    queryParams.append(key, String(value));
+  }
+
+  return queryParams.toString();
+}
+
+export const historyService = {
+  async getHistories(params, signal) {
     try {
-      return await authRequest(`/api/history/get-shop-edithistory?${queryParams.toString()}`, {
+      return await authRequest(`/api/history/get-shop-edithistory?${buildQuery(params)}`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
         signal,
@@ -50,18 +60,9 @@ export const historyService = {
     }
   },
 
-  async getRecurringEditHistories(type, cursor, limit, search, signal, lang) {
-    const queryParams = new URLSearchParams();
-    if (type) queryParams.append("type", type);
-    if (limit) queryParams.append("limit", limit);
-    if (search) queryParams.append("search", search);
-    if (lang) queryParams.append("lang", lang);
-    if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
-      queryParams.append("cursor", cursor);
-    }
-
+  async getRecurringEditHistories(params, signal) {
     try {
-      return await authRequest(`/api/products/get-recurring-edits?${queryParams.toString()}`, {
+      return await authRequest(`/api/products/get-recurring-edits?${buildQuery(params)}`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
         signal,
@@ -72,15 +73,20 @@ export const historyService = {
     }
   },
 
-  async getExportHistories({ lang }) {
-    const queryParams = new URLSearchParams();
-    queryParams.append("lang", lang || "en");
-
+  async getExportHistories({ lang, type, cursor, limit, search, sortKey, sortDirection }) {
     try {
-      return await authRequest(`/api/history/get-shop-exporthistory?${queryParams.toString()}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
+      return await authRequest(
+        `/api/history/get-shop-exporthistory?${buildQuery({
+          lang: lang || "en",
+          type,
+          cursor,
+          limit,
+          search,
+          sortKey,
+          sortDirection,
+        })}`,
+        { method: "GET", headers: { "Content-Type": "application/json" } },
+      );
     } catch (error) {
       if (error.name === "AbortError") throw error;
       throw new Error(toSafeErrorMessage(error, "Failed to fetch export history"));
@@ -89,9 +95,7 @@ export const historyService = {
 
   async downloadExportedData(id, fileName = "exported_data") {
     try {
-      const blob = await authRequest(`/api/products/download-export/${id}`, {
-        method: "GET",
-      });
+      const blob = await authRequest(`/api/products/download-export/${id}`, { method: "GET" });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -107,4 +111,3 @@ export const historyService = {
     }
   },
 };
-

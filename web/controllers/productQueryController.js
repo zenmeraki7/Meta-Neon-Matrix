@@ -6,9 +6,38 @@ import { logApiError } from "../utils/errorLogUtils.js";
 import { prisma } from "../config/database.js";
 import { getStoreMirrorState } from "../services/mirrorHealthService.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import { fieldRegistry } from "../services/targeting/registry/fieldRegistry.js";
+import { getTargetingVersionBundle } from "../services/targeting/versioning.js";
 
 const productService = new Services();
 const MAX_LIMIT = 250;
+
+function mapValueTypeToUiType(valueType) {
+  if (valueType === "number") return "number";
+  if (valueType === "date") return "date";
+  return "string";
+}
+
+function mapOperatorToLegacyLabel(operator) {
+  const map = {
+    EQ: "equals",
+    NEQ: "does not equal",
+    CONTAINS: "contains",
+    NOT_CONTAINS: "does not contain",
+    STARTS_WITH: "starts with",
+    ENDS_WITH: "ends with",
+    LT: "<",
+    LTE: "<=",
+    GT: ">",
+    GTE: ">=",
+    IN: "is",
+    NOT_IN: "is not",
+    IS_EMPTY: "is empty/blank",
+    IS_NOT_EMPTY: "is not empty",
+    BETWEEN: "between",
+  };
+  return map[operator] || operator.toLowerCase();
+}
 
 function successOptionResponse(message, data) {
   return {
@@ -226,6 +255,49 @@ export const getProductFilterValues = async (req, res) => {
     return res
       .status(200)
       .json(successOptionResponse("Product filter values fetched successfully", data));
+  } catch (error) {
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
+  }
+};
+
+export const getFilterRegistry = async (req, res) => {
+  const session = res.locals.shopify?.session;
+  try {
+    if (!session?.shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
+    }
+
+    const versions = getTargetingVersionBundle();
+    const fields = Object.values(fieldRegistry)
+      .filter((field) => field?.contexts?.includes("PREVIEW"))
+      .map((field) => ({
+        key: field.key,
+        label: field.key,
+        type: mapValueTypeToUiType(field.valueType),
+        isSearchable: field.valueType === "string",
+        operators: Array.isArray(field.operators)
+          ? field.operators.map(mapOperatorToLegacyLabel)
+          : [],
+      }));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        versions: {
+          fieldRegistryVersion: versions.fieldRegistryVersion,
+          operatorRegistryVersion: versions.operatorRegistryVersion,
+        },
+        fields,
+      },
+    });
   } catch (error) {
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,

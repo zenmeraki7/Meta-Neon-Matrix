@@ -1,5 +1,5 @@
 // src/hooks/useProducts.js
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useDispatch } from "react-redux";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import {
@@ -16,11 +16,20 @@ export default function useProducts() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [hasFetched, setHasFetched] = useState(false);
+  const activeRequestRef = useRef({ id: 0, controller: null });
 
   const limit = 20;
 
   const fetchProducts = useCallback(
     async ({ cursor = null, filterParams = [] } = {}) => {
+      if (activeRequestRef.current.controller) {
+        activeRequestRef.current.controller.abort();
+      }
+
+      const controller = new AbortController();
+      const requestId = activeRequestRef.current.id + 1;
+      activeRequestRef.current = { id: requestId, controller };
+
       try {
         setLoading(true);
         setError(null);
@@ -31,9 +40,15 @@ export default function useProducts() {
           params.set("cursor", cursor);
         }
 
-        const json = await api.post(`/api/products/get-all?${params.toString()}`, {
-          filterParams,
-        });
+        const json = await api.post(
+          `/api/products/get-all?${params.toString()}`,
+          { filterParams },
+          { signal: controller.signal },
+        );
+
+        if (activeRequestRef.current.id !== requestId) {
+          return;
+        }
 
         const products = json?.data?.products || [];
         const pagination = json?.data?.pagination || null;
@@ -44,14 +59,28 @@ export default function useProducts() {
         dispatch(setPagination(pagination));
         dispatch(setCursor(pagination?.nextCursor || null));
       } catch (err) {
+        if (err?.name === "AbortError") {
+          return;
+        }
         setError(err.message);
       } finally {
+        if (activeRequestRef.current.id !== requestId) {
+          return;
+        }
         setHasFetched(true);
         setLoading(false);
       }
     },
     [api, dispatch],
   );
+
+  useEffect(() => {
+    return () => {
+      if (activeRequestRef.current.controller) {
+        activeRequestRef.current.controller.abort();
+      }
+    };
+  }, []);
 
   return {
     loading,

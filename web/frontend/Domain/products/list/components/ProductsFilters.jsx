@@ -10,7 +10,6 @@ import {
   TextField,
   Tag,
 } from "@shopify/polaris";
-import { ALL_FILTERS } from "../constants";
 import { useTranslation } from "react-i18next";
 import FilterPanel from "./FilterPanel";
 
@@ -21,6 +20,7 @@ const ProductsFilters = memo(function ProductsFilters({
   onQueryChange,
   onQueryClear,
   onClearAll,
+  availableFilters = [],
 }) {
   const { t, i18n } = useTranslation();
 
@@ -41,11 +41,11 @@ const ProductsFilters = memo(function ProductsFilters({
 
   const translatedFilters = useMemo(
     () =>
-      ALL_FILTERS.map((filter) => ({
+      availableFilters.map((filter) => ({
         ...filter,
         translatedLabel: t(`fieldLabels.${filter.key}`, filter.label),
       })),
-    [t, i18n.language]
+    [availableFilters, t, i18n.language]
   );
 
   const activeFilter = useMemo(

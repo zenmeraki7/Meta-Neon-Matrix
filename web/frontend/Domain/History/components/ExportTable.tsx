@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Badge,
   Banner,
   BlockStack,
   Box,
@@ -10,12 +9,27 @@ import {
   IndexTable,
   InlineStack,
   ProgressBar,
+  Pagination,
   SkeletonBodyText,
   SkeletonDisplayText,
   Text,
 } from "@shopify/polaris";
 import { ArrowDownIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
+import { exportStatusBadge } from "../../shared/components/StatusBadge";
+
+const DEFAULT_PAGE_INFO = {
+  hasNextPage: false,
+  hasPreviousPage: false,
+  nextCursor: null,
+  previousCursor: null,
+};
+
+function getExportTabKey(selectedType) {
+  return String(selectedType).toLowerCase().includes("scheduled")
+    ? "scheduled"
+    : "manual";
+}
 
 function getNormalizedExportType(item) {
   return String(item?.rawType || item?.type || "")
@@ -113,18 +127,36 @@ const ExportTable = ({
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState(null);
   const [downloadingItems, setDownloadingItems] = useState(new Set());
+  const [tabQueryState, setTabQueryState] = useState({
+    manual: {
+      cursor: null,
+      pageInfo: DEFAULT_PAGE_INFO,
+    },
+    scheduled: {
+      cursor: null,
+      pageInfo: DEFAULT_PAGE_INFO,
+    },
+  });
+  const activeTabKey = getExportTabKey(selectedType);
+  const activeCursor = tabQueryState[activeTabKey]?.cursor || null;
+  const activePageInfo =
+    tabQueryState[activeTabKey]?.pageInfo || DEFAULT_PAGE_INFO;
 
   useEffect(() => {
     let isMounted = true;
 
-    const fetchHistories = async ({ silent = false } = {}) => {
+    const fetchHistories = async ({ silent = false, nextCursor = null } = {}) => {
       try {
         if (!silent) {
           setHistoryLoading(true);
         }
         setHistoryError(null);
 
-        const res = await fetch("/api/history/get-shop-exporthistory?");
+        const params = new URLSearchParams();
+        params.set("type", selectedType);
+        params.set("limit", "20");
+        if (nextCursor) params.set("cursor", nextCursor);
+        const res = await fetch(`/api/history/get-shop-exporthistory?${params.toString()}`);
         const data = await res.json();
 
         if (!res.ok || !data.success) {
@@ -132,11 +164,31 @@ const ExportTable = ({
         }
 
         if (isMounted) {
-          setHistories(data.data || []);
+          setHistories(data.items || data.data || []);
+          const info = data.pageInfo || data.meta?.pageInfo || {};
+          setTabQueryState((prev) => ({
+            ...prev,
+            [activeTabKey]: {
+              ...prev[activeTabKey],
+              pageInfo: {
+                hasNextPage: Boolean(info.hasNextPage),
+                hasPreviousPage: Boolean(info.hasPreviousPage),
+                nextCursor: info.nextCursor || info.endCursor || null,
+                previousCursor: info.previousCursor || null,
+              },
+            },
+          }));
         }
       } catch (error) {
         if (isMounted) {
           setHistoryError(error);
+          setTabQueryState((prev) => ({
+            ...prev,
+            [activeTabKey]: {
+              ...prev[activeTabKey],
+              pageInfo: DEFAULT_PAGE_INFO,
+            },
+          }));
         }
       } finally {
         if (isMounted && !silent) {
@@ -145,12 +197,12 @@ const ExportTable = ({
       }
     };
 
-    fetchHistories();
+    fetchHistories({ nextCursor: activeCursor });
 
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [activeCursor, activeTabKey, selectedType]);
 
   useEffect(() => {
     const hasActiveHistory = histories.some(
@@ -165,10 +217,30 @@ const ExportTable = ({
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch("/api/history/get-shop-exporthistory?");
+        const params = new URLSearchParams();
+        params.set("type", selectedType);
+        params.set("limit", "20");
+        if (activeCursor) params.set("cursor", activeCursor);
+
+        const res = await fetch(
+          `/api/history/get-shop-exporthistory?${params.toString()}`,
+        );
         const data = await res.json();
         if (res.ok && data.success) {
-          setHistories(data.data || []);
+          setHistories(data.items || data.data || []);
+          const info = data.pageInfo || data.meta?.pageInfo || {};
+          setTabQueryState((prev) => ({
+            ...prev,
+            [activeTabKey]: {
+              ...prev[activeTabKey],
+              pageInfo: {
+                hasNextPage: Boolean(info.hasNextPage),
+                hasPreviousPage: Boolean(info.hasPreviousPage),
+                nextCursor: info.nextCursor || info.endCursor || null,
+                previousCursor: info.previousCursor || null,
+              },
+            },
+          }));
         }
       } catch {
         // silent
@@ -176,15 +248,7 @@ const ExportTable = ({
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [histories, selectedType, t]);
-
-  const filteredHistories = useMemo(() => {
-    const normalizedSelectedType = String(selectedType).trim().toLowerCase();
-
-    return histories.filter(
-      (item) => getNormalizedExportType(item) === normalizedSelectedType,
-    );
-  }, [histories, selectedType]);
+  }, [activeCursor, activeTabKey, histories, selectedType, t]);
 
   const handleDownloadClick = async (id, fileUrl, filename) => {
     if (!fileUrl) {
@@ -244,7 +308,7 @@ const ExportTable = ({
 
   const historyRowMarkup = useMemo(
     () =>
-      filteredHistories.map((item, index) => {
+      histories.map((item, index) => {
         const id = item.id || item._id;
         const primaryStatus = getPrimaryStatus(item, t);
         const filename = item.filename || "Untitled export";
@@ -299,7 +363,7 @@ const ExportTable = ({
 
             <IndexTable.Cell>
               <BlockStack gap="100">
-                <Badge tone={primaryStatus.tone}>{primaryStatus.label}</Badge>
+                {exportStatusBadge(primaryStatus.key, primaryStatus.label)}
                 {supportDetail ? (
                   <Text as="span" variant="bodySm" tone="subdued">
                     {supportDetail}
@@ -324,7 +388,7 @@ const ExportTable = ({
           </IndexTable.Row>
         );
       }),
-    [downloadingItems, filteredHistories, t],
+    [downloadingItems, histories, t],
   );
 
   if (historyLoading) {
@@ -359,7 +423,7 @@ const ExportTable = ({
               </Box>
             </BlockStack>
             <Text as="span" tone="subdued" variant="bodySm">
-              {filteredHistories.length} {t("exportItems")}
+              {histories.length} {t("exportItems")}
             </Text>
           </InlineStack>
         </Box>
@@ -374,7 +438,7 @@ const ExportTable = ({
           </Box>
         )}
 
-        {filteredHistories.length === 0 ? (
+        {histories.length === 0 ? (
           <Box padding="1200">
             <EmptyState heading={t("noExportsYet")}>
               <p>{t("exportEmptyText")}</p>
@@ -384,7 +448,7 @@ const ExportTable = ({
           <Box paddingInlineStart="600">
             <IndexTable
               resourceName={{ singular: "export", plural: "exports" }}
-              itemCount={filteredHistories.length}
+              itemCount={histories.length}
               selectable={false}
               headings={[
                 { title: t("exportColumnTitle") },
@@ -397,6 +461,30 @@ const ExportTable = ({
             >
               {historyRowMarkup}
             </IndexTable>
+            <Box padding="400">
+              <Pagination
+                hasNext={activePageInfo.hasNextPage}
+                hasPrevious={activePageInfo.hasPreviousPage}
+                onNext={() =>
+                  setTabQueryState((prev) => ({
+                    ...prev,
+                    [activeTabKey]: {
+                      ...prev[activeTabKey],
+                      cursor: activePageInfo.nextCursor || null,
+                    },
+                  }))
+                }
+                onPrevious={() =>
+                  setTabQueryState((prev) => ({
+                    ...prev,
+                    [activeTabKey]: {
+                      ...prev[activeTabKey],
+                      cursor: activePageInfo.previousCursor || null,
+                    },
+                  }))
+                }
+              />
+            </Box>
           </Box>
         )}
       </BlockStack>

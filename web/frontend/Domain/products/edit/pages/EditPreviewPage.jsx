@@ -29,6 +29,7 @@ import PreviewTable from "../components/PreviewTable";
 import ScheduleEdit from "../components/ScheduleEdit";
 import RecurringEditModal from "../components/RecurringEditModal";
 import useDebounce from "../hooks/useDebounce";
+import { useFilterRegistry } from "../../list/hooks/useFilterRegistry";
 import {
   selectFilters,
   selectSearch,
@@ -45,6 +46,7 @@ export default function EditPreviewPage() {
   const { i18n, t } = useTranslation();
   const { isSyncInProgress } = useProductSyncStatus();
   const api = useApiClient();
+  const { versions: filterRegistryVersions } = useFilterRegistry();
 
   const [selectedField, setSelectedField] = useState(getFieldDefinition("price"));
   const [editType, setEditType] = useState(null);
@@ -73,6 +75,7 @@ export default function EditPreviewPage() {
   const [previewFingerprint, setPreviewFingerprint] = useState(null);
   const [requiresBroadConfirmation, setRequiresBroadConfirmation] = useState(false);
   const [previewSignature, setPreviewSignature] = useState(null);
+  const [previewRegistryVersion, setPreviewRegistryVersion] = useState(null);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [pendingConfirmRun, setPendingConfirmRun] = useState(false);
@@ -82,6 +85,7 @@ export default function EditPreviewPage() {
   useEffect(() => {
     setPreviewFingerprint(null);
     setPreviewSignature(null);
+    setPreviewRegistryVersion(null);
   }, [
     selectedField?.value,
     editType?.value,
@@ -205,7 +209,11 @@ export default function EditPreviewPage() {
       setIsVariant(json.data.isVariant);
       setPreviewTotal(json.data.pagination?.total || 0);
       setPreviewFingerprint(json.data.previewFingerprint || null);
-      setPreviewSignature(signature);
+      setPreviewSignature(json.data.previewSignature || signature);
+      setPreviewRegistryVersion({
+        fieldRegistryVersion: json.data.previewFingerprint?.fieldRegistryVersion || null,
+        operatorRegistryVersion: json.data.previewFingerprint?.operatorRegistryVersion || null,
+      });
       setRequiresBroadConfirmation(json.data.requiresConfirmation === true);
     } catch (err) {
       toast.error(toSafeErrorMessage(err, "Failed to load preview"));
@@ -253,6 +261,14 @@ export default function EditPreviewPage() {
       previewSignature &&
       previewSignature === buildCurrentPreviewSignature(),
   );
+  const hasPreviewRegistryMismatch = Boolean(
+    previewRegistryVersion &&
+      filterRegistryVersions &&
+      (String(previewRegistryVersion.fieldRegistryVersion || "") !==
+        String(filterRegistryVersions.fieldRegistryVersion || "") ||
+        String(previewRegistryVersion.operatorRegistryVersion || "") !==
+          String(filterRegistryVersions.operatorRegistryVersion || "")),
+  );
   const requiresLocationSelection = editType?.inputType === InputType.LOCATION_SELECT;
   const hasRequiredLocation = !requiresLocationSelection || Boolean(locationValue);
 
@@ -274,6 +290,9 @@ export default function EditPreviewPage() {
         previewId: previewFingerprint?.previewId || null,
         previewFilterHash: previewFingerprint?.filterHash || null,
         previewMirrorBatchId: previewFingerprint?.mirrorBatchId || null,
+        previewFieldRegistryVersion: previewRegistryVersion?.fieldRegistryVersion || null,
+        previewOperatorRegistryVersion: previewRegistryVersion?.operatorRegistryVersion || null,
+        previewSignature,
         confirmBroadTarget,
         supportValue,
       });
@@ -293,6 +312,9 @@ export default function EditPreviewPage() {
       previewFingerprint?.filterHash,
       previewFingerprint?.mirrorBatchId,
       previewFingerprint?.previewId,
+      previewSignature,
+      previewRegistryVersion?.fieldRegistryVersion,
+      previewRegistryVersion?.operatorRegistryVersion,
       selectedField?.value,
       supportValue,
     ],
@@ -319,6 +341,10 @@ export default function EditPreviewPage() {
     }
 
     if (!editType || !canRunEdit || !hasFreshPreview) return;
+    if (hasPreviewRegistryMismatch) {
+      toast.error("Filter registry changed. Refresh preview before executing.");
+      return;
+    }
 
     setSubmitting(true);
     setLimitWarning(null);
@@ -331,12 +357,13 @@ export default function EditPreviewPage() {
       }
       await executeBulkEdit(false);
     } catch (err) {
-      if (err?.status === 400 && err.message?.toLowerCase().includes("plan")) {
-        setLimitWarning(err.message);
-        toast.error(err.message, { duration: 6000 });
+      const safeMessage = toSafeErrorMessage(err, "Failed to update products");
+      if (err?.status === 400 && safeMessage.toLowerCase().includes("plan")) {
+        setLimitWarning(safeMessage);
+        toast.error(safeMessage, { duration: 6000 });
         return;
       }
-      toast.error(toSafeErrorMessage(err, "Failed to update products"));
+      toast.error(safeMessage);
     } finally {
       setSubmitting(false);
     }
@@ -388,6 +415,7 @@ const summaryText = useMemo(() => {
           Boolean(submitError) ||
           !canRunEdit ||
           !hasFreshPreview ||
+          hasPreviewRegistryMismatch ||
           !hasRequiredLocation,
       }}
       secondaryActions={[
@@ -498,6 +526,11 @@ const summaryText = useMemo(() => {
                 {!hasFreshPreview && (
                   <Banner tone="warning" title="Preview is stale">
                     <p>Run preview again before executing this edit.</p>
+                  </Banner>
+                )}
+                {hasPreviewRegistryMismatch && (
+                  <Banner tone="critical" title="Preview invalidated by filter registry change">
+                    <p>Fields/operators changed on the server. Refresh preview before executing.</p>
                   </Banner>
                 )}
                 {requiresLocationSelection && !hasRequiredLocation && (

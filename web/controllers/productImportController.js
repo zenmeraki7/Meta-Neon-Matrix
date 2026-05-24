@@ -1,4 +1,6 @@
 import fs from "fs";
+import Papa from "papaparse";
+import { prisma } from "../config/database.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 import { buildActorContext } from "../utils/operationContextUtils.js";
 import { ProductImportCommandService } from "../services/productImport/ProductImportCommandService.js";
@@ -11,6 +13,8 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/vnd.ms-excel",
   "application/csv",
 ]);
+const DEFAULT_PREVIEW_LIMIT = 25;
+const MAX_PREVIEW_LIMIT = 250;
 const productImportCommandService = new ProductImportCommandService();
 
 function removeUploadedFile(filePath) {
@@ -76,6 +80,27 @@ function assertUploadBounds(file) {
   }
 }
 
+function decodeCursor(cursor) {
+  if (!cursor) return 0;
+  try {
+    const raw = Buffer.from(String(cursor), "base64").toString("utf8");
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function encodeCursor(offset) {
+  return Buffer.from(String(Math.max(0, Number(offset) || 0)), "utf8").toString("base64");
+}
+
+function clampLimit(limit) {
+  const parsed = Number.parseInt(String(limit || DEFAULT_PREVIEW_LIMIT), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PREVIEW_LIMIT;
+  return Math.min(parsed, MAX_PREVIEW_LIMIT);
+}
+
 export const importCsvController = async (req, res) => {
   try {
     const session = res.locals.shopify?.session;
@@ -126,6 +151,86 @@ export const importCsvController = async (req, res) => {
     const { statusCode, body } = buildPublicApiErrorResponse(
       err,
       "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
+  }
+};
+
+export const previewCsvController = async (req, res) => {
+  try {
+    const session = res.locals.shopify?.session;
+    if (!session?.shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
+    }
+
+    const uploadToken = String(req.query?.uploadToken || "").trim();
+    if (!uploadToken) {
+      return res.status(400).json({
+        code: "UPLOAD_TOKEN_REQUIRED",
+        message: "uploadToken is required",
+      });
+    }
+
+    const spreadsheetFile = await prisma.spreadsheetFile.findFirst({
+      where: {
+        id: uploadToken,
+        shop: session.shop,
+      },
+      select: {
+        id: true,
+        fileUrl: true,
+      },
+    });
+
+    if (!spreadsheetFile?.fileUrl) {
+      return res.status(404).json({
+        code: "UPLOAD_NOT_FOUND",
+        message: "CSV upload token not found for this shop",
+      });
+    }
+
+    const fileContents = await fs.promises.readFile(spreadsheetFile.fileUrl, "utf8");
+    const parsed = Papa.parse(fileContents, {
+      header: true,
+      skipEmptyLines: true,
+    });
+
+    if (parsed.errors?.length) {
+      return res.status(422).json({
+        code: "CSV_PREVIEW_PARSE_FAILED",
+        message: parsed.errors[0]?.message || "CSV parse failed",
+      });
+    }
+
+    const allItems = Array.isArray(parsed.data) ? parsed.data : [];
+    const totalCount = allItems.length;
+    const limit = clampLimit(req.query?.limit);
+    const currentOffset = decodeCursor(req.query?.cursor);
+    const start = Math.min(currentOffset, totalCount);
+    const end = Math.min(start + limit, totalCount);
+    const items = allItems.slice(start, end);
+
+    const hasNextPage = end < totalCount;
+    const hasPreviousPage = start > 0;
+
+    return res.status(200).json({
+      items,
+      pageInfo: {
+        hasNextPage,
+        hasPreviousPage,
+        nextCursor: hasNextPage ? encodeCursor(end) : null,
+        previousCursor: hasPreviousPage ? encodeCursor(Math.max(0, start - limit)) : null,
+      },
+      totalCount,
+    });
+  } catch (err) {
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "CSV_PREVIEW_FAILED",
     );
     return res.status(statusCode).json(body);
   }

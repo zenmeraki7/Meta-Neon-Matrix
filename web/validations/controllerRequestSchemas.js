@@ -23,9 +23,13 @@ export const bulkEditExecuteSchema = Joi.object({
   previewId: Joi.string().required(),
   previewFilterHash: Joi.string().required(),
   previewMirrorBatchId: Joi.string().required(),
+  previewFieldRegistryVersion: Joi.string().required(),
+  previewOperatorRegistryVersion: Joi.string().required(),
   previewFingerprint: Joi.object({
     filterHash: Joi.string().required(),
     mirrorBatchId: Joi.string().required(),
+    fieldRegistryVersion: Joi.string().required(),
+    operatorRegistryVersion: Joi.string().required(),
   }).unknown(true).allow(null),
   confirmBroadTarget: Joi.boolean().default(false),
   criticalConfirmationText: Joi.string().allow("", null),

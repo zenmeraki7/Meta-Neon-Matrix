@@ -1,188 +1,168 @@
-// web/frontend/store/slices/historySlice.js
 import { createSlice, createAsyncThunk, createAction } from "@reduxjs/toolkit";
 import { historyService } from "../../Domain/History/services/historyService";
 import { ExportHistoryResponseSchema } from "../../Domain/History/schema/exportHistorySchema";
-// import { ExportHistoryResponseSchema } from "../../Domain/History/schemas/exportHistorySchema";
 
-// Async thunks for history operations
 let controller = null;
 
 export const fetchHistories = createAsyncThunk(
   "history/fetchHistories",
-  async ({ type, cursor, limit, search, lang }, { rejectWithValue }) => {
+  async (
+    { type, cursor, limit, search, lang, status, frequency, sortKey, sortDirection },
+    { rejectWithValue },
+  ) => {
     try {
-      // Abort previous request
-      if (controller) {
-        controller.abort();
+      if (controller) controller.abort();
+      controller = new AbortController();
+
+      if (type === "Recurring edit") {
+        return await historyService.getRecurringEditHistories(
+          { type, cursor, limit, search, lang, status, frequency, sortKey, sortDirection },
+          controller.signal,
+        );
       }
 
-      controller = new AbortController();
-      let response;
-      if (type == "Recurring edit") {
-        response = await historyService.getRecurringEditHistories(
-          type,
-          cursor,
-          limit,
-          search,
-          controller.signal, // <-- pass abort signal here
-          lang
-        );
-      } else {
-        response = await historyService.getHistories(
-          type,
-          cursor,
-          limit,
-          search,
-          controller.signal, // <-- pass abort signal here
-          lang
-        );
-      }
-      return response;
+      return await historyService.getHistories(
+        { type, cursor, limit, search, lang, status, frequency, sortKey, sortDirection },
+        controller.signal,
+      );
     } catch (error) {
       if (error.name === "AbortError") {
-        console.warn("Previous request aborted");
         return rejectWithValue("Request cancelled");
       }
       return rejectWithValue(error.message || "Failed to fetch histories");
     }
-  }
+  },
 );
 
 export const fetchExportHistories = createAsyncThunk(
   "history/fetchExportHistories",
   async ({ lang }, { rejectWithValue }) => {
     try {
-      // Abort previous request
-      if (controller) {
-        controller.abort();
-      }
-
+      if (controller) controller.abort();
       controller = new AbortController();
 
       const response = await historyService.getExportHistories({ lang });
-
-      // Validate the response data using Zod schema
       if (response && response.data) {
         const parsed = ExportHistoryResponseSchema.safeParse(response.data);
-
         if (!parsed.success) {
-          const errorMessage = `Malformed API response: ${JSON.stringify(
-            parsed.error.errors
-          )}`;
-          console.error("Validation Error:", errorMessage);
+          const errorMessage = `Malformed API response: ${JSON.stringify(parsed.error.errors)}`;
           return rejectWithValue(errorMessage);
         }
-
-        // Return validated data
-        return {
-          ...response,
-          data: parsed.data,
-        };
+        return { ...response, data: parsed.data };
       }
-
       return response;
     } catch (error) {
       if (error.name === "AbortError") {
-        console.warn("Previous request aborted");
         return rejectWithValue("Request cancelled");
       }
       return rejectWithValue(error.message || "Failed to fetch histories");
     }
-  }
+  },
 );
 
-export const loadMoreHistories = createAsyncThunk(
-  "history/loadMoreHistories",
-  async ({ cursor, limit, lang }, { getState, rejectWithValue }) => {
-    try {
-      const state = getState();
-      const { type, search } = state.history.filters;
+export const setExportHistoriesError = createAction("history/setExportHistoriesError");
+export const clearExportHistories = createAction("history/clearExportHistories");
 
-      // Create a new controller for this request
-      if (controller) {
-        controller.abort();
-      }
-      controller = new AbortController();
-
-      const response = await historyService.getHistories(
-        type,
-        cursor,
-        limit,
-        search,
-        controller.signal,
-        lang
-      );
-
-      return response;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        console.warn("Load more request aborted");
-        return rejectWithValue("Request cancelled");
-      }
-      return rejectWithValue(error.message || "Failed to load more histories");
-    }
-  }
-);
-
-// Additional action for validation errors
-export const setExportHistoriesError = createAction(
-  "history/setExportHistoriesError"
-);
-
-// Additional action to clear export histories
-export const clearExportHistories = createAction(
-  "history/clearExportHistories"
-);
-
-// Initial state
 const initialState = {
-  histories: [],
+  items: [],
   exportData: {
     histories: [],
     error: null,
     loading: false,
-    validationError: null, // New field for validation errors
+    validationError: null,
   },
   currentHistory: null,
-  pagination: {
+  pageInfo: {
     hasNextPage: false,
-    endCursor: null,
-    limit: 10,
+    hasPreviousPage: false,
+    nextCursor: null,
+    previousCursor: null,
   },
   filters: {
-    type: "Manual edit",
     search: "",
+    status: null,
+    type: null,
   },
-  status: "idle", // 'idle' | 'loading' | 'succeeded' | 'failed'
+  limit: 50,
+  cursor: null,
+  loading: false,
   error: null,
   detailsStatus: "idle",
   detailsError: null,
-  loadMoreStatus: "idle", // Added missing loadMoreStatus
 };
 
-// Create the slice
 const historySlice = createSlice({
   name: "history",
   initialState,
   reducers: {
-    setHistoryType: (state, action) => {
-      state.filters.type = action.payload;
-      state.histories = []; // Reset histories when type changes
-      state.pagination.endCursor = null;
-      state.pagination.hasNextPage = false;
+    replacePage: (state, action) => {
+      const payloadItems = Array.isArray(action.payload?.items)
+        ? action.payload.items
+        : [];
+      state.items = payloadItems.slice(0, state.limit);
+      state.pageInfo = {
+        hasNextPage: Boolean(action.payload?.pageInfo?.hasNextPage),
+        hasPreviousPage: Boolean(action.payload?.pageInfo?.hasPreviousPage),
+        nextCursor: action.payload?.pageInfo?.nextCursor || null,
+        previousCursor: action.payload?.pageInfo?.previousCursor || null,
+      };
+    },
+    setFilters: (state, action) => {
+      state.filters = {
+        ...state.filters,
+        ...action.payload,
+      };
+    },
+    resetCursor: (state) => {
+      state.cursor = null;
+      state.pageInfo = {
+        hasNextPage: false,
+        hasPreviousPage: false,
+        nextCursor: null,
+        previousCursor: null,
+      };
+    },
+    setCursor: (state, action) => {
+      state.cursor = action.payload || null;
     },
     setSearchQuery: (state, action) => {
       state.filters.search = action.payload;
-      state.histories = []; // Reset histories when search changes
-      state.pagination.endCursor = null;
-      state.pagination.hasNextPage = false;
+      state.cursor = null;
+      state.items = [];
+      state.pageInfo = {
+        hasNextPage: false,
+        hasPreviousPage: false,
+        nextCursor: null,
+        previousCursor: null,
+      };
+    },
+    setHistoryType: (state, action) => {
+      state.filters.type = action.payload;
+      state.cursor = null;
+      state.items = [];
+      state.pageInfo = {
+        hasNextPage: false,
+        hasPreviousPage: false,
+        nextCursor: null,
+        previousCursor: null,
+      };
+    },
+    setCursorFilters: (state, action) => {
+      state.filters = { ...state.filters, ...action.payload };
+      state.cursor = null;
+      state.items = [];
+      state.pageInfo = {
+        hasNextPage: false,
+        hasPreviousPage: false,
+        nextCursor: null,
+        previousCursor: null,
+      };
     },
     clearCurrentHistory: (state) => {
       state.currentHistory = null;
       state.detailsStatus = "idle";
       state.detailsError = null;
     },
-    // New reducer to clear export data
     clearExportData: (state) => {
       state.exportData = {
         histories: [],
@@ -192,33 +172,29 @@ const historySlice = createSlice({
       };
     },
   },
-
   extraReducers: (builder) => {
     builder
-      // Fetch Histories
-     .addCase(fetchHistories.pending, (state, action) => {
-  if (!action.meta.arg.silent) {   // ← only show loading for non-silent fetches
-    state.status = "loading";
-  }
-  state.error = null;
-})
+      .addCase(fetchHistories.pending, (state, action) => {
+        if (!action.meta.arg.silent) state.loading = true;
+        state.error = null;
+      })
       .addCase(fetchHistories.fulfilled, (state, action) => {
-  state.status = "succeeded";   // ← always reset status
-  state.histories = action.payload.data;
-  state.pagination = {
-    ...state.pagination,
-    hasNextPage: action.payload.meta?.pageInfo?.hasNextPage || false,
-    endCursor: action.payload.meta?.pageInfo?.endCursor || null,
-    totalItems: action.payload.meta?.total || 0,
-  };
-  state.error = null;
-})
+        state.loading = false;
+        const items = action.payload.items || action.payload.data || [];
+        const pageInfo = action.payload.pageInfo || action.payload.meta?.pageInfo || {};
+        state.items = Array.isArray(items) ? items.slice(0, state.limit) : [];
+        state.pageInfo = {
+          hasNextPage: Boolean(pageInfo.hasNextPage),
+          hasPreviousPage: Boolean(pageInfo.hasPreviousPage),
+          nextCursor: pageInfo.nextCursor || pageInfo.endCursor || null,
+          previousCursor: pageInfo.previousCursor || null,
+        };
+        state.error = null;
+      })
       .addCase(fetchHistories.rejected, (state, action) => {
-        state.status = "failed";
+        state.loading = false;
         state.error = action.payload || "Failed to fetch histories";
       })
-
-      // Fetch Export Histories with enhanced error handling
       .addCase(fetchExportHistories.pending, (state) => {
         state.exportData.loading = true;
         state.exportData.error = null;
@@ -233,8 +209,6 @@ const historySlice = createSlice({
       .addCase(fetchExportHistories.rejected, (state, action) => {
         state.exportData.loading = false;
         state.exportData.histories = [];
-
-        // Check if this is a validation error
         const errorMessage = action.payload || "Failed to fetch histories";
         if (errorMessage.includes("Malformed API response")) {
           state.exportData.validationError = errorMessage;
@@ -244,29 +218,6 @@ const historySlice = createSlice({
           state.exportData.validationError = null;
         }
       })
-
-      // Load More Histories
-      .addCase(loadMoreHistories.pending, (state) => {
-        state.loadMoreStatus = "loading";
-      })
-      .addCase(loadMoreHistories.fulfilled, (state, action) => {
-        state.loadMoreStatus = "succeeded";
-        // Append new items to existing list
-        state.histories = [...state.histories, ...action.payload.data];
-        // Update pagination info
-        state.pagination = {
-          ...state.pagination,
-          hasNextPage: action.payload.meta?.pageInfo?.hasNextPage || false,
-          endCursor: action.payload.meta?.pageInfo?.endCursor || null,
-          totalItems: action.payload.meta?.total || 0,
-        };
-      })
-      .addCase(loadMoreHistories.rejected, (state, action) => {
-        state.loadMoreStatus = "failed";
-        state.error = action.payload || "Failed to load more histories";
-      })
-
-      // Additional action handlers for manual error setting
       .addCase(setExportHistoriesError, (state, action) => {
         state.exportData.loading = false;
         state.exportData.error = action.payload;
@@ -279,34 +230,36 @@ const historySlice = createSlice({
   },
 });
 
-// Export actions
 export const {
+  replacePage,
+  setFilters,
+  resetCursor,
+  setCursor,
   setHistoryType,
   setSearchQuery,
+  setCursorFilters,
   clearCurrentHistory,
   clearExportData,
 } = historySlice.actions;
 
-// Export selectors
-export const selectHistories = (state) => state.history.histories;
+export const selectHistories = (state) => state.history.items;
 export const selectExportData = (state) => state.history.exportData;
 export const selectCurrentHistory = (state) => state.history.currentHistory;
-export const selectHistoryPagination = (state) => state.history.pagination;
+export const selectHistoryPagination = (state) => ({
+  ...state.history.pageInfo,
+  limit: state.history.limit,
+});
 export const selectHistoryFilters = (state) => state.history.filters;
-export const selectHistoryStatus = (state) => state.history.status;
+export const selectHistoryCursor = (state) => state.history.cursor;
+export const selectHistoryStatus = (state) =>
+  state.history.loading ? "loading" : "idle";
+export const selectHistoryLoading = (state) => state.history.loading;
 export const selectHistoryError = (state) => state.history.error;
-export const selectLoadMoreStatus = (state) => state.history.loadMoreStatus;
-export const selectHistoryDetailsStatus = (state) =>
-  state.history.detailsStatus;
+export const selectHistoryDetailsStatus = (state) => state.history.detailsStatus;
 export const selectHistoryDetailsError = (state) => state.history.detailsError;
-
-// New selectors for export data validation
-export const selectExportValidationError = (state) =>
-  state.history.exportData.validationError;
-export const selectExportHistories = (state) =>
-  state.history.exportData.histories;
+export const selectExportValidationError = (state) => state.history.exportData.validationError;
+export const selectExportHistories = (state) => state.history.exportData.histories;
 export const selectExportLoading = (state) => state.history.exportData.loading;
 export const selectExportError = (state) => state.history.exportData.error;
 
-// Export reducer
 export default historySlice.reducer;

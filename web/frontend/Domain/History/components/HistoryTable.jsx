@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  DataTable,
-  Badge,
+  IndexTable,
+  IndexFilters,
   Button,
   InlineStack,
   BlockStack,
@@ -12,130 +12,68 @@ import {
   SkeletonDisplayText,
   Card,
   Divider,
+  Pagination,
+  Tooltip,
+  Badge,
+  ChoiceList,
 } from "@shopify/polaris";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-
 import AlertUndo from "../../products/edit/components/AlertUndo";
 import useProductSyncStatus from "../../../hooks/useProductSyncStatus";
+import { buildOperationTimeline } from "../../products/edit/utils/operationTimeline";
+import { operationStatusBadge } from "../../shared/components/StatusBadge";
 
-function getPrimaryStatusSummary(item) {
-  if (item?.primaryStatus) {
-    return item.primaryStatus;
-  }
-
-  const status = String(item?.status || "pending").toLowerCase();
-
-  switch (status) {
-    case "completed":
-      return {
-        key: "completed",
-        tone: "success",
-        isTerminal: true,
-      };
-    case "failed":
-      return {
-        key: "failed",
-        tone: "critical",
-        isTerminal: true,
-      };
-    case "finalizing":
-      return {
-        key: "finalizing",
-        tone: "info",
-        isTerminal: false,
-      };
-    case "processing":
-      return {
-        key: "processing",
-        tone: "info",
-        isTerminal: false,
-      };
-    default:
-      return {
-        key: "pending",
-        tone: "attention",
-        isTerminal: false,
-      };
-  }
+function getLifecycleState(item) {
+  return item?.executionState || item?.supportStatus?.executionState || item?.status || "UNKNOWN";
 }
 
-function getUndoStatusSummary(item) {
-  if (item?.undoStatusSummary) {
-    return item.undoStatusSummary;
+function getIdempotencyStageMap(item) {
+  const entries = Array.isArray(item?.supportStatus?.idempotencyStages)
+    ? item.supportStatus.idempotencyStages
+    : [];
+  const map = new Map();
+  for (const entry of entries) {
+    const stage = String(entry?.stage || "").toUpperCase();
+    if (stage) map.set(stage, entry);
   }
-
-  const undoStatus = String(item?.undo?.status || "").toLowerCase();
-
-  if (!undoStatus || undoStatus === "idle") {
-    return null;
-  }
-
-  switch (undoStatus) {
-    case "completed":
-      return {
-        key: "undo_completed",
-        tone: "success",
-        isTerminal: true,
-      };
-    case "failed":
-      return {
-        key: "undo_failed",
-        tone: "critical",
-        isTerminal: true,
-      };
-    default:
-      return {
-        key: "undo_processing",
-        tone: "attention",
-        isTerminal: false,
-      };
-  }
+  return map;
 }
 
-function isActiveStatus(summary) {
-  return Boolean(summary) && summary.isTerminal !== true;
+function formatStageTimestamp(entry) {
+  if (!entry) return "No stage timestamps yet";
+  const fmt = (v) => (v ? new Date(v).toLocaleString() : "n/a");
+  return `Started: ${fmt(entry.startedAt)}\nUpdated: ${fmt(entry.updatedAt)}\nCompleted: ${fmt(entry.completedAt)}\nLease: ${fmt(entry.leaseUntil)}`;
 }
 
-function getItemViewModel(item) {
-  const primaryStatus = getPrimaryStatusSummary(item);
-  const undoStatus = getUndoStatusSummary(item);
+const TYPE_OPTIONS = [
+  { label: "Manual edit", value: "Manual edit" },
+  { label: "Scheduled edit", value: "Scheduled edit" },
+  { label: "Recurring edit", value: "Recurring edit" },
+];
 
-  const isProcessing =
-    isActiveStatus(primaryStatus) || isActiveStatus(undoStatus);
-
-  const progressLabel =
-    item?.progressSummary?.label ||
-    `${item?.processedCount || 0} / ${item?.totalItems || item?.processedCount || 0}`;
-
-  const timeValue =
-    isActiveStatus(undoStatus) && item?.undo?.startedAt
-      ? item.undo.startedAt
-      : undoStatus?.key === "undo_completed" && item?.undo?.completedAt
-        ? item.undo.completedAt
-        : item?.completedAt || item?.updatedAt || item?.editTime;
-
-  return {
-    primaryStatus,
-    undoStatus,
-    isProcessing,
-    progressLabel,
-    timeValue,
-  };
-}
+const STATUS_OPTIONS = [
+  { label: "Queued", value: "queued" },
+  { label: "Processing", value: "processing" },
+  { label: "Completed", value: "completed" },
+  { label: "Failed", value: "failed" },
+  { label: "Cancelled", value: "cancelled" },
+];
 
 const HistoryTable = memo(function HistoryTable({
   histories,
   isLoading,
-  isLoadingMore,
-  hasMore,
-  onLoadMore,
   emptyStateMessage = "No history items found.",
+  onNext,
+  onPrevious,
+  pageInfo,
+  query,
+  onQueryChange,
+  onQueryClear,
 }) {
   const navigate = useNavigate();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { isSyncInProgress } = useProductSyncStatus();
-
   const [showUndoModal, setShowUndoModal] = useState(false);
   const [undoLoading, setUndoLoading] = useState(false);
   const [undoHistoryItem, setUndoHistoryItem] = useState(null);
@@ -145,308 +83,127 @@ const HistoryTable = memo(function HistoryTable({
     setLocalHistories(histories || []);
   }, [histories]);
 
-  const getStatusLabel = useCallback(
-    (statusKey) => t(`historyStatus.${statusKey}`, { defaultValue: statusKey }),
-    [t],
-  );
-
-  const getStatusDetail = useCallback(
-    (status) => {
-      if (!status) return null;
-
-      if (status.detailKey) {
-        return t(status.detailKey, {
-          defaultValue: status.detail || "",
-        });
-      }
-
-      return status.detail || null;
-    },
-    [t],
-  );
-
-  const handleCloseUndo = useCallback(() => {
-    setShowUndoModal(false);
-    setUndoHistoryItem(null);
-  }, []);
+  const appliedFilters = useMemo(() => {
+    const filters = [];
+    if (query.type) {
+      filters.push({
+        key: "type",
+        label: `Type: ${query.type}`,
+        onRemove: () => onQueryChange({ type: "", cursor: null }),
+      });
+    }
+    if (query.status) {
+      filters.push({
+        key: "status",
+        label: `Status: ${query.status}`,
+        onRemove: () => onQueryChange({ status: "", cursor: null }),
+      });
+    }
+    return filters;
+  }, [query.type, query.status, onQueryChange]);
 
   const handleUndo = useCallback((history) => {
     setUndoHistoryItem(history);
     setShowUndoModal(true);
   }, []);
 
-  const canUndo = useCallback((item) => {
-    const primaryStatus = getPrimaryStatusSummary(item);
-    const undoStatus = item?.undo?.status ?? item?.undoStatusSummary?.key ?? "idle";
-    const isAllowed = item?.undo == null ? true : item.undo.allowed === true;
-
-    return (
-      primaryStatus.key === "completed" &&
-      isAllowed &&
-      ["idle", "failed", "undo_failed"].includes(String(undoStatus))
-    );
-  }, []);
-
-  const renderStatusBadge = useCallback(
-    (item) => {
-      const { primaryStatus, undoStatus } = getItemViewModel(item);
-
-      return (
-        <InlineStack gap="150" wrap>
-          <Badge tone={primaryStatus.tone}>
-            {getStatusLabel(primaryStatus.key)}
-          </Badge>
-
-          {undoStatus ? (
-            <Badge tone={undoStatus.tone}>
-              {getStatusLabel(undoStatus.key)}
-            </Badge>
-          ) : null}
-        </InlineStack>
-      );
-    },
-    [getStatusLabel],
-  );
-
   const handleUndoEditHistory = useCallback(async () => {
     if (!undoHistoryItem?.id) return;
-
     setUndoLoading(true);
-
     try {
       const response = await fetch(`/api/products/undo-edit/${undoHistoryItem.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
       });
-
-      if (!response.ok) {
-        return;
-      }
-
-      setLocalHistories((prev) =>
-        prev.map((history) =>
-          history.id === undoHistoryItem.id
-            ? {
-                ...history,
-                undo: {
-                  ...history.undo,
-                  status: "processing",
-                  state: "queued",
-                  startedAt: new Date().toISOString(),
-                },
-                undoStatusSummary: {
-                  key: "undo_queued",
-                  tone: "attention",
-                  isTerminal: false,
-                },
-              }
-            : history,
-        ),
-      );
-
-      setShowUndoModal(false);
-      setUndoHistoryItem(null);
+      if (response.ok) setShowUndoModal(false);
     } finally {
       setUndoLoading(false);
     }
   }, [undoHistoryItem]);
 
-  const activeHistoryIds = useMemo(() => {
-    return (localHistories || [])
-      .filter((history) => {
-        const { primaryStatus, undoStatus } = getItemViewModel(history);
-        return isActiveStatus(primaryStatus) || isActiveStatus(undoStatus);
-      })
-      .map((history) => history.id)
-      .filter(Boolean);
-  }, [localHistories]);
-
-  const fetchHistoryDetails = useCallback(async () => {
-    if (activeHistoryIds.length === 0) {
-      return;
-    }
-
-    try {
-      const updates = await Promise.all(
-        activeHistoryIds.map((id) =>
-          fetch(
-            `/api/history/get-edit-history-details/${id}?lang=${encodeURIComponent(i18n.language)}`,
-          )
-            .then((response) => (response.ok ? response.json() : null))
-            .then((json) => json?.data || null)
-            .catch(() => null),
-        ),
-      );
-
-      const updateMap = new Map(
-        updates.filter(Boolean).map((entry) => [entry.id, entry]),
-      );
-
-      if (updateMap.size === 0) {
-        return;
-      }
-
-      setLocalHistories((prev) =>
-        prev.map((history) => {
-          const updated = updateMap.get(history.id);
-          return updated ? { ...history, ...updated } : history;
-        }),
-      );
-    } catch {
-      // silent polling failure
-    }
-  }, [activeHistoryIds, i18n.language]);
-
-  useEffect(() => {
-    if (activeHistoryIds.length === 0) {
-      return undefined;
-    }
-
-    const interval = setInterval(() => {
-      fetchHistoryDetails();
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [activeHistoryIds, fetchHistoryDetails]);
-
-  const summary = useMemo(() => {
-    const items = localHistories || [];
-
-    const total = items.length;
-    const processing = items.filter((item) => {
-      const { primaryStatus, undoStatus } = getItemViewModel(item);
-      return isActiveStatus(primaryStatus) || isActiveStatus(undoStatus);
-    }).length;
-
-    const completed = items.filter(
-      (item) => getPrimaryStatusSummary(item).key === "completed",
-    ).length;
-
-    const failed = items.filter(
-      (item) => getPrimaryStatusSummary(item).key === "failed",
-    ).length;
-
-    return {
-      total,
-      processing,
-      completed,
-      failed,
-    };
-  }, [localHistories]);
-
   const rows = useMemo(() => {
-    return (localHistories || []).map((item) => {
-      const { id, title, shop } = item;
-      const user = shop?.split(".")[0];
+    return (localHistories || []).map((item, index) => {
+      const id = item.id || `row-${index}`;
+      const timeline = buildOperationTimeline(getLifecycleState(item));
+      const activeStage = timeline.stages.find((s) => s.status === "active");
+      const activeStageLabel = activeStage
+        ? t(activeStage.labelKey, { defaultValue: activeStage.defaultLabel })
+        : t(`operationLifecycleStageLabels.${timeline.currentState}`, {
+            defaultValue: timeline.currentState,
+          });
+      const stageMetaMap = getIdempotencyStageMap(item);
 
-      const {
-        primaryStatus,
-        undoStatus,
-        isProcessing,
-        progressLabel,
-        timeValue,
-      } = getItemViewModel(item);
+      return (
+        <IndexTable.Row id={String(id)} key={String(id)} position={index}>
+          <IndexTable.Cell>
+            <BlockStack gap="050">
+              <Text variant="bodyMd" fontWeight="medium" as="span">{item.title || "-"}</Text>
+              <Text variant="bodySm" tone="subdued" as="span">{item.shop?.split(".")?.[0] || "-"}</Text>
+            </BlockStack>
+          </IndexTable.Cell>
 
-      const isUndoable = canUndo(item);
-      const undoDisabled = !isUndoable || isProcessing || isSyncInProgress;
-      const primaryDetail = getStatusDetail(primaryStatus);
+          <IndexTable.Cell>
+            <InlineStack gap="150" wrap>
+              {operationStatusBadge(
+                item?.primaryStatus?.key || item?.status,
+                t(`historyStatus.${String(item?.primaryStatus?.key || item?.status || "pending").toLowerCase()}`, {
+                  defaultValue: String(item?.status || "pending"),
+                }),
+              )}
+              {item?.undoStatusSummary?.key
+                ? operationStatusBadge(
+                    item.undoStatusSummary.key,
+                    t(`historyStatus.${item.undoStatusSummary.key}`, { defaultValue: item.undoStatusSummary.key }),
+                  )
+                : null}
+            </InlineStack>
+          </IndexTable.Cell>
 
-      return [
-        <Box key={`title-${id}`} maxWidth="320px">
-          <BlockStack gap="050">
-         <Text variant="bodyMd" fontWeight="medium" truncate as="span">
-  {typeof title === "string"
-    ? title
-    : Array.isArray(title)
-      ? title
-          .map((rule) =>
-            `${t(`fieldLabels.${rule.field}`)} ${t(rule.operation)} ${rule.value}`
-          )
-          .join(" + ")
-      : "-"}
-</Text>
-            <Text variant="bodySm" tone="subdued" as="span">
-              {user || "-"}
-            </Text>
-          </BlockStack>
-        </Box>,
+          <IndexTable.Cell>
+            <BlockStack gap="050">
+              <Text as="span">{item?.progressSummary?.label || `${item?.processedCount || 0} / ${item?.totalItems || 0}`}</Text>
+              <InlineStack gap="100" wrap>
+                <Badge tone="info">{activeStageLabel}</Badge>
+                {timeline.stages.slice(0, 5).map((stage) => {
+                  const meta = stageMetaMap.get(String(stage.key || "").toUpperCase()) || null;
+                  const tooltip = `${t(stage.labelKey, { defaultValue: stage.defaultLabel })}\n${formatStageTimestamp(meta)}`;
+                  return (
+                    <Tooltip key={`${id}-${stage.key}`} content={tooltip}>
+                      <Badge tone={stage.status === "completed" ? "success" : stage.status === "active" ? "info" : "attention"}>
+                        {String(stage.key).slice(0, 3)}
+                      </Badge>
+                    </Tooltip>
+                  );
+                })}
+              </InlineStack>
+            </BlockStack>
+          </IndexTable.Cell>
 
-        renderStatusBadge(item),
+          <IndexTable.Cell>
+            <Text as="span" variant="bodySm">{item?.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-"}</Text>
+          </IndexTable.Cell>
 
-        <BlockStack key={`processed-${id}`} gap="050">
-          <Text variant="bodyMd" as="span">
-            {progressLabel}
-          </Text>
-          {primaryDetail ? (
-            <Text variant="bodySm" tone="subdued" as="span">
-              {primaryDetail}
-            </Text>
-          ) : null}
-        </BlockStack>,
-
-        <Text key={`updated-${id}`} as="span" variant="bodySm">
-          {timeValue ? new Date(timeValue).toLocaleString() : "-"}
-        </Text>,
-
-        <InlineStack key={`actions-${id}`} gap="200" wrap={false}>
-          <Button size="slim" onClick={() => navigate(`/editDetails/${id}`)}>
-            {t("historyViewButton")}
-          </Button>
-
-          <Button
-            size="slim"
-            tone={isUndoable ? "critical" : undefined}
-            onClick={() => {
-              if (isUndoable) {
-                handleUndo(item);
-              }
-            }}
-            disabled={undoDisabled}
-          >
-            {t("historyUndoButton")}
-          </Button>
-        </InlineStack>,
-      ];
+          <IndexTable.Cell>
+            <InlineStack gap="200" wrap={false}>
+              <Button size="slim" onClick={() => navigate(`/editDetails/${id}`)}>{t("historyViewButton")}</Button>
+              <Button size="slim" tone="critical" onClick={() => handleUndo(item)} disabled={isSyncInProgress}>
+                {t("historyUndoButton")}
+              </Button>
+            </InlineStack>
+          </IndexTable.Cell>
+        </IndexTable.Row>
+      );
     });
-  }, [
-    localHistories,
-    canUndo,
-    getStatusDetail,
-    handleUndo,
-    isSyncInProgress,
-    navigate,
-    renderStatusBadge,
-    t,
-  ]);
+  }, [localHistories, t, navigate, handleUndo, isSyncInProgress]);
 
   if (isLoading) {
     return (
       <Card padding="0">
         <Box padding="500">
           <BlockStack gap="400">
-            <BlockStack gap="200">
-              <SkeletonDisplayText size="small" />
-              <SkeletonBodyText lines={2} />
-            </BlockStack>
-
-            <Divider />
-
-            <BlockStack gap="300">
-              <SkeletonBodyText lines={6} />
-            </BlockStack>
+            <SkeletonDisplayText size="small" />
+            <SkeletonBodyText lines={6} />
           </BlockStack>
-        </Box>
-      </Card>
-    );
-  }
-
-  if (!localHistories || localHistories.length === 0) {
-    return (
-      <Card>
-        <Box padding="1200">
-          <EmptyState heading={t("historyEmptyStateTitle")}>
-            <p>{emptyStateMessage}</p>
-          </EmptyState>
         </Box>
       </Card>
     );
@@ -454,100 +211,92 @@ const HistoryTable = memo(function HistoryTable({
 
   return (
     <Card padding="0">
-      <Box padding="500">
-        <BlockStack gap="500">
-          <InlineStack align="space-between" blockAlign="start" wrap gap="300">
-            <BlockStack gap="100">
-              <Box paddingInlineStart="500">
-                <BlockStack gap="100">
-                  <Text as="h3" variant="headingMd">
-                    {t("historyEditActivityTitle")}
-                  </Text>
-
-                  <Text tone="subdued" variant="bodySm">
-                    {t("historyEditActivityText")}
-                  </Text>
-
-                  {isSyncInProgress ? (
-                    <Text tone="subdued" variant="bodySm">
-                      {t("historyUndoDisabledSync")}
-                    </Text>
-                  ) : null}
-                </BlockStack>
-              </Box>
-            </BlockStack>
-
-            <InlineStack gap="200" wrap>
-              <Badge>
-                {summary.total} {t("historySummaryTotal")}
-              </Badge>
-              <Badge tone="info">
-                {summary.processing} {t("historySummaryActive")}
-              </Badge>
-              <Badge tone="success">
-                {summary.completed} {t("historySummaryCompleted")}
-              </Badge>
-              <Badge tone="critical">
-                {summary.failed} {t("historySummaryFailed")}
-              </Badge>
-            </InlineStack>
-          </InlineStack>
-
-          <InlineStack align="space-between" blockAlign="center" wrap gap="300">
-            <Box
-              background="bg-surface-secondary"
-              borderRadius="300"
-              padding="300"
-              paddingInlineStart="800"
-            >
-              <Text tone="subdued" variant="bodySm" as="p">
-                {t("historyLiveStatusHint")}
-              </Text>
-            </Box>
-
-            <Text tone="subdued" variant="bodySm">
-              {localHistories.length} {t("historyItemsCount")}
-            </Text>
-          </InlineStack>
-        </BlockStack>
-      </Box>
+      <IndexFilters
+        queryValue={query.search}
+        queryPlaceholder="Search history"
+        onQueryChange={(value) => onQueryChange({ search: value, cursor: null })}
+        onQueryClear={onQueryClear}
+        filters={[
+          {
+            key: "type",
+            label: "Type",
+            filter: (
+              <ChoiceList
+                title="Type"
+                titleHidden
+                choices={TYPE_OPTIONS}
+                selected={query.type ? [query.type] : []}
+                onChange={(selected) => onQueryChange({ type: selected[0] || "", cursor: null })}
+              />
+            ),
+            shortcut: true,
+          },
+          {
+            key: "status",
+            label: "Status",
+            filter: (
+              <ChoiceList
+                title="Status"
+                titleHidden
+                choices={STATUS_OPTIONS}
+                selected={query.status ? [query.status] : []}
+                onChange={(selected) => onQueryChange({ status: selected[0] || "", cursor: null })}
+              />
+            ),
+            shortcut: true,
+          },
+        ]}
+        appliedFilters={appliedFilters}
+        onClearAll={onQueryClear}
+        cancelAction={{ onAction: () => {}, disabled: true, loading: false }}
+        tabs={[]}
+        selected={0}
+        onSelect={() => {}}
+        canCreateNewView={false}
+        mode="default"
+        setMode={() => {}}
+      />
 
       <Divider />
 
-      <Box overflowX="auto" paddingInlineStart="800">
-        <DataTable
-          columnContentTypes={["text", "text", "text", "text", "text"]}
-          headings={[
-            t("historyColumnTitle"),
-            t("historyColumnStatus"),
-            t("historyColumnProcessed"),
-            t("historyColumnUpdated"),
-            t("historyColumnActions"),
-          ]}
-          rows={rows}
+      {!localHistories?.length ? (
+        <Box padding="1200">
+          <EmptyState heading={t("historyEmptyStateTitle")}>
+            <p>{emptyStateMessage}</p>
+          </EmptyState>
+        </Box>
+      ) : (
+        <Box overflowX="auto" paddingInlineStart="800">
+          <IndexTable
+            resourceName={{ singular: "history item", plural: "history items" }}
+            itemCount={localHistories.length}
+            selectable={false}
+            headings={[
+              { title: t("historyColumnTitle") },
+              { title: t("historyColumnStatus") },
+              { title: t("historyColumnProcessed") },
+              { title: t("historyColumnUpdated") },
+              { title: t("historyColumnActions") },
+            ]}
+          >
+            {rows}
+          </IndexTable>
+        </Box>
+      )}
+
+      <Divider />
+      <Box padding="400">
+        <Pagination
+          hasNext={Boolean(pageInfo?.hasNextPage)}
+          hasPrevious={Boolean(pageInfo?.hasPreviousPage)}
+          onNext={onNext}
+          onPrevious={onPrevious}
         />
       </Box>
 
-      {hasMore ? (
-        <>
-          <Divider />
-          <Box padding="400">
-            <InlineStack align="space-between" blockAlign="center" wrap gap="300">
-              <Text tone="subdued" variant="bodySm">
-                {t("historyLoadMoreHint")}
-              </Text>
-
-              <Button loading={isLoadingMore} onClick={onLoadMore}>
-                {t("historyLoadMoreButton")}
-              </Button>
-            </InlineStack>
-          </Box>
-        </>
-      ) : null}
-
       <AlertUndo
         show={showUndoModal}
-        handleClose={handleCloseUndo}
+        handleClose={() => setShowUndoModal(false)}
         undoEditHistory={handleUndoEditHistory}
         loading={undoLoading}
       />
@@ -556,5 +305,4 @@ const HistoryTable = memo(function HistoryTable({
 });
 
 HistoryTable.displayName = "HistoryTable";
-
 export default HistoryTable;

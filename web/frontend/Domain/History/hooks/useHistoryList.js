@@ -2,14 +2,16 @@ import { useEffect, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   fetchHistories,
-  loadMoreHistories,
   setHistoryType,
+  setFilters as setHistoryFilters,
+  resetCursor,
+  setCursor,
   selectHistories,
   selectHistoryPagination,
   selectHistoryFilters,
-  selectHistoryStatus,
+  selectHistoryCursor,
+  selectHistoryLoading,
   selectHistoryError,
-  selectLoadMoreStatus,
 } from "../../../store/slices/historySlice";
 import { useTranslation } from "react-i18next";
 
@@ -17,14 +19,14 @@ export const TYPE_TO_KEY = {
   "Manual edit": "ManualEdit",
   "Scheduled edit": "ScheduledEdit",
   "Recurring edit": "RecurringEdit",
-  "Favorites": "Favorites"
+  Favorites: "Favorites",
 };
 
 export const KEY_TO_TYPE = {
   ManualEdit: "Manual edit",
   ScheduledEdit: "Scheduled edit",
   RecurringEdit: "Recurring edit",
-  Favorites: "Favorites"
+  Favorites: "Favorites",
 };
 
 export const useHistoryList = () => {
@@ -34,65 +36,72 @@ export const useHistoryList = () => {
   const histories = useSelector(selectHistories);
   const pagination = useSelector(selectHistoryPagination);
   const filters = useSelector(selectHistoryFilters);
-  const status = useSelector(selectHistoryStatus);
-  const loadMoreStatus = useSelector(selectLoadMoreStatus);
+  const cursor = useSelector(selectHistoryCursor);
+  const loading = useSelector(selectHistoryLoading);
   const error = useSelector(selectHistoryError);
 
-  const isLoading = status === "loading";
-  const isLoadingMore = loadMoreStatus === "loading";
+  const isLoading = loading;
 
-  const fetchHistoryData = useCallback((silent = false) => {
-    dispatch(
-      fetchHistories({
-        type: filters.type,
-        cursor: null,
-        limit: pagination.limit,
-        search: filters.search,
-        lang: i18n.language || "en",
-        silent,
-      })
-    );
-  }, [dispatch, filters.type, filters.search, pagination.limit]);
+  const fetchHistoryData = useCallback(
+    ({ nextCursor = cursor, silent = false } = {}) => {
+      dispatch(
+        fetchHistories({
+          ...filters,
+          cursor: nextCursor,
+          limit: pagination.limit,
+          lang: i18n.language || "en",
+          silent,
+        }),
+      );
+    },
+    [cursor, dispatch, filters, pagination.limit, i18n.language],
+  );
 
   const handleTabChange = useCallback(
     (tabIndex, tabTypes) => {
       const selectedLabel = tabTypes[tabIndex].content;
-      const selectedKey = Object.keys(KEY_TO_TYPE).find(
-        (key) => t(key) === selectedLabel
-      );
+      const selectedKey = Object.keys(KEY_TO_TYPE).find((key) => t(key) === selectedLabel);
       const backendValue = KEY_TO_TYPE[selectedKey] || "Manual edit";
       dispatch(setHistoryType(backendValue));
     },
-    [dispatch, t]
+    [dispatch, t],
   );
 
-  const loadMore = useCallback(() => {
-    if (pagination.hasNextPage && !isLoadingMore) {
-      dispatch(
-        loadMoreHistories({
-          cursor: pagination.endCursor,
-          limit: pagination.limit,
-          lang: i18n.language || "en",
-        })
-      );
+  const applyFilters = useCallback(
+    (nextFilters) => {
+      dispatch(setHistoryFilters(nextFilters));
+      dispatch(resetCursor());
+    },
+    [dispatch],
+  );
+
+  const goNext = useCallback(() => {
+    if (pagination.hasNextPage && pagination.nextCursor) {
+      dispatch(setCursor(pagination.nextCursor));
     }
-  }, [dispatch, pagination.hasNextPage, pagination.endCursor, pagination.limit, isLoadingMore]);
+  }, [dispatch, pagination.hasNextPage, pagination.nextCursor]);
+
+  const goPrevious = useCallback(() => {
+    if (pagination.hasPreviousPage && pagination.previousCursor) {
+      dispatch(setCursor(pagination.previousCursor));
+    }
+  }, [dispatch, pagination.hasPreviousPage, pagination.previousCursor]);
 
   useEffect(() => {
     fetchHistoryData();
-  }, [fetchHistoryData, filters.type, filters.search]);
+  }, [fetchHistoryData, filters.type, filters.search, filters.status, pagination.limit, cursor]);
 
   useEffect(() => {
     const hasActiveItems = histories.some((h) => {
-      const mainActive = ["pending", "processing"].includes(h.status?.toLowerCase());
-      const undoActive = ["processing"].includes(h.undo?.status?.toLowerCase());
+      const mainActive = ["pending", "processing"].includes(String(h.status || "").toLowerCase());
+      const undoActive = ["processing"].includes(String(h.undo?.status || "").toLowerCase());
       return mainActive || undoActive;
     });
 
     if (!hasActiveItems) return;
 
     const interval = setInterval(() => {
-      fetchHistoryData(true);
+      fetchHistoryData({ silent: true });
     }, 4000);
 
     return () => clearInterval(interval);
@@ -103,11 +112,11 @@ export const useHistoryList = () => {
     pagination,
     filters,
     isLoading,
-    isLoadingMore,
     error,
     handleTabChange,
-    loadMore,
     refetch: fetchHistoryData,
-    hasMore: pagination.hasNextPage,
+    setFilters: applyFilters,
+    goNext,
+    goPrevious,
   };
 };
