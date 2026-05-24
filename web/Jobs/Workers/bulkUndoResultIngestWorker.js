@@ -7,7 +7,7 @@ const QUEUE_NAME =
 
 async function processBulkUndoResultIngest(job) {
   const shop = job.data?.shop;
-  const bulkOperationId = job.data?.bulkOperationId || job.data?.admin_graphql_api_id;
+  const bulkOperationId = job.data?.bulkOperationId;
   const status = job.data?.status || null;
   if (!shop || !bulkOperationId) {
     throw new Error("bulk undo result ingest job requires shop and bulkOperationId");

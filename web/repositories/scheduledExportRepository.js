@@ -35,11 +35,12 @@ export const scheduledExportRepository = {
     });
   },
 
-  async updateById(id, data, db = prisma) {
-    return getClient(db).scheduledExport.update({
-      where: { id },
+  async updateByIdForShop({ id, shop, data }, db = prisma) {
+    const result = await getClient(db).scheduledExport.updateMany({
+      where: { id, shop },
       data,
     });
+    return result;
   },
 
   async findDueScheduledExportIds(now, limit = 100, db = prisma) {

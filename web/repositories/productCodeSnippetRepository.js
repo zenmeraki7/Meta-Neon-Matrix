@@ -44,10 +44,14 @@ export const productCodeSnippetRepository = {
     });
   },
 
-  async updateById(id, data, db = prisma) {
-    return getClient(db).productCodeSnippet.update({
-      where: { id },
+  async updateByIdForShop({ id, shop, data }, db = prisma) {
+    const updated = await getClient(db).productCodeSnippet.updateMany({
+      where: { id, shop, isDeleted: false },
       data,
+    });
+    if (!updated?.count) return null;
+    return getClient(db).productCodeSnippet.findFirst({
+      where: { id, shop, isDeleted: false },
     });
   },
 };

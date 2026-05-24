@@ -457,7 +457,10 @@ export async function updateRecurringEdit({
     resolvedAt: null,
   };
 
-  await recurringEditRepository.updateById(existing.id, {
+  await recurringEditRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
     title,
     status: nextStatus,
     scheduleType: scheduleInput.scheduleType,
@@ -480,6 +483,7 @@ export async function updateRecurringEdit({
     rules,
     nextRunAt,
     isDeleted: false,
+    },
   });
 
   return getRecurringEditHydrated(existing.id, shop);
@@ -513,9 +517,13 @@ export async function toggleRecurringEditStatus({
     ? computeRecurringEditNextRunAt(existing, new Date())
     : null;
 
-  await recurringEditRepository.updateById(existing.id, {
-    status: requestedStatus,
-    nextRunAt,
+  await recurringEditRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
+      status: requestedStatus,
+      nextRunAt,
+    },
   });
 
   return getRecurringEditHydrated(existing.id, shop);
@@ -527,11 +535,15 @@ export async function deleteRecurringEdit({ shop, recurringEditId }) {
     throw new Error("Recurring edit not found");
   }
 
-  await recurringEditRepository.updateById(existing.id, {
-    status: "CANCELLED",
-    isDeleted: true,
-    nextRunAt: null,
-    endAt: existing.endAt || new Date(),
+  await recurringEditRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
+      status: "CANCELLED",
+      isDeleted: true,
+      nextRunAt: null,
+      endAt: existing.endAt || new Date(),
+    },
   });
 
   return {

@@ -10,6 +10,30 @@ import { getJobAttempt, isRetryExhausted, recordRetryExhausted } from "../../uti
 const QUEUE_NAME =
   process.env.BULK_OPERATION_MUTATION_QUEUE || "bulk-operation-mutation";
 
+async function resolveOperationKindByLedger(shop, bulkOperationId) {
+  const ledgerMatch = await prisma.bulkSubmission.findUnique({
+    where: {
+      shop_shopifyBulkOperationId: {
+        shop,
+        shopifyBulkOperationId: String(bulkOperationId),
+      },
+    },
+    select: {
+      id: true,
+      editHistoryId: true,
+    },
+  });
+  if (ledgerMatch?.id) {
+    return {
+      operationKind: "EDIT",
+      source: "bulk_submission_ledger",
+      editHistoryId: ledgerMatch.editHistoryId || null,
+    };
+  }
+
+  return null;
+}
+
 async function hasUndoOwnerForBulkOperation(shop, bulkOperationId) {
   const byColumn = await prisma.editHistory.findFirst({
     where: { shop, bulkOperationId: String(bulkOperationId) },
@@ -48,6 +72,32 @@ const bulkOperationMutationWorker = new Worker(
       // Single path: all mutation webhook statuses are delegated to the
       // bulk edit result ingestion pipeline for deterministic lifecycle handling.
       if (type === "MUTATION") {
+        const ledgerResolution = await resolveOperationKindByLedger(
+          shop,
+          bulkOperationId,
+        );
+
+        if (ledgerResolution?.operationKind === "EDIT") {
+          await addbulkEditResultIngestJob({
+            shop,
+            webhookId: job.data?.webhookId,
+            bulkOperationId,
+            status,
+            type,
+            url: job.data?.url || null,
+            partialDataUrl: job.data?.partialDataUrl || null,
+            payload: job.data || null,
+          });
+          return {
+            success: true,
+            shop,
+            bulkOperationId,
+            enqueued: "bulk-edit-result-ingest",
+            status,
+            routedBy: ledgerResolution.source,
+          };
+        }
+
         const isUndoBulkOperation = await hasUndoOwnerForBulkOperation(
           shop,
           bulkOperationId,
@@ -58,7 +108,6 @@ const bulkOperationMutationWorker = new Worker(
             shop,
             webhookId: job.data?.webhookId,
             bulkOperationId,
-            admin_graphql_api_id: bulkOperationId,
             status,
             type,
             url: job.data?.url || null,
@@ -78,7 +127,7 @@ const bulkOperationMutationWorker = new Worker(
           shop,
           webhookId: job.data?.webhookId,
           bulkOperationId,
-          admin_graphql_api_id: bulkOperationId,
+          source: "bulk_operation_mutation_webhook",
           status,
           type,
           url: job.data?.url || null,

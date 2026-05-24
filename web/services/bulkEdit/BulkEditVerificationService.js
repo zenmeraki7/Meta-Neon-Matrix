@@ -17,7 +17,24 @@ const VERIFY_MODES = Object.freeze({
   FULL: "FULL",
 });
 
+function includesAnyToken(value, tokens = []) {
+  const normalized = String(value || "").toLowerCase();
+  return tokens.some((token) => normalized.includes(String(token || "").toLowerCase()));
+}
+
+function requiresFullVerification(history) {
+  const targetGranularity = String(history?.batch?.targetGranularity || "").toUpperCase();
+  if (targetGranularity === "VARIANT") return true;
+  const rules = Array.isArray(history?.rules) ? history.rules : [];
+  return rules.some((rule) => includesAnyToken(rule?.field, ["inventory", "metafield", "variant"]));
+}
+
+function isDeterministicHighRiskVerification(history) {
+  return requiresFullVerification(history);
+}
+
 function pickVerificationMode(history) {
+  if (requiresFullVerification(history)) return VERIFY_MODES.FULL;
   const configured = String(history?.batch?.verificationMode || "").toUpperCase();
   if (Object.values(VERIFY_MODES).includes(configured)) return configured;
 
@@ -85,12 +102,63 @@ const VERIFY_NODES_QUERY = `#graphql
   }
 `;
 
-async function fetchShopifyNodesByIds(shop, ids = []) {
+const VERIFY_VARIANT_INVENTORY_QUERY = `#graphql
+  query VerifyVariantInventory($id: ID!, $first: Int!) {
+    productVariant(id: $id) {
+      id
+      inventoryItem {
+        id
+        inventoryLevels(first: $first) {
+          nodes {
+            location {
+              id
+            }
+            quantities(names: ["available"]) {
+              name
+              quantity
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const VERIFY_OWNER_METAFIELD_QUERY = `#graphql
+  query VerifyOwnerMetafield($id: ID!, $namespace: String!, $key: String!) {
+    node(id: $id) {
+      __typename
+      id
+      ... on Product {
+        metafield(namespace: $namespace, key: $key) {
+          id
+          namespace
+          key
+          type
+        }
+      }
+      ... on ProductVariant {
+        metafield(namespace: $namespace, key: $key) {
+          id
+          namespace
+          key
+          type
+        }
+      }
+    }
+  }
+`;
+
+async function buildShopifyAdminClient(shop) {
   const session = await getSession(shop);
   if (!session?.shop || session.shop !== shop) {
     throw new Error("Shop session not available for verification");
   }
-  const client = new shopify.api.clients.Graphql({ session });
+  return new shopify.api.clients.Graphql({ session });
+}
+
+async function fetchShopifyNodesByIds(shop, ids = []) {
+  const client = await buildShopifyAdminClient(shop);
   const uniqueIds = [...new Set(ids.map(toNodeId).filter(Boolean))];
   if (uniqueIds.length === 0) return new Map();
 
@@ -116,6 +184,84 @@ async function fetchShopifyNodesByIds(shop, ids = []) {
   return nodeMap;
 }
 
+async function fetchInventoryLevelsByTupleFromShopify({
+  shop,
+  inventoryRequests = new Map(),
+}) {
+  const client = await buildShopifyAdminClient(shop);
+  const map = new Map();
+  for (const [variantId, requiredLocationIds] of inventoryRequests.entries()) {
+    // eslint-disable-next-line no-await-in-loop
+    const response = await client.query({
+      data: {
+        query: VERIFY_VARIANT_INVENTORY_QUERY,
+        variables: { id: variantId, first: 250 },
+      },
+    });
+    const levels = response?.body?.data?.productVariant?.inventoryItem?.inventoryLevels?.nodes || [];
+    for (const level of levels) {
+      const locationId = String(level?.location?.id || "").trim();
+      if (!locationId || !requiredLocationIds.has(locationId)) continue;
+      const quantities = Array.isArray(level?.quantities) ? level.quantities : [];
+      const available = quantities.find((quantity) => quantity?.name === "available")?.quantity ?? null;
+      map.set(`${variantId}::${locationId}`, {
+        available,
+      });
+    }
+  }
+  return map;
+}
+
+async function fetchMetafieldsByTupleFromShopify({
+  shop,
+  metafieldRequests = [],
+}) {
+  const client = await buildShopifyAdminClient(shop);
+  const map = new Map();
+  const unique = new Map();
+  for (const request of metafieldRequests) {
+    const ownerId = String(request?.ownerId || "").trim();
+    const namespace = String(request?.namespace || "").trim();
+    const key = String(request?.key || "").trim();
+    const type = String(request?.type || "").trim();
+    if (!ownerId || !namespace || !key || !type) continue;
+    unique.set(`${ownerId}::${namespace}::${key}::${type}`, {
+      ownerId,
+      namespace,
+      key,
+      type,
+    });
+  }
+
+  for (const request of unique.values()) {
+    // eslint-disable-next-line no-await-in-loop
+    const response = await client.query({
+      data: {
+        query: VERIFY_OWNER_METAFIELD_QUERY,
+        variables: {
+          id: request.ownerId,
+          namespace: request.namespace,
+          key: request.key,
+        },
+      },
+    });
+    const node = response?.body?.data?.node || null;
+    const metafield = node?.metafield || null;
+    if (!metafield?.type) continue;
+    map.set(
+      `${request.ownerId}::${request.namespace}::${request.key}::${request.type}`,
+      {
+        ownerId: request.ownerId,
+        namespace: request.namespace,
+        key: request.key,
+        type: String(metafield.type || ""),
+      },
+    );
+  }
+
+  return map;
+}
+
 function readExpectedFromAfterValues(afterValues = {}) {
   const productFieldChanges = Array.isArray(afterValues?.productFieldChanges)
     ? afterValues.productFieldChanges
@@ -123,10 +269,52 @@ function readExpectedFromAfterValues(afterValues = {}) {
   const variantFieldChanges = Array.isArray(afterValues?.variantFieldChanges)
     ? afterValues.variantFieldChanges
     : [];
-  return { productFieldChanges, variantFieldChanges };
+  const inventoryLevelChanges = Array.isArray(afterValues?.inventoryLevelChanges)
+    ? afterValues.inventoryLevelChanges
+    : [];
+  const metafieldChanges = Array.isArray(afterValues?.metafieldChanges)
+    ? afterValues.metafieldChanges
+    : [];
+  return {
+    productFieldChanges,
+    variantFieldChanges,
+    inventoryLevelChanges,
+    metafieldChanges,
+  };
 }
 
-function compareSimpleExpected({ product, variantsById, expected }) {
+function normalizeInventoryTuple(change = {}, row = {}) {
+  const tupleVariantId = String(change?.variantId ?? row?.variantId ?? "").trim();
+  const tupleLocationId = String(change?.locationId ?? "").trim();
+  return {
+    variantId: tupleVariantId,
+    locationId: tupleLocationId,
+  };
+}
+
+function normalizeMetafieldTuple(change = {}, row = {}) {
+  const tupleOwnerId = String(
+    change?.ownerId ?? change?.variantId ?? change?.productId ?? row?.variantId ?? row?.productId ?? "",
+  ).trim();
+  const tupleNamespace = String(change?.namespace ?? "").trim();
+  const tupleKey = String(change?.key ?? "").trim();
+  const tupleType = String(change?.type ?? change?.valueType ?? "").trim();
+  return {
+    ownerId: tupleOwnerId,
+    namespace: tupleNamespace,
+    key: tupleKey,
+    type: tupleType,
+  };
+}
+
+function compareSimpleExpected({
+  row,
+  product,
+  variantsById,
+  expected,
+  inventoryLevelsByTuple = new Map(),
+  metafieldsByTuple = new Map(),
+}) {
   const mismatches = [];
   for (const item of expected.productFieldChanges) {
     const field = item?.field;
@@ -140,13 +328,84 @@ function compareSimpleExpected({ product, variantsById, expected }) {
 
   for (const item of expected.variantFieldChanges) {
     const field = item?.field;
-    const variantId = item?.variantId;
+    const variantId = String(item?.variantId || "").trim();
     if (!field || !variantId) continue;
+    if (row?.variantId && String(row.variantId) !== variantId) {
+      mismatches.push({
+        target: "variant",
+        variantId,
+        field: "tuple",
+        expected: { rowVariantId: String(row.variantId), changeVariantId: variantId },
+        actual: "variant_tuple_mismatch",
+      });
+      continue;
+    }
     const variant = variantsById.get(variantId) || variantsById.get(String(variantId));
     const current = variant?.[field] ?? null;
     const wanted = item?.newValue ?? null;
     if (String(current) !== String(wanted)) {
       mismatches.push({ target: "variant", variantId, field, expected: wanted, actual: current });
+    }
+  }
+
+  for (const item of expected.inventoryLevelChanges || []) {
+    const { variantId, locationId } = normalizeInventoryTuple(item, row);
+    if (!variantId || !locationId) {
+      mismatches.push({
+        target: "inventory",
+        field: "tuple",
+        expected: { variantId, locationId },
+        actual: null,
+      });
+      continue;
+    }
+    const tupleKey = `${variantId}::${locationId}`;
+    const current = inventoryLevelsByTuple.get(tupleKey) || null;
+    if (!current) {
+      mismatches.push({
+        target: "inventory",
+        field: "tuple",
+        expected: { variantId, locationId },
+        actual: null,
+      });
+      continue;
+    }
+    const wantedAvailable = item?.available;
+    if (wantedAvailable !== undefined && wantedAvailable !== null) {
+      const currentAvailable = current?.available ?? null;
+      if (String(currentAvailable) !== String(wantedAvailable)) {
+        mismatches.push({
+          target: "inventory",
+          field: "available",
+          expected: wantedAvailable,
+          actual: currentAvailable,
+          variantId,
+          locationId,
+        });
+      }
+    }
+  }
+
+  for (const item of expected.metafieldChanges || []) {
+    const { ownerId, namespace, key, type } = normalizeMetafieldTuple(item, row);
+    if (!ownerId || !namespace || !key || !type) {
+      mismatches.push({
+        target: "metafield",
+        field: "tuple",
+        expected: { ownerId, namespace, key, type },
+        actual: null,
+      });
+      continue;
+    }
+    const tupleKey = `${ownerId}::${namespace}::${key}::${type}`;
+    const current = metafieldsByTuple.get(tupleKey) || null;
+    if (!current) {
+      mismatches.push({
+        target: "metafield",
+        field: "tuple",
+        expected: { ownerId, namespace, key, type },
+        actual: null,
+      });
     }
   }
 
@@ -174,6 +433,7 @@ export class BulkEditVerificationService {
     }
 
     const mode = pickVerificationMode(history);
+    const deterministicFullRequired = isDeterministicHighRiskVerification(history);
     await upsertOperationStageProgress({
       shop,
       operationType: "BULK_EDIT",
@@ -214,7 +474,7 @@ export class BulkEditVerificationService {
 
     let verifyRows = [];
     const seed = `${historyId}:${batchId || "none"}`;
-    if (mode === VERIFY_MODES.FULL || mode === VERIFY_MODES.FULL_FOR_SMALL_BATCH) {
+    if (deterministicFullRequired || mode === VERIFY_MODES.FULL || mode === VERIFY_MODES.FULL_FOR_SMALL_BATCH) {
       verifyRows = [...successes];
     } else if (mode === VERIFY_MODES.SAMPLE_ONLY) {
       verifyRows = deterministicSample(
@@ -247,6 +507,34 @@ export class BulkEditVerificationService {
       }
     }
 
+    const inventoryRequests = new Map();
+    const metafieldRequests = [];
+    for (const row of verifyRows) {
+      const expected = readExpectedFromAfterValues(row.afterValues || {});
+      for (const change of expected.inventoryLevelChanges) {
+        const { variantId, locationId } = normalizeInventoryTuple(change, row);
+        if (!variantId || !locationId) continue;
+        if (!inventoryRequests.has(variantId)) inventoryRequests.set(variantId, new Set());
+        inventoryRequests.get(variantId).add(locationId);
+      }
+      for (const change of expected.metafieldChanges) {
+        const { ownerId, namespace, key, type } = normalizeMetafieldTuple(change, row);
+        if (!ownerId || !namespace || !key || !type) continue;
+        metafieldRequests.push({ ownerId, namespace, key, type });
+      }
+    }
+
+    const inventoryLevelsByTuple = await fetchInventoryLevelsByTupleFromShopify({
+      shop,
+      inventoryRequests,
+    });
+
+    const metafieldsByTuple = await fetchMetafieldsByTupleFromShopify({
+      shop,
+      metafieldRequests,
+    });
+
+    const verificationTargetCount = successes.length;
     let verified = 0;
     let failed = 0;
     const verifiedIds = [];
@@ -254,7 +542,14 @@ export class BulkEditVerificationService {
     for (const row of verifyRows) {
       const product = productsById.get(row.productId);
       const expected = readExpectedFromAfterValues(row.afterValues || {});
-      const mismatches = compareSimpleExpected({ product, variantsById, expected });
+      const mismatches = compareSimpleExpected({
+        row,
+        product,
+        variantsById,
+        expected,
+        inventoryLevelsByTuple,
+        metafieldsByTuple,
+      });
 
       if (mismatches.length === 0) {
         verified += 1;
@@ -299,6 +594,8 @@ export class BulkEditVerificationService {
       );
     }
 
+    const fullCoverageAchieved = verifyRows.length === verificationTargetCount;
+    const completionBlockedByCoverage = deterministicFullRequired && !fullCoverageAchieved;
     await prisma.editHistory.updateMany({
       where: { id: historyId, shop },
       data: {
@@ -319,10 +616,10 @@ export class BulkEditVerificationService {
       verificationStatus,
     });
 
-    const finalState = failed > 0
+    const finalState = failed > 0 || completionBlockedByCoverage
       ? OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED
       : OPERATION_LIFECYCLE_STATES.COMPLETED;
-    const finalStatus = failed > 0 ? "partial" : "completed";
+    const finalStatus = failed > 0 || completionBlockedByCoverage ? "partial" : "completed";
 
     const historyUpdate = await prisma.editHistory.updateMany({
       where: { id: historyId, shop },
@@ -336,10 +633,14 @@ export class BulkEditVerificationService {
           ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
           verification: {
             mode,
+            deterministicFullRequired,
+            fullCoverageAchieved,
             verifiedAt: new Date().toISOString(),
             verifiedCount: verified,
             verificationFailedCount: failed,
             sampledCount: verifyRows.length,
+            verificationTargetCount,
+            completionBlockedByCoverage,
           },
         },
       },
@@ -353,11 +654,17 @@ export class BulkEditVerificationService {
       operationId: historyId,
       executionId: executionId || history.executionIdentity || null,
       stageKey: "VERIFICATION",
-      stageStatus: failed > 0 ? "PARTIAL_FAILED" : "COMPLETED",
+      stageStatus: failed > 0 || completionBlockedByCoverage ? "PARTIAL_FAILED" : "COMPLETED",
       counterA: verified,
       counterB: failed,
       counterC: verifyRows.length,
-      detail: { mode },
+      detail: {
+        mode,
+        deterministicFullRequired,
+        fullCoverageAchieved,
+        verificationTargetCount,
+        completionBlockedByCoverage,
+      },
       completed: true,
     });
 
@@ -365,6 +672,8 @@ export class BulkEditVerificationService {
       historyId,
       shop,
       mode,
+      deterministicFullRequired,
+      fullCoverageAchieved,
       verified,
       verificationFailed: failed,
       sampledCount: verifyRows.length,

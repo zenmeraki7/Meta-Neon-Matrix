@@ -4,7 +4,7 @@ import { BulkEditPreviewService } from "../bulkEdit/BulkEditPreviewService.js";
 import { BulkEditTargetFreezeService } from "../bulkEdit/BulkEditTargetFreezeService.js";
 import { BulkEditExecutionPreparationService } from "../bulkEdit/BulkEditExecutionPreparationService.js";
 import { ShopifyBulkMutationService } from "../bulkEdit/ShopifyBulkMutationService.js";
-import { BulkEditRetryService } from "../bulkEdit/BulkEditRetryService.js";
+import { BulkEditRetryService } from "./BulkEditRetryService.js";
 import { ScheduledEditService } from "../bulkEdit/ScheduledEditService.js";
 
 export default class ProductBulkService {

@@ -35,11 +35,12 @@ export const recurringEditRepository = {
     });
   },
 
-  async updateById(id, data, db = prisma) {
-    return getClient(db).recurringEdit.update({
-      where: { id },
+  async updateByIdForShop({ id, shop, data }, db = prisma) {
+    const result = await getClient(db).recurringEdit.updateMany({
+      where: { id, shop },
       data,
     });
+    return result;
   },
 
   async countActiveByShop(shop, excludeId = null, db = prisma) {

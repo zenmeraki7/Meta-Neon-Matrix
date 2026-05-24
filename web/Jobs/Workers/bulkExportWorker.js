@@ -688,6 +688,7 @@ const csvStream = format({
 
       await finalizeScheduledExportRunFromExportJob({
   exportJobId,
+  shop,
   status: "SUCCESS",
 }).catch((err) => {
   logger.error("Failed to finalize scheduled export run", {
@@ -744,6 +745,7 @@ const csvStream = format({
 
         await finalizeScheduledExportRunFromExportJob({
   exportJobId,
+  shop,
   status: "FAILED",
   errorMessage: error.message,
 }).catch((err) => {

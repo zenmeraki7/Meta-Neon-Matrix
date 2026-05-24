@@ -7,6 +7,11 @@ import { addbulkUndoResultIngestJob } from "../Queues/bulkUndoResultIngestJob.js
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 
 const QUEUE_NAME = "stuck-bulk-mutation-recovery";
+const RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
+
+function buildRecoveryCooldownKey({ shop, bulkOperationId, mode }) {
+  return `stuck-recovery-cooldown:${shop}:${bulkOperationId}:${mode}`;
+}
 
 export const stuckBulkMutationRecoveryQueue = new Queue(QUEUE_NAME, {
   connection,
@@ -87,18 +92,33 @@ async function recoverStuckBulkMutations() {
     });
 
     try {
+      const recoveryCooldownKey = buildRecoveryCooldownKey({
+        shop: history.shop,
+        bulkOperationId,
+        mode: isUndo ? "undo" : "edit",
+      });
+      const cooldownClaimed = await connection.set(
+        recoveryCooldownKey,
+        String(Date.now()),
+        "NX",
+        "PX",
+        RECOVERY_COOLDOWN_MS,
+      );
+      if (cooldownClaimed !== "OK") {
+        skipped += 1;
+        continue;
+      }
+
       if (isUndo) {
         await addbulkUndoResultIngestJob({
           shop: history.shop,
           bulkOperationId,
-          status: "COMPLETED",
           source: "stuck_bulk_mutation_recovery",
         });
       } else {
         await addbulkEditResultIngestJob({
           shop: history.shop,
           bulkOperationId,
-          status: "COMPLETED",
           source: "stuck_bulk_mutation_recovery",
         });
       }

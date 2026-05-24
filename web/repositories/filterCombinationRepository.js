@@ -80,7 +80,13 @@ export class FilterCombinationRepository {
       where: { id, shop, type: FILTER_COMBINATION_TYPE },
     });
     if (!existing) return null;
-    await prisma.filterTrack.delete({ where: { id: existing.id } });
+    await prisma.filterTrack.deleteMany({
+      where: {
+        id: existing.id,
+        shop,
+        type: FILTER_COMBINATION_TYPE,
+      },
+    });
     return fromFilterTrack(existing);
   }
 }

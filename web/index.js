@@ -155,7 +155,7 @@ app.use("/api/store", StoreRoutes);
 app.use("/api/sync", SyncRoutes);
 app.use("/api/automatic-rules", automaticProductRuleRoutes);
 app.use("/api/product-code-snippets", productCodeSnippetRoutes);
-app.use("/admin", AdminRoutes);
+app.use("/api/admin", shopify.validateAuthenticatedSession(), AdminRoutes);
 app.use("/metrics", metricsRoute);
 // app.use("/referral", AffiliateRoutes);
 

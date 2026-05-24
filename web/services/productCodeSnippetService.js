@@ -109,7 +109,10 @@ export async function updateProductCodeSnippet({
     code: body.code ?? existing.code,
   });
 
-  const updated = await productCodeSnippetRepository.updateById(existing.id, {
+  const updated = await productCodeSnippetRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
     title: body.title !== undefined ? String(body.title).trim() : existing.title,
     status,
     code: body.code !== undefined ? String(body.code) : existing.code,
@@ -117,6 +120,7 @@ export async function updateProductCodeSnippet({
     lastValidationStatus: validation.validationStatus,
     lastValidationError: null,
     updatedBy,
+    },
   });
 
   return serializeSnippet(updated);
@@ -129,9 +133,13 @@ export async function archiveProductCodeSnippet({
 }) {
   const existing = await getSnippetOrThrow(shop, productCodeSnippetId);
 
-  const archived = await productCodeSnippetRepository.updateById(existing.id, {
-    status: "ARCHIVED",
-    updatedBy,
+  const archived = await productCodeSnippetRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
+      status: "ARCHIVED",
+      updatedBy,
+    },
   });
 
   return serializeSnippet(archived);
@@ -149,10 +157,14 @@ export async function validateProductCodeSnippet({
       code: snippet.code,
     });
 
-    const updated = await productCodeSnippetRepository.updateById(snippet.id, {
-      normalizedAst: validation.ast,
-      lastValidationStatus: "VALID",
-      lastValidationError: null,
+    const updated = await productCodeSnippetRepository.updateByIdForShop({
+      id: snippet.id,
+      shop,
+      data: {
+        normalizedAst: validation.ast,
+        lastValidationStatus: "VALID",
+        lastValidationError: null,
+      },
     });
 
     return {
@@ -161,9 +173,13 @@ export async function validateProductCodeSnippet({
       normalizedAst: validation.ast,
     };
   } catch (error) {
-    const updated = await productCodeSnippetRepository.updateById(snippet.id, {
-      lastValidationStatus: "INVALID",
-      lastValidationError: error.message,
+    const updated = await productCodeSnippetRepository.updateByIdForShop({
+      id: snippet.id,
+      shop,
+      data: {
+        lastValidationStatus: "INVALID",
+        lastValidationError: error.message,
+      },
     });
 
     return {
@@ -197,10 +213,14 @@ export async function previewSavedProductCodeSnippet({
     });
     normalizedAst = validation.ast;
 
-    await productCodeSnippetRepository.updateById(snippet.id, {
-      normalizedAst,
-      lastValidationStatus: "VALID",
-      lastValidationError: null,
+    await productCodeSnippetRepository.updateByIdForShop({
+      id: snippet.id,
+      shop,
+      data: {
+        normalizedAst,
+        lastValidationStatus: "VALID",
+        lastValidationError: null,
+      },
     });
   }
 
@@ -213,8 +233,12 @@ export async function previewSavedProductCodeSnippet({
     productId,
   });
 
-  await productCodeSnippetRepository.updateById(snippet.id, {
-    lastPreviewedAt: new Date(),
+  await productCodeSnippetRepository.updateByIdForShop({
+    id: snippet.id,
+    shop,
+    data: {
+      lastPreviewedAt: new Date(),
+    },
   });
 
   return preview;

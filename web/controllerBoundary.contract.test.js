@@ -98,6 +98,19 @@ test("controllers use sanitized public error responses", () => {
   }
 });
 
+test("sync status requires verified session shop and does not fallback to query shop", () => {
+  const source = read("web/controllers/syncController.js");
+  assert.ok(
+    source.includes("const shop = session?.shop;"),
+    "syncController.getSyncStatus must source shop from verified session only",
+  );
+  assert.equal(
+    source.includes("req.query.shop"),
+    false,
+    "syncController must not trust req.query.shop for tenant selection",
+  );
+});
+
 test("history controller maps import and recurring responses through DTO mappers", () => {
   const source = read("web/controllers/historyController.js");
 

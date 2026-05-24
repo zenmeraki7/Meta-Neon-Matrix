@@ -74,11 +74,15 @@ async function markRunFailed(run, scheduledExport, errorMessage) {
     return null;
   }
 
-  await scheduledExportRepository.updateById(scheduledExport.id, {
-    runCount: { increment: 1 },
-    lastRunAt: new Date(),
-    lastFailureAt: new Date(),
-    lastFailureReason: errorMessage,
+  await scheduledExportRepository.updateByIdForShop({
+    id: scheduledExport.id,
+    shop: scheduledExport.shop,
+    data: {
+      runCount: { increment: 1 },
+      lastRunAt: new Date(),
+      lastFailureAt: new Date(),
+      lastFailureReason: errorMessage,
+    },
   });
 
   return errorMessage;
@@ -93,9 +97,13 @@ async function markRunSkipped(run, scheduledExport, reason) {
     return null;
   }
 
-  await scheduledExportRepository.updateById(scheduledExport.id, {
-    runCount: { increment: 1 },
-    lastRunAt: new Date(),
+  await scheduledExportRepository.updateByIdForShop({
+    id: scheduledExport.id,
+    shop: scheduledExport.shop,
+    data: {
+      runCount: { increment: 1 },
+      lastRunAt: new Date(),
+    },
   });
 
   return reason;
@@ -257,11 +265,14 @@ const debugAll = await prisma.scheduledExport.findMany({
             new Date(scheduledFor.getTime() + 1000),
           );
 
-          await scheduledExportRepository.updateById(
-            scheduledExport.id,
+          await scheduledExportRepository.updateByIdForShop(
             {
-              nextRunAt,
-              status: nextRunAt ? "ACTIVE" : "COMPLETED",
+              id: scheduledExport.id,
+              shop: scheduledExport.shop,
+              data: {
+                nextRunAt,
+                status: nextRunAt ? "ACTIVE" : "COMPLETED",
+              },
             },
             tx,
           );
@@ -594,6 +605,7 @@ shopRenewInterval = setInterval(async () => {
 
 export async function finalizeScheduledExportRunFromExportJob({
   exportJobId,
+  shop = null,
   status,
   errorMessage = null,
 }) {
@@ -615,6 +627,9 @@ export async function finalizeScheduledExportRunFromExportJob({
 
   if (!exportJob?.scheduledExportId || !exportJob?.scheduledExportRunId) {
     return null;
+  }
+  if (shop && exportJob.shop !== shop) {
+    throw new Error("CROSS_SHOP_SCHEDULED_EXPORT_FINALIZE_BLOCKED");
   }
 
   const run = await scheduledExportRunRepository.findById(exportJob.scheduledExportRunId);
@@ -675,19 +690,23 @@ export async function finalizeScheduledExportRunFromExportJob({
   if (!transition.count) {
     return run.status; // now safe to exit after history is written
   }
-  await scheduledExportRepository.updateById(exportJob.scheduledExportId, {
-    runCount: { increment: 1 },
-    lastRunAt: completedAt,
-    ...(normalizedStatus === "SUCCESS"
-      ? {
-        lastSuccessAt: completedAt,
-        lastFailureReason: null,
-      }
-      : {
-        lastFailureAt: completedAt,
-        lastFailureReason:
-          errorMessage || exportJob.error || "Scheduled export run failed",
-      }),
+  await scheduledExportRepository.updateByIdForShop({
+    id: exportJob.scheduledExportId,
+    shop: exportJob.shop,
+    data: {
+      runCount: { increment: 1 },
+      lastRunAt: completedAt,
+      ...(normalizedStatus === "SUCCESS"
+        ? {
+          lastSuccessAt: completedAt,
+          lastFailureReason: null,
+        }
+        : {
+          lastFailureAt: completedAt,
+          lastFailureReason:
+            errorMessage || exportJob.error || "Scheduled export run failed",
+        }),
+    },
   });
 
   return normalizedStatus;

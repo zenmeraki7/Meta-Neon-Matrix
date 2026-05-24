@@ -362,7 +362,10 @@ export async function updateScheduledExport({
     throw new Error("Scheduled export time must be in the future");
   }
 
-  await scheduledExportRepository.updateById(existing.id, {
+  await scheduledExportRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
     title,
     status: nextStatus,
     scheduleType: scheduleInput.scheduleType,
@@ -386,6 +389,7 @@ export async function updateScheduledExport({
     filename,
     nextRunAt,
     isDeleted: false,
+    },
   });
 
   return getScheduledExportHydrated(existing.id, shop);
@@ -420,9 +424,13 @@ export async function toggleScheduledExportStatus({
     throw new Error("Scheduled export time must be in the future");
   }
 
-  await scheduledExportRepository.updateById(existing.id, {
-    status: requestedStatus,
-    nextRunAt,
+  await scheduledExportRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
+      status: requestedStatus,
+      nextRunAt,
+    },
   });
 
   return getScheduledExportHydrated(existing.id, shop);
@@ -434,11 +442,15 @@ export async function deleteScheduledExport({ shop, scheduledExportId }) {
     throw new Error("Scheduled export not found");
   }
 
-  await scheduledExportRepository.updateById(existing.id, {
-    status: "CANCELLED",
-    isDeleted: true,
-    nextRunAt: null,
-    endAt: existing.endAt || new Date(),
+  await scheduledExportRepository.updateByIdForShop({
+    id: existing.id,
+    shop,
+    data: {
+      status: "CANCELLED",
+      isDeleted: true,
+      nextRunAt: null,
+      endAt: existing.endAt || new Date(),
+    },
   });
 
   return {

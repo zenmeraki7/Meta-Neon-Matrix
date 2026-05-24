@@ -44,12 +44,7 @@ const BULK_OPERATION_RESULT_QUERY = `#graphql
 `;
 
 function resolveBulkOperationId(jobData = {}) {
-  return (
-    jobData.bulkOperationId
-    || jobData.admin_graphql_api_id
-    || jobData.id
-    || null
-  );
+  return jobData.bulkOperationId || null;
 }
 
 function resolveResultUrl(jobData = {}) {
@@ -147,6 +142,10 @@ async function processBulkEditResultIngest(job) {
 
   const history = await findHistoryByBulkOperation({ shop, bulkOperationId });
   if (!history) {
+    const source = String(job.data?.source || "").toLowerCase();
+    if (source.includes("webhook") || source.includes("polling")) {
+      throw new Error("EDIT_HISTORY_NOT_FOUND_RETRYABLE");
+    }
     return {
       skipped: true,
       reason: "edit_history_not_found_for_bulk_operation",
@@ -228,16 +227,24 @@ async function processBulkEditResultIngest(job) {
     || null;
 
   if (status && ["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(status)) {
+    const cancelled = ["CANCELED", "CANCELLED"].includes(status);
+    const terminalStatus = cancelled ? "cancelled" : "failed";
+    const terminalState = cancelled
+      ? OPERATION_LIFECYCLE_STATES.CANCELLED
+      : OPERATION_LIFECYCLE_STATES.FAILED;
+    const failureStage = cancelled
+      ? "SHOPIFY_BULK_OPERATION_CANCELLED"
+      : "SHOPIFY_BULK_OPERATION";
     const failedUpdate = await prisma.editHistory.updateMany({
       where: { id: history.id, shop },
       data: {
-        status: "failed",
-        statusNormalized: normalizeEditHistoryStatus("failed"),
-        executionState: OPERATION_LIFECYCLE_STATES.FAILED,
+        status: terminalStatus,
+        statusNormalized: normalizeEditHistoryStatus(terminalStatus),
+        executionState: terminalState,
         executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.FAILED,
+          terminalState,
         ),
-        failureStage: "SHOPIFY_BULK_OPERATION",
+        failureStage,
         completedAt: new Date(),
         batch: {
           ...(history.batch && typeof history.batch === "object" ? history.batch : {}),

@@ -147,11 +147,15 @@ async function markRunFailed(run, recurringEdit, errorMessage) {
 
   if (!transition.count) return null;
 
-  await recurringEditRepository.updateById(recurringEdit.id, {
-    runCount: { increment: 1 },
-    lastRunAt: new Date(),
-    lastFailureAt: new Date(),
-    lastFailureReason: errorMessage,
+  await recurringEditRepository.updateByIdForShop({
+    id: recurringEdit.id,
+    shop: recurringEdit.shop,
+    data: {
+      runCount: { increment: 1 },
+      lastRunAt: new Date(),
+      lastFailureAt: new Date(),
+      lastFailureReason: errorMessage,
+    },
   });
 
   return errorMessage;
@@ -164,9 +168,13 @@ async function markRunSkipped(run, recurringEdit, reason) {
 
   if (!transition.count) return null;
 
-  await recurringEditRepository.updateById(recurringEdit.id, {
-    runCount: { increment: 1 },
-    lastRunAt: new Date(),
+  await recurringEditRepository.updateByIdForShop({
+    id: recurringEdit.id,
+    shop: recurringEdit.shop,
+    data: {
+      runCount: { increment: 1 },
+      lastRunAt: new Date(),
+    },
   });
 
   return reason;
@@ -244,11 +252,14 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
             new Date(scheduledFor.getTime() + 1000),
           );
 
-          await recurringEditRepository.updateById(
-            recurringEdit.id,
+          await recurringEditRepository.updateByIdForShop(
             {
-              nextRunAt,
-              status: nextRunAt ? "ACTIVE" : "COMPLETED",
+              id: recurringEdit.id,
+              shop: recurringEdit.shop,
+              data: {
+                nextRunAt,
+                status: nextRunAt ? "ACTIVE" : "COMPLETED",
+              },
             },
             tx,
           );
@@ -330,20 +341,24 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
     if (!compilerVersions.versionsMatch) {
       const mismatchReason =
         `Recurring edit paused due to compiler version change (${compilerVersions.createdCompilerVersion} -> ${compilerVersions.currentCompilerVersion}). Merchant confirmation is required before resuming.`;
-      await recurringEditRepository.updateById(currentRecurringEdit.id, {
-        status: "PAUSED",
-        nextRunAt: null,
-        lastFailureAt: new Date(),
-        lastFailureReason: mismatchReason,
-        targetingSnapshotMeta: {
-          ...(currentRecurringEdit.targetingSnapshotMeta || {}),
-          createdCompilerVersion: compilerVersions.createdCompilerVersion,
-          currentCompilerVersion: compilerVersions.currentCompilerVersion,
-          compatibilityEvent: {
-            type: "COMPILER_VERSION_MISMATCH_PAUSED",
-            at: new Date().toISOString(),
+      await recurringEditRepository.updateByIdForShop({
+        id: currentRecurringEdit.id,
+        shop: currentRecurringEdit.shop,
+        data: {
+          status: "PAUSED",
+          nextRunAt: null,
+          lastFailureAt: new Date(),
+          lastFailureReason: mismatchReason,
+          targetingSnapshotMeta: {
+            ...(currentRecurringEdit.targetingSnapshotMeta || {}),
             createdCompilerVersion: compilerVersions.createdCompilerVersion,
             currentCompilerVersion: compilerVersions.currentCompilerVersion,
+            compatibilityEvent: {
+              type: "COMPILER_VERSION_MISMATCH_PAUSED",
+              at: new Date().toISOString(),
+              createdCompilerVersion: compilerVersions.createdCompilerVersion,
+              currentCompilerVersion: compilerVersions.currentCompilerVersion,
+            },
           },
         },
       });
@@ -529,6 +544,7 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
 
 export async function finalizeRecurringRunFromHistory({
   historyId,
+  shop = null,
   status,
   errorMessage = null,
 }) {
@@ -539,11 +555,15 @@ export async function finalizeRecurringRunFromHistory({
       recurringEditId: true,
       completedAt: true,
       status: true,
+      shop: true,
     },
   });
 
   if (!history?.recurringRunId || !history?.recurringEditId) {
     return null;
+  }
+  if (shop && history?.shop && history.shop !== shop) {
+    throw new Error("CROSS_SHOP_RECURRING_FINALIZE_BLOCKED");
   }
 
   const run = await recurringEditRunRepository.findById(history.recurringRunId);
@@ -571,15 +591,19 @@ export async function finalizeRecurringRunFromHistory({
     return run.status;
   }
 
-  await recurringEditRepository.updateById(history.recurringEditId, {
-    runCount: { increment: 1 },
-    lastRunAt: completedAt,
-    ...(normalizedStatus === "SUCCESS"
-      ? { lastSuccessAt: completedAt, lastFailureReason: null }
-      : {
-          lastFailureAt: completedAt,
-          lastFailureReason: errorMessage || "Recurring run failed",
-        }),
+  await recurringEditRepository.updateByIdForShop({
+    id: history.recurringEditId,
+    shop: history.shop,
+    data: {
+      runCount: { increment: 1 },
+      lastRunAt: completedAt,
+      ...(normalizedStatus === "SUCCESS"
+        ? { lastSuccessAt: completedAt, lastFailureReason: null }
+        : {
+            lastFailureAt: completedAt,
+            lastFailureReason: errorMessage || "Recurring run failed",
+          }),
+    },
   });
 
   return normalizedStatus;

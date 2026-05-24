@@ -1,31 +1,51 @@
 import { prisma } from "../../config/database.js";
 import { addBulkEditExecuteJob } from "../../Jobs/Queues/bulkEditExecuteJob.js";
+import crypto from "crypto";
 import {
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
 
+const RETRY_ALLOWED_SOURCE_STATES = new Set([
+  OPERATION_LIFECYCLE_STATES.FAILED,
+  OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED,
+]);
+
 export class BulkEditRetryService {
-  constructor({ shop }) {
+  constructor({
+    shop,
+    prismaClient = prisma,
+    enqueueExecuteJob = addBulkEditExecuteJob,
+    uuidFactory = () => crypto.randomUUID(),
+  }) {
     this.shop = shop;
+    this.prisma = prismaClient;
+    this.enqueueExecuteJob = enqueueExecuteJob;
+    this.uuidFactory = uuidFactory;
   }
 
   async retryFailedOnly({ historyId }) {
-    const history = await prisma.editHistory.findFirst({
+    const history = await this.prisma.editHistory.findFirst({
       where: { id: historyId, shop: this.shop },
       select: {
         id: true,
         shop: true,
         executionIdentity: true,
+        executionState: true,
         batch: true,
       },
     });
     if (!history) {
       throw new Error("Edit history not found");
     }
+    if (!RETRY_ALLOWED_SOURCE_STATES.has(String(history.executionState || "").toUpperCase())) {
+      const error = new Error("RETRY_STATE_CONFLICT");
+      error.code = "CONFLICT";
+      throw error;
+    }
 
-    const failedRows = await prisma.changeRecord.findMany({
+    const failedRows = await this.prisma.changeRecord.findMany({
       where: {
         editHistoryId: historyId,
         shop: this.shop,
@@ -43,8 +63,9 @@ export class BulkEditRetryService {
     }
 
     const currentBatch = history.batch && typeof history.batch === "object" ? history.batch : {};
+    const nextExecutionId = this.uuidFactory();
 
-    await prisma.editHistory.update({
+    await this.prisma.editHistory.update({
       where: { id: historyId },
       data: {
         status: "pending",
@@ -59,9 +80,12 @@ export class BulkEditRetryService {
         cancelRequestedAt: null,
         pauseRequestedAt: null,
         resumedAt: new Date(),
+        executionIdentity: nextExecutionId,
         batch: {
           ...currentBatch,
           retryFailedOnly: true,
+          retryAttemptedAt: new Date().toISOString(),
+          retrySourceExecutionIdentity: history.executionIdentity || null,
           retryTargetIdentities,
           retryCursorIndex: 0,
           lastProductId: null,
@@ -70,15 +94,16 @@ export class BulkEditRetryService {
       },
     });
 
-    await addBulkEditExecuteJob({
+    await this.enqueueExecuteJob({
       historyId,
       shop: this.shop,
       source: "retry_failed_only",
-      executionId: history.executionIdentity || historyId,
+      executionId: nextExecutionId,
     });
 
     return {
       historyId,
+      executionId: nextExecutionId,
       retryTargetCount: retryTargetIdentities.length,
     };
   }

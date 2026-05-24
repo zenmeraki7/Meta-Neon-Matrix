@@ -346,10 +346,20 @@ async function persistTargetingMetadata({
     data.queryFilter = JSON.stringify(resolvedWhere || {});
   }
 
-  await db[modelName].update({
-    where: { id: ownerId },
+  const result = await db[modelName].updateMany({
+    where: { id: ownerId, shop: payload.shop },
     data,
   });
+  if (Number(result?.count || 0) !== 1) {
+    throw new TargetingValidationError("TARGETING_OWNER_SHOP_SCOPE_MISMATCH", {
+      code: "TARGETING_OWNER_SHOP_SCOPE_MISMATCH",
+      meta: {
+        ownerType,
+        ownerId,
+        shop: payload.shop,
+      },
+    });
+  }
 }
 
 async function resolveAndMaybeFreeze({
@@ -436,8 +446,8 @@ async function resolveAndMaybeFreeze({
       const modelName = OWNER_MODEL_MAP[ownerType];
       if (modelName && db[modelName]) {
         const resolvedAt = new Date();
-        await db[modelName].update({
-          where: { id: ownerId },
+        await db[modelName].updateMany({
+          where: { id: ownerId, shop },
           data: {
             filterHash: legacyFilterHash,
             targetGranularity: String(targetGranularity || "PRODUCT").toUpperCase(),
@@ -618,8 +628,8 @@ async function resolveAndMaybeFreeze({
     const modelName = OWNER_MODEL_MAP[ownerType];
     let reusedSnapshot = null;
     if (modelName && db[modelName]) {
-      const existingOwner = await db[modelName].findUnique({
-        where: { id: ownerId },
+      const existingOwner = await db[modelName].findFirst({
+        where: { id: ownerId, shop },
         select: {
           targetingSnapshotMeta: true,
         },

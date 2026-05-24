@@ -6,14 +6,17 @@ import {
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
+import {
+  acquireOperationLease,
+  buildLeaseOwnerId,
+  heartbeatOperationLease,
+  releaseOperationLease,
+} from "../operationLeaseService.js";
 
 function normalizeTargetIdentity(row) {
   return String(
     row?.targetIdentity
       || row?.target?.identity
-      || row?.id
-      || row?.product?.id
-      || row?.productSet?.product?.id
       || "",
   ).trim() || null;
 }
@@ -80,6 +83,25 @@ export class BulkEditResultIngestionService {
     resultUrl,
     attempt = 1,
   }) {
+    const leaseOwnerId = buildLeaseOwnerId("bulk-edit-result-ingest");
+    const lease = await acquireOperationLease({
+      shop,
+      namespace: "BULK_EDIT_RESULT_INGEST",
+      resourceId: String(historyId),
+      ownerId: leaseOwnerId,
+    });
+    if (!lease?.acquired) {
+      throw new Error("RESULT_INGEST_LEASE_CONFLICT");
+    }
+    const leaseHeartbeat = setInterval(() => {
+      heartbeatOperationLease({
+        shop,
+        namespace: "BULK_EDIT_RESULT_INGEST",
+        resourceId: String(historyId),
+        ownerId: leaseOwnerId,
+      }).catch(() => {});
+    }, 30_000);
+    try {
     const history = await prisma.editHistory.findUnique({
       where: { id: historyId },
       select: {
@@ -101,6 +123,14 @@ export class BulkEditResultIngestionService {
     const submittedBulkOperationId = history.batch?.shopifyBulkOperation?.id || history.bulkOperationId;
     if (!submittedBulkOperationId || String(submittedBulkOperationId) !== String(bulkOperationId)) {
       throw new Error("SHOPIFY_BULK_OPERATION_MISMATCH");
+    }
+    if (history.batch?.resultIngestion?.ingestedAt) {
+      return {
+        skipped: true,
+        reason: "already_ingested",
+        historyId,
+        shop,
+      };
     }
 
     const batchId =
@@ -126,7 +156,7 @@ export class BulkEditResultIngestionService {
     let failureCount = 0;
     let rowCount = 0;
     let unmappedRowCount = 0;
-    const ingestionRunId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const ingestionRunId = `${historyId}:${batchId || "none"}:${attempt}:${Date.now()}`;
 
     const pendingUpdates = [];
     const FLUSH_SIZE = 500;
@@ -191,7 +221,14 @@ export class BulkEditResultIngestionService {
     }
 
     const completedUpdate = await prisma.editHistory.updateMany({
-      where: { id: historyId, shop },
+      where: {
+        id: historyId,
+        shop,
+        batch: {
+          path: ["resultIngestion", "ingestedAt"],
+          equals: null,
+        },
+      },
       data: {
         processedCount: {
           increment: successCount,
@@ -216,7 +253,17 @@ export class BulkEditResultIngestionService {
       },
     });
     if (completedUpdate.count !== 1) {
-      throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_SHOPIFY_COMPLETED");
+      return {
+        skipped: true,
+        reason: "already_ingested",
+        historyId,
+        shop,
+        batchId,
+        successCount: 0,
+        failureCount: 0,
+        unmappedRowCount: 0,
+        rowCount: 0,
+      };
     }
 
     return {
@@ -228,5 +275,14 @@ export class BulkEditResultIngestionService {
       unmappedRowCount,
       rowCount,
     };
+    } finally {
+      clearInterval(leaseHeartbeat);
+      await releaseOperationLease({
+        shop,
+        namespace: "BULK_EDIT_RESULT_INGEST",
+        resourceId: String(historyId),
+        ownerId: leaseOwnerId,
+      });
+    }
   }
 }

@@ -1,7 +1,9 @@
 import express from "express";
 import * as adminController from "../controllers/adminController.js";
+import { requireAdminShop } from "../middleware/requireAdminShop.js";
 
 const router = express.Router();
+router.use(requireAdminShop);
 
 // Dashboard
 router.get("/dashboard", adminController.getDashboard);

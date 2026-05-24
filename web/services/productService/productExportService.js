@@ -349,7 +349,12 @@ transformToCSV(products, requestedColumns) {
         },
       });
 
-      return prisma.exportJob.findUnique({ where: { id: jobId } });
+      return prisma.exportJob.findFirst({
+        where: {
+          id: jobId,
+          shop: this.session.shop,
+        },
+      });
     } finally {
       await releaseExclusiveShopWork(writeCatalogLock?.lockKey);
     }

@@ -23,8 +23,10 @@ export const bulkUndoResultIngestQueue = new Queue(QUEUE_NAME, {
 });
 
 export async function addbulkUndoResultIngestJob(data, options = {}) {
-  const entityId =
-    data?.bulkOperationId || data?.admin_graphql_api_id || data?.id || "unknown";
+  if (!data?.shop || !data?.bulkOperationId) {
+    throw new Error("bulk undo result ingest job requires shop and bulkOperationId");
+  }
+  const entityId = data.bulkOperationId;
   const jobId =
     options.jobId ||
     buildWebhookJobId({
@@ -36,11 +38,13 @@ export async function addbulkUndoResultIngestJob(data, options = {}) {
 
   return bulkUndoResultIngestQueue.add(
     "bulk-undo-result-ingest",
-    data,
+    {
+      ...data,
+      bulkOperationId: String(data.bulkOperationId),
+    },
     mergeJobOptions(defaultJobOptions, {
       ...options,
       jobId,
     }),
   );
 }
-

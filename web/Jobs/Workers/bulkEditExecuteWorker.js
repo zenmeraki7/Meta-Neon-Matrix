@@ -21,6 +21,13 @@ import { ShopifyBulkMutationService } from "../../services/bulkEdit/ShopifyBulkM
 import { loadAuthoritativeSubscriptionForShop } from "../../services/subscriptionAuthorityService.js";
 import { getPlanMaxBulkEditTargets } from "../../services/bulkEdit/bulkEditPlanUtils.js";
 import { upsertOperationStageProgress } from "../../services/operationStageProgressService.js";
+import {
+  acquireOperationLease,
+  assertOperationLeaseOwnership,
+  buildLeaseOwnerId,
+  heartbeatOperationLease,
+  releaseOperationLease,
+} from "../../services/operationLeaseService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -188,6 +195,15 @@ async function markExecuting({ historyId, shop, batchPatch = {} }) {
   });
 }
 
+async function assertExecuteLeaseActive({ shop, historyId, leaseOwnerId }) {
+  await assertOperationLeaseOwnership({
+    shop,
+    namespace: "BULK_EDIT_EXECUTE",
+    resourceId: String(historyId),
+    ownerId: leaseOwnerId,
+  });
+}
+
 async function markCompletedEmpty({ historyId, shop, batchId }) {
   const existing = await prisma.editHistory.findFirst({
     where: { id: historyId, shop },
@@ -236,6 +252,32 @@ async function countRemainingFrozenTargets({ historyId, shop, cursorOrdinal }) {
         : {}),
     },
   });
+}
+
+async function resolveEmptyBatchCursorOrdinal({
+  historyId,
+  shop,
+  preparedBatch,
+  history,
+}) {
+  if (Number.isInteger(preparedBatch?.lastProductId)) {
+    return preparedBatch.lastProductId;
+  }
+
+  if (Number.isInteger(history?.batch?.lastProductId)) {
+    return history.batch.lastProductId;
+  }
+
+  const latest = await prisma.editHistory.findFirst({
+    where: { id: historyId, shop },
+    select: { batch: true },
+  });
+
+  if (Number.isInteger(latest?.batch?.lastProductId)) {
+    return latest.batch.lastProductId;
+  }
+
+  return null;
 }
 
 async function isFrozenCursorExhausted({ historyId, shop, cursorOrdinal }) {
@@ -373,6 +415,8 @@ async function processBulkEditExecuteJob(job) {
   const { historyId, shop, executionId, source } = payload;
 
   let lock = null;
+  let executeLeaseOwnerId = null;
+  let executeLeaseHeartbeat = null;
 
   try {
     const history = await loadExecutionHistory({ historyId, shop });
@@ -422,7 +466,61 @@ async function processBulkEditExecuteJob(job) {
       };
     }
 
-    await markExecuting({ historyId, shop });
+    executeLeaseOwnerId = buildLeaseOwnerId("bulk-edit-execute");
+    const executeLease = await acquireOperationLease({
+      shop,
+      namespace: "BULK_EDIT_EXECUTE",
+      resourceId: String(historyId),
+      ownerId: executeLeaseOwnerId,
+    });
+    if (!executeLease?.acquired) {
+      const delayMs = DEFAULT_REQUEUE_DELAY_MS;
+      await addBulkEditExecuteJob(
+        {
+          historyId,
+          shop,
+          executionId,
+          source: `${source}:execute_lease_busy`,
+        },
+        { delay: delayMs },
+      );
+      return {
+        success: true,
+        requeued: true,
+        reason: "BULK_EDIT_EXECUTE_LEASE_BUSY",
+        delayMs,
+      };
+    }
+
+    executeLeaseHeartbeat = setInterval(() => {
+      heartbeatOperationLease({
+        shop,
+        namespace: "BULK_EDIT_EXECUTE",
+        resourceId: String(historyId),
+        ownerId: executeLeaseOwnerId,
+      }).catch(() => {});
+    }, 30_000);
+
+    await markExecuting({
+      historyId,
+      shop,
+      batchPatch: {
+        executeLeaseOwnerId,
+        executeLeaseFencingToken: Number(executeLease.fencingToken || 0),
+      },
+    });
+    await upsertOperationStageProgress({
+      shop,
+      operationType: "BULK_EDIT",
+      operationId: historyId,
+      executionId,
+      stageKey: "EXECUTING",
+      stageStatus: "RUNNING",
+      detail: {
+        executeLeaseOwnerId,
+        executeLeaseFencingToken: Number(executeLease.fencingToken || 0),
+      },
+    });
 
     const session = await buildSessionForShop(shop);
 
@@ -440,11 +538,19 @@ async function processBulkEditExecuteJob(job) {
       historyId,
       executionId,
     });
+    await assertExecuteLeaseActive({
+      shop,
+      historyId,
+      leaseOwnerId: executeLeaseOwnerId,
+    });
 
     if (!preparedBatch.batchTargetCount || !preparedBatch.formattedProducts) {
-      const cursorOrdinal = Number.isInteger(history.batch?.lastProductId)
-        ? history.batch.lastProductId
-        : null;
+      const cursorOrdinal = await resolveEmptyBatchCursorOrdinal({
+        historyId,
+        shop,
+        preparedBatch,
+        history,
+      });
       const remaining = await countRemainingFrozenTargets({
         historyId,
         shop,
@@ -475,6 +581,10 @@ async function processBulkEditExecuteJob(job) {
     const submission = await mutationService.submitProductSetBulkMutation({
       historyId,
       executionId,
+      submitFence: {
+        leaseOwnerId: executeLeaseOwnerId,
+        fencingToken: Number(executeLease.fencingToken || 0),
+      },
       formattedProducts: preparedBatch.formattedProducts,
       fields: preparedBatch.fields,
       batchId: preparedBatch.batchId,
@@ -546,6 +656,17 @@ async function processBulkEditExecuteJob(job) {
 
     throw error;
   } finally {
+    if (executeLeaseHeartbeat) {
+      clearInterval(executeLeaseHeartbeat);
+    }
+    if (executeLeaseOwnerId) {
+      await releaseOperationLease({
+        shop,
+        namespace: "BULK_EDIT_EXECUTE",
+        resourceId: String(historyId),
+        ownerId: executeLeaseOwnerId,
+      });
+    }
     if (lock?.lockKey) {
       await releaseExclusiveShopWork(lock.lockKey);
     }

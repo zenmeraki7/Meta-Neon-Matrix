@@ -19,8 +19,39 @@ import {
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
+import { loadAuthoritativeSubscriptionForShop } from "../../services/subscriptionAuthorityService.js";
+import { getPlanMaxBulkEditTargets } from "../../services/bulkEdit/bulkEditPlanUtils.js";
+import { assertMirrorSafeForTargeting } from "../../services/mirrorHealthService.js";
 
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
+
+const SCHEDULED_RUN_LOCK_TTL_MS = 10 * 60 * 1000;
+
+function buildScheduledRunLockKey({ shop, historyId, scheduledAt, jobName }) {
+  const atMs = new Date(scheduledAt || 0).getTime() || 0;
+  return `scheduled-run-lock:${shop}:${historyId}:${atMs}:${jobName || "scheduled-task"}`;
+}
+
+async function acquireScheduledRunLock({ shop, historyId, scheduledAt, jobName }) {
+  const lockKey = buildScheduledRunLockKey({ shop, historyId, scheduledAt, jobName });
+  const token = crypto.randomUUID();
+  const acquired = await connection.set(lockKey, token, "NX", "PX", SCHEDULED_RUN_LOCK_TTL_MS);
+  if (acquired !== "OK") {
+    return { acquired: false, lockKey: null, token: null };
+  }
+  return { acquired: true, lockKey, token };
+}
+
+async function releaseScheduledRunLock({ lockKey, token }) {
+  if (!lockKey || !token) return;
+  const lua = `
+    if redis.call("get", KEYS[1]) == ARGV[1] then
+      return redis.call("del", KEYS[1])
+    end
+    return 0
+  `;
+  await connection.eval(lua, 1, lockKey, token).catch(() => {});
+}
 
 async function claimScheduledEdit(historyId, shop) {
   const result = await prisma.editHistory.updateMany({
@@ -115,6 +146,40 @@ async function claimScheduledUndo(historyId, shop) {
   return true;
 }
 
+async function blockScheduledEdit({
+  historyId,
+  shop,
+  historyBatch,
+  reason,
+  message,
+}) {
+  await prisma.editHistory.updateMany({
+    where: {
+      id: historyId,
+      shop,
+      status: "processing",
+    },
+    data: {
+      status: "failed",
+      statusNormalized: normalizeEditHistoryStatus("failed"),
+      executionState: OPERATION_LIFECYCLE_STATES.FAILED,
+      executionStateNormalized: normalizeEditHistoryExecutionState(
+        OPERATION_LIFECYCLE_STATES.FAILED,
+      ),
+      failureStage: reason,
+      completedAt: new Date(),
+      batch: {
+        ...(historyBatch && typeof historyBatch === "object" ? historyBatch : {}),
+        scheduledBlock: {
+          reason,
+          message,
+          blockedAt: new Date().toISOString(),
+        },
+      },
+    },
+  });
+}
+
 const scheduledEditWorker = new Worker(
   "scheduled-edit-queue",
   async (job) => {
@@ -126,7 +191,25 @@ const scheduledEditWorker = new Worker(
       throw new Error("scheduled-edit job requires historyId and shop");
     }
 
+    let scheduledRunLock = null;
     try {
+      const lockContext = await prisma.editHistory.findFirst({
+        where: { id: historyId, shop },
+        select: { scheduledAt: true },
+      });
+      scheduledRunLock = await acquireScheduledRunLock({
+        shop,
+        historyId,
+        scheduledAt: lockContext?.scheduledAt || null,
+        jobName: job.name,
+      });
+      if (!scheduledRunLock?.acquired) {
+        return {
+          skipped: true,
+          reason: "scheduled_run_lock_conflict",
+        };
+      }
+
       const claimed = isUndo
         ? await claimScheduledUndo(historyId, shop)
         : await claimScheduledEdit(historyId, shop);
@@ -146,9 +229,43 @@ const scheduledEditWorker = new Worker(
         select: {
           executionIdentity: true,
           targetSnapshotCount: true,
+          totalItems: true,
           batch: true,
         },
       });
+      if (!scheduledHistory) {
+        throw new Error("scheduled history not found after claim");
+      }
+      const subscription = await loadAuthoritativeSubscriptionForShop(shop);
+      const maxTargets = getPlanMaxBulkEditTargets(subscription);
+      const targetCount = Number(
+        scheduledHistory.targetSnapshotCount
+        || scheduledHistory.batch?.previewCount
+        || scheduledHistory.totalItems
+        || 0,
+      );
+      if (Number.isFinite(maxTargets) && targetCount > maxTargets) {
+        await blockScheduledEdit({
+          historyId,
+          shop,
+          historyBatch: scheduledHistory.batch,
+          reason: "SCHEDULED_EDIT_ENTITLEMENT_BLOCKED",
+          message: `Target count ${targetCount} exceeds plan limit ${maxTargets}`,
+        });
+        return { skipped: true, reason: "entitlement_blocked", targetCount, maxTargets };
+      }
+      try {
+        await assertMirrorSafeForTargeting(shop, { purpose: "EXECUTE" });
+      } catch (error) {
+        await blockScheduledEdit({
+          historyId,
+          shop,
+          historyBatch: scheduledHistory.batch,
+          reason: "SCHEDULED_EDIT_MIRROR_UNSAFE",
+          message: String(error?.message || "Mirror is not safe for execution"),
+        });
+        return { skipped: true, reason: "mirror_unsafe" };
+      }
       const executionIdentity = scheduledHistory?.executionIdentity || historyId;
       const freezeMode = String(scheduledHistory?.batch?.freezeMode || "DYNAMIC_AT_RUN").toUpperCase();
       if (
@@ -177,6 +294,8 @@ const scheduledEditWorker = new Worker(
         source: "scheduledEditWorker",
       });
       throw error;
+    } finally {
+      await releaseScheduledRunLock(scheduledRunLock || {});
     }
   },
   { connection, concurrency: 1 },

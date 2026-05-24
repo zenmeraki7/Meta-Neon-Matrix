@@ -18,6 +18,20 @@ import {
   completeEditHistoryStage,
   failEditHistoryStage,
 } from "../../services/operationStageIdempotencyService.js";
+import {
+  acquireOperationLease,
+  assertOperationLeaseOwnership,
+  buildLeaseOwnerId,
+  heartbeatOperationLease,
+  releaseOperationLease,
+} from "../../services/operationLeaseService.js";
+
+function assertPipelineExecutionState(history, allowedStates = []) {
+  const state = String(history?.executionState || "").toUpperCase();
+  if (!allowedStates.includes(state)) {
+    throw new Error(`PIPELINE_STATE_CONFLICT:${state}`);
+  }
+}
 
 const QUEUE_NAME = process.env.BULK_EDIT_PIPELINE_QUEUE || "bulk-edit-pipeline";
 
@@ -32,55 +46,112 @@ async function processTargetFreeze(jobData) {
   if (stageRun.state === "completed" || stageRun.state === "running") {
     return;
   }
-  const session = await getSession(shop);
-  if (!session?.shop || session.shop !== shop) {
-    throw new Error("Shop session not available for target.freeze stage");
-  }
-
-  const service = new ProductBulkService(session);
-  await prisma.editHistory.updateMany({
+  const history = await prisma.editHistory.findFirst({
     where: { id: historyId, shop },
-    data: {
-      executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
-      executionStateNormalized: normalizeEditHistoryExecutionState(OPERATION_LIFECYCLE_STATES.TARGET_FREEZING),
+    select: {
+      cancelRequestedAt: true,
+      executionIdentity: true,
+      executionState: true,
     },
   });
+  if (!history) {
+    throw new Error("Edit history not found for target.freeze stage");
+  }
+  if (history.cancelRequestedAt) {
+    throw new Error("OPERATION_CANCEL_REQUESTED");
+  }
+  if (history.executionIdentity && executionId && history.executionIdentity !== executionId) {
+    throw new Error("STALE_EXECUTION_JOB");
+  }
+  assertPipelineExecutionState(history, [
+    OPERATION_LIFECYCLE_STATES.QUEUED,
+    OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
+    OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+  ]);
 
-  let frozenCount = 0;
+  const leaseOwnerId = buildLeaseOwnerId("bulk-edit-target-freeze");
+  const lease = await acquireOperationLease({
+    shop,
+    namespace: "TARGET_FREEZE",
+    resourceId: String(historyId),
+    ownerId: leaseOwnerId,
+  });
+  if (!lease?.acquired) {
+    throw new Error("TARGET_FREEZE_LEASE_CONFLICT");
+  }
+  const leaseHeartbeat = setInterval(() => {
+    heartbeatOperationLease({
+      shop,
+      namespace: "TARGET_FREEZE",
+      resourceId: String(historyId),
+      ownerId: leaseOwnerId,
+    }).catch(() => {});
+  }, 30_000);
   try {
-    frozenCount = await service.freezeEditHistoryTargets(historyId);
-  } catch (error) {
-    await failEditHistoryStage({
+    const session = await getSession(shop);
+    if (!session?.shop || session.shop !== shop) {
+      throw new Error("Shop session not available for target.freeze stage");
+    }
+
+    const service = new ProductBulkService(session);
+    await prisma.editHistory.updateMany({
+      where: { id: historyId, shop },
+      data: {
+        executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+        executionStateNormalized: normalizeEditHistoryExecutionState(OPERATION_LIFECYCLE_STATES.TARGET_FREEZING),
+      },
+    });
+
+    let frozenCount = 0;
+    try {
+      await assertOperationLeaseOwnership({
+        shop,
+        namespace: "TARGET_FREEZE",
+        resourceId: String(historyId),
+        ownerId: leaseOwnerId,
+      });
+      frozenCount = await service.freezeEditHistoryTargets(historyId);
+    } catch (error) {
+      await failEditHistoryStage({
+        historyId,
+        shop,
+        stage: "targetFreeze",
+        retryable: true,
+        error: error.message,
+      });
+      throw error;
+    }
+    await prisma.editHistory.updateMany({
+      where: { id: historyId, shop },
+      data: {
+        totalItems: frozenCount,
+        targetSnapshotCount: frozenCount,
+        executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
+        executionStateNormalized: normalizeEditHistoryExecutionState(OPERATION_LIFECYCLE_STATES.TARGET_FROZEN),
+      },
+    });
+
+    await enqueueBulkEditMutationPlanJob({
+      historyId,
+      shop,
+      executionId,
+      source: "pipeline_target_freeze",
+    });
+    await completeEditHistoryStage({
       historyId,
       shop,
       stage: "targetFreeze",
-      retryable: true,
-      error: error.message,
+      checkpoint: { frozenCount },
     });
-    throw error;
+  } finally {
+    clearInterval(leaseHeartbeat);
+    await releaseOperationLease({
+      shop,
+      namespace: "TARGET_FREEZE",
+      resourceId: String(historyId),
+      ownerId: leaseOwnerId,
+    });
   }
-  await prisma.editHistory.updateMany({
-    where: { id: historyId, shop },
-    data: {
-      totalItems: frozenCount,
-      targetSnapshotCount: frozenCount,
-      executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
-      executionStateNormalized: normalizeEditHistoryExecutionState(OPERATION_LIFECYCLE_STATES.TARGET_FROZEN),
-    },
-  });
-
-  await enqueueBulkEditMutationPlanJob({
-    historyId,
-    shop,
-    executionId,
-    source: "pipeline_target_freeze",
-  });
-  await completeEditHistoryStage({
-    historyId,
-    shop,
-    stage: "targetFreeze",
-    checkpoint: { frozenCount },
-  });
 }
 
 async function processMutationPlan(jobData) {
@@ -88,12 +159,18 @@ async function processMutationPlan(jobData) {
   const history = await prisma.editHistory.findFirst({
     where: { id: historyId, shop },
     select: {
+      executionIdentity: true,
+      executionState: true,
       batch: true,
     },
   });
   if (!history) {
     throw new Error("Edit history not found for mutation.plan stage");
   }
+  if (history.executionIdentity && executionId && history.executionIdentity !== executionId) {
+    throw new Error("STALE_EXECUTION_JOB");
+  }
+  assertPipelineExecutionState(history, [OPERATION_LIFECYCLE_STATES.TARGET_FROZEN]);
   const operationKey = history?.batch?.operationKey || history?.batch?.executionPlan?.operationKey || null;
   assertValidOperationKey(operationKey);
 

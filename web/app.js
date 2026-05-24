@@ -100,7 +100,7 @@ export const buildApp = (_server, io) => {
   app.use("/api/location", LocationRoutes);
   app.use("/api/sync", SyncRoutes);
   app.use("/api/intelligence", intelligenceRoutes);
-  app.use("/admin", AdminRoutes);
+  app.use("/api/admin", shopify.validateAuthenticatedSession(), AdminRoutes);
   app.use("/metrics", metricsRoute);
   app.use("/referral", AffiliateRoutes);
 

@@ -68,13 +68,11 @@ for (const history of stuck) {
       ? await addbulkUndoResultIngestJob({
           shop: history.shop,
           bulkOperationId,
-          status: "COMPLETED",
           source: "manual_stuck_recovery",
         })
       : await addbulkEditResultIngestJob({
           shop: history.shop,
           bulkOperationId,
-          status: "COMPLETED",
           source: "manual_stuck_recovery",
         });
 

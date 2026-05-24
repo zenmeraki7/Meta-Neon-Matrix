@@ -22,8 +22,10 @@ export const bulkEditResultIngestQueue = new Queue(QUEUE_NAME, {
 });
 
 export async function addbulkEditResultIngestJob(data, options = {}) {
-  const entityId =
-    data?.bulkOperationId || data?.admin_graphql_api_id || data?.id || "unknown";
+  if (!data?.shop || !data?.bulkOperationId) {
+    throw new Error("bulk edit result ingest job requires shop and bulkOperationId");
+  }
+  const entityId = data.bulkOperationId;
   const jobId =
     options.jobId ||
     buildWebhookJobId({
@@ -35,7 +37,10 @@ export async function addbulkEditResultIngestJob(data, options = {}) {
 
   return bulkEditResultIngestQueue.add(
     "bulk-edit-result-ingest",
-    data,
+    {
+      ...data,
+      bulkOperationId: String(data.bulkOperationId),
+    },
     mergeJobOptions(defaultJobOptions, {
       ...options,
       jobId,
