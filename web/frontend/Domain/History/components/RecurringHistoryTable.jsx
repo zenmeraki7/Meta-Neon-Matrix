@@ -22,20 +22,20 @@ import { recurringStatusBadge } from "../../shared/components/StatusBadge";
 import { protectedApiDelete, protectedApiGet } from "../../../api/protectedApiClient";
 
 const STATUS_OPTIONS = [
-  { label: "Active", value: "active" },
-  { label: "Inactive", value: "inactive" },
-  { label: "Paused", value: "paused" },
-  { label: "Completed", value: "completed" },
-  { label: "Failed", value: "failed" },
-  { label: "Expired", value: "expired" },
+  { label: "recurringStatusActive", value: "active" },
+  { label: "recurringStatusInactive", value: "inactive" },
+  { label: "recurringStatusPaused", value: "paused" },
+  { label: "recurringStatusCompleted", value: "completed" },
+  { label: "recurringStatusFailed", value: "failed" },
+  { label: "recurringStatusExpired", value: "expired" },
 ];
 
 const FREQUENCY_OPTIONS = [
-  { label: "Hourly", value: "hourly" },
-  { label: "Every 2 Hours", value: "every 2 hours" },
-  { label: "Daily", value: "daily" },
-  { label: "Weekly", value: "weekly" },
-  { label: "Monthly", value: "monthly" },
+  { label: "recurringFrequencyHourly", value: "hourly" },
+  { label: "recurringFrequencyEvery2Hours", value: "every 2 hours" },
+  { label: "recurringFrequencyDaily", value: "daily" },
+  { label: "recurringFrequencyWeekly", value: "weekly" },
+  { label: "recurringFrequencyMonthly", value: "monthly" },
 ];
 
 const DEFAULT_QUERY = {
@@ -50,7 +50,7 @@ const DEFAULT_QUERY = {
 
 const RecurringHistoryTable = memo(function RecurringHistoryTable({
   onRefresh,
-  emptyStateMessage = "No recurring edits found.",
+  emptyStateMessage,
 }) {
   const [open, setOpen] = useState(false);
   const [historyItem, setHistoryItem] = useState(null);
@@ -113,19 +113,25 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
     if (query.status) {
       filters.push({
         key: "status",
-        label: `Status: ${query.status}`,
+        label: t("recurringFilterStatusLabel", {
+          value: query.status,
+          defaultValue: `Status: ${query.status}`,
+        }),
         onRemove: () => setQuery((current) => ({ ...current, status: "", cursor: null })),
       });
     }
     if (query.frequency) {
       filters.push({
         key: "frequency",
-        label: `Frequency: ${query.frequency}`,
+        label: t("recurringFilterFrequencyLabel", {
+          value: query.frequency,
+          defaultValue: `Frequency: ${query.frequency}`,
+        }),
         onRemove: () => setQuery((current) => ({ ...current, frequency: "", cursor: null })),
       });
     }
     return filters;
-  }, [query.status, query.frequency]);
+  }, [query.status, query.frequency, t]);
 
   const onViewDetails = async (id) => {
     const requestId = detailsRequestIdRef.current + 1;
@@ -144,7 +150,12 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
       if (requestId !== detailsRequestIdRef.current) {
         return;
       }
-      setDetailsError(error.message || "Failed to load recurring edit details");
+      setDetailsError(
+        error.message ||
+          t("recurringDetailsLoadError", {
+            defaultValue: "Failed to load recurring edit details",
+          }),
+      );
     } finally {
       if (requestId !== detailsRequestIdRef.current) {
         return;
@@ -170,7 +181,12 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
   if (isLoading) {
     return (
       <Box padding="400" textAlign="center">
-        <Spinner accessibilityLabel="Loading recurring edits" size="large" />
+        <Spinner
+          accessibilityLabel={t("recurringLoadingAriaLabel", {
+            defaultValue: "Loading recurring edits",
+          })}
+          size="large"
+        />
       </Box>
     );
   }
@@ -180,18 +196,23 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
       <Card padding="0">
         <IndexFilters
           queryValue={query.search}
-          queryPlaceholder="Search recurring edits"
+          queryPlaceholder={t("recurringSearchPlaceholder", {
+            defaultValue: "Search recurring edits",
+          })}
           onQueryChange={(value) => setQuery((current) => ({ ...current, search: value, cursor: null }))}
           onQueryClear={() => setQuery((current) => ({ ...current, search: "", status: "", frequency: "", cursor: null }))}
           filters={[
             {
               key: "status",
-              label: "Status",
+              label: t("recurringFilterStatus", { defaultValue: "Status" }),
               filter: (
                 <ChoiceList
-                  title="Status"
+                  title={t("recurringFilterStatus", { defaultValue: "Status" })}
                   titleHidden
-                  choices={STATUS_OPTIONS}
+                  choices={STATUS_OPTIONS.map((option) => ({
+                    ...option,
+                    label: t(option.label, { defaultValue: option.value }),
+                  }))}
                   selected={query.status ? [query.status] : []}
                   onChange={(selected) => setQuery((current) => ({ ...current, status: selected[0] || "", cursor: null }))}
                 />
@@ -200,12 +221,15 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
             },
             {
               key: "frequency",
-              label: "Frequency",
+              label: t("recurringFilterFrequency", { defaultValue: "Frequency" }),
               filter: (
                 <ChoiceList
-                  title="Frequency"
+                  title={t("recurringFilterFrequency", { defaultValue: "Frequency" })}
                   titleHidden
-                  choices={FREQUENCY_OPTIONS}
+                  choices={FREQUENCY_OPTIONS.map((option) => ({
+                    ...option,
+                    label: t(option.label, { defaultValue: option.value }),
+                  }))}
                   selected={query.frequency ? [query.frequency] : []}
                   onChange={(selected) => setQuery((current) => ({ ...current, frequency: selected[0] || "", cursor: null }))}
                 />
@@ -227,7 +251,12 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
         {items.length === 0 ? (
           <Box padding="600">
             <EmptyState heading={t("historyEmptyStateTitle")}>
-              <p>{emptyStateMessage}</p>
+              <p>
+                {emptyStateMessage ||
+                  t("recurringEmptyStateMessage", {
+                    defaultValue: "No recurring edits found.",
+                  })}
+              </p>
             </EmptyState>
           </Box>
         ) : (
@@ -251,7 +280,10 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
                   return (
                     <IndexTable.Row id={String(id)} key={String(id)} position={index}>
                       <IndexTable.Cell>
-                        <Text as="span" variant="bodyMd">{item.title || "Untitled"}</Text>
+                        <Text as="span" variant="bodyMd">
+                          {item.title ||
+                            t("recurringUntitled", { defaultValue: "Untitled" })}
+                        </Text>
                       </IndexTable.Cell>
                       <IndexTable.Cell>
                         {recurringStatusBadge(item.status, t(`statusRecurring.${String(item.status || "").toLowerCase()}`, { defaultValue: item.status || "Unknown" }))}

@@ -300,7 +300,9 @@ export default function EditPreviewPage() {
       }, {
         idempotent: true,
       });
-      showSuccess("Bulk edit started");
+      showSuccess(
+        t("bulkEditStartedToast", { defaultValue: "Bulk edit started" }),
+      );
       navigate(`/editDetails/${json.id || json.operationId}`);
     },
     [
@@ -321,6 +323,7 @@ export default function EditPreviewPage() {
       previewRegistryVersion?.operatorRegistryVersion,
       selectedField?.value,
       supportValue,
+      t,
     ],
   );
 
@@ -340,13 +343,21 @@ export default function EditPreviewPage() {
     }
 
     if (!hasRequiredLocation) {
-      showError("Select a location before running this inventory update.");
+      showError(
+        t("bulkEditLocationRequiredError", {
+          defaultValue: "Select a location before running this inventory update.",
+        }),
+      );
       return;
     }
 
     if (!editType || !canRunEdit || !hasFreshPreview) return;
     if (hasPreviewRegistryMismatch) {
-      showError("Filter registry changed. Refresh preview before executing.");
+      showError(
+        t("bulkEditPreviewRegistryChangedError", {
+          defaultValue: "Filter registry changed. Refresh preview before executing.",
+        }),
+      );
       return;
     }
 
@@ -405,7 +416,7 @@ const summaryText = useMemo(() => {
       fullWidth
       title={t("ConfigureModifications")}
       backAction={{
-        content: "Back",
+        content: t("back", { defaultValue: "Back" }),
         icon: ChevronLeftIcon,
         onAction: () => navigate("/products"),
       }}
@@ -438,7 +449,10 @@ const summaryText = useMemo(() => {
       <Layout>
         {isSyncInProgress && (
           <Layout.Section>
-            <Banner tone="info" title="Sync in progress">
+            <Banner
+              tone="info"
+              title={t("syncInProgressTitle", { defaultValue: "Sync in progress" })}
+            >
               <p>
                 {t("bulkEditSyncBlockingMessage",)}
               </p>
@@ -451,10 +465,10 @@ const summaryText = useMemo(() => {
             <Box paddingBlockEnd="300">
               <Banner
                 tone="warning"
-                title="Plan limit reached"
+                title={t("planLimitReachedTitle", { defaultValue: "Plan limit reached" })}
                 onDismiss={() => setLimitWarning(null)}
                 action={{
-                  content: "Upgrade plan",
+                  content: t("upgradePlanButton", { defaultValue: "Upgrade plan" }),
                   onAction: () => navigate("/pricing"),
                 }}
               >
@@ -529,18 +543,45 @@ const summaryText = useMemo(() => {
                 </Text>
                 <MirrorFreshnessBadge isSyncInProgress={isSyncInProgress} />
                 {!hasFreshPreview && (
-                  <Banner tone="warning" title="Preview is stale">
-                    <p>Run preview again before executing this edit.</p>
+                  <Banner
+                    tone="warning"
+                    title={t("bulkEditPreviewStaleTitle", { defaultValue: "Preview is stale" })}
+                  >
+                    <p>
+                      {t("bulkEditPreviewStaleMessage", {
+                        defaultValue: "Run preview again before executing this edit.",
+                      })}
+                    </p>
                   </Banner>
                 )}
                 {hasPreviewRegistryMismatch && (
-                  <Banner tone="critical" title="Preview invalidated by filter registry change">
-                    <p>Fields/operators changed on the server. Refresh preview before executing.</p>
+                  <Banner
+                    tone="critical"
+                    title={t("bulkEditPreviewInvalidatedTitle", {
+                      defaultValue: "Preview invalidated by filter registry change",
+                    })}
+                  >
+                    <p>
+                      {t("bulkEditPreviewInvalidatedMessage", {
+                        defaultValue:
+                          "Fields/operators changed on the server. Refresh preview before executing.",
+                      })}
+                    </p>
                   </Banner>
                 )}
                 {requiresLocationSelection && !hasRequiredLocation && (
-                  <Banner tone="critical" title="Location required">
-                    <p>Select a location for inventory updates before preview/execute.</p>
+                  <Banner
+                    tone="critical"
+                    title={t("bulkEditLocationRequiredTitle", {
+                      defaultValue: "Location required",
+                    })}
+                  >
+                    <p>
+                      {t("bulkEditLocationRequiredMessage", {
+                        defaultValue:
+                          "Select a location for inventory updates before preview/execute.",
+                      })}
+                    </p>
                   </Banner>
                 )}
                 <Text as="p" variant="bodySm" tone="subdued">
@@ -596,7 +637,9 @@ const summaryText = useMemo(() => {
       )}
       <Modal
         open={confirmModalOpen}
-        title="Confirm broad target edit"
+        title={t("bulkEditConfirmBroadTargetTitle", {
+          defaultValue: "Confirm broad target edit",
+        })}
         onClose={() => {
           if (pendingConfirmRun) return;
           setConfirmModalOpen(false);
@@ -604,14 +647,14 @@ const summaryText = useMemo(() => {
           setSubmitting(false);
         }}
         primaryAction={{
-          content: "Confirm and run",
+          content: t("bulkEditConfirmAndRun", { defaultValue: "Confirm and run" }),
           onAction: handleConfirmAndRun,
           loading: pendingConfirmRun,
           disabled: confirmText.trim().toUpperCase() !== "CONFIRM",
         }}
         secondaryActions={[
           {
-            content: "Cancel",
+            content: t("cancel", { defaultValue: "Cancel" }),
             onAction: () => {
               setConfirmModalOpen(false);
               setConfirmText("");
@@ -623,11 +666,15 @@ const summaryText = useMemo(() => {
         <Modal.Section>
           <BlockStack gap="300">
             <Text as="p" variant="bodyMd">
-              This edit targets {previewTotal} items. Type <strong>CONFIRM</strong> to proceed.
+              {t("bulkEditConfirmBroadTargetMessage", {
+                count: previewTotal,
+                defaultValue:
+                  "This edit targets {{count}} items. Type CONFIRM to proceed.",
+              })}
             </Text>
             <TextField
               autoComplete="off"
-              label="Type CONFIRM"
+              label={t("bulkEditTypeConfirmLabel", { defaultValue: "Type CONFIRM" })}
               value={confirmText}
               onChange={setConfirmText}
             />

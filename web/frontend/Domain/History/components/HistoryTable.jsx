@@ -48,17 +48,17 @@ function formatStageTimestamp(entry) {
 }
 
 const TYPE_OPTIONS = [
-  { label: "Manual edit", value: "Manual edit" },
-  { label: "Scheduled edit", value: "Scheduled edit" },
-  { label: "Recurring edit", value: "Recurring edit" },
+  { label: "historyTypeManualEdit", value: "Manual edit" },
+  { label: "historyTypeScheduledEdit", value: "Scheduled edit" },
+  { label: "historyTypeRecurringEdit", value: "Recurring edit" },
 ];
 
 const STATUS_OPTIONS = [
-  { label: "Queued", value: "queued" },
-  { label: "Processing", value: "processing" },
-  { label: "Completed", value: "completed" },
-  { label: "Failed", value: "failed" },
-  { label: "Cancelled", value: "cancelled" },
+  { label: "historyStatusQueued", value: "queued" },
+  { label: "historyStatusProcessing", value: "processing" },
+  { label: "historyStatusCompleted", value: "completed" },
+  { label: "historyStatusFailed", value: "failed" },
+  { label: "historyStatusCancelled", value: "cancelled" },
 ];
 
 const HistoryTable = memo(function HistoryTable({
@@ -89,19 +89,25 @@ const HistoryTable = memo(function HistoryTable({
     if (query.type) {
       filters.push({
         key: "type",
-        label: `Type: ${query.type}`,
+        label: t("historyFilterTypeLabel", {
+          value: query.type,
+          defaultValue: `Type: ${query.type}`,
+        }),
         onRemove: () => onQueryChange({ type: "", cursor: null }),
       });
     }
     if (query.status) {
       filters.push({
         key: "status",
-        label: `Status: ${query.status}`,
+        label: t("historyFilterStatusLabel", {
+          value: query.status,
+          defaultValue: `Status: ${query.status}`,
+        }),
         onRemove: () => onQueryChange({ status: "", cursor: null }),
       });
     }
     return filters;
-  }, [query.type, query.status, onQueryChange]);
+  }, [query.type, query.status, onQueryChange, t]);
 
   const handleUndo = useCallback((history) => {
     setUndoHistoryItem(history);
@@ -213,18 +219,23 @@ const HistoryTable = memo(function HistoryTable({
     <Card padding="0">
       <IndexFilters
         queryValue={query.search}
-        queryPlaceholder="Search history"
+        queryPlaceholder={t("historySearchPlaceholder", {
+          defaultValue: "Search history",
+        })}
         onQueryChange={(value) => onQueryChange({ search: value, cursor: null })}
         onQueryClear={onQueryClear}
         filters={[
           {
             key: "type",
-            label: "Type",
+            label: t("historyFilterType", { defaultValue: "Type" }),
             filter: (
               <ChoiceList
-                title="Type"
+                title={t("historyFilterType", { defaultValue: "Type" })}
                 titleHidden
-                choices={TYPE_OPTIONS}
+                choices={TYPE_OPTIONS.map((option) => ({
+                  ...option,
+                  label: t(option.label, { defaultValue: option.value }),
+                }))}
                 selected={query.type ? [query.type] : []}
                 onChange={(selected) => onQueryChange({ type: selected[0] || "", cursor: null })}
               />
@@ -233,12 +244,15 @@ const HistoryTable = memo(function HistoryTable({
           },
           {
             key: "status",
-            label: "Status",
+            label: t("historyFilterStatus", { defaultValue: "Status" }),
             filter: (
               <ChoiceList
-                title="Status"
+                title={t("historyFilterStatus", { defaultValue: "Status" })}
                 titleHidden
-                choices={STATUS_OPTIONS}
+                choices={STATUS_OPTIONS.map((option) => ({
+                  ...option,
+                  label: t(option.label, { defaultValue: option.value }),
+                }))}
                 selected={query.status ? [query.status] : []}
                 onChange={(selected) => onQueryChange({ status: selected[0] || "", cursor: null })}
               />
