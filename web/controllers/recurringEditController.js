@@ -7,11 +7,14 @@ import {
   updateRecurringEdit,
 } from "../services/recurringEditService.js";
 import { logApiError } from "../utils/errorLogUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 function getSessionOrThrow(res) {
   const session = res.locals.shopify?.session;
   if (!session?.shop) {
-    throw new Error("Session expired");
+    const error = new Error("UNAUTHENTICATED");
+    error.code = "UNAUTHENTICATED";
+    throw error;
   }
 
   return session;
@@ -41,14 +44,11 @@ export async function createRecurringEditController(req, res) {
       source: "recurringEditController.create",
     });
 
-    const statusCode = error.message === "Session expired" ? 403 : 400;
-    return res.status(statusCode).json({
-      success: false,
-      code: error?.code || "RECURRING_EDIT_CREATE_FAILED",
-      path: error?.path || null,
-      meta: error?.meta || null,
-      message: error.message || "Failed to create recurring edit",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -74,11 +74,11 @@ export async function listRecurringEditsController(req, res) {
       source: "recurringEditController.list",
     });
 
-    const statusCode = error.message === "Session expired" ? 403 : 500;
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || "Failed to fetch recurring edits",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -105,20 +105,14 @@ export async function getRecurringEditByIdController(req, res) {
       source: "recurringEditController.getById",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Recurring edit not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      code: error?.code || "RECURRING_EDIT_GET_FAILED",
-      path: error?.path || null,
-      meta: error?.meta || null,
-      message: error.message || "Failed to fetch recurring edit",
-    });
+    const fallbackCode = error?.message === "Recurring edit not found"
+      ? "NOT_FOUND"
+      : "VALIDATION_FAILED";
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      fallbackCode,
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -147,20 +141,14 @@ export async function updateRecurringEditController(req, res) {
       source: "recurringEditController.update",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Recurring edit not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      code: error?.code || "RECURRING_EDIT_UPDATE_FAILED",
-      path: error?.path || null,
-      meta: error?.meta || null,
-      message: error.message || "Failed to update recurring edit",
-    });
+    const fallbackCode = error?.message === "Recurring edit not found"
+      ? "NOT_FOUND"
+      : "VALIDATION_FAILED";
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      fallbackCode,
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -189,17 +177,14 @@ export async function toggleRecurringEditStatusController(req, res) {
       source: "recurringEditController.toggleStatus",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Recurring edit not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || "Failed to update recurring edit status",
-    });
+    const fallbackCode = error?.message === "Recurring edit not found"
+      ? "NOT_FOUND"
+      : "VALIDATION_FAILED";
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      fallbackCode,
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -226,16 +211,14 @@ export async function deleteRecurringEditController(req, res) {
       source: "recurringEditController.delete",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Recurring edit not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || "Failed to delete recurring edit",
-    });
+    const fallbackCode = error?.message === "Recurring edit not found"
+      ? "NOT_FOUND"
+      : "VALIDATION_FAILED";
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      fallbackCode,
+    );
+    return res.status(statusCode).json(body);
   }
 }
+

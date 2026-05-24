@@ -4,7 +4,6 @@ import { prisma } from "../../config/database.js";
 import logger from "../../utils/loggerUtils.js";
 import { logWorkerError } from "../../utils/errorLogUtils.js";
 import {
-  BULK_EDIT_EXECUTION_STATES,
   BULK_UNDO_STATES,
   normalizeUndoState,
   buildPlannedUndoState,
@@ -15,6 +14,11 @@ import {
   enqueueBulkEditMutationPlanJob,
   enqueueBulkEditTargetFreezeJob,
 } from "../Queues/bulkEditPipelineJob.js";
+import {
+  normalizeEditHistoryExecutionState,
+  normalizeEditHistoryStatus,
+} from "../../utils/normalizedStateUtils.js";
+import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 
@@ -27,7 +31,11 @@ async function claimScheduledEdit(historyId, shop) {
     },
     data: {
       status: "processing",
-      executionState: BULK_EDIT_EXECUTION_STATES.QUEUED,
+      statusNormalized: normalizeEditHistoryStatus("processing"),
+      executionState: OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
+      executionStateNormalized: normalizeEditHistoryExecutionState(
+        OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
+      ),
     },
   });
 
@@ -131,10 +139,8 @@ const scheduledEditWorker = new Worker(
       }
 
       if (isUndo) {
-  return { success: true, type: "scheduled_undo_enqueued" };
-}
-
-return updateProducts(historyId, false, shop);
+        return { success: true, type: "scheduled_undo_enqueued" };
+      }
       const scheduledHistory = await prisma.editHistory.findFirst({
         where: { id: historyId, shop },
         select: {

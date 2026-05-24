@@ -26,29 +26,61 @@ import {
 } from "./bulkEditPlanUtils.js";
 import { buildPlannedUndoState } from "../bulkEditExecutionStateService.js";
 import { loadAuthoritativeSubscriptionForShop } from "../subscriptionAuthorityService.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "../idempotency/IdempotencyStoreService.js";
 
 export class BulkEditCommandService {
   constructor(session) {
     this.session = session;
+    this.idempotencyStore = new IdempotencyStoreService(prisma);
   }
 
-  async createManualBulkEditOperation(req) {
+  async createManualBulkEditOperation(input = {}) {
+    if (input && typeof input === "object" && Object.prototype.hasOwnProperty.call(input, "body")) {
+      throw new Error("RAW_REQ_SHAPE_FORBIDDEN");
+    }
+
+    const command = input.command || {};
+    const idempotencyKey = String(input.idempotencyKey || "").trim();
+    if (!idempotencyKey) {
+      const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+      error.code = "VALIDATION_FAILED";
+      throw error;
+    }
+
+    const begin = await this.idempotencyStore.begin({
+      shop: this.session.shop,
+      scope: "BULK_EDIT_EXECUTE",
+      key: idempotencyKey,
+      requestHash: buildIdempotencyRequestHash({
+        shop: this.session.shop,
+        command,
+      }),
+    });
+    if (begin.mode === "replay") {
+      return begin.response;
+    }
+
+    const actor = input.actor || buildActorContext({
+        req: { body: command, query: {}, headers: {} },
+        session: this.session,
+        fallbackType: "MERCHANT_ADMIN",
+      });
+
     const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(
       this.session.shop,
     );
 
-    const actor = buildActorContext({
-      req,
-      session: this.session,
-      fallbackType: "MERCHANT_ADMIN",
-    });
+    const effectiveSubscription = input.subscription || authoritativeSubscription;
 
     const historyData = await this.#buildManualHistoryData(
-      req.body,
-      authoritativeSubscription,
+      command,
+      effectiveSubscription,
       {
         actor,
-        entitlementSnapshot: buildEntitlementSnapshot(authoritativeSubscription),
+        entitlementSnapshot: buildEntitlementSnapshot(effectiveSubscription),
       },
     );
 
@@ -109,12 +141,18 @@ export class BulkEditCommandService {
       executionId: executionIdentity,
     });
 
-    return {
+    const response = {
       success: true,
+      id: historyId,
       operationId: historyId,
       status: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
       message: "Bulk edit has been queued.",
     };
+    await this.idempotencyStore.complete({
+      recordId: begin.recordId,
+      response,
+    });
+    return response;
   }
 
   async createEditHistoryPayload(body, subscription, operationContext = {}) {
@@ -126,6 +164,7 @@ export class BulkEditCommandService {
   }
 
   async #buildManualHistoryData(body, subscription, operationContext = {}) {
+    const locationId = body.locationId ?? body.location ?? null;
     const {
       editedField,
       filterParams,
@@ -143,7 +182,7 @@ export class BulkEditCommandService {
 
     const rules = normalizeRules(body);
 
-    if (editedField === "inventory" && !body.locationId) {
+    if (editedField === "inventory" && !locationId) {
       throw new Error("Location ID is required for inventory edits");
     }
 
@@ -312,10 +351,10 @@ export class BulkEditCommandService {
         confirmBroadTarget: confirmBroadTarget === true,
         criticalConfirmationText:
           String(criticalConfirmationText || "").trim() || null,
-        locationId: body.locationId || null,
+        locationId: locationId || null,
         blastRadiusAssessment,
       },
-      ...(editedField === "inventory" && { locationId: body.locationId }),
+      ...(editedField === "inventory" && { locationId }),
       entitlementSnapshot: operationContext.entitlementSnapshot || null,
       actorType: operationContext.actor?.actorType || null,
       actorId: operationContext.actor?.actorId || null,

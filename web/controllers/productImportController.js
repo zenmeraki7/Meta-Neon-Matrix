@@ -1,179 +1,133 @@
 import fs from "fs";
-import { asyncHandler } from "../utils/asyncHandler.js";
-import { getCurrentBulkOperationStatus } from "../utils/bulkOperationHelper.js";
-import {
-  createMultiLanguageForFileEdit,
-} from "../utils/googleTranslator.js";
-import { clearAllCachesForShop, clearKeyCaches } from "../utils/cacheUtils.js";
-import { prisma } from "../config/database.js";
-import { addbulkImportEditJob } from "../Jobs/Queues/bulkImportEditJob.js";
-import crypto from "crypto";
-import {
-  BULK_EDIT_EXECUTION_STATES,
-  buildPlannedUndoState,
-} from "../services/bulkEditExecutionStateService.js";
-import {
-  normalizeEditHistoryExecutionState,
-  normalizeEditHistoryStatus,
-} from "../utils/normalizedStateUtils.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import { buildActorContext } from "../utils/operationContextUtils.js";
+import { ProductImportCommandService } from "../services/productImport/ProductImportCommandService.js";
 
-export const csvBulkProductsEdit = asyncHandler(async (req, res) => {
-  const session = res.locals.shopify.session;
+const MAX_COLUMN_MAPPING_KEYS = 100;
+const MAX_COLUMN_MAPPING_JSON_BYTES = 20_000;
+const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_MIME_TYPES = new Set([
+  "text/csv",
+  "application/vnd.ms-excel",
+  "application/csv",
+]);
+const productImportCommandService = new ProductImportCommandService();
 
-  if (!req.file) {
-    return res.status(400).json({
-      success: false,
-      message: "CSV file is required",
-    });
+function removeUploadedFile(filePath) {
+  if (!filePath) return;
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // no-op
+  }
+}
+
+function parseColumnMappings(raw) {
+  if (!raw) return {};
+
+  if (Buffer.byteLength(String(raw), "utf8") > MAX_COLUMN_MAPPING_JSON_BYTES) {
+    const error = new Error("COLUMN_MAPPINGS_TOO_LARGE");
+    error.code = "COLUMN_MAPPINGS_TOO_LARGE";
+    throw error;
   }
 
-  const columnMappings = req.body.columnMappings
-    ? JSON.parse(req.body.columnMappings)
-    : {};
-
-  if (!Object.values(columnMappings).includes("id")) {
-    fs.unlinkSync(req.file.path);
-    return res.status(400).json({
-      success: false,
-      message: "Product ID mapping is required",
-    });
+  let parsed;
+  try {
+    parsed = JSON.parse(String(raw));
+  } catch {
+    const error = new Error("INVALID_COLUMN_MAPPINGS");
+    error.code = "INVALID_COLUMN_MAPPINGS";
+    throw error;
   }
 
-  const { status } = await getCurrentBulkOperationStatus(session);
-  if (status === "RUNNING") {
-    fs.unlinkSync(req.file.path);
-    return res.status(400).json({
-      success: false,
-      message: "Another bulk operation is already running",
-    });
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const error = new Error("INVALID_COLUMN_MAPPINGS");
+    error.code = "INVALID_COLUMN_MAPPINGS";
+    throw error;
   }
 
-  const editHistory = await prisma.editHistory.create({
-    data: {
-      shop: session.shop,
-      title: createMultiLanguageForFileEdit(req.file.originalname),
-      editedType: "mixed",
-      startedAt: new Date(),
-      status: "pending",
-      statusNormalized: normalizeEditHistoryStatus("pending"),
-      executionState: BULK_EDIT_EXECUTION_STATES.PLANNED,
-      executionStateNormalized: normalizeEditHistoryExecutionState(
-        BULK_EDIT_EXECUTION_STATES.PLANNED,
-      ),
-      executionIdentity: crypto.randomUUID(),
-      isSpreadsheetEdit: true,
-      undo: buildPlannedUndoState({ allowed: true }),
-      rules: [{ field: "mixed" }],
-      batch: {
-        lastProductId: null,
-        hasMore: false,
-        size: 0,
-      },
-    },
-  });
+  if (Object.keys(parsed).length > MAX_COLUMN_MAPPING_KEYS) {
+    const error = new Error("TOO_MANY_COLUMN_MAPPINGS");
+    error.code = "TOO_MANY_COLUMN_MAPPINGS";
+    throw error;
+  }
 
-  const importHistory = await prisma.spreadsheetFile.create({
-    data: {
-      shop: session.shop,
-      editHistoryId: editHistory.id,
-      fileUrl: null,
-      columnMappings: columnMappings,
-      totalRows: 0,
-    },
-  });
+  return parsed;
+}
 
-  await addbulkImportEditJob({
-    shop: session.shop,
-    filePath: req.file.path,
-    historyId: editHistory.id,
-    columnMappings,
-    source: "csv_import",
-    executionId: editHistory.executionIdentity,
-  });
+function assertUploadBounds(file) {
+  if (!file) {
+    const error = new Error("CSV_FILE_REQUIRED");
+    error.code = "CSV_FILE_REQUIRED";
+    throw error;
+  }
 
-  await clearAllCachesForShop(session.shop);
+  if (Number(file.size || 0) > MAX_UPLOAD_SIZE_BYTES) {
+    const error = new Error("CSV_FILE_TOO_LARGE");
+    error.code = "CSV_FILE_TOO_LARGE";
+    throw error;
+  }
 
-  res.status(200).json({
-    success: true,
-    message: "CSV import queued successfully",
-    data: importHistory,
-  });
-});
+  const mimeType = String(file.mimetype || "").toLowerCase();
+  if (mimeType && !ALLOWED_MIME_TYPES.has(mimeType)) {
+    const error = new Error("INVALID_CSV_MIME_TYPE");
+    error.code = "INVALID_CSV_MIME_TYPE";
+    throw error;
+  }
+}
 
 export const importCsvController = async (req, res) => {
   try {
-    const { columnMappings } = req.body;
-    const session = res.locals.shopify.session;
+    const session = res.locals.shopify?.session;
+    if (!session?.shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
+    }
+
+    assertUploadBounds(req.file);
+    const parsedMappings = parseColumnMappings(req.body?.columnMappings);
+
+    if (!Object.values(parsedMappings).includes("id")) {
+      removeUploadedFile(req.file?.path);
+      return res.status(400).json({
+        success: false,
+        code: "PRODUCT_ID_MAPPING_REQUIRED",
+        message: "Product ID mapping is required",
+      });
+    }
+
     const shop = session.shop;
-
-    if (!req.file) {
-      return res.status(400).json({ message: "CSV file required" });
-    }
-
-    if (!columnMappings) {
-      return res.status(400).json({ message: "columnMappings missing" });
-    }
-
-    const parsedMappings = JSON.parse(columnMappings);
-
-    const localFilePath = req.file.path;
-
-  const newHistory = await prisma.editHistory.create({
-      data: {
-        shop,
-        title: createMultiLanguageForFileEdit(req.file.originalname),
-        editedType: "mixed",
-        startedAt: new Date(),
-        status: "pending",
-        statusNormalized: normalizeEditHistoryStatus("pending"),
-        executionState: BULK_EDIT_EXECUTION_STATES.PLANNED,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          BULK_EDIT_EXECUTION_STATES.PLANNED,
-        ),
-        executionIdentity: crypto.randomUUID(),
-        isSpreadsheetEdit: true,
-        undo: buildPlannedUndoState({ allowed: true }),
-        rules: [{ field: "mixed" }],
-        batch: {
-          lastProductId: null,
-          hasMore: false,
-          size: 0,
-        },
-      },
+    const actor = buildActorContext({
+      req,
+      session,
+      fallbackType: "MERCHANT_ADMIN",
     });
 
-    const importDoc = await prisma.spreadsheetFile.create({
-      data: {
-        shop,
-        editHistoryId: newHistory.id,
-        columnMappings: parsedMappings,
-        fileUrl: localFilePath,
-      },
-    });
-
-    await clearKeyCaches(`${shop}:fetchHistories`);
-
-    await addbulkImportEditJob({
-      historyId: newHistory.id,
+    const result = await productImportCommandService.createImportCommand({
       shop,
-      filePath: localFilePath,
+      actor,
+      file: req.file,
       columnMappings: parsedMappings,
-      source: "csv_import",
-      executionId: newHistory.executionIdentity,
+      subscription: req.subscription || null,
+      idempotencyKey: req.headers["idempotency-key"],
     });
 
-    return res.json({
+    return res.status(202).json({
       success: true,
-      importId: newHistory.id,
-      spreadsheetFileId: importDoc.id,
+      operationId: result.operationId,
+      importId: result.importId,
+      status: result.status,
     });
   } catch (err) {
-    console.error(err);
+    removeUploadedFile(req.file?.path);
     const { statusCode, body } = buildPublicApiErrorResponse(
       err,
-      "INTERNAL_ERROR",
+      "VALIDATION_FAILED",
     );
     return res.status(statusCode).json(body);
   }
 };
+

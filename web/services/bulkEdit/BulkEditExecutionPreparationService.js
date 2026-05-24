@@ -297,6 +297,7 @@ export class BulkEditExecutionPreparationService {
       select: {
         id: true,
         shop: true,
+        isSpreadsheetEdit: true,
         batch: true,
         rules: true,
         targetMirrorBatchId: true,
@@ -407,6 +408,51 @@ export class BulkEditExecutionPreparationService {
         hasMore: false,
         nextRetryCursorIndex,
         fields,
+      };
+    }
+
+    const isCsvFrozenExecution =
+      history.isSpreadsheetEdit === true || history.batch?.csvImport === true;
+    if (isCsvFrozenExecution) {
+      const productIds = [...new Set(rows.map((row) => row.productId).filter(Boolean))];
+      const csvRecords = await prisma.changeRecord.findMany({
+        where: {
+          editHistoryId: historyId,
+          shop: history.shop,
+          productId: { in: productIds },
+        },
+        select: {
+          productId: true,
+          options: true,
+        },
+      });
+      const csvRowByProductId = new Map();
+      for (const record of csvRecords) {
+        const options =
+          record?.options && typeof record.options === "object" && !Array.isArray(record.options)
+            ? record.options
+            : {};
+        const csvMutationRow = typeof options.csvMutationRow === "string"
+          ? options.csvMutationRow.trim()
+          : "";
+        if (csvMutationRow && record.productId) {
+          csvRowByProductId.set(record.productId, csvMutationRow);
+        }
+      }
+
+      const formattedRows = rows
+        .map((row) => csvRowByProductId.get(row.productId))
+        .filter(Boolean);
+
+      return {
+        formattedProducts: formattedRows.join("\n"),
+        changes: [],
+        batchId,
+        batchTargetCount: formattedRows.length,
+        lastProductId,
+        hasMore,
+        nextRetryCursorIndex,
+        fields: ["mixed"],
       };
     }
 

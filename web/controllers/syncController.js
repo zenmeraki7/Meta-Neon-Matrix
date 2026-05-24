@@ -15,9 +15,11 @@ export const syncProductData = async (req, res) => {
 
   try {
     if (!session?.shop) {
-      return res.status(401).json({
-        error: "Shopify session missing",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
         console.log(`[api:sync_request] shop=${session.shop} force=${req.query.force || req.body?.force}`);
@@ -133,9 +135,11 @@ export const getSyncStatus = async (req, res) => {
     const shop = session?.shop;
 
     if (!shop) {
-      return res.status(401).json({
-        error: "Shopify session missing",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
     const cacheKey = `${shop}:sync_details`;
@@ -255,12 +259,17 @@ export const getSyncStatus = async (req, res) => {
 };
 
 export const trackProductSync = async (req, res) => {
+  let session = null;
   try {
-    const session = res.locals?.shopify?.session;
+    session = res.locals?.shopify?.session || req.shopify?.session || null;
     const shop = session?.shop;
 
-   if (!shop) {
-      return res.status(401).json({ success: false, error: "Shopify session missing" });
+    if (!shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
     const storeDetails = await prisma.store.findUnique({
@@ -386,16 +395,18 @@ export const trackProductSync = async (req, res) => {
           : 0,
     });
   } catch (error) {
-     await logApiError({
-      shop: session?.shop,   // session is already in scope from the try block
+    await logApiError({
+      shop: session?.shop,
       err: error,
       req,
       source: "syncController.trackProductSync",
     });
 
-    return res.status(500).json({
-      error: "Internal Server Error",
-      message: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
+

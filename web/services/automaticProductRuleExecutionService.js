@@ -21,7 +21,7 @@ import { logWorkerError } from "../utils/errorLogUtils.js";
 import { getCurrentBulkOperationStatus } from "../utils/bulkOperationHelper.js";
 import logger from "../utils/loggerUtils.js";
 import ProductBulkService from "./productService/productBulkEditService.js";
-import { addbulkEditJob } from "../Jobs/Queues/bulkEditJob.js";
+import { addBulkEditExecuteJob } from "../Jobs/Queues/bulkEditExecuteJob.js";
 import {
   acquireExclusiveShopWork,
   LOCK_NS,
@@ -827,7 +827,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
         return { skipped: true, reason: "history_already_failed" };
       }
 
-      await addbulkEditJob({
+      await addBulkEditExecuteJob({
         historyId: run.editHistoryId,
         shop: rule.shop,
         source: "automatic_rule_resume",
@@ -878,7 +878,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
         return { skipped: true, reason: "history_recovered_failed" };
       }
 
-      await addbulkEditJob({
+      await addBulkEditExecuteJob({
         historyId: existingHistory.id,
         shop: rule.shop,
         source: "automatic_rule_recovery",
@@ -1224,7 +1224,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
         },
       });
 
-      await addbulkEditJob({
+      await addBulkEditExecuteJob({
         historyId: editHistoryId,
         shop: rule.shop,
         source: "automatic_rule",

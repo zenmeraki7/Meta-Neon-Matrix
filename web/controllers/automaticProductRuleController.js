@@ -10,21 +10,20 @@ import {
   updateAutomaticProductRule,
 } from "../services/automaticProductRuleService.js";
 import { logApiError } from "../utils/errorLogUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 function getSessionOrThrow(res) {
   const session = res.locals.shopify?.session;
-  if (!session?.shop) throw new Error("Session expired");
+  if (!session?.shop) {
+    const error = new Error("UNAUTHENTICATED");
+    error.code = "UNAUTHENTICATED";
+    throw error;
+  }
   return session;
 }
 
 function getUserFromSession(session) {
   return session?.id || session?.shop || null;
-}
-
-function getErrorStatusCode(error) {
-  if (error.message === "Session expired") return 403;
-  if (error.message === "Automatic product rule not found") return 404;
-  return 400;
 }
 
 export async function createAutomaticProductRuleController(req, res) {
@@ -42,10 +41,11 @@ export async function createAutomaticProductRuleController(req, res) {
     return res.status(201).json({ success: true, data, message: "Automatic rule created successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.create" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to create automatic rule",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -58,10 +58,11 @@ export async function listAutomaticProductRulesController(req, res) {
     return res.status(200).json({ success: true, data, message: "Automatic rules fetched successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.list" });
-    return res.status(error.message === "Session expired" ? 403 : 500).json({
-      success: false,
-      message: error.message || "Failed to fetch automatic rules",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -78,10 +79,11 @@ export async function getAutomaticProductRuleByIdController(req, res) {
     return res.status(200).json({ success: true, data, message: "Automatic rule fetched successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.getById" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to fetch automatic rule",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "NOT_FOUND",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -101,10 +103,11 @@ export async function updateAutomaticProductRuleController(req, res) {
     return res.status(200).json({ success: true, data, message: "Automatic rule updated successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.update" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to update automatic rule",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -121,10 +124,11 @@ export async function pauseAutomaticProductRuleController(req, res) {
     return res.status(200).json({ success: true, data, message: "Automatic rule paused successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.pause" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to pause automatic rule",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -143,10 +147,11 @@ export async function resumeAutomaticProductRuleController(req, res) {
     return res.status(200).json({ success: true, data, message: "Automatic rule resumed successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.resume" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to resume automatic rule",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -164,10 +169,11 @@ export async function runAutomaticProductRuleNowController(req, res) {
     return res.status(202).json({ success: true, data, message: "Automatic rule run queued successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.runNow" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to queue automatic rule run",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -184,10 +190,11 @@ export async function deleteAutomaticProductRuleController(req, res) {
     return res.status(200).json({ success: true, data, message: "Automatic rule deleted successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.delete" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to delete automatic rule",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -204,9 +211,10 @@ export async function listAutomaticProductRuleRunsController(req, res) {
     return res.status(200).json({ success: true, data, message: "Automatic rule runs fetched successfully" });
   } catch (error) {
     await logApiError({ shop: session?.shop, err: error, req, source: "automaticProductRuleController.listRuns" });
-    return res.status(getErrorStatusCode(error)).json({
-      success: false,
-      message: error.message || "Failed to fetch automatic rule runs",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "NOT_FOUND",
+    );
+    return res.status(statusCode).json(body);
   }
 }

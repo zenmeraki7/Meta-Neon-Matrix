@@ -7,12 +7,19 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-test("legacy bulkEditWorker does not perform direct Shopify slot check", () => {
+test("legacy bulkEditWorker is removed from runtime", () => {
   const workerPath = path.join(__dirname, "Jobs", "Workers", "bulkEditWorker.js");
-  const source = fs.readFileSync(workerPath, "utf8");
   assert.equal(
-    source.includes("getCurrentBulkOperationStatus("),
+    fs.existsSync(workerPath),
     false,
-    "bulkEditWorker must not do direct slot checks; submission service owns this policy",
+    "legacy bulkEditWorker.js must be deleted",
+  );
+
+  const workerBootstrapPath = path.join(__dirname, "worker.js");
+  const source = fs.readFileSync(workerBootstrapPath, "utf8");
+  assert.equal(
+    source.includes("./Jobs/Workers/bulkEditWorker.js"),
+    false,
+    "worker bootstrap must not import legacy bulkEditWorker",
   );
 });

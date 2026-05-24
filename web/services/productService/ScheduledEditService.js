@@ -246,6 +246,7 @@ export class ScheduledEditService {
         data: {
           totalItems: frozenCount,
           targetSnapshotCount: frozenCount,
+          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
           executionStateNormalized: normalizeEditHistoryExecutionState(OPERATION_LIFECYCLE_STATES.TARGET_FROZEN),
         },
       });

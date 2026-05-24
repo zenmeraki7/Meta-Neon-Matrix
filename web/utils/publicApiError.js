@@ -1,7 +1,8 @@
 import { generateErrorId } from "./errorUtils.js";
 
 const DEFAULT_MESSAGES = Object.freeze({
-  UNAUTHORIZED: "Session expired",
+  UNAUTHENTICATED: "Authentication required.",
+  UNAUTHORIZED: "Authentication required.",
   FORBIDDEN: "You are not allowed to perform this action",
   CONFLICT: "Operation cannot be completed in the current state",
   VALIDATION_FAILED: "Request validation failed",
@@ -11,6 +12,7 @@ const DEFAULT_MESSAGES = Object.freeze({
 });
 
 function statusFromCode(code = "INTERNAL_ERROR") {
+  if (code === "UNAUTHENTICATED") return 401;
   if (code === "UNAUTHORIZED") return 403;
   if (code === "FORBIDDEN") return 403;
   if (code === "NOT_FOUND") return 404;
@@ -23,8 +25,8 @@ function statusFromCode(code = "INTERNAL_ERROR") {
 export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR") {
   const raw = String(error?.code || "").toUpperCase();
 
-  if (raw.includes("SESSION") || raw.includes("UNAUTHORIZED")) {
-    return { code: "UNAUTHORIZED", message: DEFAULT_MESSAGES.UNAUTHORIZED };
+  if (raw.includes("SESSION") || raw.includes("UNAUTHORIZED") || raw.includes("UNAUTHENTICATED")) {
+    return { code: "UNAUTHENTICATED", message: DEFAULT_MESSAGES.UNAUTHENTICATED };
   }
   if (raw.includes("NOT_FOUND")) {
     return { code: "NOT_FOUND", message: DEFAULT_MESSAGES.NOT_FOUND };
@@ -71,4 +73,3 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
     },
   };
 }
-

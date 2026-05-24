@@ -21,8 +21,8 @@ export default class ProductBulkService {
     this.scheduledEditService = new ScheduledEditService(session);
   }
 
-  async bulkEditProducts(req) {
-    return this.commandService.createManualBulkEditOperation(req);
+  async bulkEditProducts(input) {
+    return this.commandService.createManualBulkEditOperation(input);
   }
 
   async _bulkOperationEdit(body, subscription, operationContext = {}) {

@@ -38,10 +38,8 @@ process.on("unhandledRejection", (err) => {
   console.error("Unhandled Rejection:", err);
 });
 
-if (String(process.env.ENABLE_LEGACY_BULK_EDIT_WORKER || "false").toLowerCase() === "true") {
-  await import("./Jobs/Workers/bulkEditWorker.js");
-}
 await import("./Jobs/Workers/bulkEditPipelineWorker.js");
+await import("./Jobs/Workers/bulkEditExecuteWorker.js");
 await import("./Jobs/Workers/bulkExportWorker.js");
 await import("./Jobs/Workers/bulkUndoWorker.js");
 await import("./Jobs/Workers/bulkOperationMutationWorker.js");
@@ -53,6 +51,7 @@ await import("./Jobs/Workers/scheduledEditRecoveryWorker.js");
 await import("./Jobs/Workers/appUninstallWorker.js");
 await import("./Jobs/Workers/bulkImportEditWorker.js");
 await import("./Jobs/Workers/shopSyncWorker.js");
+await import("./Jobs/Workers/productSyncClearProductTypesWorker.js");
 
 await import("./Jobs/Workers/recurringEditExecutionWorker.js");
 await import("./Jobs/Workers/recurringEditSchedulerWorker.js");
@@ -62,6 +61,9 @@ await import("./Jobs/Workers/automaticProductRuleExecutionWorker.js");
 await import("./Jobs/Workers/automaticProductRuleSchedulerWorker.js");
 await import("./Jobs/Workers/automaticProductRuleSignalWorker.js");
 await import("./Jobs/Workers/stuckBulkMutationRecoveryWorker.js");
+await import("./Jobs/Workers/bulkEditResultIngestWorker.js");
+await import("./Jobs/Workers/bulkEditVerificationWorker.js");
+await import("./Jobs/Workers/subscriptionBillingWorker.js");
 
 console.log(`✅ Worker process ${process.pid} started`);
 

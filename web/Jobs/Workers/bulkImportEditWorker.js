@@ -10,16 +10,23 @@ import {
   diffVariants,
 } from "../../utils/importEditUtils.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
-import ProductBulkService from "../../services/productService/productBulkEditService.js";
 import { prisma } from "../../config/database.js";
-import { getSession } from "../../utils/sessionHandler.js";
 import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { getJobAttempt, isRetryExhausted, recordRetryExhausted } from "../../utils/workerTelemetry.js";
+import crypto from "crypto";
 import {
   BULK_EDIT_EXECUTION_STATES,
   appendExecutionError,
   buildExecutionError,
 } from "../../services/bulkEditExecutionStateService.js";
+import {
+  computeTargetSnapshotChecksum,
+  freezeExplicitTargetSnapshot,
+  getActiveMirrorBatchId,
+} from "../../services/productService/productTargetingService.js";
+import { addBulkEditExecuteJob } from "../Queues/bulkEditExecuteJob.js";
+import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
+import { normalizeEditHistoryExecutionState } from "../../utils/normalizedStateUtils.js";
 
 const QUEUE_NAME = process.env.IMPORT_EDIT_QUEUE || "importEdit";
 const WORKER_NAME = "bulkImportEditWorker";
@@ -97,10 +104,6 @@ async function removeLocalFile(filePath) {
   } catch (_error) {}
 }
 
-async function claimImportHistory(historyId) {
-  return claimImportHistoryForShop(historyId, null);
-}
-
 async function claimImportHistoryForShop(historyId, shop) {
   const result = await prisma.editHistory.updateMany({
     where: {
@@ -110,7 +113,10 @@ async function claimImportHistoryForShop(historyId, shop) {
     },
     data: {
       status: "processing",
-      executionState: BULK_EDIT_EXECUTION_STATES.DISPATCHING,
+      executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+      executionStateNormalized: normalizeEditHistoryExecutionState(
+        OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+      ),
     },
   });
 
@@ -195,6 +201,7 @@ const bulkImportEditWorker = new Worker(
           id: true,
           shop: true,
           status: true,
+          executionIdentity: true,
         },
       });
 
@@ -225,6 +232,9 @@ const bulkImportEditWorker = new Worker(
 
       const productMap = new Map();
       let totalRows = 0;
+      const mirrorBatchId = await getActiveMirrorBatchId(history.shop, {
+        purpose: "EXECUTE",
+      });
 
       await new Promise((resolve, reject) => {
         fs.createReadStream(filePath)
@@ -242,6 +252,7 @@ const bulkImportEditWorker = new Worker(
         where: {
           shop: history.shop,
           id: { in: productIds },
+          mirrorBatchId,
         },
         include: { variants: true },
       });
@@ -251,8 +262,8 @@ const bulkImportEditWorker = new Worker(
         return accumulator;
       }, {});
 
-      const formattedProducts = [];
       const changeRecords = [];
+      const explicitTargets = [];
       const batchId = String(job.id);
 
       for (const { productSet } of productMap.values()) {
@@ -282,13 +293,11 @@ const bulkImportEditWorker = new Worker(
           continue;
         }
 
-        formattedProducts.push(
-          JSON.stringify(
-            buildProductSetMutation({
-              productSet,
-              existingProduct: existingProductForDiff,
-            }),
-          ),
+        const mutationRow = JSON.stringify(
+          buildProductSetMutation({
+            productSet,
+            existingProduct: existingProductForDiff,
+          }),
         );
 
         changeRecords.push({
@@ -319,10 +328,21 @@ const bulkImportEditWorker = new Worker(
           productFieldChanges,
           variantFieldChanges,
           status: "pending",
+          csvMutationRow: mutationRow,
+        });
+        explicitTargets.push({
+          targetType: "PRODUCT",
+          targetIdentity: `PRODUCT:${productSet.id}`,
+          productId: productSet.id,
+          variantId: null,
+          beforeValues: {
+            productFieldChanges,
+            variantFieldChanges,
+          },
         });
       }
 
-      if (!formattedProducts.length) {
+      if (!explicitTargets.length) {
       await prisma.editHistory.update({
         where: { id: historyId },
         data: {
@@ -344,43 +364,85 @@ const bulkImportEditWorker = new Worker(
 
       if (changeRecords.length) {
         await prisma.changeRecord.createMany({
-          data: changeRecords,
+          data: changeRecords.map((record) => {
+            const {
+              csvMutationRow,
+              options,
+              ...rest
+            } = record;
+            return {
+              ...rest,
+              options: {
+                csvMutationRow,
+                csvImport: true,
+                productOptions: options,
+              },
+            };
+          }),
         });
       }
 
-      const session = await getSession(history.shop);
-      const service = new ProductBulkService(session);
-      const result = await service._bulkOperationHelper({
-        historyId,
-        executionId: history.executionIdentity || historyId,
-        formattedProducts: formattedProducts.join("\n"),
-        fields: ["mixed"],
-        batchId,
-        batchTargetCount: formattedProducts.length,
-        lastProductId: null,
-        hasMore: false,
-        nextRetryCursorIndex: null,
+      const filterHash = crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify(
+            explicitTargets.map((target) => target.targetIdentity).sort(),
+          ),
+        )
+        .digest("hex");
+
+      const frozenCount = await freezeExplicitTargetSnapshot({
+        ownerType: "EDIT_HISTORY",
+        ownerId: historyId,
+        shop: history.shop,
+        mirrorBatchId,
+        filterHash,
+        targetGranularity: "PRODUCT",
+        source: "CSV_IMPORT",
+        targets: explicitTargets,
       });
 
-      if (!result?.bulkOperation?.id) {
-        throw new Error("Missing bulkOperationId in Shopify response");
-      }
+      const snapshotChecksum = await computeTargetSnapshotChecksum({
+        ownerType: "EDIT_HISTORY",
+        ownerId: historyId,
+        shop: history.shop,
+        mirrorBatchId,
+      });
 
       await prisma.editHistory.update({
         where: { id: historyId },
         data: {
           totalRows,
-          totalItems: formattedProducts.length,
-          bulkOperationId: result.bulkOperation.id,
-          processingBatchId: batchId,
-          executionState: BULK_EDIT_EXECUTION_STATES.AWAITING_SHOPIFY,
+          totalItems: frozenCount,
+          targetSnapshotCount: frozenCount,
+          targetMirrorBatchId: mirrorBatchId,
+          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
+          ),
           batch: {
+            csvImport: true,
+            targetGranularity: "PRODUCT",
             lastProductId: null,
-            hasMore: false,
-            size: 0,
-            currentBatchId: batchId,
-            currentBatchTargetCount: formattedProducts.length,
-            currentBatchCount: changeRecords.length,
+            hasMore: frozenCount > 0,
+            size: 75,
+            previewCount: frozenCount,
+            currentBatchTargetCount: 0,
+            queuedAt: new Date().toISOString(),
+            filterParams: [],
+            filterAst: null,
+            filterHash,
+            freezeSource: "CSV_IMPORT",
+          },
+          targetingSnapshotMeta: {
+            shop: history.shop,
+            source: "CSV_IMPORT",
+            mirrorBatchId,
+            targetCount: frozenCount,
+            filterHash,
+            snapshotChecksum,
+            targetGranularity: "PRODUCT",
+            resolvedAt: new Date(),
           },
         },
       });
@@ -390,6 +452,13 @@ const bulkImportEditWorker = new Worker(
         data: { totalRows },
       });
 
+      await addBulkEditExecuteJob({
+        historyId,
+        shop: history.shop,
+        source: "csv_import_pipeline",
+        executionId: history.executionIdentity || historyId,
+      });
+
       await clearKeyCaches(`${history.shop}:fetchHistories`);
       await removeLocalFile(filePath);
 
@@ -397,7 +466,7 @@ const bulkImportEditWorker = new Worker(
         success: true,
         historyId,
         totalRows,
-        totalItems: formattedProducts.length,
+        totalItems: frozenCount,
       };
     } catch (error) {
       logger.error("Bulk import edit worker failed", {

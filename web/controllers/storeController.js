@@ -2,6 +2,7 @@
 
 import { getCache, setCache } from "../utils/cacheUtils.js";
 import { logApiError } from "../utils/errorLogUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 import { prisma } from "../config/database.js";
 
@@ -10,9 +11,11 @@ export const getStoreAccess = async (req, res) => {
 
   try {
     if (!session?.shop) {
-      return res.status(401).json({
-        message: "Shopify session missing",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
     const cacheKey = `${session.shop}:storeDetails`;
@@ -80,9 +83,11 @@ export const getStoreAccess = async (req, res) => {
       source: "storeController.getStoreAccess",
     });
 
-    return res.status(500).json({
-      message: "Error fetching store access",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
+

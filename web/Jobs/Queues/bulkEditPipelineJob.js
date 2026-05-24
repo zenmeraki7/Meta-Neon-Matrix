@@ -30,7 +30,13 @@ export async function enqueueBulkEditTargetFreezeJob(data, options = {}) {
     data,
     mergeJobOptions(defaultJobOptions, {
       ...options,
-      jobId: options.jobId || joinSafeJobId("bulk-edit-pipeline-freeze", data.historyId),
+      jobId:
+        options.jobId
+        || joinSafeJobId(
+          "bulk-edit-pipeline-freeze",
+          data.historyId,
+          data.executionId,
+        ),
     }),
   );
 }
@@ -44,7 +50,13 @@ export async function enqueueBulkEditMutationPlanJob(data, options = {}) {
     data,
     mergeJobOptions(defaultJobOptions, {
       ...options,
-      jobId: options.jobId || joinSafeJobId("bulk-edit-pipeline-plan", data.historyId),
+      jobId:
+        options.jobId
+        || joinSafeJobId(
+          "bulk-edit-pipeline-plan",
+          data.historyId,
+          data.executionId,
+        ),
     }),
   );
 }
@@ -58,8 +70,13 @@ export async function enqueueBulkEditExecuteStageJob(data, options = {}) {
     data,
     mergeJobOptions(defaultJobOptions, {
       ...options,
-      jobId: options.jobId || joinSafeJobId("bulk-edit-pipeline-execute", data.historyId),
+      jobId:
+        options.jobId
+        || joinSafeJobId(
+          "bulk-edit-pipeline-execute",
+          data.historyId,
+          data.executionId,
+        ),
     }),
   );
 }
-

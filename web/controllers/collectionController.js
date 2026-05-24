@@ -3,8 +3,9 @@ import Joi from "joi";
 import { getCurrentBulkOperationStatus } from "../utils/bulkOperationHelper.js";
 import logger from "../utils/loggerUtils.js";
 import { clearKeyCaches } from "../utils/cacheUtils.js";
-import shopify from "../shopify.js";
 import { logApiError } from "../utils/errorLogUtils.js";
+import CollectionControllerService from "../services/collection/collectionService.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 // ⛔️ REMOVE this:
 // import Store from "../schema/Store.js";
@@ -12,11 +13,14 @@ import { logApiError } from "../utils/errorLogUtils.js";
 // ✅ ADD Prisma
 import { prisma } from "../config/database.js";
 
+const collectionControllerService = new CollectionControllerService();
+
 
 // ✅ Validate query param "search"
 const getAllCollectionsQuerySchema = Joi.object({
   search: Joi.string().trim().allow("").max(100).optional(),
   isNameOnly: Joi.string().trim().allow("").max(100).optional(),
+  limit: Joi.number().integer().min(1).max(50).optional(),
 });
 
 export const getAllCollection =
@@ -29,7 +33,14 @@ export const getAllCollection =
         });
       }
 
-      const session = res.locals.shopify.session;
+      const session = res.locals?.shopify?.session;
+      if (!session?.shop) {
+        const { statusCode, body } = buildPublicApiErrorResponse(
+          { code: "UNAUTHENTICATED" },
+          "UNAUTHENTICATED",
+        );
+        return res.status(statusCode).json(body);
+      }
 
       const searchText = value.search?.trim() || "";
 
@@ -57,16 +68,24 @@ export const getAllCollection =
       });
     } catch (error) {
       logger.error("Failed to get collections", { error: error.message });
-      return res.status(500).json({
-        error: error.message,
-        message: "Failed to get collections",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        error,
+        "INTERNAL_ERROR",
+      );
+      return res.status(statusCode).json(body);
     }
   };
 
 export const getCollectionsFromShopify = async (req, res) => {
-  const session = res.locals.shopify.session;
+  const session = res.locals?.shopify?.session;
   try {
+    if (!session?.shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
+    }
     const { error, value } = getAllCollectionsQuerySchema.validate(req.query);
     if (error) {
       return res.status(400).json({
@@ -75,40 +94,11 @@ export const getCollectionsFromShopify = async (req, res) => {
     }
 
     const searchText = value.search?.trim() || "";
-    const first = value.limit || 20;
-
-    // Build query string
-    const queryString = searchText ? `title:${searchText}*` : "";
-
-    const client = new shopify.api.clients.Graphql({ session });
-
-    const QUERY = `
-      query GetCollections($first: Int!, $query: String) {
-        collections(first: $first, query: $query) {
-          edges {
-            node {
-              id
-              title
-            }
-          }
-        }
-      }
-    `;
-
-    const response = await client.query({
-      data: {
-        query: QUERY,
-        variables: {
-          first,
-          query: queryString || null,
-        },
-      },
+    const collections = await collectionControllerService.fetchFromShopify({
+      session,
+      search: searchText,
+      limit: value.limit || 20,
     });
-
-    const collections = response.body.data.collections.edges.map((edge) => ({
-      id: edge.node.id,
-      title: edge.node.title,
-    }));
 
     return res.status(200).json({
       success: true,
@@ -120,23 +110,30 @@ export const getCollectionsFromShopify = async (req, res) => {
       error: error.message,
     });
     await logApiError({
-      shop: session.shop,
+      shop: session?.shop,
       err: error,
       req,
       source: "collectionController.getCollectionsFromShopify",
     });
-
-    return res.status(500).json({
-      error: error.message,
-      message: "Failed to get collections",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
 export const clearCollections =
   (collectionService) => async (req, res, next) => {
     try {
-      const session = res.locals.shopify.session;
+      const session = res.locals?.shopify?.session;
+      if (!session?.shop) {
+        const { statusCode, body } = buildPublicApiErrorResponse(
+          { code: "UNAUTHENTICATED" },
+          "UNAUTHENTICATED",
+        );
+        return res.status(statusCode).json(body);
+      }
 
       const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
       if (status === "RUNNING") {
@@ -172,6 +169,11 @@ export const clearCollections =
       });
     } catch (error) {
       logger.error("Failed to clear collections", { error: error.message });
-      return res.status(500).json({ error: "Failed to clear collections" });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        error,
+        "INTERNAL_ERROR",
+      );
+      return res.status(statusCode).json(body);
     }
   };
+

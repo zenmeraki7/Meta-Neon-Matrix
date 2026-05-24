@@ -21,6 +21,7 @@ export function normalizeEditHistoryExecutionState(value) {
   switch (v) {
     case "PLANNED":
     case "QUEUED":
+    case "PAUSED":
     case "DISPATCHING":
     case "AWAITING_SHOPIFY":
     case "FINALIZING":

@@ -1,5 +1,4 @@
-import { errorResponse } from "../utils/responseUtils.js";
-import { ProductExportService } from "../services/productService/productExportService.js";
+import { ProductExportCommandService } from "../services/productExport/ProductExportCommandService.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import {
   buildActorContext,
@@ -12,17 +11,34 @@ import {
 } from "../services/operationPauseResumeService.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
-export const handleExportProductsData = async (req, res) => {
+function toExportJobDto(exportJob) {
+  return {
+    success: true,
+    exportJobId: exportJob.id,
+    status: "QUEUED",
+    queuedAt: exportJob.createdAt,
+  };
+}
+
+function getSessionOrThrow(res) {
   const session = res.locals.shopify?.session;
+  if (!session?.shop) {
+    const error = new Error("UNAUTHENTICATED");
+    error.code = "UNAUTHENTICATED";
+    throw error;
+  }
+  return session;
+}
+
+export const handleExportProductsData = async (req, res) => {
+  let session;
 
   try {
-    if (!session) {
-      return res.status(403).json(errorResponse("Session expired"));
-    }
+    session = getSessionOrThrow(res);
 
     const { filterParams, filterAst, fields, fileName } = req.body;
-    const service = new ProductExportService(session);
-    const exportJob = await service.createExportJob({
+    const commandService = new ProductExportCommandService(session);
+    const exportJob = await commandService.createExportCommand({
       fields,
       fileName,
       filterParams,
@@ -36,8 +52,7 @@ export const handleExportProductsData = async (req, res) => {
     });
 
     return res.status(200).json({
-      message: "Exporting started - queued in background",
-      data: exportJob,
+      ...toExportJobDto(exportJob),
     });
   } catch (err) {
     await logApiError({
@@ -56,25 +71,26 @@ export const handleExportProductsData = async (req, res) => {
 };
 
 export const createProductExport = async (req, res) => {
-  const session = res.locals.shopify?.session;
+  let session;
 
   try {
+    session = getSessionOrThrow(res);
     const { fields, fileName, filterParams, filterAst } = req.body;
 
-    if (!session?.shop) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
     if (!Array.isArray(fields) || fields.length === 0) {
-      return res.status(400).json({ message: "No fields selected" });
+      const error = new Error("FIELDS_REQUIRED");
+      error.code = "VALIDATION_FAILED";
+      throw error;
     }
 
     if (!fileName?.trim()) {
-      return res.status(400).json({ message: "File name required" });
+      const error = new Error("FILE_NAME_REQUIRED");
+      error.code = "VALIDATION_FAILED";
+      throw error;
     }
 
-    const service = new ProductExportService(session);
-    const job = await service.createExportJob({
+    const commandService = new ProductExportCommandService(session);
+    const job = await commandService.createExportCommand({
       fields,
       fileName,
       filterParams,
@@ -87,10 +103,7 @@ export const createProductExport = async (req, res) => {
       entitlementSnapshot: buildEntitlementSnapshot(req.subscription),
     });
 
-    return res.status(200).json({
-      exportJobId: job.id,
-      status: job.status,
-    });
+    return res.status(200).json(toExportJobDto(job));
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -108,26 +121,24 @@ export const createProductExport = async (req, res) => {
 };
 
 export const handleDownloadExportProductsData = async (req, res) => {
-  const session = res.locals.shopify?.session;
+  let session;
 
   try {
-    if (!session) {
-      return res.status(403).json(errorResponse("Session expired"));
-    }
+    session = getSessionOrThrow(res);
 
-    const service = new ProductExportService(session);
-    const result = await service.getExportHistoryDetails(req.params.id);
+    const commandService = new ProductExportCommandService(session);
+    const result = await commandService.getExportDetails(req.params.id);
 
     if (!result) {
-      return res.status(404).json({
-        message: "Export history not found",
-      });
+      const error = new Error("EXPORT_HISTORY_NOT_FOUND");
+      error.code = "NOT_FOUND";
+      throw error;
     }
 
     if (!result.fileUrl) {
-      return res.status(409).json({
-        message: "Export file is not ready yet",
-      });
+      const error = new Error("EXPORT_FILE_NOT_READY");
+      error.code = "CONFLICT";
+      throw error;
     }
 
     return res.redirect(result.fileUrl);
@@ -139,18 +150,18 @@ export const handleDownloadExportProductsData = async (req, res) => {
       source: "GET /api/export-products/:id/download",
     });
 
-    return res
-      .status(500)
-      .json(errorResponse("Failed to download export file"));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
 export const cancelExportOperation = async (req, res) => {
-  const session = res.locals.shopify?.session;
+  let session;
   try {
-    if (!session) {
-      return res.status(403).json(errorResponse("Session expired"));
-    }
+    session = getSessionOrThrow(res);
     const result = await requestExportJobCancellation({
       shop: session.shop,
       exportJobId: req.params.id,
@@ -167,9 +178,9 @@ export const cancelExportOperation = async (req, res) => {
 };
 
 export const pauseExportOperation = async (req, res) => {
-  const session = res.locals.shopify?.session;
+  let session;
   try {
-    if (!session) return res.status(403).json(errorResponse("Session expired"));
+    session = getSessionOrThrow(res);
     const data = await requestPauseExportOperation({
       shop: session.shop,
       exportJobId: req.params.id,
@@ -186,9 +197,9 @@ export const pauseExportOperation = async (req, res) => {
 };
 
 export const resumePausedExportOperation = async (req, res) => {
-  const session = res.locals.shopify?.session;
+  let session;
   try {
-    if (!session) return res.status(403).json(errorResponse("Session expired"));
+    session = getSessionOrThrow(res);
     const data = await resumeExportOperation({
       shop: session.shop,
       exportJobId: req.params.id,

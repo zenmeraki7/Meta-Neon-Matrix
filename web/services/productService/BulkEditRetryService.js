@@ -1,5 +1,5 @@
 import { prisma } from "../../config/database.js";
-import { addbulkEditJob } from "../../Jobs/Queues/bulkEditJob.js";
+import { addBulkEditExecuteJob } from "../../Jobs/Queues/bulkEditExecuteJob.js";
 import {
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
@@ -70,7 +70,7 @@ export class BulkEditRetryService {
       },
     });
 
-    await addbulkEditJob({
+    await addBulkEditExecuteJob({
       historyId,
       shop: this.shop,
       source: "retry_failed_only",
@@ -83,4 +83,3 @@ export class BulkEditRetryService {
     };
   }
 }
-

@@ -8,7 +8,7 @@ import {
 import { productEditConfirmationEmailHTML } from "../../../config/templates/productEditConfirmationTemplate.js";
 import { sendEmail } from "../../../utils/emailHelper.js";
 import { addbulkUndoJob } from "../../../Jobs/Queues/bulkUndoJob.js";
-import { addbulkEditJob } from "../../../Jobs/Queues/bulkEditJob.js";
+import { addBulkEditExecuteJob } from "../../../Jobs/Queues/bulkEditExecuteJob.js";
 import { clearKeyCaches } from "../../../utils/cacheUtils.js";
 import { prisma } from "../../../config/database.js";
 import { finalizeRecurringRunFromHistory } from "../../../services/recurringEditExecutionService.js";
@@ -1195,9 +1195,9 @@ async function finalizeEditSuccess(history) {
       await prisma.editHistory.update({
         where: { id: history.id },
         data: {
-          executionState: "PAUSED",
+          executionState: OPERATION_LIFECYCLE_STATES.PAUSED,
           executionStateNormalized: normalizeEditHistoryExecutionState(
-            BULK_EDIT_EXECUTION_STATES.QUEUED,
+            OPERATION_LIFECYCLE_STATES.PAUSED,
           ),
           status: "pending",
           statusNormalized: normalizeEditHistoryStatus("pending"),
@@ -1241,7 +1241,7 @@ async function finalizeEditSuccess(history) {
       },
     });
 
-    await addbulkEditJob({
+    await addBulkEditExecuteJob({
       historyId: history.id,
       shop: history.shop,
       source: "bulk_edit_continuation",
@@ -1569,7 +1569,7 @@ async function processNextEdit(shop) {
     return;
   }
 
-  await addbulkEditJob({
+  await addBulkEditExecuteJob({
     historyId: nextEdit.id,
     shop: nextEdit.shop,
     source: "bulk_edit_followup",

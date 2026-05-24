@@ -7,11 +7,14 @@ import {
   updateScheduledExport,
 } from "../services/scheduledExportService.js";
 import { logApiError } from "../utils/errorLogUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 function getSessionOrThrow(res) {
   const session = res.locals.shopify?.session;
   if (!session?.shop) {
-    throw new Error("Session expired");
+    const error = new Error("UNAUTHENTICATED");
+    error.code = "UNAUTHENTICATED";
+    throw error;
   }
 
   return session;
@@ -41,15 +44,11 @@ export async function createScheduledExportController(req, res) {
       source: "scheduledExportController.create",
     });
 
-   const isSessionError = error.message === "Session expired";
-
-return res.status(error.statusCode || (isSessionError ? 403 : 400)).json({
-  success: false,
-  code: error.code || "SCHEDULED_EXPORT_FAILED",
-  path: error?.path || null,
-  meta: error?.meta || null,
-  message: error.message || "SCHEDULED_EXPORT_FAILED",
-});
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -75,11 +74,11 @@ export async function listScheduledExportsController(req, res) {
       source: "scheduledExportController.list",
     });
 
-    const statusCode = error.message === "Session expired" ? 403 : 500;
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || "Failed to fetch scheduled exports",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -106,20 +105,11 @@ export async function getScheduledExportByIdController(req, res) {
       source: "scheduledExportController.getById",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Scheduled export not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      code: error?.code || "SCHEDULED_EXPORT_GET_FAILED",
-      path: error?.path || null,
-      meta: error?.meta || null,
-      message: error.message || "Failed to fetch scheduled export",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "NOT_FOUND",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -148,20 +138,11 @@ export async function updateScheduledExportController(req, res) {
       source: "scheduledExportController.update",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Scheduled export not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      code: error?.code || "SCHEDULED_EXPORT_UPDATE_FAILED",
-      path: error?.path || null,
-      meta: error?.meta || null,
-      message: error.message || "Failed to update scheduled export",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -190,17 +171,11 @@ export async function toggleScheduledExportStatusController(req, res) {
       source: "scheduledExportController.toggleStatus",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Scheduled export not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || "Failed to update scheduled export status",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -227,16 +202,10 @@ export async function deleteScheduledExportController(req, res) {
       source: "scheduledExportController.delete",
     });
 
-    const statusCode =
-      error.message === "Session expired"
-        ? 403
-        : error.message === "Scheduled export not found"
-          ? 404
-          : 400;
-
-    return res.status(statusCode).json({
-      success: false,
-      message: error.message || "Failed to delete scheduled export",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }

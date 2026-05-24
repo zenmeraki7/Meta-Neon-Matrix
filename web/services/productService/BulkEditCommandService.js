@@ -6,7 +6,7 @@ export class BulkEditCommandService extends BulkEditCommandServiceV2 {
     super(session);
   }
 
-  async bulkEditProducts(req) {
-    return this.createManualBulkEditOperation(req);
+  async bulkEditProducts(input) {
+    return this.createManualBulkEditOperation(input);
   }
 }

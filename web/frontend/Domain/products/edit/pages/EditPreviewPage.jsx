@@ -144,7 +144,7 @@ const [previewTotal, setPreviewTotal] = useState(0);
           editValue: debouncedValue,
           searchKey: debouncedSearchReplace.search,
           replaceText: debouncedSearchReplace.replace,
-          location: locationValue,
+          locationId: locationValue,
           filterParams: effectiveFilters,
           filterAst: buildFilterAstFromLegacyFilters({
             filterParams: effectiveFilters,
@@ -278,7 +278,7 @@ const [previewTotal, setPreviewTotal] = useState(0);
       }
 
       toast.success("Bulk edit started");
-      navigate(`/editDetails/${json.id}`);
+      navigate(`/editDetails/${json.id || json.operationId}`);
     } catch (err) {
       toast.error(err.message || "Failed to update products");
     } finally {

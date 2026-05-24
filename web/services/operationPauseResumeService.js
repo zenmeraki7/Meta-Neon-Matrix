@@ -1,5 +1,5 @@
 import { prisma } from "../config/database.js";
-import { addbulkEditJob } from "../Jobs/Queues/bulkEditJob.js";
+import { addBulkEditExecuteJob } from "../Jobs/Queues/bulkEditExecuteJob.js";
 import { addbulkExportJob } from "../Jobs/Queues/bulkExportJob.js";
 import { BULK_EDIT_EXECUTION_STATES } from "./bulkEditExecutionStateService.js";
 import { EXPORT_EXECUTION_STATES } from "./exportExecutionStateService.js";
@@ -48,9 +48,9 @@ export async function requestPauseEditOperation({ shop, historyId, subscription 
       ? {
         pauseRequestedAt: now,
         pausedAt: now,
-        executionState: "PAUSED",
+        executionState: OPERATION_LIFECYCLE_STATES.PAUSED,
         executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.QUEUED,
+          OPERATION_LIFECYCLE_STATES.PAUSED,
         ),
         status: "pending",
         statusNormalized: normalizeEditHistoryStatus("pending"),
@@ -66,7 +66,7 @@ export async function resumeEditOperation({ shop, historyId, subscription }) {
   assertPremiumPlan(subscription);
   const history = await prisma.editHistory.findFirst({ where: { id: historyId, shop } });
   if (!history) throw new Error("Edit history not found");
-  if (normalizeToLifecycleState(history.executionState) !== "PAUSED") {
+  if (normalizeToLifecycleState(history.executionState) !== OPERATION_LIFECYCLE_STATES.PAUSED) {
     throw new Error("Only paused operations can be resumed.");
   }
   const resumedAt = new Date();
@@ -83,7 +83,7 @@ export async function resumeEditOperation({ shop, historyId, subscription }) {
       statusNormalized: normalizeEditHistoryStatus("pending"),
     },
   });
-  await addbulkEditJob({
+  await addBulkEditExecuteJob({
     historyId,
     shop,
     source: "manual_resume",

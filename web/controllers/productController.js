@@ -18,7 +18,6 @@ export {
 } from "./productExportController.js";
 
 export {
-  csvBulkProductsEdit,
   importCsvController,
 } from "./productImportController.js";
 

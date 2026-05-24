@@ -220,7 +220,7 @@ async function processBulkEditResultIngest(job) {
   });
 
   const fetched = await fetchBulkOperationResultUrl({ shop, bulkOperationId });
-  const status = webhookStatus || fetched.status;
+  const status = String(fetched.status || "").toUpperCase();
   const resultUrl =
     resolveResultUrl(job.data || {})
     || fetched.url
@@ -245,6 +245,7 @@ async function processBulkEditResultIngest(job) {
             ...(history.batch?.shopifyBulkOperation || {}),
             id: bulkOperationId,
             status,
+            webhookStatus: webhookStatus || null,
             failedAt: new Date().toISOString(),
           },
         },
@@ -271,6 +272,7 @@ async function processBulkEditResultIngest(job) {
       shop,
       bulkOperationId,
       status,
+      webhookStatus,
     };
   }
 

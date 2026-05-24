@@ -10,24 +10,20 @@ import {
 } from "../services/productCodeSnippetService.js";
 import { errorResponse, successResponse } from "../utils/responseUtils.js";
 import { logApiError } from "../utils/errorLogUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 function getSessionOrThrow(res) {
   const session = res.locals.shopify?.session;
   if (!session?.shop) {
-    throw new Error("Session expired");
+    const error = new Error("UNAUTHENTICATED");
+    error.code = "UNAUTHENTICATED";
+    throw error;
   }
   return session;
 }
 
 function getUserFromSession(session) {
   return session?.id || session?.shop || null;
-}
-
-function getStatusCode(error) {
-  if (error.message === "Session expired") return 403;
-  if (error.message === "Product code snippet not found") return 404;
-  if (error.message?.includes("not found")) return 404;
-  return 400;
 }
 
 export async function createProductCodeSnippetController(req, res) {
@@ -49,7 +45,11 @@ export async function createProductCodeSnippetController(req, res) {
       req,
       source: "productCodeSnippetController.create",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -71,7 +71,11 @@ export async function listProductCodeSnippetsController(req, res) {
       req,
       source: "productCodeSnippetController.list",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -93,7 +97,11 @@ export async function getProductCodeSnippetByIdController(req, res) {
       req,
       source: "productCodeSnippetController.getById",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "NOT_FOUND",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -117,7 +125,11 @@ export async function updateProductCodeSnippetController(req, res) {
       req,
       source: "productCodeSnippetController.update",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -140,7 +152,11 @@ export async function deleteProductCodeSnippetController(req, res) {
       req,
       source: "productCodeSnippetController.delete",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -170,7 +186,11 @@ export async function validateProductCodeSnippetController(req, res) {
       req,
       source: "productCodeSnippetController.validate",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -193,7 +213,11 @@ export async function previewProductCodeSnippetController(req, res) {
       req,
       source: "productCodeSnippetController.preview",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 }
 
@@ -216,6 +240,10 @@ export async function searchSnippetPreviewProductsController(req, res) {
       req,
       source: "productCodeSnippetController.searchProducts",
     });
-    return res.status(getStatusCode(error)).json(errorResponse(error.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 }

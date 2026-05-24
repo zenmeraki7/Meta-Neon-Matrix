@@ -26,7 +26,14 @@ export async function addbulkUndoJob(data, options = {}) {
     throw new Error("bulk undo job requires historyId, shop, and executionId");
   }
 
-  const jobId = options.jobId || joinSafeJobId("bulk-undo", data?.historyId);
+  const jobId =
+    options.jobId
+    || joinSafeJobId(
+      "bulk-undo",
+      data?.historyId,
+      data?.executionId,
+      data?.source || "default",
+    );
 
   return bulkUndoQueue.add(
     "bulk-undo",

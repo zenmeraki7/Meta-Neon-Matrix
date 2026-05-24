@@ -4,6 +4,7 @@
 // import History from "../schema/editHistorySchema.js";
 
 import adminService from "../services/adminService.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 // ✅ Add Prisma
 import  {prisma} from "../config/database.js"
@@ -14,11 +15,8 @@ export const getDashboard = async (req, res) => {
     const overview = await adminService.getDashboardOverview();
     res.json({ success: true, data: overview });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch dashboard data",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -112,11 +110,8 @@ export const getStoreStats = async (req, res) => {
     const stats = await adminService.getStoreStats();
     res.json({ success: true, data: stats });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch store stats",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -137,11 +132,8 @@ export const getAllStores = async (req, res) => {
     });
     res.json({ success: true, data: result });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch stores",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -151,10 +143,8 @@ export const getStoreDetails = async (req, res) => {
     const details = await adminService.getStoreDetails(shopUrl);
     res.json({ success: true, data: details });
   } catch (error) {
-    res.status(404).json({
-      success: false,
-      message: error.message || "Store not found",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "NOT_FOUND");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -165,11 +155,8 @@ export const getEditHistoryStats = async (req, res) => {
     const stats = await adminService.getEditHistoryStats(shopUrl);
     res.json({ success: true, data: stats });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch edit history stats",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -193,11 +180,8 @@ export const getEditHistoryList = async (req, res) => {
     });
     res.json({ success: true, data: result });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch edit history",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -217,11 +201,8 @@ export const getFailedEdits = async (req, res) => {
     });
     res.json({ success: true, data: result });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch failed edits",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -232,11 +213,8 @@ export const getSyncHistoryStats = async (req, res) => {
     const stats = await adminService.getSyncHistoryStats(shopUrl);
     res.json({ success: true, data: stats });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch sync history stats",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -258,10 +236,7 @@ export const getSyncHistoryList = async (req, res) => {
     });
     res.json({ success: true, data: result });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch sync history",
-      error: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };

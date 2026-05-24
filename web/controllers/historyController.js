@@ -9,6 +9,44 @@ import { NotFoundError } from "../utils/errorUtils.js";
 import { prisma } from "../config/database.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
+function toImportHistoryListDto(history) {
+  return {
+    id: history.id,
+    status: history.status,
+    fileName: history.fileName ?? null,
+    createdAt: history.createdAt,
+    completedAt: history.completedAt ?? null,
+    totalRows: history.totalRows ?? 0,
+    successCount: history.successCount ?? 0,
+    failedCount: history.failedCount ?? 0,
+  };
+}
+
+function toImportHistoryDetailDto(history) {
+  return {
+    id: history.id,
+    status: history.status,
+    fileName: history.fileName ?? null,
+    totalRows: history.totalRows ?? 0,
+    successCount: history.successCount ?? 0,
+    failedCount: history.failedCount ?? 0,
+    errors: Array.isArray(history.errors) ? history.errors : [],
+    createdAt: history.createdAt,
+    completedAt: history.completedAt ?? null,
+  };
+}
+
+function toRecurringJobDto(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    ruleId: job.ruleId || null,
+    nextRunAt: job.nextRunAt ?? null,
+    lastRunAt: job.lastRunAt ?? null,
+    createdAt: job.createdAt,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // Export histories
 // ─────────────────────────────────────────────────────────────
@@ -17,8 +55,12 @@ export const getAllExportHistories = asyncHandler(async (req, res) => {
   const session = res.locals.shopify.session;
   const lang = req.query.lang || "en";
 
-  if (!session) {
-    return res.status(403).json(errorResponse("Session expired"));
+  if (!session?.shop) {
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      { code: "UNAUTHENTICATED" },
+      "UNAUTHENTICATED",
+    );
+    return res.status(statusCode).json(body);
   }
 
   const service = new ProductExportService(session);
@@ -46,8 +88,12 @@ export const getExportHistoryDetails = async (req, res) => {
   const id = req.params.id;
 
   try {
-    if (!session) {
-      return res.status(403).json(errorResponse("Session expired"));
+    if (!session?.shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
     const service = new ProductExportService(session);
@@ -78,8 +124,12 @@ export const getAllEditHistories = asyncHandler(async (req, res) => {
   const session = res.locals.shopify.session;
   const { type, search, cursor, limit, lang } = req.query;
 
-  if (!session) {
-    return res.status(403).json(errorResponse("Session expired"));
+  if (!session?.shop) {
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      { code: "UNAUTHENTICATED" },
+      "UNAUTHENTICATED",
+    );
+    return res.status(statusCode).json(body);
   }
 
   const service = new EditHistoryService(session, req.activePlan || {});
@@ -122,8 +172,12 @@ export const getHistoryDetails = async (req, res) => {
   const { lang } = req.query;
 
   try {
-    if (!session) {
-      return res.status(403).json(errorResponse("Session expired"));
+    if (!session?.shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
     if (!id || id === "undefined" || id === "null") {
@@ -170,8 +224,12 @@ export const getHistoryChanges = async (req, res) => {
   const { cursor = null, limit = 10, page } = req.query;
 
   try {
-    if (!session) {
-      return res.status(403).json(errorResponse("Session expired"));
+    if (!session?.shop) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
     if (!id || id === "undefined" || id === "null") {
@@ -223,10 +281,11 @@ export const getAllImportHistories = asyncHandler(async (req, res) => {
   const session = res.locals.shopify.session;
 
   if (!session?.shop) {
-    return res.status(401).json({
-      success: false,
-      message: "Shopify session missing",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      { code: "UNAUTHENTICATED" },
+      "UNAUTHENTICATED",
+    );
+    return res.status(statusCode).json(body);
   }
 
   const { cursor = null, page } = req.query;
@@ -283,7 +342,7 @@ export const getAllImportHistories = asyncHandler(async (req, res) => {
       hasNextPage,
       endCursor,
     },
-    data: histories,
+    data: histories.map(toImportHistoryListDto),
   });
 });
 
@@ -292,10 +351,11 @@ export const getImportHistoryDetails = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   if (!session?.shop) {
-    return res.status(401).json({
-      success: false,
-      message: "Shopify session missing",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      { code: "UNAUTHENTICATED" },
+      "UNAUTHENTICATED",
+    );
+    return res.status(statusCode).json(body);
   }
 
   const history = await prisma.spreadsheetFile.findFirst({
@@ -314,7 +374,7 @@ export const getImportHistoryDetails = asyncHandler(async (req, res) => {
 
   return res.status(200).json({
     success: true,
-    data: history,
+    data: toImportHistoryDetailDto(history),
   });
 });
 
@@ -349,7 +409,7 @@ export const getRecurringEdits = async (req, res) => {
     });
 
     return res.status(200).json({
-      data: datas,
+      data: datas.map(toRecurringJobDto),
       message: "recurring edit fetched successfully",
     });
   } catch (err) {
@@ -380,9 +440,10 @@ export const getRecurringEditById = async (req, res) => {
 
     return res
       .status(200)
-      .json({ data: job, message: "Job fetched successfully" });
+      .json({ data: toRecurringJobDto(job), message: "Job fetched successfully" });
   } catch (err) {
     console.error("getRecurringEditById error:", err);
     return res.status(500).json({ message: "Internal Server Error" });
   }
 };
+

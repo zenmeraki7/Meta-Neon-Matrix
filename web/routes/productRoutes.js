@@ -30,7 +30,6 @@ import {
   getProductsWithQuery,
 } from "../controllers/productQueryController.js";
 import {
-  csvBulkProductsEdit,
   importCsvController,
 } from "../controllers/productImportController.js";
 import {
@@ -60,16 +59,20 @@ import { validateBody, validateQuery } from "../middleware/validateQuery.js";
 // } from "../controllers/filterCombinationController.js";
 // import path from "path";
 import { createScheduledEdit } from "../controllers/productBulkEditController.js";
-import { productExportSchema } from "../validations/productExportQuerySchema.js";
 import { uploadCsv } from "../middleware/uploadCsv.js";
+import {
+  bulkEditExecuteSchema,
+  bulkEditPreviewSchema,
+  exportRequestSchema,
+  importRequestSchema,
+} from "../validations/controllerRequestSchemas.js";
 
 const router = express.Router();
 
 router.post("/get-all", validateQuery(productQuerySchema), getProductsWithQuery);
 router.post(
   "/export",
-  // restrictSubscribeUserWork,
-  
+  validateBody(exportRequestSchema),
   createProductExport
 );
 router.post(
@@ -103,11 +106,12 @@ router.post("/resume-export/:id", subscriptionMiddleware, resumePausedExportOper
 router.get("/product-type-all", getProductTypes);
 router.get("/filter-values/:field", getProductFilterValues);
 router.get("/product-type-refresh", clearProductTypes);
-router.post("/edit-preview", subscriptionMiddleware, trackEditPreview);
+router.post("/edit-preview", subscriptionMiddleware, validateBody(bulkEditPreviewSchema), trackEditPreview);
 router.get("/bulk-edit-status/:id", checkEditStatus);
 router.post(
   "/update",
   subscriptionMiddleware,
+  validateBody(bulkEditExecuteSchema),
   handleBulkEditProduct
 );
 
@@ -144,7 +148,9 @@ router.post(
 
 router.post(
   "/csv/import",
+  subscriptionMiddleware,
   uploadCsv.single("file"),
+  validateBody(importRequestSchema),
   importCsvController,
 );
 
