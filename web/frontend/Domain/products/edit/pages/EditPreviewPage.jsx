@@ -10,6 +10,8 @@ import {
   Banner,
   InlineStack,
   Badge,
+  Modal,
+  TextField,
 } from "@shopify/polaris";
 import { ChevronLeftIcon } from "@shopify/polaris-icons";
 import { useSelector } from "react-redux";
@@ -33,6 +35,8 @@ import {
 } from "../../../../store/slices/productSlice";
 import useProductSyncStatus from "../../../../hooks/useProductSyncStatus";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst";
+import { useApiClient } from "../../../../hooks/useApiClient";
+import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
 export default function EditPreviewPage() {
   const filters = useSelector(selectFilters);
@@ -40,6 +44,7 @@ export default function EditPreviewPage() {
   const navigate = useNavigate();
   const { i18n, t } = useTranslation();
   const { isSyncInProgress } = useProductSyncStatus();
+  const api = useApiClient();
 
   const [selectedField, setSelectedField] = useState(getFieldDefinition("price"));
   const [editType, setEditType] = useState(null);
@@ -64,11 +69,28 @@ export default function EditPreviewPage() {
     scheduleEdit: false,
     recurringEdit: false,
   });
-const [previewTotal, setPreviewTotal] = useState(0);
+  const [previewTotal, setPreviewTotal] = useState(0);
   const [previewFingerprint, setPreviewFingerprint] = useState(null);
   const [requiresBroadConfirmation, setRequiresBroadConfirmation] = useState(false);
+  const [previewSignature, setPreviewSignature] = useState(null);
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [pendingConfirmRun, setPendingConfirmRun] = useState(false);
   const debouncedValue = useDebounce(inputValue, 600);
   const debouncedSearchReplace = useDebounce(searchReplace, 600);
+
+  useEffect(() => {
+    setPreviewFingerprint(null);
+    setPreviewSignature(null);
+  }, [
+    selectedField?.value,
+    editType?.value,
+    debouncedValue,
+    debouncedSearchReplace.search,
+    debouncedSearchReplace.replace,
+    locationValue,
+    supportValue,
+  ]);
 
   useEffect(() => {
     if (!selectedField) return;
@@ -115,12 +137,36 @@ const [previewTotal, setPreviewTotal] = useState(0);
   ];
 }, [filters, search]);
 
+  const buildCurrentPreviewSignature = useCallback(
+    () =>
+      JSON.stringify({
+        field: selectedField?.value || null,
+        editType: editType?.value || null,
+        editValue: debouncedValue,
+        searchKey: debouncedSearchReplace.search,
+        replaceText: debouncedSearchReplace.replace,
+        locationId: locationValue || null,
+        filterParams: effectiveFilters,
+        supportValue,
+        page: pagination.page,
+        limit: pagination.limit,
+      }),
+    [
+      selectedField?.value,
+      editType?.value,
+      debouncedValue,
+      debouncedSearchReplace.search,
+      debouncedSearchReplace.replace,
+      locationValue,
+      effectiveFilters,
+      supportValue,
+      pagination.page,
+      pagination.limit,
+    ],
+  );
+
   const fetchPreview = useCallback(async () => {
     if (!editType || !selectedField) return;
-
-     console.log("🔵 UI Selected Field:", selectedField.value);
-    //  console.log("🔵 Edit Type:", editType.value)
-
     const validOps = selectedField.actions?.map((a) => a.value) || [];
     if (!validOps.includes(editType.value)) return;
 
@@ -135,10 +181,8 @@ const [previewTotal, setPreviewTotal] = useState(0);
     setLoading(true);
 
     try {
-      const res = await fetch(`/api/products/edit-preview?lang=${i18n.language}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const signature = buildCurrentPreviewSignature();
+      const json = await api.post(`/api/products/edit-preview?lang=${i18n.language}`, {
           field: selectedField.value,
           editType: editType.value,
           editValue: debouncedValue,
@@ -154,24 +198,17 @@ const [previewTotal, setPreviewTotal] = useState(0);
           page: pagination.page,
           limit: pagination.limit,
           supportValue,
-        }),
-      });
-
-      const json = await res.json();
-
-      // console.log("🟢 FULL PREVIEW RESPONSE:", json);
-      // console.log("🟢 PREVIEW DATA:", json.data?.preview);
-
-      if (!res.ok) throw new Error(json.message);
+        });
 
       setProducts(json.data.preview);
       setPagination(json.data.pagination);
       setIsVariant(json.data.isVariant);
       setPreviewTotal(json.data.pagination?.total || 0);
       setPreviewFingerprint(json.data.previewFingerprint || null);
+      setPreviewSignature(signature);
       setRequiresBroadConfirmation(json.data.requiresConfirmation === true);
     } catch (err) {
-      toast.error(err.message || "Failed to load preview");
+      toast.error(toSafeErrorMessage(err, "Failed to load preview"));
     } finally {
       setLoading(false);
     }
@@ -186,6 +223,8 @@ const [previewTotal, setPreviewTotal] = useState(0);
     pagination.limit,
     supportValue,
     i18n.language,
+    api,
+    buildCurrentPreviewSignature,
   ]);
 
   useEffect(() => {
@@ -209,9 +248,58 @@ const [previewTotal, setPreviewTotal] = useState(0);
         return Boolean(inputValue?.toString().trim());
     }
   }, [editType, inputValue, searchReplace?.search, selectedField]);
+  const hasFreshPreview = Boolean(
+    previewFingerprint?.previewId &&
+      previewSignature &&
+      previewSignature === buildCurrentPreviewSignature(),
+  );
+  const requiresLocationSelection = editType?.inputType === InputType.LOCATION_SELECT;
+  const hasRequiredLocation = !requiresLocationSelection || Boolean(locationValue);
+
+  const executeBulkEdit = useCallback(
+    async (confirmBroadTarget) => {
+      const json = await api.post(`/api/products/update?lang=${i18n.language}`, {
+        editedField: selectedField.value,
+        editedType: editType.value,
+        value: debouncedValue,
+        searchKey: debouncedSearchReplace.search,
+        replaceText: debouncedSearchReplace.replace,
+        location: locationValue,
+        filterParams: effectiveFilters,
+        filterAst: buildFilterAstFromLegacyFilters({
+          filterParams: effectiveFilters,
+          targetGranularity: "PRODUCT",
+          source: "MANUAL_EXECUTE",
+        }),
+        previewId: previewFingerprint?.previewId || null,
+        previewFilterHash: previewFingerprint?.filterHash || null,
+        previewMirrorBatchId: previewFingerprint?.mirrorBatchId || null,
+        confirmBroadTarget,
+        supportValue,
+      });
+      toast.success("Bulk edit started");
+      navigate(`/editDetails/${json.id || json.operationId}`);
+    },
+    [
+      api,
+      debouncedSearchReplace.replace,
+      debouncedSearchReplace.search,
+      debouncedValue,
+      editType?.value,
+      effectiveFilters,
+      i18n.language,
+      locationValue,
+      navigate,
+      previewFingerprint?.filterHash,
+      previewFingerprint?.mirrorBatchId,
+      previewFingerprint?.previewId,
+      selectedField?.value,
+      supportValue,
+    ],
+  );
 
   const handleRunEdit = async () => {
-    if (isSyncInProgress) {
+    if (isSyncInProgress || submitting) {
       return;
     }
 
@@ -225,66 +313,49 @@ const [previewTotal, setPreviewTotal] = useState(0);
       return;
     }
 
-    if (!editType || !canRunEdit) return;
+    if (!hasRequiredLocation) {
+      toast.error("Select a location before running this inventory update.");
+      return;
+    }
+
+    if (!editType || !canRunEdit || !hasFreshPreview) return;
 
     setSubmitting(true);
     setLimitWarning(null);
 
     try {
-      let confirmBroadTarget = false;
       if (requiresBroadConfirmation) {
-        const confirmed = window.confirm(
-          `This filter targets ${previewTotal} items and may be broad. Confirm to continue.`,
-        );
-        if (!confirmed) {
-          setSubmitting(false);
-          return;
-        }
-        confirmBroadTarget = true;
-      }
-      const res = await fetch(`/api/products/update?lang=${i18n.language}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          editedField: selectedField.value,
-          editedType: editType.value,
-          value: debouncedValue,
-          searchKey: debouncedSearchReplace.search,
-          replaceText: debouncedSearchReplace.replace,
-          location: locationValue,
-          filterParams: effectiveFilters,
-          filterAst: buildFilterAstFromLegacyFilters({
-            filterParams: effectiveFilters,
-            targetGranularity: "PRODUCT",
-            source: "MANUAL_EXECUTE",
-          }),
-          previewId: previewFingerprint?.previewId || null,
-          previewFilterHash: previewFingerprint?.filterHash || null,
-          previewMirrorBatchId: previewFingerprint?.mirrorBatchId || null,
-          confirmBroadTarget,
-          supportValue,
-        }),
-      });
-
-      const json = await res.json();
-      if (!res.ok) {
-        if (res.status === 400 && json.message?.toLowerCase().includes("plan")) {
-          setLimitWarning(json.message);
-          toast.error(json.message, { duration: 6000 });
-        } else {
-          toast.error(json.message || "Failed to update products");
-        }
+        setConfirmModalOpen(true);
+        setSubmitting(false);
         return;
       }
-
-      toast.success("Bulk edit started");
-      navigate(`/editDetails/${json.id || json.operationId}`);
+      await executeBulkEdit(false);
     } catch (err) {
-      toast.error(err.message || "Failed to update products");
+      if (err?.status === 400 && err.message?.toLowerCase().includes("plan")) {
+        setLimitWarning(err.message);
+        toast.error(err.message, { duration: 6000 });
+        return;
+      }
+      toast.error(toSafeErrorMessage(err, "Failed to update products"));
     } finally {
       setSubmitting(false);
     }
   };
+
+  const handleConfirmAndRun = useCallback(async () => {
+    if (confirmText.trim().toUpperCase() !== "CONFIRM") return;
+    setPendingConfirmRun(true);
+    try {
+      await executeBulkEdit(true);
+      setConfirmModalOpen(false);
+      setConfirmText("");
+    } catch (err) {
+      toast.error(toSafeErrorMessage(err, "Failed to update products"));
+    } finally {
+      setPendingConfirmRun(false);
+      setSubmitting(false);
+    }
+  }, [confirmText, executeBulkEdit]);
 
 const summaryText = useMemo(() => {
   if (loading) {
@@ -311,7 +382,13 @@ const summaryText = useMemo(() => {
         content: submitting ? t("Running") : t("RunEdit"),
         onAction: handleRunEdit,
         loading: submitting,
-        disabled: isSyncInProgress || Boolean(submitError) || !canRunEdit,
+        disabled:
+          isSyncInProgress ||
+          submitting ||
+          Boolean(submitError) ||
+          !canRunEdit ||
+          !hasFreshPreview ||
+          !hasRequiredLocation,
       }}
       secondaryActions={[
         {
@@ -418,6 +495,16 @@ const summaryText = useMemo(() => {
                 <Text as="p" variant="bodySm" tone="subdued">
                   {summaryText}
                 </Text>
+                {!hasFreshPreview && (
+                  <Banner tone="warning" title="Preview is stale">
+                    <p>Run preview again before executing this edit.</p>
+                  </Banner>
+                )}
+                {requiresLocationSelection && !hasRequiredLocation && (
+                  <Banner tone="critical" title="Location required">
+                    <p>Select a location for inventory updates before preview/execute.</p>
+                  </Banner>
+                )}
                 <Text as="p" variant="bodySm" tone="subdued">
                   {t("bulkEditPreviewSummaryText",)}
                 </Text>
@@ -469,6 +556,48 @@ const summaryText = useMemo(() => {
           supportValue={supportValue}
         />
       )}
+      <Modal
+        open={confirmModalOpen}
+        title="Confirm broad target edit"
+        onClose={() => {
+          if (pendingConfirmRun) return;
+          setConfirmModalOpen(false);
+          setConfirmText("");
+          setSubmitting(false);
+        }}
+        primaryAction={{
+          content: "Confirm and run",
+          onAction: handleConfirmAndRun,
+          loading: pendingConfirmRun,
+          disabled: confirmText.trim().toUpperCase() !== "CONFIRM",
+        }}
+        secondaryActions={[
+          {
+            content: "Cancel",
+            onAction: () => {
+              setConfirmModalOpen(false);
+              setConfirmText("");
+              setSubmitting(false);
+            },
+          },
+        ]}
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text as="p" variant="bodyMd">
+              This edit targets {previewTotal} items. Type <strong>CONFIRM</strong> to proceed.
+            </Text>
+            <TextField
+              autoComplete="off"
+              label="Type CONFIRM"
+              value={confirmText}
+              onChange={setConfirmText}
+            />
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
     </Page>
   );
 }
+
+

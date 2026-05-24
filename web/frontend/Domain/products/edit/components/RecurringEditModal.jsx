@@ -16,6 +16,8 @@ import {
 
 import { useTranslation } from "react-i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
+import { useApiClient } from "../../../../hooks/useApiClient";
+import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
 const TIMEZONE_OPTIONS = [
   { label: "Asia/Kolkata (IST)", value: "Asia/Kolkata" },
@@ -82,6 +84,7 @@ function RecurringEditModal({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const api = useApiClient();
 
   const dayOfMonthOptions = useMemo(
     () =>
@@ -248,28 +251,7 @@ function RecurringEditModal({
         payload.endAt = buildIsoFromDateAndTime(endDate, endTime);
       }
 
-      const response = await fetch("/api/products/create-recurring-edit", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const message =
-  data?.message || t("recurringEditErrors.createFailed");
-
-        if (response.status === 400 && message.toLowerCase().includes("pro")) {
-          setUpgradeWarning(message);
-          return;
-        }
-
-        setError(message);
-        return;
-      }
+      await api.post("/api/products/create-recurring-edit", payload);
 
       setToastState({
         active: true,
@@ -282,10 +264,17 @@ function RecurringEditModal({
         navigate("/history");
       }, 800);
     } catch (requestError) {
-      setError(requestError.message || t("recurringEditErrors.createFailed"));
+      const detail = requestError?.details || null;
+      const message = toSafeErrorMessage(requestError, t("recurringEditErrors.createFailed"));
+      if (detail?.code === "UPGRADE_REQUIRED" || (typeof message === "string" && message.toLowerCase().includes("pro"))) {
+        setUpgradeWarning(message);
+        setSubmitting(false);
+        return;
+      }
+      setError(message);
       setToastState({
         active: true,
-        message: requestError.message || t("recurringEditErrors.createFailed"),
+        message,
         error: true,
       });
     } finally {
@@ -318,6 +307,7 @@ function RecurringEditModal({
     title,
     validate,
     value,
+    api,
   ]);
 
   const toastMarkup = toastState.active ? (

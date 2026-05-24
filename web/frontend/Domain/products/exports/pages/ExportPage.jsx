@@ -10,6 +10,8 @@ import {
 import { allFields } from "../constants";
 
 import { useTranslation } from "react-i18next";
+import { useApiClient } from "../../../../hooks/useApiClient";
+import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
 import ExportSettingsCard from "../components/ExportSettingsCard";
 import FieldSelectionCard from "../components/FieldSelectionCard";
@@ -21,6 +23,7 @@ import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst";
 export default function CsvExportPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const api = useApiClient();
   const count = useSelector(selectProductCount);
   const filters = useSelector(selectFilters);
   const search = useSelector(selectSearch);
@@ -78,7 +81,6 @@ export default function CsvExportPage() {
     setBanner(null);
 
     const payload = {
-      shop: "demo-zen-store.myshopify.com",
       fields: selectedFields,
       fileName: fileName.endsWith(".csv")
         ? fileName
@@ -92,31 +94,16 @@ export default function CsvExportPage() {
     };
 
     try {
-      const res = await fetch("/api/products/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      const data = await api.post("/api/products/export", payload);
+      setBanner({
+        tone: "success",
+        message: "Export started successfully. You will receive the CSV once ready.",
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setBanner({
-          tone: "critical",
-         message: data.message || data.error || "Export failed",
-        });
-      } else {
-        setBanner({
-          tone: "success",
-          message:
-            "Export started successfully. You’ll receive the CSV once ready.",
-        });
-        navigate("/exportDetails/" + data.exportJobId);
-      }
+      navigate("/exportDetails/" + data.exportJobId);
     } catch (err) {
       setBanner({
         tone: "critical",
-        message: "Something went wrong while starting export.",
+        message: toSafeErrorMessage(err, "Something went wrong while starting export."),
       });
     } finally {
       setLoading(false);
@@ -227,3 +214,4 @@ export default function CsvExportPage() {
     </Page>
   );
 }
+

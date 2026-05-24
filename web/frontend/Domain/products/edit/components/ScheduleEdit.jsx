@@ -15,6 +15,8 @@ import {
 } from "@shopify/polaris";
 import { t } from "i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
+import { useApiClient } from "../../../../hooks/useApiClient";
+import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
 function ScheduleEdit({
   onHide,
@@ -30,6 +32,7 @@ function ScheduleEdit({
   supportValue,
 }) {
   const navigate = useNavigate();
+  const api = useApiClient();
   // State for form fields
   const [startEditChecked, setStartEditChecked] = useState(false);
   const [undoStartEditChecked, setUndoStartEditChecked] = useState(false);
@@ -142,35 +145,7 @@ function ScheduleEdit({
         supportValue,
       };
 
-      const response = await fetch("/api/products/schedule-task", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const errorMessage = data?.message || data?.error || t("schedule_fail");
-
-        if (data.code === "PRODUCT_LIMIT_EXCEEDED") {
-          setUpgradeWarning(errorMessage);
-          return;
-        }
-
-        if (data.code === "UPGRADE_REQUIRED") {
-          setUpgradeWarning(errorMessage);
-          return;
-        }
-
-        throw new Error(errorMessage);
-      }
-
-
-
-
+      await api.post("/api/products/schedule-task", payload);
       // Show success toast
       setToastState({
         active: true,
@@ -185,11 +160,17 @@ function ScheduleEdit({
         navigate("/history");
       }, 1000);
     } catch (error) {
+      const detail = error?.details || null;
+      if (detail?.code === "PRODUCT_LIMIT_EXCEEDED" || detail?.code === "UPGRADE_REQUIRED") {
+        setUpgradeWarning(toSafeErrorMessage(error, t("schedule_fail")));
+        return;
+      }
       console.error("Error scheduling edit:", error);
-      setError(error.message || t("try_again"));
+      const safeMessage = toSafeErrorMessage(error, t("try_again"));
+      setError(safeMessage);
       setToastState({
         active: true,
-        message: error.message || t("try_again"),
+        message: safeMessage,
         error: true,
       });
     } finally {
@@ -210,6 +191,7 @@ function ScheduleEdit({
     location,
     filters,
     supportValue,
+    api,
     resetForm,
     onHide,
     navigate,

@@ -21,6 +21,8 @@ import { useTranslation } from "react-i18next";
 import { getFieldDefinition, InputType, FieldType } from "../constants";
 import { useFieldValidation } from "../hooks/useFiledValidation";
 import { getValueValidationRules } from "../../../../utils/valueValidation";
+import { useApiClient } from "../../../../hooks/useApiClient";
+import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
 const ValueInput = ({
   selectedField,
@@ -34,6 +36,7 @@ const ValueInput = ({
   setSupportValue,
 }) => {
   const { t } = useTranslation();
+  const api = useApiClient();
   const [helperText, setHelperText] = useState("");
 
   // State for autocomplete
@@ -99,10 +102,7 @@ const ValueInput = ({
           )}`
           : config.apiEndpoint;
 
-        const res = await fetch(url);
-        const json = await res.json();
-
-        if (!res.ok) throw new Error(json.message || "Failed to fetch options");
+        const json = await api.get(url);
 
         // Transform API response to autocomplete options format
         const options = (json.data || json).map((item) => ({
@@ -113,22 +113,19 @@ const ValueInput = ({
         setAutocompleteOptions(options);
       } catch (err) {
         console.error("Failed to fetch autocomplete options:", err);
-        setHelperText(err.message || "Failed to load options");
+        setHelperText(toSafeErrorMessage(err, "Failed to load options"));
         setAutocompleteOptions([]);
       } finally {
         setLoadingAutocomplete(false);
       }
     },
-    [config.apiEndpoint, config.labelKey, config.valueKey]
+    [api, config.apiEndpoint, config.labelKey, config.valueKey]
   );
 
   // Fetch locations
   const fetchLocations = async () => {
-    try {
-      const res = await fetch("/api/location/get-all");
-      const json = await res.json();
-
-      if (!res.ok) throw new Error(json.message || "Failed to fetch locations");
+      try {
+      const json = await api.get("/api/location/get-all");
 
       const locationOptions = [
         ...json.data.map((loc) => ({
@@ -143,6 +140,7 @@ const ValueInput = ({
       setApiLocations(locationOptions);
     } catch (err) {
       console.error("Failed to fetch locations:", err);
+      setHelperText(toSafeErrorMessage(err, "Failed to fetch locations"));
     }
   };
 

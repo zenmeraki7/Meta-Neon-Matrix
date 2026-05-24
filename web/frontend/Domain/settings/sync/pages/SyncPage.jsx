@@ -17,12 +17,14 @@ import {
 import { RefreshIcon, ArrowLeftIcon } from "@shopify/polaris-icons";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useApiClient } from "../../../../../hooks/useApiClient";
 
 const rows = [{ key: "products", api: "/api/sync/products" }];
 
 export default function DataSyncPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const api = useApiClient();
 
   const [dataSources, setDataSources] = useState(null);
   const [toast, setToast] = useState({
@@ -54,10 +56,8 @@ export default function DataSyncPage() {
 
   const fetchSyncStatus = useCallback(async () => {
     try {
-      const response = await fetch("/api/sync/sync-status");
-      const result = await response.json();
-
-      if (response.ok && result?.syncStatus) {
+      const result = await api.get("/api/sync/sync-status");
+      if (result?.syncStatus) {
         const ds = result.syncStatus;
         setDataSources(ds);
 
@@ -75,7 +75,7 @@ export default function DataSyncPage() {
     } catch {
       showToast(t("syncStatusLoadFailed"), true);
     }
-  }, [waitingForSync]);
+  }, [api, waitingForSync]);
 
   useEffect(() => {
     fetchSyncStatus();
@@ -118,10 +118,7 @@ export default function DataSyncPage() {
     setShouldPoll(true);
 
     try {
-      const response = await fetch(`${row.api}?force=true`);
-      const result = await response.json();
-
-      if (!response.ok) throw new Error(result?.error);
+      await api.get(`${row.api}?force=true`);
 
       showToast(
         t("syncStarted", { item: getRowLabel(row.key) })

@@ -1,171 +1,110 @@
+import { getAuthenticatedFetch } from "../../../api/authenticatedFetchRegistry";
+import { toSafeErrorMessage } from "../../../utils/frontendError";
+
+async function authRequest(url, options = {}) {
+  const authFetch = getAuthenticatedFetch();
+  if (!authFetch) {
+    throw new Error("Authenticated fetch is not initialized");
+  }
+  const response = await authFetch(url, options);
+  if (!response) {
+    throw new Error("Authentication required");
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  const payload = isJson ? await response.json() : await response.blob();
+
+  if (!response.ok) {
+    const err = new Error(
+      isJson ? payload?.message || payload?.error || "Request failed" : "Request failed",
+    );
+    err.status = response.status;
+    err.details = payload;
+    throw err;
+  }
+
+  return payload;
+}
+
 export const historyService = {
-  controller: null, // Store the controller for cancellation
-
   async getHistories(type, cursor, limit, search, signal, lang) {
+    const queryParams = new URLSearchParams();
+    if (type) queryParams.append("type", type);
+    if (limit) queryParams.append("limit", limit);
+    if (search) queryParams.append("search", search);
+    if (lang) queryParams.append("lang", lang);
+    if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
+      queryParams.append("cursor", cursor);
+    }
+
     try {
-      const queryParams = new URLSearchParams();
-
-      // Add parameters that are always required
-      if (type) queryParams.append("type", type);
-      if (limit) queryParams.append("limit", limit);
-      if (search) queryParams.append("search", search);
-      if (lang) queryParams.append("lang", lang);
-      // Only add cursor if it's a non-empty string
-      if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
-        queryParams.append("cursor", cursor);
-      }
-
-      const response = await fetch(
-        `/api/history/get-shop-edithistory?${queryParams.toString()}`,
-        {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-          signal, // <- Pass AbortController signal here
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        // Extract the best available error message
-        const errorMessage =
-          data.message || data.error?.details || "Failed to fetch history";
-        throw new Error(errorMessage);
-      }
-
-      return data;
+      return await authRequest(`/api/history/get-shop-edithistory?${queryParams.toString()}`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        signal,
+      });
     } catch (error) {
-      // Handle fetch cancellation separately
-      if (error.name === "AbortError") {
-        console.warn("Fetch aborted:", error);
-      } else {
-        console.error("Error in getHistories:", error);
-      }
-
-      // Always re-throw so redux-thunk can handle it
-      throw error;
+      if (error.name === "AbortError") throw error;
+      throw new Error(toSafeErrorMessage(error, "Failed to fetch history"));
     }
   },
 
   async getRecurringEditHistories(type, cursor, limit, search, signal, lang) {
+    const queryParams = new URLSearchParams();
+    if (type) queryParams.append("type", type);
+    if (limit) queryParams.append("limit", limit);
+    if (search) queryParams.append("search", search);
+    if (lang) queryParams.append("lang", lang);
+    if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
+      queryParams.append("cursor", cursor);
+    }
+
     try {
-      const queryParams = new URLSearchParams();
-
-      // // Add parameters that are always required
-      // if (type) queryParams.append("type", type);
-      // if (limit) queryParams.append("limit", limit);
-      // if (search) queryParams.append("search", search);
-      // if (lang) queryParams.append("lang", lang);
-      // // Only add cursor if it's a non-empty string
-      // if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
-      //   queryParams.append("cursor", cursor);
-      // }
-
-      const response = await fetch(
-        `/api/products/get-recurring-edits?${queryParams.toString()}`,
-        {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-          signal, // <- Pass AbortController signal here
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        // Extract the best available error message
-        const errorMessage =
-          data.message || data.error?.details || "Failed to fetch history";
-        throw new Error(errorMessage);
-      }
-
-      return data;
+      return await authRequest(`/api/products/get-recurring-edits?${queryParams.toString()}`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        signal,
+      });
     } catch (error) {
-      // Handle fetch cancellation separately
-      if (error.name === "AbortError") {
-        console.warn("Fetch aborted:", error);
-      } else {
-        console.error("Error in getHistories:", error);
-      }
-
-      // Always re-throw so redux-thunk can handle it
-      throw error;
+      if (error.name === "AbortError") throw error;
+      throw new Error(toSafeErrorMessage(error, "Failed to fetch recurring edits"));
     }
   },
 
   async getExportHistories({ lang }) {
+    const queryParams = new URLSearchParams();
+    queryParams.append("lang", lang || "en");
+
     try {
-      const queryParams = new URLSearchParams();
-      queryParams.append("lang", lang || "en");
-      // Add parameters that are always required
-      // if (filters.type) queryParams.append('type', filters.type);
-      // if (filters.search) queryParams.append('search', filters.search);
-
-      const response = await fetch(
-        `/api/history/get-shop-exporthistory?${queryParams.toString()}`,
-        {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        const errorMessage =
-          errorData.message ||
-          errorData.error?.details ||
-          "Failed to export history";
-        throw new Error(errorMessage);
-      }
-
-      return await response.json();
+      return await authRequest(`/api/history/get-shop-exporthistory?${queryParams.toString()}`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
     } catch (error) {
-      // Handle fetch cancellation separately
-      if (error.name === "AbortError") {
-        console.warn("Fetch aborted:", error);
-      } else {
-        console.error("Error in getHistories:", error);
-      }
-
-      // Always re-throw so redux-thunk can handle it
-      throw error;
+      if (error.name === "AbortError") throw error;
+      throw new Error(toSafeErrorMessage(error, "Failed to fetch export history"));
     }
   },
 
   async downloadExportedData(id, fileName = "exported_data") {
     try {
-      const response = await fetch(`/api/products/download-export/${id}`, {
+      const blob = await authRequest(`/api/products/download-export/${id}`, {
         method: "GET",
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Error exporting products:", errorData);
-        throw new Error(
-          errorData.message || "Failed to download exported data."
-        );
-      }
-      // Get the CSV file content
-      const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-
-      // Trigger download
       const a = document.createElement("a");
       a.href = url;
       a.download = `${fileName}.csv`;
       a.click();
-
-      // Cleanup
       window.URL.revokeObjectURL(url);
-      return {
-        success: true,
-      };
+      return { success: true };
     } catch (error) {
-      console.error("Error during export:", error);
       return {
         success: false,
-        error: error.message || "An unexpected error occurred during export.",
+        error: toSafeErrorMessage(error, "An unexpected error occurred during export."),
       };
     }
   },
 };
+

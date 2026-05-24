@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useApiClient } from "./useApiClient";
 
 function isActiveSyncStatus(syncStatus) {
   if (!syncStatus) {
@@ -22,15 +23,14 @@ function isActiveSyncStatus(syncStatus) {
 }
 
 export default function useProductSyncStatus() {
+  const api = useApiClient();
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
 
   const fetchSyncStatus = useCallback(async () => {
     try {
-      const response = await fetch("/api/sync/sync-status");
-      const result = await response.json();
-
-      if (response.ok && result?.syncStatus) {
+      const result = await api.get("/api/sync/sync-status");
+      if (result?.syncStatus) {
         setSyncStatus(result.syncStatus);
       }
     } catch {
@@ -38,7 +38,7 @@ export default function useProductSyncStatus() {
     } finally {
       setSyncStatusLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     fetchSyncStatus();

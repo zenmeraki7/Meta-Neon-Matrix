@@ -19,6 +19,7 @@ import { getTranslatedOperatorLabel } from "../utils/filterUtils";
 import ProductsFilters from "../components/ProductsFilters";
 import ProductsTable from "../components/ProductsTable";
 import useProducts from "../hooks/useProducts";
+import { useApiClient } from "../../../../hooks/useApiClient";
 import { getFilterByKey } from "../constants";
 
 import {
@@ -58,6 +59,7 @@ useEffect(() => {
 }, [search]);
 
   const { loading, error, hasFetched, fetchProducts } = useProducts();
+  const api = useApiClient();
 
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
@@ -68,10 +70,8 @@ useEffect(() => {
 
   const fetchSyncStatus = useCallback(async () => {
     try {
-      const response = await fetch("/api/sync/sync-status");
-      const result = await response.json();
-
-      if (response.ok && result?.syncStatus) {
+      const result = await api.get("/api/sync/sync-status");
+      if (result?.syncStatus) {
         setSyncStatus(result.syncStatus);
         return result.syncStatus;
 
@@ -81,7 +81,7 @@ useEffect(() => {
     } finally {
       setSyncStatusLoading(false);
     }
-  }, []);
+  }, [api]);
 
 const effectiveFilters = useMemo(() => {
   const baseFilters = filterState.filter((f) => f.field !== "search");
@@ -105,7 +105,7 @@ const effectiveFilters = useMemo(() => {
 }, [filterState, debouncedSearch]);
 
 useEffect(() => {
-  fetchProducts(1, effectiveFilters);
+  fetchProducts({ filterParams: effectiveFilters });
 }, [effectiveFilters, fetchProducts]);
 
  useEffect(() => {
@@ -115,10 +115,10 @@ useEffect(() => {
       !status?.isProductSyncing &&
       !status?.isProductInitialySyning;
     if (neverSynced) {
-      fetch("/api/sync/products").catch(() => {});
+      api.get("/api/sync/products").catch(() => {});
     }
   });
-}, []);
+}, [api, fetchSyncStatus]);
 
   useEffect(() => {
     const isSyncRunning =
@@ -149,7 +149,7 @@ useEffect(() => {
 
   if (justCompleted) {
     setSyncCompleted(true);
-    fetchProducts(1, effectiveFilters);
+    fetchProducts({ filterParams: effectiveFilters });
   }
 
   wasSyncingRef.current = isSyncing;
@@ -180,7 +180,7 @@ useEffect(() => {
 
   const onClearAll = () => {
     dispatch(clearFilters());
-    fetchProducts(1, []);
+    fetchProducts({ filterParams: [] });
   };
 
 const appliedFilters = useMemo(
@@ -352,8 +352,8 @@ const appliedFilters = useMemo(
               products={products}
               loading={shouldShowLoadingState}
               pagination={pagination}
-              onNext={() => fetchProducts(page + 1, effectiveFilters)}
-              onPrev={() => fetchProducts(page - 1, effectiveFilters)}
+              onNext={() => fetchProducts({ cursor: pagination?.nextCursor, filterParams: effectiveFilters })}
+              onPrev={() => fetchProducts({ cursor: pagination?.prevCursor, filterParams: effectiveFilters })}
             />
           </Card>
         </Layout.Section>

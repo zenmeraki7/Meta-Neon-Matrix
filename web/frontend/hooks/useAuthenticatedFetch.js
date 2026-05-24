@@ -24,9 +24,10 @@ export function useAuthenticatedFetch() {
       );
 
       if (redirectUrl) {
-        // Force redirect to re-auth flow
-        window.location.assign(redirectUrl);
-        return null;
+        const reauthError = new Error("Reauthorization required");
+        reauthError.code = "REAUTH_REQUIRED";
+        reauthError.redirectUrl = redirectUrl;
+        throw reauthError;
       }
     }
 

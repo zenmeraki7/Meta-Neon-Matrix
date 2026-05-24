@@ -1,6 +1,7 @@
 // src/hooks/useProducts.js
 import { useState, useCallback } from "react";
 import { useDispatch } from "react-redux";
+import { useApiClient } from "../../../../hooks/useApiClient";
 import {
   setProducts,
   setCount,
@@ -10,6 +11,7 @@ import {
 
 export default function useProducts() {
   const dispatch = useDispatch();
+  const api = useApiClient();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -29,19 +31,9 @@ export default function useProducts() {
           params.set("cursor", cursor);
         }
 
-        const res = await fetch(`/api/products/get-all?${params.toString()}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ filterParams }),
+        const json = await api.post(`/api/products/get-all?${params.toString()}`, {
+          filterParams,
         });
-
-        const json = await res.json();
-
-        if (!res.ok) {
-          throw new Error(json?.message || json?.error || "Failed to fetch products");
-        }
 
         const products = json?.data?.products || [];
         const pagination = json?.data?.pagination || null;
@@ -58,7 +50,7 @@ export default function useProducts() {
         setLoading(false);
       }
     },
-    [dispatch],
+    [api, dispatch],
   );
 
   return {
