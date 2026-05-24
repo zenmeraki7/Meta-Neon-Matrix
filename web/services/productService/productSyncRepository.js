@@ -1,0 +1,418 @@
+import { prisma } from "../../config/database.js";
+import { clearKeyCaches } from "../../utils/cacheUtils.js";
+import {
+  createMirrorBatchId,
+  markFullSyncStarted,
+} from "../mirrorHealthService.js";
+
+async function upsertMirrorBatch(tx, {
+  id,
+  shop,
+  syncHistoryId = null,
+  bulkOperationId = null,
+  resourceType = "PRODUCT_CATALOG",
+  status = "SYNC_REQUESTED",
+}) {
+  return tx.mirrorBatch.upsert({
+    where: { id },
+    update: {
+      shop,
+      syncHistoryId,
+      bulkOperationId,
+      resourceType,
+      status,
+      failureReason: null,
+      failedAt: null,
+    },
+    create: {
+      id,
+      shop,
+      syncHistoryId,
+      bulkOperationId,
+      resourceType,
+      status,
+    },
+  });
+}
+
+export async function markMirrorBatchStatus({
+  shop,
+  syncBatchId,
+  status,
+  failureReason = null,
+  counts = {},
+}) {
+  if (!syncBatchId) return;
+
+  const data = {
+    status,
+    ...(failureReason ? { failureReason } : {}),
+    ...(status === "FAILED" ? { failedAt: new Date() } : {}),
+    ...(status === "ACTIVE" ? { activatedAt: new Date() } : {}),
+    ...(typeof counts.actualProducts === "number" ? { actualProducts: counts.actualProducts } : {}),
+    ...(typeof counts.actualVariants === "number" ? { actualVariants: counts.actualVariants } : {}),
+    ...(typeof counts.actualCollections === "number" ? { actualCollections: counts.actualCollections } : {}),
+    ...(typeof counts.actualMetafields === "number" ? { actualMetafields: counts.actualMetafields } : {}),
+  };
+
+  await prisma.mirrorBatch.updateMany({
+    where: { id: syncBatchId, shop },
+    data,
+  });
+}
+
+export async function markProductSyncStarted({ shop }) {
+  await markFullSyncStarted(shop);
+}
+
+export async function queueProductSyncStart({
+  shop,
+  bulkOperationId,
+  isInitialSync = false,
+}) {
+  const syncBatchId = createMirrorBatchId("product_sync");
+
+  const syncHistory = await prisma.$transaction(async (tx) => {
+    await tx.store.update({
+      where: { shopUrl: shop },
+      data: {
+        isProductSyncing: true,
+        isProductInitialySyning: isInitialSync,
+        shopifyBulkJobCompleted: false,
+        syncProgressStage: "SHOPIFY_BULK_RUNNING",
+        staleReason: "FULL_SYNC_RUNNING",
+        lastSyncErrorSummary: null,
+        mirrorUnsafeSince: new Date(),
+      },
+    });
+
+    const createdHistory = await tx.syncHistory.create({
+      data: {
+        shop,
+        bulkOperationId,
+        syncBatchId,
+        status: "processing",
+        stage: "SHOPIFY_BULK_RUNNING",
+        operationType: "Product",
+        isInitialProductSync: isInitialSync,
+        recordCount: 0,
+        duration: 0,
+      },
+    });
+
+    await upsertMirrorBatch(tx, {
+      id: syncBatchId,
+      shop,
+      syncHistoryId: createdHistory.id,
+      bulkOperationId,
+      resourceType: "PRODUCT_CATALOG",
+      status: "BULK_OPERATION_STARTED",
+    });
+
+    return createdHistory;
+  });
+
+  return syncHistory;
+}
+
+export async function clearProductSyncCache(shop) {
+  await clearKeyCaches(`${shop}:sync_details`);
+}
+
+export async function stageProductMirrorBatch({
+  shop,
+  syncBatchId,
+  syncHistoryId = null,
+}) {
+  await prisma.$transaction(async (tx) => {
+    await tx.store.update({
+      where: { shopUrl: shop },
+      data: {
+        syncProgressStage: "MIRROR_STAGING",
+        staleReason: "FULL_SYNC_RUNNING",
+      },
+    });
+
+    if (syncHistoryId) {
+      await tx.syncHistory.update({
+        where: { id: syncHistoryId },
+        data: {
+          stage: "MIRROR_STAGING",
+        },
+      });
+    }
+
+    await upsertMirrorBatch(tx, {
+      id: syncBatchId,
+      shop,
+      syncHistoryId,
+      resourceType: "PRODUCT_CATALOG",
+      status: "INGESTING_TO_STAGING_BATCH",
+    });
+
+    await tx.variant.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+      },
+    });
+    await tx.inventoryLevelMirror.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+      },
+    });
+    await tx.inventoryItemMirror.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+      },
+    });
+    await tx.productCollection.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+      },
+    });
+    await tx.metafieldMirror.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+      },
+    });
+
+    await tx.product.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+      },
+    });
+  });
+}
+
+export async function insertProductMirrorBatch({
+  productRows,
+  variantRows,
+  inventoryItemRows,
+  inventoryLevelRows,
+  productCollectionRows,
+  metafieldRows,
+  syncBatchId,
+}) {
+  if (productRows.length > 0) {
+    await prisma.product.createMany({
+      data: productRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
+      skipDuplicates: true,
+    });
+  }
+
+  if (variantRows.length > 0) {
+    await prisma.variant.createMany({
+      data: variantRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
+      skipDuplicates: true,
+    });
+  }
+
+  if (Array.isArray(inventoryItemRows) && inventoryItemRows.length > 0) {
+    await prisma.inventoryItemMirror.createMany({
+      data: inventoryItemRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
+      skipDuplicates: true,
+    });
+  }
+
+  if (Array.isArray(inventoryLevelRows) && inventoryLevelRows.length > 0) {
+    await prisma.inventoryLevelMirror.createMany({
+      data: inventoryLevelRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
+      skipDuplicates: true,
+    });
+  }
+
+  if (Array.isArray(productCollectionRows) && productCollectionRows.length > 0) {
+    await prisma.productCollection.createMany({
+      data: productCollectionRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
+      skipDuplicates: true,
+    });
+  }
+
+  if (Array.isArray(metafieldRows) && metafieldRows.length > 0) {
+    await prisma.metafieldMirror.createMany({
+      data: metafieldRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
+      skipDuplicates: true,
+    });
+  }
+}
+
+export async function markSyncHistoryFailed({
+  shop,
+  syncHistoryId,
+  errorMessage,
+}) {
+  await prisma.$transaction(async (tx) => {
+    if (syncHistoryId) {
+      const updatedSyncHistory = await tx.syncHistory.update({
+        where: { id: syncHistoryId },
+        data: {
+          status: "failed",
+          stage: "FAILED",
+          errorMessage,
+        },
+      });
+
+      if (updatedSyncHistory.syncBatchId) {
+        await upsertMirrorBatch(tx, {
+          id: updatedSyncHistory.syncBatchId,
+          shop: updatedSyncHistory.shop,
+          syncHistoryId: updatedSyncHistory.id,
+          bulkOperationId: updatedSyncHistory.bulkOperationId || null,
+          resourceType: "PRODUCT_CATALOG",
+          status: "FAILED",
+        });
+        await tx.mirrorBatch.updateMany({
+          where: { id: updatedSyncHistory.syncBatchId, shop: updatedSyncHistory.shop },
+          data: {
+            failedAt: new Date(),
+            failureReason: errorMessage,
+          },
+        });
+      }
+    }
+
+    if (shop) {
+      await tx.store.update({
+        where: { shopUrl: shop },
+        data: {
+          isProductSyncing: false,
+          isProductInitialySyning: false,
+          syncProgressStage: "IDLE",
+          mirrorHealthState: "UNSAFE",
+          staleReason: "FULL_SYNC_FAILED",
+          repairRequired: true,
+          mirrorUnsafeSince: new Date(),
+          lastSyncErrorSummary: errorMessage,
+        },
+      });
+    }
+  });
+}
+
+export async function activateProductMirrorBatch({
+  shop,
+  syncBatchId,
+  totalProductsProcessed,
+  totalVariantsProcessed = null,
+  syncHistoryId,
+}) {
+  const store = await prisma.store.findUnique({
+    where: { shopUrl: shop },
+    select: { activeMirrorBatchId: true },
+  });
+
+  const previousBatchId = store?.activeMirrorBatchId || null;
+  const completedAt = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    await tx.store.update({
+      where: { shopUrl: shop },
+      data: {
+        activeMirrorBatchId: syncBatchId,
+        mirrorHealthState: "HEALTHY",
+        staleReason: null,
+        repairRequired: false,
+        mirrorUnsafeSince: null,
+        lastSyncErrorSummary: null,
+        lastFullSyncAt: completedAt,
+        isProductSyncing: false,
+        isProductInitialySyning: false,
+        syncProgressStage: "IDLE",
+        shopifyBulkJobCompleted: true,
+        storeTotalProducts: totalProductsProcessed,
+        productInitialSyncProgress: totalProductsProcessed,
+        lastProductSyncAt: completedAt,
+      },
+    });
+
+    if (syncHistoryId) {
+      const updatedSyncHistory = await tx.syncHistory.update({
+        where: { id: syncHistoryId },
+        data: {
+          status: "completed",
+          stage: "MIRROR_ACTIVATED",
+          recordCount: totalProductsProcessed,
+          updatedAt: completedAt,
+        },
+      });
+
+      await upsertMirrorBatch(tx, {
+        id: syncBatchId,
+        shop,
+        syncHistoryId: updatedSyncHistory.id,
+        bulkOperationId: updatedSyncHistory.bulkOperationId || null,
+        resourceType: "PRODUCT_CATALOG",
+        status: "ACTIVE",
+      });
+      await tx.mirrorBatch.updateMany({
+        where: { id: syncBatchId, shop },
+        data: {
+          status: "ACTIVE",
+          activatedAt: completedAt,
+          actualProducts: totalProductsProcessed,
+          ...(typeof totalVariantsProcessed === "number"
+            ? { actualVariants: totalVariantsProcessed }
+            : {}),
+          failureReason: null,
+          failedAt: null,
+        },
+      });
+    }
+
+    if (!syncHistoryId) {
+      await tx.mirrorBatch.updateMany({
+        where: { id: syncBatchId, shop },
+        data: {
+          status: "ACTIVE",
+          activatedAt: completedAt,
+          actualProducts: totalProductsProcessed,
+          ...(typeof totalVariantsProcessed === "number"
+            ? { actualVariants: totalVariantsProcessed }
+            : {}),
+          failureReason: null,
+          failedAt: null,
+        },
+      });
+    }
+
+    if (previousBatchId && previousBatchId !== syncBatchId) {
+      await tx.variant.deleteMany({
+        where: { shop, mirrorBatchId: previousBatchId },
+      });
+      await tx.inventoryLevelMirror.deleteMany({
+        where: { shop, mirrorBatchId: previousBatchId },
+      });
+      await tx.inventoryItemMirror.deleteMany({
+        where: { shop, mirrorBatchId: previousBatchId },
+      });
+      await tx.productCollection.deleteMany({
+        where: { shop, mirrorBatchId: previousBatchId },
+      });
+      await tx.metafieldMirror.deleteMany({
+        where: { shop, mirrorBatchId: previousBatchId },
+      });
+      await tx.product.deleteMany({
+        where: { shop, mirrorBatchId: previousBatchId },
+      });
+    }
+  });
+}
+
+export async function updateInitialSyncProgress({
+  shop,
+  totalProductsProcessed,
+}) {
+  await prisma.store.update({
+    where: { shopUrl: shop },
+    data: {
+      productInitialSyncProgress: totalProductsProcessed,
+      syncProgressStage: "MIRROR_STAGING",
+    },
+  });
+}
