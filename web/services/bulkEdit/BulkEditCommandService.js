@@ -25,6 +25,7 @@ import {
   getPlanMaxBulkEditTargets,
 } from "./bulkEditPlanUtils.js";
 import { buildPlannedUndoState } from "../bulkEditExecutionStateService.js";
+import { loadAuthoritativeSubscriptionForShop } from "../subscriptionAuthorityService.js";
 
 export class BulkEditCommandService {
   constructor(session) {
@@ -32,6 +33,10 @@ export class BulkEditCommandService {
   }
 
   async createManualBulkEditOperation(req) {
+    const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(
+      this.session.shop,
+    );
+
     const actor = buildActorContext({
       req,
       session: this.session,
@@ -40,10 +45,10 @@ export class BulkEditCommandService {
 
     const historyData = await this.#buildManualHistoryData(
       req.body,
-      req.subscription || {},
+      authoritativeSubscription,
       {
         actor,
-        entitlementSnapshot: buildEntitlementSnapshot(req.subscription),
+        entitlementSnapshot: buildEntitlementSnapshot(authoritativeSubscription),
       },
     );
 

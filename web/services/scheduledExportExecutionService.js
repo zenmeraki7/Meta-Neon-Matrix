@@ -22,6 +22,7 @@ import {
   buildEntitlementSnapshot,
 } from "../utils/operationContextUtils.js";
 import { EXPORT_EXECUTION_STATES } from "./exportExecutionStateService.js";
+import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
 import { joinSafeJobId } from "../utils/jobQueueUtils.js";
 import { TargetingEngineService } from "./targeting/TargetingEngineService.js";
 
@@ -433,7 +434,7 @@ shopRenewInterval = setInterval(async () => {
           fields: currentRun.scheduledExport.fields,
           filterQuery: "{}",
           status: "PENDING",
-          executionState: "TARGETING_STARTED",
+          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
           type: "Scheduled export",
           isScheduled: true,
           scheduledExportId: currentRun.scheduledExport.id,
@@ -527,7 +528,7 @@ shopRenewInterval = setInterval(async () => {
         where: { id: createdExportJob.id },
         data: {
           targetSnapshotCount: frozenCount,
-          executionState: "TARGETING_FROZEN",
+          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
         },
       });
 
@@ -556,7 +557,7 @@ shopRenewInterval = setInterval(async () => {
     await prisma.exportJob.update({
       where: { id: exportJob.id },
       data: {
-        executionState: "QUEUED_FOR_EXECUTION",
+        executionState: OPERATION_LIFECYCLE_STATES.QUEUED,
       },
     });
 

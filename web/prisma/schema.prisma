@@ -465,6 +465,7 @@ model EditHistory {
   @@index([shop])
   @@index([shop, executionState])
   @@index([shop, executionStateNormalized])
+  @@index([shop, executionIdentity])
   @@index([shop, statusNormalized, type, updatedAt], map: "shop_status_norm_type_recent")
   @@index([isSpreadsheetEdit])
   @@index([recurringEditId])
@@ -968,7 +969,48 @@ model ChangeRecord {
   @@index([shop])
   @@index([status])
   @@index([batchId])
-  @@unique([shop, editHistoryId, batchId, targetIdentity])
+  @@unique([shop, editHistoryId, batchId, targetIdentity], map: "uniq_change_record_shop_history_batch_target")
+}
+
+model BulkSubmission {
+  id                 String   @id @default(cuid())
+  shop               String
+  editHistoryId      String
+  executionIdentity  String?
+  batchId            String?
+  operationName      String
+  mutationMode       String
+  stagedUploadPath   String?
+  shopifyBulkOperationId String
+  shopifyStatus      String?
+  submittedAt        DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([shop, shopifyBulkOperationId])
+  @@index([shop, editHistoryId, submittedAt])
+  @@index([shop, executionIdentity])
+}
+
+model OperationStageProgress {
+  id            String   @id @default(cuid())
+  shop          String
+  operationType String
+  operationId   String
+  executionId   String?
+  stageKey      String
+  stageStatus   String
+  startedAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  completedAt   DateTime?
+  counterA      Int?
+  counterB      Int?
+  counterC      Int?
+  detail        Json?
+
+  @@unique([shop, operationType, operationId, stageKey], map: "uniq_operation_stage_progress")
+  @@index([shop, operationType, operationId])
+  @@index([shop, stageStatus, updatedAt])
 }
 
 model FilterTrack {
@@ -1310,6 +1352,27 @@ model OperationLease {
   @@unique([shop, namespace, resourceId])
   @@index([expiresAt])
   @@index([shop, namespace])
+}
+
+model OperationEnqueueIntent {
+  id          String   @id @default(cuid())
+  shop        String
+  queueKey    String
+  jobName     String
+  payload     Json
+  options     Json?
+  dedupeKey   String?
+  status      String   @default("PENDING")
+  attempts    Int      @default(0)
+  lastError   String?
+  runAt       DateTime @default(now())
+  dispatchedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, queueKey, dedupeKey])
+  @@index([shop, status, runAt])
+  @@index([status, runAt])
 }
 
 model DeadLetterJob {

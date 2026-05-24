@@ -21,9 +21,13 @@ import {
   buildEntitlementSnapshot,
 } from "../utils/operationContextUtils.js";
 import { getTargetingVersionBundle } from "./targeting/versioning.js";
-import { enqueueBulkEditTargetFreezeJob } from "../Jobs/Queues/bulkEditPipelineJob.js";
 import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
 import { normalizeEditHistoryExecutionState } from "../utils/normalizedStateUtils.js";
+import {
+  createEnqueueIntent,
+  dispatchPendingEnqueueIntents,
+  ENQUEUE_QUEUE_KEYS,
+} from "./operationEnqueueIntentService.js";
 
 export const RECURRING_EDIT_EXECUTION_QUEUE =
   process.env.RECURRING_EDIT_EXECUTION_QUEUE || "recurring-edit-execution";
@@ -432,7 +436,7 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
           recurringEditId: currentRecurringEdit.id,
           recurringRunId: run.id,
           triggerType: "RECURRING",
-          executionState: "TARGETING_STARTED",
+          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
         },
       });
 
@@ -467,21 +471,35 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
       };
     });
 
-    await enqueueBulkEditTargetFreezeJob({
-      historyId: prepared.editHistoryId,
+    await createEnqueueIntent({
       shop: currentRecurringEdit.shop,
-      source: "recurring_edit_pipeline",
-      executionId: prepared.executionIdentity || prepared.editHistoryId,
-    });
-    await prisma.editHistory.update({
-      where: { id: prepared.editHistoryId },
-      data: {
-        executionState: OPERATION_LIFECYCLE_STATES.QUEUED,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.QUEUED,
-        ),
+      queueKey: ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE,
+      jobName: "target.freeze",
+      payload: {
+        historyId: prepared.editHistoryId,
+        shop: currentRecurringEdit.shop,
+        source: "recurring_edit_pipeline",
+        executionId: prepared.executionIdentity || prepared.editHistoryId,
       },
+      options: {},
+      dedupeKey: `recurring-freeze:${prepared.editHistoryId}`,
     });
+    const dispatchResult = await dispatchPendingEnqueueIntents({
+      shop: currentRecurringEdit.shop,
+      queueKey: ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE,
+      limit: 10,
+    });
+    if (dispatchResult.dispatched > 0) {
+      await prisma.editHistory.updateMany({
+        where: { id: prepared.editHistoryId, shop: currentRecurringEdit.shop },
+        data: {
+          executionState: OPERATION_LIFECYCLE_STATES.QUEUED,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            OPERATION_LIFECYCLE_STATES.QUEUED,
+          ),
+        },
+      });
+    }
 
     logger.info("Recurring edit execution queued", {
       shop: currentRecurringEdit.shop,

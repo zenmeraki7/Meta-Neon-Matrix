@@ -1,7 +1,6 @@
 import crypto from "crypto";
 import { prisma } from "../../config/database.js";
 import { createMultiLanguage } from "../../utils/googleTranslator.js";
-import { scheduledEditQueue } from "../../Jobs/Queues/scheduledEditQueue.js";
 import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
 import { buildPlannedUndoState } from "../bulkEditExecutionStateService.js";
 import {
@@ -13,6 +12,11 @@ import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
 import { computeBlastRadiusRisk } from "../targeting/validate/mutationIntentPreflightValidator.js";
 import { getUpdatedProducts } from "../../helpers/productBulkOperationHelpers/productUpdateHandler.js";
 import { buildImmutableEditCommand } from "../bulkEdit/immutableEditCommand.js";
+import {
+  createEnqueueIntent,
+  dispatchPendingEnqueueIntents,
+  ENQUEUE_QUEUE_KEYS,
+} from "../operationEnqueueIntentService.js";
 import {
   buildEditIntentFromRules,
   buildExecutionPlanForEdit,
@@ -247,30 +251,50 @@ export class ScheduledEditService {
       });
     }
 
-    await scheduledEditQueue.add(
-      "scheduled-task",
-      { historyId: history.id, shop: this.session.shop },
-      { delay, jobId: joinSafeJobId("scheduled-edit", this.session.shop, history.id) },
-    );
-    await prisma.editHistory.update({
-      where: { id: history.id },
-      data: {
-        executionState: OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
-        ),
+    await createEnqueueIntent({
+      shop: this.session.shop,
+      queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
+      jobName: "scheduled-task",
+      payload: { historyId: history.id, shop: this.session.shop },
+      options: {
+        delay,
+        jobId: joinSafeJobId("scheduled-edit", this.session.shop, history.id),
       },
+      dedupeKey: `scheduled-edit:${history.id}`,
     });
 
     if (scheduledUndoAt && scheduledUndoAt.getTime() > Date.now() && undoAllowed) {
       const undoDelay = scheduledUndoAt.getTime() - Date.now();
       if (undoDelay > 0) {
-        await scheduledEditQueue.add(
-          "undo-task",
-          { historyId: history.id, shop: this.session.shop },
-          { delay: undoDelay, jobId: joinSafeJobId("scheduled-undo", this.session.shop, history.id) },
-        );
+        await createEnqueueIntent({
+          shop: this.session.shop,
+          queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
+          jobName: "undo-task",
+          payload: { historyId: history.id, shop: this.session.shop },
+          options: {
+            delay: undoDelay,
+            jobId: joinSafeJobId("scheduled-undo", this.session.shop, history.id),
+          },
+          dedupeKey: `scheduled-undo:${history.id}`,
+        });
       }
+    }
+
+    const dispatched = await dispatchPendingEnqueueIntents({
+      shop: this.session.shop,
+      queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
+      limit: 20,
+    });
+    if (dispatched.dispatched > 0) {
+      await prisma.editHistory.updateMany({
+        where: { id: history.id, shop: this.session.shop },
+        data: {
+          executionState: OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
+          ),
+        },
+      });
     }
 
     return history;

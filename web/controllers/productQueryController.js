@@ -77,9 +77,16 @@ export const getProductsWithQuery = async (req, res) => {
 
 export const checkEditStatus = asyncHandler(async (req, res) => {
   const id = req.params.id;
+  const session = res.locals.shopify?.session;
+  if (!session?.shop) {
+    return res.status(403).json(errorResponse("Session expired"));
+  }
 
-  const history = await prisma.editHistory.findUnique({
-    where: { id },
+  const history = await prisma.editHistory.findFirst({
+    where: {
+      id,
+      shop: session.shop,
+    },
     select: {
       processedCount: true,
       totalItems: true,

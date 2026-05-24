@@ -7,6 +7,8 @@ import {
   EXPORT_EXECUTION_STATES,
   parseSerializedExportError,
 } from "./exportExecutionStateService.js";
+import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
+import { normalizeExecutionStateLiteral } from "../utils/normalizedStateUtils.js";
 const LEGACY_COMPAT = Object.freeze({
   undoStatusFallback: String(process.env.ENABLE_LEGACY_UNDO_STATUS_FALLBACK || "false").toLowerCase() === "true",
 });
@@ -74,7 +76,7 @@ function buildStatusSummary({
 }
 
 function buildMerchantSafetyState(record, undo, primaryStatus) {
-  const rawExecutionState = String(record.executionState || "").toUpperCase();
+  const rawExecutionState = normalizeExecutionStateLiteral(record.executionState);
   const normalizedExecutionState = String(record.executionStateNormalized || "").toUpperCase();
   const statusNormalized = String(record.statusNormalized || "").toUpperCase();
   const processedCount = Number(record.processedCount || 0);
@@ -83,10 +85,10 @@ function buildMerchantSafetyState(record, undo, primaryStatus) {
   const conflictCount = Number(batch.conflictDetectedCount || 0);
   const undoConflicts = Array.isArray(undo?.conflicts) ? undo.conflicts.length : 0;
 
-  if (rawExecutionState === "TARGETING_STARTED" || rawExecutionState === "TARGET_FREEZING") return "Preparing targets";
-  if (rawExecutionState === "TARGETING_FROZEN" || rawExecutionState === "TARGET_FROZEN") return "Targets frozen";
+  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING) return "Preparing targets";
+  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN) return "Targets frozen";
   if (rawExecutionState === "PAUSED") return "Paused";
-  if (rawExecutionState === "QUEUED_FOR_EXECUTION" || rawExecutionState === "QUEUED" || normalizedExecutionState === "QUEUED" || normalizedExecutionState === "PLANNED") {
+  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.QUEUED || normalizedExecutionState === "QUEUED" || normalizedExecutionState === "PLANNED") {
     return "Queued";
   }
   if (normalizedExecutionState === "DISPATCHING" || normalizedExecutionState === "AWAITING_SHOPIFY") {

@@ -10,6 +10,7 @@ import {
   requestPauseExportOperation,
   resumeExportOperation,
 } from "../services/operationPauseResumeService.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 export const handleExportProductsData = async (req, res) => {
   const session = res.locals.shopify?.session;
@@ -46,15 +47,11 @@ export const handleExportProductsData = async (req, res) => {
       source: "POST /api/export-products",
     });
 
-    const statusCode = err?.statusCode || 500;
-    return res
-      .status(statusCode)
-      .json({
-        ...errorResponse(err.message || "Failed to start export process"),
-        code: err?.code || "EXPORT_START_FAILED",
-        path: err?.path || null,
-        meta: err?.meta || null,
-      });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -102,12 +99,11 @@ export const createProductExport = async (req, res) => {
       source: "POST /api/create-export",
     });
 
-    return res.status(error?.statusCode || 500).json({
-      code: error?.code || "EXPORT_CREATE_FAILED",
-      path: error?.path || null,
-      meta: error?.meta || null,
-      message: error.message || "Failed to create export job",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -162,12 +158,11 @@ export const cancelExportOperation = async (req, res) => {
     });
     return res.status(200).json({ success: true, data: result });
   } catch (err) {
-    const statusCode = err?.code === "CANCEL_NOT_ALLOWED_AFTER_EXECUTION" ? 409 : 400;
-    return res.status(statusCode).json({
-      success: false,
-      code: err?.code || "EXPORT_CANCEL_FAILED",
-      message: err?.message || "Failed to cancel export operation",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -182,8 +177,11 @@ export const pauseExportOperation = async (req, res) => {
     });
     return res.status(200).json({ success: true, data });
   } catch (err) {
-    const statusCode = err?.code === "PREMIUM_FEATURE_REQUIRED" ? 403 : 400;
-    return res.status(statusCode).json({ success: false, code: err?.code || "EXPORT_PAUSE_FAILED", message: err.message });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -198,7 +196,10 @@ export const resumePausedExportOperation = async (req, res) => {
     });
     return res.status(200).json({ success: true, data });
   } catch (err) {
-    const statusCode = err?.code === "PREMIUM_FEATURE_REQUIRED" ? 403 : 400;
-    return res.status(statusCode).json({ success: false, code: err?.code || "EXPORT_RESUME_FAILED", message: err.message });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };

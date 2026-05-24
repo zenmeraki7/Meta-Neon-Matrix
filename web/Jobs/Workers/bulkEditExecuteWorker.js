@@ -18,6 +18,9 @@ import {
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 import { BulkEditExecutionPreparationService } from "../../services/bulkEdit/BulkEditExecutionPreparationService.js";
 import { ShopifyBulkMutationService } from "../../services/bulkEdit/ShopifyBulkMutationService.js";
+import { loadAuthoritativeSubscriptionForShop } from "../../services/subscriptionAuthorityService.js";
+import { getPlanMaxBulkEditTargets } from "../../services/bulkEdit/bulkEditPlanUtils.js";
+import { upsertOperationStageProgress } from "../../services/operationStageProgressService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,6 +139,23 @@ function assertHistoryRunnable({ history, historyId, shop, executionId }) {
   }
 }
 
+function assertExecuteEntitlement({ history, authoritativeSubscription }) {
+  const count = Number(history?.targetSnapshotCount || history?.totalItems || 0);
+  const limit = Number(authoritativeSubscription?.limit || 100);
+  const isUnlimited = Boolean(authoritativeSubscription?.isUnlimited);
+  const planName = authoritativeSubscription?.planName || "Free Plan";
+  const maxBulkEditTargets = getPlanMaxBulkEditTargets(authoritativeSubscription);
+
+  if (!isUnlimited && count > limit) {
+    throw new Error(
+      `ENTITLEMENT_LIMIT_EXCEEDED:${planName}:${limit}:${count}`,
+    );
+  }
+  if (count > maxBulkEditTargets) {
+    throw new Error("TARGET_COUNT_EXCEEDS_PLAN_LIMIT");
+  }
+}
+
 async function markExecuting({ historyId, shop, batchPatch = {} }) {
   const existing = await prisma.editHistory.findFirst({
     where: { id: historyId, shop },
@@ -159,6 +179,13 @@ async function markExecuting({ historyId, shop, batchPatch = {} }) {
   if (updated.count !== 1) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_EXECUTING");
   }
+  await upsertOperationStageProgress({
+    shop,
+    operationType: "BULK_EDIT",
+    operationId: historyId,
+    stageKey: "EXECUTING",
+    stageStatus: "RUNNING",
+  });
 }
 
 async function markCompletedEmpty({ historyId, shop, batchId }) {
@@ -188,6 +215,14 @@ async function markCompletedEmpty({ historyId, shop, batchId }) {
   if (updated.count !== 1) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_COMPLETED_EMPTY");
   }
+  await upsertOperationStageProgress({
+    shop,
+    operationType: "BULK_EDIT",
+    operationId: historyId,
+    stageKey: "EXECUTING",
+    stageStatus: "COMPLETED_EMPTY",
+    completed: true,
+  });
 }
 
 async function countRemainingFrozenTargets({ historyId, shop, cursorOrdinal }) {
@@ -201,6 +236,26 @@ async function countRemainingFrozenTargets({ historyId, shop, cursorOrdinal }) {
         : {}),
     },
   });
+}
+
+async function isFrozenCursorExhausted({ historyId, shop, cursorOrdinal }) {
+  const maxRow = await prisma.targetSnapshot.findFirst({
+    where: {
+      ownerType: "EDIT_HISTORY",
+      ownerId: historyId,
+      shop,
+    },
+    orderBy: [{ ordinal: "desc" }, { id: "desc" }],
+    select: { ordinal: true },
+  });
+  const maxOrdinal = Number(maxRow?.ordinal);
+  if (!Number.isFinite(maxOrdinal)) {
+    return true;
+  }
+  if (!Number.isInteger(cursorOrdinal)) {
+    return false;
+  }
+  return cursorOrdinal >= maxOrdinal;
 }
 
 async function markWaitingForShopifySlot({
@@ -232,6 +287,17 @@ async function markWaitingForShopifySlot({
   if (updated.count !== 1) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_WAITING_SLOT");
   }
+  await upsertOperationStageProgress({
+    shop,
+    operationType: "BULK_EDIT",
+    operationId: historyId,
+    stageKey: "WAITING_FOR_SHOPIFY_SLOT",
+    stageStatus: "WAITING",
+    detail: {
+      delayMs,
+      currentBulkOperation: currentBulkOperation || null,
+    },
+  });
 }
 
 async function markFailed({
@@ -268,6 +334,18 @@ async function markFailed({
   if (updated.count !== 1) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_FAILED");
   }
+  await upsertOperationStageProgress({
+    shop,
+    operationType: "BULK_EDIT",
+    operationId: historyId,
+    stageKey: "EXECUTING",
+    stageStatus: "FAILED",
+    detail: {
+      failureStage,
+      message: error?.message || String(error),
+    },
+    completed: true,
+  });
 }
 
 async function requeueForShopifySlot({
@@ -304,6 +382,11 @@ async function processBulkEditExecuteJob(job) {
       historyId,
       shop,
       executionId,
+    });
+    const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(shop);
+    assertExecuteEntitlement({
+      history,
+      authoritativeSubscription,
     });
 
     lock = await acquireExclusiveShopWork({
@@ -359,14 +442,20 @@ async function processBulkEditExecuteJob(job) {
     });
 
     if (!preparedBatch.batchTargetCount || !preparedBatch.formattedProducts) {
+      const cursorOrdinal = Number.isInteger(history.batch?.lastProductId)
+        ? history.batch.lastProductId
+        : null;
       const remaining = await countRemainingFrozenTargets({
         historyId,
         shop,
-        cursorOrdinal: Number.isInteger(history.batch?.lastProductId)
-          ? history.batch.lastProductId
-          : null,
+        cursorOrdinal,
       });
-      if (remaining > 0) {
+      const exhausted = await isFrozenCursorExhausted({
+        historyId,
+        shop,
+        cursorOrdinal,
+      });
+      if (remaining > 0 || !exhausted) {
         throw new Error("EMPTY_PREPARED_BATCH_WITH_REMAINING_FROZEN_TARGETS");
       }
       await markCompletedEmpty({

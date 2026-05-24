@@ -9,9 +9,14 @@ import {
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 import { getSession } from "../../utils/sessionHandler.js";
+import { upsertOperationStageProgress } from "../../services/operationStageProgressService.js";
 
 const QUEUE_NAME = process.env.BULK_EDIT_RESULT_INGEST_QUEUE || "bulk-edit-result-ingest";
 const VERIFY_QUEUE_NAME = process.env.BULK_EDIT_VERIFICATION_QUEUE || "bulk-edit-verification";
+const MAX_RESULT_URL_RETRIES = Number.parseInt(
+  process.env.BULK_EDIT_RESULT_URL_MAX_RETRIES || "4",
+  10,
+);
 
 const verificationQueue = new Queue(VERIFY_QUEUE_NAME, {
   connection,
@@ -70,6 +75,13 @@ async function fetchBulkOperationResultUrl({ shop, bulkOperationId }) {
     status: String(node?.status || "").toUpperCase(),
     url: node?.url || null,
     partialDataUrl: node?.partialDataUrl || null,
+  };
+}
+
+function mergeBatch(existingBatch, patch) {
+  return {
+    ...(existingBatch && typeof existingBatch === "object" ? existingBatch : {}),
+    ...patch,
   };
 }
 
@@ -198,9 +210,22 @@ async function processBulkEditResultIngest(job) {
     };
   }
 
+  await upsertOperationStageProgress({
+    shop,
+    operationType: "BULK_EDIT",
+    operationId: history.id,
+    executionId,
+    stageKey: "RESULT_INGESTION",
+    stageStatus: "RUNNING",
+  });
+
   const fetched = await fetchBulkOperationResultUrl({ shop, bulkOperationId });
   const status = webhookStatus || fetched.status;
-  const resultUrl = resolveResultUrl(job.data || {}) || fetched.url || fetched.partialDataUrl;
+  const resultUrl =
+    resolveResultUrl(job.data || {})
+    || fetched.url
+    || fetched.partialDataUrl
+    || null;
 
   if (status && ["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(status)) {
     const failedUpdate = await prisma.editHistory.updateMany({
@@ -250,7 +275,45 @@ async function processBulkEditResultIngest(job) {
   }
 
   if (!resultUrl) {
-    throw new Error("Missing bulk operation result URL");
+    const attemptNumber = Number(job.attemptsMade || 0) + 1;
+    const exhausted = attemptNumber >= MAX_RESULT_URL_RETRIES;
+
+    if (exhausted) {
+      await prisma.editHistory.updateMany({
+        where: { id: history.id, shop },
+        data: {
+          status: "failed",
+          statusNormalized: normalizeEditHistoryStatus("failed"),
+          executionState: OPERATION_LIFECYCLE_STATES.FAILED,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            OPERATION_LIFECYCLE_STATES.FAILED,
+          ),
+          failureStage: "RESULT_INGESTION_URL_EXPIRED",
+          completedAt: new Date(),
+          batch: mergeBatch(history.batch, {
+            resultIngestionFailure: {
+              code: "RESULT_URL_MISSING_OR_EXPIRED",
+              attemptNumber,
+              exhausted: true,
+              status,
+              bulkOperationId,
+              failedAt: new Date().toISOString(),
+            },
+          }),
+        },
+      });
+      return {
+        success: false,
+        failed: true,
+        reason: "RESULT_URL_MISSING_OR_EXPIRED",
+        historyId: history.id,
+        shop,
+        bulkOperationId,
+        attemptNumber,
+      };
+    }
+
+    throw new Error("RESULT_URL_MISSING_OR_EXPIRED_RETRYABLE");
   }
 
   const updated = await prisma.editHistory.updateMany({
@@ -267,14 +330,78 @@ async function processBulkEditResultIngest(job) {
   }
 
   const service = new BulkEditResultIngestionService();
-  const result = await service.ingestCompletedBulkOperation({
-    shop,
-    historyId: history.id,
-    executionId,
-    bulkOperationId,
-    resultUrl,
-    attempt: job.attemptsMade + 1,
-  });
+  let result;
+  try {
+    result = await service.ingestCompletedBulkOperation({
+      shop,
+      historyId: history.id,
+      executionId,
+      bulkOperationId,
+      resultUrl,
+      attempt: job.attemptsMade + 1,
+    });
+    await upsertOperationStageProgress({
+      shop,
+      operationType: "BULK_EDIT",
+      operationId: history.id,
+      executionId,
+      stageKey: "RESULT_INGESTION",
+      stageStatus: "COMPLETED",
+      counterA: Number(result?.successCount || 0),
+      counterB: Number(result?.failureCount || 0),
+      counterC: Number(result?.rowCount || 0),
+      completed: true,
+    });
+  } catch (error) {
+    const message = String(error?.message || "");
+    const isResultUrlError =
+      message.includes("Failed to download Shopify result JSONL: 403")
+      || message.includes("Failed to download Shopify result JSONL: 410")
+      || message.includes("RESULT_URL_");
+
+    if (!isResultUrlError) {
+      throw error;
+    }
+
+    const attemptNumber = Number(job.attemptsMade || 0) + 1;
+    const exhausted = attemptNumber >= MAX_RESULT_URL_RETRIES;
+    if (!exhausted) {
+      throw new Error("RESULT_URL_EXPIRED_RETRYABLE");
+    }
+
+    await prisma.editHistory.updateMany({
+      where: { id: history.id, shop },
+      data: {
+        status: "failed",
+        statusNormalized: normalizeEditHistoryStatus("failed"),
+        executionState: OPERATION_LIFECYCLE_STATES.FAILED,
+        executionStateNormalized: normalizeEditHistoryExecutionState(
+          OPERATION_LIFECYCLE_STATES.FAILED,
+        ),
+        failureStage: "RESULT_INGESTION_URL_EXPIRED",
+        completedAt: new Date(),
+        batch: mergeBatch(history.batch, {
+          resultIngestionFailure: {
+            code: "RESULT_URL_EXPIRED",
+            attemptNumber,
+            exhausted: true,
+            bulkOperationId,
+            failedAt: new Date().toISOString(),
+            message,
+          },
+        }),
+      },
+    });
+    return {
+      success: false,
+      failed: true,
+      reason: "RESULT_URL_EXPIRED",
+      historyId: history.id,
+      shop,
+      bulkOperationId,
+      attemptNumber,
+    };
+  }
 
   await enqueueVerification({
     historyId: history.id,

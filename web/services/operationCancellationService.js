@@ -11,6 +11,7 @@ import {
   normalizeExportJobExecutionState,
   normalizeExportJobStatus,
 } from "../utils/normalizedStateUtils.js";
+import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
 
 function normalizeCancelReason(reason) {
   if (typeof reason !== "string") return null;
@@ -20,8 +21,8 @@ function normalizeCancelReason(reason) {
 
 function buildStage(executionStateRaw) {
   const state = String(executionStateRaw || "").toUpperCase();
-  if (state === "TARGETING_STARTED" || state === "TARGET_FREEZING") return "BEFORE_FREEZE";
-  if (state === "TARGETING_FROZEN" || state === "TARGET_FROZEN" || state === "QUEUED_FOR_EXECUTION" || state === "QUEUED") return "AFTER_FREEZE_BEFORE_EXECUTION";
+  if (state === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING) return "BEFORE_FREEZE";
+  if (state === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN || state === OPERATION_LIFECYCLE_STATES.QUEUED) return "AFTER_FREEZE_BEFORE_EXECUTION";
   if (state === "EXECUTING" || state === "SHOPIFY_BULK_SUBMITTED" || state === "SHOPIFY_RUNNING") return "DURING_EXECUTION";
   if (state === "SHOPIFY_COMPLETED" || state === "INGESTING_RESULTS" || state === "VERIFYING" || state === "MIRROR_UPDATING") return "DURING_VERIFICATION";
   if (state === BULK_EDIT_EXECUTION_STATES.FINALIZING || state === EXPORT_EXECUTION_STATES.FINALIZING) {
@@ -71,7 +72,7 @@ export async function requestEditHistoryCancellation({ shop, historyId, reason }
     Object.assign(update, {
       status: "cancelled",
       statusNormalized: normalizeEditHistoryStatus("CANCELLED"),
-      executionState: BULK_EDIT_EXECUTION_STATES.CANCELLED,
+      executionState: OPERATION_LIFECYCLE_STATES.CANCELLED,
       executionStateNormalized: normalizeEditHistoryExecutionState("CANCELLED"),
       cancelledAt: now,
       completedAt: now,
@@ -82,8 +83,8 @@ export async function requestEditHistoryCancellation({ shop, historyId, reason }
     throw error;
   }
 
-  await prisma.editHistory.update({
-    where: { id: history.id },
+  await prisma.editHistory.updateMany({
+    where: { id: history.id, shop },
     data: update,
   });
 
@@ -133,8 +134,8 @@ export async function requestExportJobCancellation({ shop, exportJobId, reason }
     throw error;
   }
 
-  await prisma.exportJob.update({
-    where: { id: job.id },
+  await prisma.exportJob.updateMany({
+    where: { id: job.id, shop },
     data: update,
   });
 

@@ -15,6 +15,7 @@ import {
   normalizeEditHistoryExecutionState,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
+import { upsertOperationStageProgress } from "../operationStageProgressService.js";
 
 const CURRENT_BULK_OPERATION_QUERY = `
   query CurrentBulkOperation {
@@ -252,6 +253,17 @@ export class ShopifyBulkMutationService {
           }),
         },
       });
+      await upsertOperationStageProgress({
+        shop: this.session.shop,
+        operationType: "BULK_EDIT",
+        operationId: historyId,
+        executionId: history.executionIdentity || null,
+        stageKey: "SHOPIFY_SUBMISSION",
+        stageStatus: "WAITING_SLOT",
+        detail: {
+          currentBulkOperation: slot.currentBulkOperation || null,
+        },
+      });
 
       return {
         submitted: false,
@@ -300,6 +312,21 @@ export class ShopifyBulkMutationService {
 
     const submittedAt = new Date();
 
+    await prisma.bulkSubmission.create({
+      data: {
+        shop: this.session.shop,
+        editHistoryId: historyId,
+        executionIdentity: history.executionIdentity || null,
+        batchId: batchId || null,
+        operationName,
+        mutationMode: String(mode),
+        stagedUploadPath,
+        shopifyBulkOperationId: bulkOperation.id,
+        shopifyStatus: bulkOperation.status || null,
+        submittedAt,
+      },
+    });
+
     await prisma.editHistory.update({
       where: { id: historyId },
       data: {
@@ -338,6 +365,20 @@ export class ShopifyBulkMutationService {
       running: true,
       historyId,
       bulkOperationId: bulkOperation.id,
+    });
+    await upsertOperationStageProgress({
+      shop: this.session.shop,
+      operationType: "BULK_EDIT",
+      operationId: historyId,
+      executionId: history.executionIdentity || null,
+      stageKey: "SHOPIFY_SUBMISSION",
+      stageStatus: "SUBMITTED",
+      detail: {
+        bulkOperationId: bulkOperation.id,
+        status: bulkOperation.status,
+        batchId: batchId || null,
+      },
+      completed: true,
     });
 
     return {

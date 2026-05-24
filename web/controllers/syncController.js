@@ -6,6 +6,7 @@ import {
 import { setCache, getCache, clearKeyCaches } from "../utils/cacheUtils.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import { prisma } from "../config/database.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 const service = new Services();
 
@@ -117,10 +118,11 @@ export const syncProductData = async (req, res) => {
       source: "syncController.syncProductData",
     });
 
-    return res.status(500).json({
-      error: "Failed to fetch products",
-      message: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -244,10 +246,11 @@ export const getSyncStatus = async (req, res) => {
       source: "syncController.getSyncStatus",
     });
 
-    return res.status(500).json({
-      error: "Internal Server Error",
-      message: error.message,
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 

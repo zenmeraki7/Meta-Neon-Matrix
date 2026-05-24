@@ -8,6 +8,10 @@ import {
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
+import {
+  dispatchPendingEnqueueIntents,
+  ENQUEUE_QUEUE_KEYS,
+} from "../../services/operationEnqueueIntentService.js";
 
 const POLL_INTERVAL_MS = 60_000;
 const LIMIT = 100;
@@ -64,6 +68,23 @@ async function requeuePendingScheduledEdits() {
 async function runRecoveryTick() {
   try {
     await requeuePendingScheduledEdits();
+    const shops = await prisma.operationEnqueueIntent.findMany({
+      where: {
+        status: "PENDING",
+        queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
+      },
+      select: { shop: true },
+      distinct: ["shop"],
+      take: LIMIT,
+    });
+    for (const row of shops) {
+      // eslint-disable-next-line no-await-in-loop
+      await dispatchPendingEnqueueIntents({
+        shop: row.shop,
+        queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
+        limit: LIMIT,
+      });
+    }
   } catch (error) {
     await logWorkerError({
       shop: "unknown",

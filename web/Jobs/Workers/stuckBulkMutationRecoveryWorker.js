@@ -3,6 +3,7 @@ import { connection } from "../../config/redis.js";
 import { prisma } from "../../config/database.js";
 import logger from "../../utils/loggerUtils.js";
 import { addbulkEditResultIngestJob } from "../Queues/bulkEditResultIngestJob.js";
+import { addbulkUndoResultIngestJob } from "../Queues/bulkUndoResultIngestJob.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 
 const QUEUE_NAME = "stuck-bulk-mutation-recovery";
@@ -86,12 +87,21 @@ async function recoverStuckBulkMutations() {
     });
 
     try {
-      await addbulkEditResultIngestJob({
-        shop: history.shop,
-        bulkOperationId,
-        status: "COMPLETED",
-        source: "stuck_bulk_mutation_recovery",
-      });
+      if (isUndo) {
+        await addbulkUndoResultIngestJob({
+          shop: history.shop,
+          bulkOperationId,
+          status: "COMPLETED",
+          source: "stuck_bulk_mutation_recovery",
+        });
+      } else {
+        await addbulkEditResultIngestJob({
+          shop: history.shop,
+          bulkOperationId,
+          status: "COMPLETED",
+          source: "stuck_bulk_mutation_recovery",
+        });
+      }
 
       recovered += 1;
     } catch (error) {

@@ -16,6 +16,7 @@
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",
     "test:targeting-integration": "node --test web/resolveCanonicalProductTarget.integration.test.js",
+    "test:failure-matrix": "node --test web/failureModeMatrix.test.js web/legacyFinalizerRetirement.contract.test.js web/webhookUndoRouting.contract.test.js web/mirrorIndexCoverage.contract.test.js web/entitlementAuthority.contract.test.js",
     "explain:targeting": "node web/scripts/explainNormalizedTargeting.js",
     "backfill:access-token-encryption": "node web/scripts/backfillAccessTokenEncryption.js"
   },

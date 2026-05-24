@@ -16,6 +16,7 @@ import {
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
 } from "../utils/normalizedStateUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 export const csvBulkProductsEdit = asyncHandler(async (req, res) => {
   const session = res.locals.shopify.session;
@@ -169,6 +170,10 @@ export const importCsvController = async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ message: err.message });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };

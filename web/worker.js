@@ -38,11 +38,14 @@ process.on("unhandledRejection", (err) => {
   console.error("Unhandled Rejection:", err);
 });
 
-await import("./Jobs/Workers/bulkEditWorker.js");
+if (String(process.env.ENABLE_LEGACY_BULK_EDIT_WORKER || "false").toLowerCase() === "true") {
+  await import("./Jobs/Workers/bulkEditWorker.js");
+}
 await import("./Jobs/Workers/bulkEditPipelineWorker.js");
 await import("./Jobs/Workers/bulkExportWorker.js");
 await import("./Jobs/Workers/bulkUndoWorker.js");
 await import("./Jobs/Workers/bulkOperationMutationWorker.js");
+await import("./Jobs/Workers/bulkUndoResultIngestWorker.js");
 await import("./Jobs/Workers/bulkOperationQueryWorker.js");
 await import("./Jobs/Workers/appInstallationWorker.js");
 await import("./Jobs/Workers/scheduledEditWorker.js");

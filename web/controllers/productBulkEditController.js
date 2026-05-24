@@ -12,6 +12,7 @@ import {
   requestPauseEditOperation,
   resumeEditOperation,
 } from "../services/operationPauseResumeService.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 export const undoEdit = async (req, res) => {
   const session = res.locals.shopify?.session;
@@ -78,11 +79,11 @@ export const handleBulkEditProduct = async (req, res) => {
       source: "POST /api/bulk-edit",
     });
 
-    return res.status(400).json({
-      success: false,
-      message:
-        err.message || "An unexpected error occurred. Please try again later.",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -200,13 +201,11 @@ export const createScheduledEdit = async (req, res) => {
       source: "POST /api/scheduled-edit",
     });
 
-    return res.status(500).json({
-      code: err?.code || "SCHEDULED_EDIT_CREATE_FAILED",
-      path: err?.path || null,
-      meta: err?.meta || null,
-      message: err.message || "Failed to create scheduled edit",
-      error: "Failed to create scheduled edit",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -223,12 +222,11 @@ export const cancelEditOperation = async (req, res) => {
     });
     return res.status(200).json({ success: true, data: result });
   } catch (err) {
-    const statusCode = err?.code === "CANCEL_NOT_ALLOWED_AFTER_EXECUTION" ? 409 : 400;
-    return res.status(statusCode).json({
-      success: false,
-      code: err?.code || "EDIT_CANCEL_FAILED",
-      message: err?.message || "Failed to cancel edit operation",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -243,8 +241,11 @@ export const pauseEditOperation = async (req, res) => {
     });
     return res.status(200).json({ success: true, data });
   } catch (err) {
-    const statusCode = err?.code === "PREMIUM_FEATURE_REQUIRED" ? 403 : 400;
-    return res.status(statusCode).json({ success: false, code: err?.code || "EDIT_PAUSE_FAILED", message: err.message });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -259,8 +260,11 @@ export const resumePausedEditOperation = async (req, res) => {
     });
     return res.status(200).json({ success: true, data });
   } catch (err) {
-    const statusCode = err?.code === "PREMIUM_FEATURE_REQUIRED" ? 403 : 400;
-    return res.status(statusCode).json({ success: false, code: err?.code || "EDIT_RESUME_FAILED", message: err.message });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -272,10 +276,10 @@ export const retryFailedOnlyEditOperation = async (req, res) => {
     const data = await service.retryFailedOnly({ historyId: req.params.id });
     return res.status(200).json({ success: true, data });
   } catch (err) {
-    return res.status(400).json({
-      success: false,
-      code: err?.code || "EDIT_RETRY_FAILED_ONLY_FAILED",
-      message: err?.message || "Failed to queue retry for failed targets",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "VALIDATION_FAILED",
+    );
+    return res.status(statusCode).json(body);
   }
 };

@@ -4,6 +4,7 @@ import { addbulkExportJob } from "../Jobs/Queues/bulkExportJob.js";
 import { BULK_EDIT_EXECUTION_STATES } from "./bulkEditExecutionStateService.js";
 import { EXPORT_EXECUTION_STATES } from "./exportExecutionStateService.js";
 import {
+  normalizeExecutionStateLiteral,
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
   normalizeExportJobExecutionState,
@@ -12,13 +13,7 @@ import {
 import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
 
 function normalizeToLifecycleState(rawState) {
-  const state = String(rawState || "").toUpperCase();
-  const legacyToLifecycle = {
-    TARGETING_STARTED: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
-    TARGETING_FROZEN: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
-    QUEUED_FOR_EXECUTION: OPERATION_LIFECYCLE_STATES.QUEUED,
-  };
-  return legacyToLifecycle[state] || state;
+  return normalizeExecutionStateLiteral(rawState);
 }
 
 function assertPremiumPlan(subscription = {}) {
@@ -106,9 +101,15 @@ export async function requestPauseExportOperation({ shop, exportJobId, subscript
   if ([EXPORT_EXECUTION_STATES.COMPLETED, EXPORT_EXECUTION_STATES.CANCELLED, EXPORT_EXECUTION_STATES.FAILED].includes(state)) {
     throw new Error("Cannot pause a completed/cancelled/failed export.");
   }
-  const immediate = ["TARGETING_STARTED", "TARGETING_FROZEN", "QUEUED_FOR_EXECUTION"].includes(state);
-  await prisma.exportJob.update({
-    where: { id: exportJobId },
+  const immediate = [
+    OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+    OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
+    OPERATION_LIFECYCLE_STATES.QUEUED,
+    OPERATION_LIFECYCLE_STATES.PLANNING,
+    OPERATION_LIFECYCLE_STATES.PLANNED,
+  ].includes(state);
+  await prisma.exportJob.updateMany({
+    where: { id: exportJobId, shop },
     data: immediate
       ? {
         pauseRequestedAt: now,
@@ -133,12 +134,12 @@ export async function resumeExportOperation({ shop, exportJobId, subscription })
     throw new Error("Only paused exports can be resumed.");
   }
   const resumedAt = new Date();
-  await prisma.exportJob.update({
-    where: { id: exportJobId },
+  await prisma.exportJob.updateMany({
+    where: { id: exportJobId, shop },
     data: {
       pauseRequestedAt: null,
       resumedAt,
-      executionState: "QUEUED_FOR_EXECUTION",
+      executionState: OPERATION_LIFECYCLE_STATES.QUEUED,
       executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
       status: "PENDING",
       statusNormalized: normalizeExportJobStatus("PENDING"),

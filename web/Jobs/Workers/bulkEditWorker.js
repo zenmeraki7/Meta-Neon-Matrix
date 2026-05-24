@@ -1,6 +1,5 @@
 import { Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
-import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 import ProductBulkService from "../../services/productService/productBulkEditService.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { logWorkerError } from "../../utils/errorLogUtils.js";
@@ -669,6 +668,14 @@ async function markHistoryFailure(historyId, shop, error, attempt, executionId, 
 }
 
 async function processBulkEdit(job) {
+  if (String(process.env.ENABLE_LEGACY_BULK_EDIT_WORKER || "false").toLowerCase() !== "true") {
+    return {
+      success: true,
+      skipped: true,
+      reason: "legacy_bulk_edit_worker_disabled",
+    };
+  }
+
   const { historyId, shop, source = "bulk-edit", executionId = null } = job.data || {};
   assertNoRawTargetingPayload(job.data || {});
   const attempt = getJobAttempt(job);
@@ -732,16 +739,6 @@ async function processBulkEdit(job) {
 
     if (["terminal", "paused", "awaiting_shopify", "finalizing", "already_running", "not_claimed", "stale_dispatch_failed"].includes(claimResult.state)) {
       return { skipped: true, reason: claimResult.state, shop, historyId };
-    }
-
-    const currentBulkOperation = await getCurrentBulkOperationStatus(session);
-    const { status } = currentBulkOperation || {};
-    if (["CREATED", "RUNNING", "CANCELING"].includes(String(status || "").toUpperCase())) {
-      throw new RetryableBulkEditError(
-        "Another Shopify bulk operation is already running",
-        "shopify_bulk_busy",
-        { currentBulkOperation },
-      );
     }
 
     await clearKeyCaches(`${shop}:fetchHistories`);

@@ -1,7 +1,18 @@
 import { normalizeLifecycleToEditExecutionState } from "../services/operationLifecycleStateMachine.js";
+import { OPERATION_LIFECYCLE_STATES } from "../services/operationLifecycleStateMachine.js";
 
 function upper(value) {
   return String(value || "").trim().toUpperCase();
+}
+
+export function normalizeExecutionStateLiteral(value) {
+  const v = upper(value);
+  const legacyToLifecycle = {
+    TARGETING_STARTED: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+    TARGETING_FROZEN: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
+    QUEUED_FOR_EXECUTION: OPERATION_LIFECYCLE_STATES.QUEUED,
+  };
+  return legacyToLifecycle[v] || v;
 }
 
 export function normalizeEditHistoryExecutionState(value) {

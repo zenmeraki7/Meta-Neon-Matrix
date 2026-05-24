@@ -153,18 +153,104 @@ function filterVariantsForFrozenVariantTargets(product, variantIdsByProduct) {
  * - That future function should apply all rules in memory and emit exactly
  *   one final JSONL row per target identity.
  */
-function buildMutationRowsForProduct({
+function mergeVariantRows(existing = [], incoming = []) {
+  const byId = new Map();
+  for (const row of existing) {
+    if (row?.id) byId.set(String(row.id), { ...row });
+  }
+  for (const row of incoming) {
+    if (!row?.id) continue;
+    const key = String(row.id);
+    const prev = byId.get(key) || { id: row.id };
+    byId.set(key, { ...prev, ...row });
+  }
+  return [...byId.values()];
+}
+
+function mergeProductSetMutation(base = {}, patch = {}) {
+  const merged = { ...base, ...patch };
+  if (Array.isArray(base.variants) || Array.isArray(patch.variants)) {
+    merged.variants = mergeVariantRows(base.variants || [], patch.variants || []);
+  }
+  return merged;
+}
+
+function mergeMutationRows(rows = []) {
+  let mergedRoot = null;
+  for (const row of rows) {
+    if (!row) continue;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(String(row));
+    } catch {
+      continue;
+    }
+    if (!mergedRoot) {
+      mergedRoot = parsed;
+      continue;
+    }
+    if (parsed.productSet || mergedRoot.productSet) {
+      mergedRoot = {
+        ...mergedRoot,
+        ...parsed,
+        productSet: mergeProductSetMutation(
+          mergedRoot.productSet || {},
+          parsed.productSet || {},
+        ),
+      };
+    } else {
+      mergedRoot = { ...mergedRoot, ...parsed };
+    }
+  }
+  return mergedRoot ? JSON.stringify(mergedRoot) : null;
+}
+
+function foldChangeEntries(entries = []) {
+  if (!entries.length) return null;
+  const base = entries[0];
+  const productFieldMap = new Map();
+  const variantFieldMap = new Map();
+
+  for (const entry of entries) {
+    const productChanges = Array.isArray(entry?.productFieldChanges)
+      ? entry.productFieldChanges
+      : [];
+    for (const change of productChanges) {
+      if (!change?.field) continue;
+      productFieldMap.set(String(change.field), change);
+    }
+
+    const variantChanges = Array.isArray(entry?.variantFieldChanges)
+      ? entry.variantFieldChanges
+      : [];
+    for (const change of variantChanges) {
+      if (!change?.field || !change?.variantId) continue;
+      const key = `${change.variantId}:${change.field}`;
+      variantFieldMap.set(key, change);
+    }
+  }
+
+  return {
+    ...base,
+    productFieldChanges: [...productFieldMap.values()],
+    variantFieldChanges: [...variantFieldMap.values()],
+  };
+}
+
+function buildProductMutationInputFromRules({
   product,
   rules,
   changes,
   historyId,
   shop,
   batchId,
+  mutationBuilder = getUpdatedProducts,
 }) {
   const rows = [];
-
+  const localChangeEntries = [];
   for (const rule of rules) {
-    const result = getUpdatedProducts({
+    const localRuleChanges = [];
+    const result = mutationBuilder({
       product,
       field: rule.field,
       editType: rule.editOption,
@@ -172,7 +258,7 @@ function buildMutationRowsForProduct({
       searchKey: rule.searchKey,
       replaceText: rule.replaceText,
       supportValue: rule.supportValue,
-      changes,
+      changes: localRuleChanges,
       historyId,
       shop,
       batchId,
@@ -181,10 +267,24 @@ function buildMutationRowsForProduct({
     if (result) {
       rows.push(result);
     }
+    if (localRuleChanges.length > 0) {
+      localChangeEntries.push(...localRuleChanges);
+    }
   }
 
-  return rows;
+  const merged = mergeMutationRows(rows);
+  const foldedChange = foldChangeEntries(localChangeEntries);
+  if (foldedChange) {
+    changes.push(foldedChange);
+  }
+  return merged;
 }
+
+export const __bulkEditExecutionPreparationTestables = {
+  mergeMutationRows,
+  foldChangeEntries,
+  buildProductMutationInputFromRules,
+};
 
 export class BulkEditExecutionPreparationService {
   constructor(session = null) {
@@ -377,7 +477,7 @@ export class BulkEditExecutionPreparationService {
         variantIdsByProduct,
       );
 
-      const mutationRows = buildMutationRowsForProduct({
+      const mutationRow = buildProductMutationInputFromRules({
         product: scopedProduct,
         rules,
         changes,
@@ -386,7 +486,9 @@ export class BulkEditExecutionPreparationService {
         batchId,
       });
 
-      formattedRows.push(...mutationRows);
+      if (mutationRow) {
+        formattedRows.push(mutationRow);
+      }
     }
 
     return {

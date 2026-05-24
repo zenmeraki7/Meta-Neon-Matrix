@@ -10,6 +10,7 @@ import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
 import {
   EXPORT_EXECUTION_STATES,
 } from "../exportExecutionStateService.js";
+import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
 import {
   normalizeExportJobExecutionState,
   normalizeExportJobStatus,
@@ -286,7 +287,7 @@ transformToCSV(products, requestedColumns) {
             filterQuery: "{}",
             status: "PENDING",
             statusNormalized: normalizeExportJobStatus("PENDING"),
-            executionState: "TARGETING_STARTED",
+            executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
             executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.PLANNED),
             entitlementSnapshot,
             actorType: actor?.actorType || null,
@@ -324,7 +325,7 @@ transformToCSV(products, requestedColumns) {
           where: { id: job.id },
           data: {
             targetSnapshotCount: frozenCount,
-            executionState: "TARGETING_FROZEN",
+            executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
             executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.PLANNED),
           },
         });
@@ -343,7 +344,7 @@ transformToCSV(products, requestedColumns) {
       await prisma.exportJob.update({
         where: { id: jobId },
         data: {
-          executionState: "QUEUED_FOR_EXECUTION",
+          executionState: OPERATION_LIFECYCLE_STATES.QUEUED,
           executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
         },
       });

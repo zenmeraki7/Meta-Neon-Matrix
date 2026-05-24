@@ -7,6 +7,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import { NotFoundError } from "../utils/errorUtils.js";
 import { prisma } from "../config/database.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 // ─────────────────────────────────────────────────────────────
 // Export histories
@@ -144,10 +145,18 @@ export const getHistoryDetails = async (req, res) => {
     });
 
     if (err instanceof NotFoundError) {
-      return res.status(404).json(errorResponse(err.message));
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "NOT_FOUND" },
+        "NOT_FOUND",
+      );
+      return res.status(statusCode).json(body);
     }
 
-    return res.status(500).json(errorResponse(err.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 
@@ -191,10 +200,18 @@ export const getHistoryChanges = async (req, res) => {
     });
 
     if (err instanceof NotFoundError) {
-      return res.status(404).json(errorResponse(err.message));
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "NOT_FOUND" },
+        "NOT_FOUND",
+      );
+      return res.status(statusCode).json(body);
     }
 
-    return res.status(500).json(errorResponse(err.message));
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      err,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };
 

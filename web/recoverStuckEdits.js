@@ -3,7 +3,8 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { prisma } from "./config/database.js";
-import { handleProductEditOperation } from "./helpers/webhookHelpers/bulkOperations/bulkEdit.js";
+import { addbulkEditResultIngestJob } from "./Jobs/Queues/bulkEditResultIngestJob.js";
+import { addbulkUndoResultIngestJob } from "./Jobs/Queues/bulkUndoResultIngestJob.js";
 
 const cutoff = new Date(Date.now() - 3 * 60 * 1000);
 
@@ -63,10 +64,19 @@ for (const history of stuck) {
   });
 
   try {
-    const result = await handleProductEditOperation({
-      shop: history.shop,
-      bulkOperationId,
-    });
+    const result = isUndo
+      ? await addbulkUndoResultIngestJob({
+          shop: history.shop,
+          bulkOperationId,
+          status: "COMPLETED",
+          source: "manual_stuck_recovery",
+        })
+      : await addbulkEditResultIngestJob({
+          shop: history.shop,
+          bulkOperationId,
+          status: "COMPLETED",
+          source: "manual_stuck_recovery",
+        });
 
     console.log("Result", history.id, result);
   } catch (error) {

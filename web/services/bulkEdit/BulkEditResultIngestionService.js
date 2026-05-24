@@ -128,16 +128,13 @@ export class BulkEditResultIngestionService {
     let unmappedRowCount = 0;
     const ingestionRunId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-    await processJsonlLines(resultUrl, async (row) => {
-      rowCount += 1;
-      const item = extractRowResult(row);
-      if (!item.targetIdentity) {
-        unmappedRowCount += 1;
-        return;
-      }
+    const pendingUpdates = [];
+    const FLUSH_SIZE = 500;
 
-      const status = item.status === "SUCCESS" ? "SUCCESS" : "FAILED";
-      const updateResult = await prisma.changeRecord.updateMany({
+    const flushPending = async () => {
+      if (!pendingUpdates.length) return;
+      const updates = pendingUpdates.splice(0, pendingUpdates.length);
+      const txOps = updates.map((item) => prisma.changeRecord.updateMany({
         where: {
           editHistoryId: historyId,
           shop,
@@ -146,23 +143,48 @@ export class BulkEditResultIngestionService {
           status: { in: ["pending", "PENDING", "failed", "FAILED"] },
         },
         data: {
-          status,
-          failureCode: status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
-          failureMessage: status === "FAILED" ? JSON.stringify(item.shopifyUserErrors || []) : null,
+          status: item.status,
+          failureCode: item.status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
+          failureMessage: item.status === "FAILED"
+            ? JSON.stringify(item.shopifyUserErrors || [])
+            : null,
           options: {
             attempt,
             shopifyUserErrors: item.shopifyUserErrors || [],
           },
         },
-      });
-      if (updateResult.count === 0) {
-        unmappedRowCount += 1;
+      }));
+      const results = await prisma.$transaction(txOps);
+      for (let i = 0; i < results.length; i += 1) {
+        const count = Number(results[i]?.count || 0);
+        const row = updates[i];
+        if (!count) {
+          unmappedRowCount += 1;
+          continue;
+        }
+        if (row.status === "SUCCESS") successCount += count;
+        else failureCount += count;
       }
-      if (updateResult.count > 0) {
-        if (status === "SUCCESS") successCount += updateResult.count;
-        else failureCount += updateResult.count;
+    };
+
+    await processJsonlLines(resultUrl, async (row) => {
+      rowCount += 1;
+      const item = extractRowResult(row);
+      if (!item.targetIdentity) {
+        unmappedRowCount += 1;
+        return;
+      }
+
+      pendingUpdates.push({
+        targetIdentity: item.targetIdentity,
+        status: item.status === "SUCCESS" ? "SUCCESS" : "FAILED",
+        shopifyUserErrors: item.shopifyUserErrors || [],
+      });
+      if (pendingUpdates.length >= FLUSH_SIZE) {
+        await flushPending();
       }
     });
+    await flushPending();
 
     if (unmappedRowCount > 0) {
       throw new Error(`UNMAPPED_RESULT_ROWS:${unmappedRowCount}`);

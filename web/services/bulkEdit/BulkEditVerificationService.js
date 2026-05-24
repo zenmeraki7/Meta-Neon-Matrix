@@ -7,6 +7,7 @@ import {
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
 import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
+import { upsertOperationStageProgress } from "../operationStageProgressService.js";
 
 const VERIFY_MODES = Object.freeze({
   NONE: "NONE",
@@ -173,6 +174,16 @@ export class BulkEditVerificationService {
     }
 
     const mode = pickVerificationMode(history);
+    await upsertOperationStageProgress({
+      shop,
+      operationType: "BULK_EDIT",
+      operationId: historyId,
+      executionId: executionId || history.executionIdentity || null,
+      stageKey: "VERIFICATION",
+      stageStatus: mode === VERIFY_MODES.NONE ? "SKIPPED" : "RUNNING",
+      detail: { mode },
+      completed: mode === VERIFY_MODES.NONE,
+    });
     if (mode === VERIFY_MODES.NONE) {
       return { historyId, shop, mode, skipped: true };
     }
@@ -238,6 +249,8 @@ export class BulkEditVerificationService {
 
     let verified = 0;
     let failed = 0;
+    const verifiedIds = [];
+    const failedRows = [];
     for (const row of verifyRows) {
       const product = productsById.get(row.productId);
       const expected = readExpectedFromAfterValues(row.afterValues || {});
@@ -245,25 +258,45 @@ export class BulkEditVerificationService {
 
       if (mismatches.length === 0) {
         verified += 1;
-        await prisma.changeRecord.updateMany({
-          where: { id: row.id, shop },
-          data: {
-            status: "VERIFIED",
-            failureCode: null,
-            failureMessage: null,
-          },
-        });
+        verifiedIds.push(row.id);
       } else {
         failed += 1;
-        await prisma.changeRecord.updateMany({
-          where: { id: row.id, shop },
+        failedRows.push({
+          id: row.id,
+          message: JSON.stringify(mismatches.slice(0, 20)),
+        });
+      }
+    }
+
+    const chunkSize = 500;
+    for (let i = 0; i < verifiedIds.length; i += chunkSize) {
+      const idChunk = verifiedIds.slice(i, i + chunkSize);
+      // eslint-disable-next-line no-await-in-loop
+      await prisma.changeRecord.updateMany({
+        where: {
+          shop,
+          id: { in: idChunk },
+        },
+        data: {
+          status: "VERIFIED",
+          failureCode: null,
+          failureMessage: null,
+        },
+      });
+    }
+    for (let i = 0; i < failedRows.length; i += chunkSize) {
+      const batch = failedRows.slice(i, i + chunkSize);
+      // eslint-disable-next-line no-await-in-loop
+      await prisma.$transaction(
+        batch.map((item) => prisma.changeRecord.updateMany({
+          where: { id: item.id, shop },
           data: {
             status: "VERIFICATION_FAILED",
             failureCode: "VERIFICATION_MISMATCH",
-            failureMessage: JSON.stringify(mismatches.slice(0, 20)),
+            failureMessage: item.message,
           },
-        });
-      }
+        })),
+      );
     }
 
     await prisma.editHistory.updateMany({
@@ -314,6 +347,19 @@ export class BulkEditVerificationService {
     if (historyUpdate.count !== 1) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFICATION_RESULT");
     }
+    await upsertOperationStageProgress({
+      shop,
+      operationType: "BULK_EDIT",
+      operationId: historyId,
+      executionId: executionId || history.executionIdentity || null,
+      stageKey: "VERIFICATION",
+      stageStatus: failed > 0 ? "PARTIAL_FAILED" : "COMPLETED",
+      counterA: verified,
+      counterB: failed,
+      counterC: verifyRows.length,
+      detail: { mode },
+      completed: true,
+    });
 
     return {
       historyId,
