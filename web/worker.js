@@ -60,6 +60,8 @@ await import("./Jobs/Workers/scheduledExportSchedulerWorker.js");
 await import("./Jobs/Workers/automaticProductRuleExecutionWorker.js");
 await import("./Jobs/Workers/automaticProductRuleSchedulerWorker.js");
 await import("./Jobs/Workers/automaticProductRuleSignalWorker.js");
+await import("./Jobs/Workers/targetFreezeQueueWorker.js");
+await import("./Jobs/Workers/outboxDispatcherWorker.js");
 await import("./Jobs/Workers/stuckBulkMutationRecoveryWorker.js");
 await import("./Jobs/Workers/missedBulkOperationPollingWorker.js");
 await import("./Jobs/Workers/bulkEditResultIngestWorker.js");

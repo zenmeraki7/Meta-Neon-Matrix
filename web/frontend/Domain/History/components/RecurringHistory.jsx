@@ -17,6 +17,7 @@ import {
 } from "@shopify/polaris";
 import { CalendarIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
+import { protectedApiDelete, protectedApiGet, protectedApiPatch } from "../../../api/protectedApiClient";
 
 export default function RecurringHistory() {
   const { t } = useTranslation();
@@ -37,9 +38,7 @@ export default function RecurringHistory() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/recurring-edits");
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Failed to fetch recurring edits");
+      const data = await protectedApiGet("/api/recurring-edits");
       setRecurringEdits(data?.edits || []);
     } catch (err) {
       console.error(err);
@@ -57,13 +56,9 @@ export default function RecurringHistory() {
   const handleToggleStatus = async (id, currentStatus) => {
     try {
       const newStatus = !currentStatus;
-      const response = await fetch(`/api/recurring-edits/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active: newStatus }),
+      await protectedApiPatch(`/api/recurring-edits/${id}`, { active: newStatus }, {
+        idempotent: true,
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Failed to update status");
 
       // Optimistic UI update
       setRecurringEdits((prev) =>
@@ -87,9 +82,9 @@ export default function RecurringHistory() {
   // === API: Cancel Edit ===
   const handleCancelEdit = async (id) => {
     try {
-      const response = await fetch(`/api/recurring-edits/${id}`, { method: "DELETE" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || "Failed to cancel recurring edit");
+      await protectedApiDelete(`/api/recurring-edits/${id}`, {
+        idempotent: true,
+      });
 
       setRecurringEdits((prev) => prev.filter((edit) => edit.id !== id));
       setToastState({ active: true, message: t("cancelledSuccessfully"), error: false });

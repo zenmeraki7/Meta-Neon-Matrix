@@ -12,6 +12,8 @@ import { allFields } from "../constants";
 import { useTranslation } from "react-i18next";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
+import useProductSyncStatus from "../../../../hooks/useProductSyncStatus";
+import MirrorFreshnessBadge from "../../../../components/MirrorFreshnessBadge";
 
 import ExportSettingsCard from "../components/ExportSettingsCard";
 import FieldSelectionCard from "../components/FieldSelectionCard";
@@ -24,6 +26,7 @@ export default function CsvExportPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const api = useApiClient();
+  const { isSyncInProgress } = useProductSyncStatus();
   const count = useSelector(selectProductCount);
   const filters = useSelector(selectFilters);
   const search = useSelector(selectSearch);
@@ -94,7 +97,9 @@ export default function CsvExportPage() {
     };
 
     try {
-      const data = await api.post("/api/products/export", payload);
+      const data = await api.post("/api/products/export", payload, {
+        idempotent: true,
+      });
       setBanner({
         tone: "success",
         message: "Export started successfully. You will receive the CSV once ready.",
@@ -148,28 +153,29 @@ export default function CsvExportPage() {
         )}
 
         <Card>
-          <InlineStack align="space-between" blockAlign="center" wrap gap="400">
-            <BlockStack gap="100">
-              <Text as="h2" variant="headingMd">
-                {t("exportBuilderTitle",)}
-              </Text>
+            <InlineStack align="space-between" blockAlign="center" wrap gap="400">
+              <BlockStack gap="100">
+                <Text as="h2" variant="headingMd">
+                  {t("exportBuilderTitle",)}
+                </Text>
 
               <Text as="p" tone="subdued" variant="bodyMd">
                 {t("exportBuilderText",)}
               </Text>
             </BlockStack>
-            <InlineStack gap="200">
-              <Badge tone="info">
+              <InlineStack gap="200">
+                <Badge tone="info">
                 {count === 0
                   ? t("Allfilteredproducts")
                   : `${count} ${t("matchingProducts")}`}
               </Badge>
-              <Badge>
-                {selectedFields.length} {t("fieldsselected")}
-              </Badge>
+                <Badge>
+                  {selectedFields.length} {t("fieldsselected")}
+                </Badge>
+                <MirrorFreshnessBadge isSyncInProgress={isSyncInProgress} />
+              </InlineStack>
             </InlineStack>
-          </InlineStack>
-        </Card>
+          </Card>
 
         <Layout>
           <Layout.Section>

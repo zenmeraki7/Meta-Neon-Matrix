@@ -16,7 +16,6 @@ import {
 import { ChevronLeftIcon } from "@shopify/polaris-icons";
 import { useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
-import { toast } from "react-hot-toast";
 import { useTranslation } from "react-i18next";
 
 import { getFieldDefinition, InputType } from "../constants";
@@ -38,6 +37,8 @@ import useProductSyncStatus from "../../../../hooks/useProductSyncStatus";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
+import MirrorFreshnessBadge from "../../../../components/MirrorFreshnessBadge";
 
 export default function EditPreviewPage() {
   const filters = useSelector(selectFilters);
@@ -45,6 +46,7 @@ export default function EditPreviewPage() {
   const navigate = useNavigate();
   const { i18n, t } = useTranslation();
   const { isSyncInProgress } = useProductSyncStatus();
+  const { showSuccess, showError } = useAppToast();
   const api = useApiClient();
   const { versions: filterRegistryVersions } = useFilterRegistry();
 
@@ -216,7 +218,7 @@ export default function EditPreviewPage() {
       });
       setRequiresBroadConfirmation(json.data.requiresConfirmation === true);
     } catch (err) {
-      toast.error(toSafeErrorMessage(err, "Failed to load preview"));
+      showError(toSafeErrorMessage(err, "Failed to load preview"));
     } finally {
       setLoading(false);
     }
@@ -295,8 +297,10 @@ export default function EditPreviewPage() {
         previewSignature,
         confirmBroadTarget,
         supportValue,
+      }, {
+        idempotent: true,
       });
-      toast.success("Bulk edit started");
+      showSuccess("Bulk edit started");
       navigate(`/editDetails/${json.id || json.operationId}`);
     },
     [
@@ -326,23 +330,23 @@ export default function EditPreviewPage() {
     }
 
     if (submitError) {
-      toast.error(submitError);
+      showError(submitError);
       return;
     }
 
     if (editType?.inputType === InputType.SEARCH_REPLACE && !searchReplace.search) {
-      toast.error(t("bulkEditSearchReplaceSearchRequired",))
+      showError(t("bulkEditSearchReplaceSearchRequired",))
       return;
     }
 
     if (!hasRequiredLocation) {
-      toast.error("Select a location before running this inventory update.");
+      showError("Select a location before running this inventory update.");
       return;
     }
 
     if (!editType || !canRunEdit || !hasFreshPreview) return;
     if (hasPreviewRegistryMismatch) {
-      toast.error("Filter registry changed. Refresh preview before executing.");
+      showError("Filter registry changed. Refresh preview before executing.");
       return;
     }
 
@@ -360,10 +364,10 @@ export default function EditPreviewPage() {
       const safeMessage = toSafeErrorMessage(err, "Failed to update products");
       if (err?.status === 400 && safeMessage.toLowerCase().includes("plan")) {
         setLimitWarning(safeMessage);
-        toast.error(safeMessage, { duration: 6000 });
+        showError(safeMessage, { duration: 6000 });
         return;
       }
-      toast.error(safeMessage);
+      showError(safeMessage);
     } finally {
       setSubmitting(false);
     }
@@ -377,7 +381,7 @@ export default function EditPreviewPage() {
       setConfirmModalOpen(false);
       setConfirmText("");
     } catch (err) {
-      toast.error(toSafeErrorMessage(err, "Failed to update products"));
+      showError(toSafeErrorMessage(err, "Failed to update products"));
     } finally {
       setPendingConfirmRun(false);
       setSubmitting(false);
@@ -523,6 +527,7 @@ const summaryText = useMemo(() => {
                 <Text as="p" variant="bodySm" tone="subdued">
                   {summaryText}
                 </Text>
+                <MirrorFreshnessBadge isSyncInProgress={isSyncInProgress} />
                 {!hasFreshPreview && (
                   <Banner tone="warning" title="Preview is stale">
                     <p>Run preview again before executing this edit.</p>

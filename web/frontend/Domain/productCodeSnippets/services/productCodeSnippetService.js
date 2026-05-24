@@ -1,3 +1,5 @@
+import { generateIdempotencyKey } from "../../../utils/idempotencyKey";
+
 export async function readJsonResponse(response) {
   const payload = await response.json();
   if (!response.ok) {
@@ -26,7 +28,10 @@ export async function getProductCodeSnippet(fetchFn, id) {
 export async function createProductCodeSnippet(fetchFn, body) {
   const response = await fetchFn("/api/product-code-snippets", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": generateIdempotencyKey(),
+    },
     body: JSON.stringify(body),
   });
   const payload = await readJsonResponse(response);
@@ -36,7 +41,10 @@ export async function createProductCodeSnippet(fetchFn, body) {
 export async function updateProductCodeSnippet(fetchFn, id, body) {
   const response = await fetchFn(`/api/product-code-snippets/${id}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": generateIdempotencyKey(),
+    },
     body: JSON.stringify(body),
   });
   const payload = await readJsonResponse(response);
@@ -46,6 +54,9 @@ export async function updateProductCodeSnippet(fetchFn, id, body) {
 export async function archiveProductCodeSnippet(fetchFn, id) {
   const response = await fetchFn(`/api/product-code-snippets/${id}`, {
     method: "DELETE",
+    headers: {
+      "Idempotency-Key": generateIdempotencyKey(),
+    },
   });
   const payload = await readJsonResponse(response);
   return payload.data;

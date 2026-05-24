@@ -559,13 +559,24 @@ model AutomaticProductRule {
   id                 String                             @id @default(cuid())
   shop               String
   title              String
+  name               String?
   status             AutomaticProductRuleStatus         @default(ACTIVE)
+  revision           Int                                @default(1)
+  commandVersion     Int                                @default(1)
+  configFingerprint  String?
   triggerType        AutomaticProductRuleTriggerType
   scheduleType       AutomaticRuleScheduleType?
   timezone           String?
   scheduleConfig     Json?
+  scheduleJson       Json?
   cronExpression     String?
   intervalMinutes    Int?
+  targetMode         String?
+  filterAstJson      Json?
+  savedTargetSetId   String?
+  editOperationJson  Json?
+  safetyConfirmationJson Json?
+  expectedPreviewFingerprint String?
   startAt            DateTime?
   endAt              DateTime?
   scopeType          AutomaticProductRuleScopeType
@@ -584,6 +595,15 @@ model AutomaticProductRule {
   createdBy          String?
   updatedBy          String?
   isDeleted          Boolean                            @default(false)
+  deletedAt          DateTime?
+  deletedBy          String?
+  pausedAt           DateTime?
+  pausedBy           String?
+  resumedAt          DateTime?
+  resumedBy          String?
+  schedulerDisabledAt DateTime?
+  schedulerClaimedAt DateTime?
+  schedulerClaimId   String?
   createdAt          DateTime                           @default(now())
   updatedAt          DateTime                           @updatedAt
   filterVersion      Int                                @default(1)
@@ -611,6 +631,14 @@ model AutomaticProductRule {
   @@index([shop, priority, status])
   @@index([shop, createdAt])
   @@index([shop, canonicalFilterKey])
+  @@index([shop, id])
+  @@index([shop, isDeleted])
+  @@index([shop, status, isDeleted])
+  @@index([shop, status, nextRunAt])
+  @@index([shop, deletedAt])
+  @@index([shop, status, deletedAt])
+  @@index([shop, status, schedulerDisabledAt])
+  @@index([status, nextRunAt])
 }
 
 model AutomaticProductRuleRun {
@@ -624,10 +652,19 @@ model AutomaticProductRuleRun {
   processingStartedAt    DateTime?
   heartbeatAt            DateTime?
   completedAt            DateTime?
-  status                 AutomaticProductRuleRunStatus        @default(PENDING)
+  status                 AutomaticProductRuleRunStatus        @default(TARGET_FREEZE_QUEUED)
   executionKey           String                               @unique
+  idempotencyKey         String
+  source                 String?
+  ruleRevision           Int?
+  configFingerprint      String?
+  requestedByJson        Json?
+  cancelledAt            DateTime?
+  cancelledBy            String?
+  cancelReason           String?
   processingToken        String?
   processingOwner        String?
+  operationId            String?
   mirrorBatchId          String?
   filterAst              Json?
   normalizedFilterAst    Json?
@@ -660,10 +697,51 @@ model AutomaticProductRuleRun {
   @@index([shop, status, heartbeatAt])
   @@index([shop, mirrorBatchId])
   @@index([shop, editHistoryId])
+  @@index([shop, automaticProductRuleId, status])
+  @@index([shop, automaticProductRuleId, createdAt])
+  @@index([shop, operationId])
   @@index([automaticProductRuleId, createdAt])
   @@index([automaticProductRuleId, status, createdAt])
   @@index([automaticProductRuleId, scheduledFor])
   @@index([editHistoryId])
+  @@unique([shop, idempotencyKey])
+}
+
+model TargetFreezeCommand {
+  id                 String   @id @default(cuid())
+  shop               String
+  operationId        String?
+  sourceType         String
+  sourceId           String
+  sourceRevision     Int?
+  configFingerprint  String?
+  mirrorBatchId      String?
+  targetMode         String?
+  filterAstJson      Json?
+  savedTargetSetId   String?
+  editOperationJson  Json?
+  status             String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([shop, operationId])
+  @@index([status, createdAt])
+}
+
+model OutboxEvent {
+  id            String   @id @default(cuid())
+  shop          String
+  aggregateType String
+  aggregateId   String
+  eventType     String
+  payloadJson   Json?
+  status        String
+  dispatchedAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([shop, aggregateType, aggregateId])
 }
 
 model AutomaticProductRuleProductState {
@@ -1569,10 +1647,10 @@ enum RecurringEditRunStatus {
 }
 
 enum AutomaticProductRuleStatus {
+  DRAFT
   ACTIVE
   PAUSED
-  FAILED
-  CANCELLED
+  DELETED
 }
 
 enum AutomaticProductRuleTriggerType {
@@ -1595,11 +1673,16 @@ enum AutomaticProductRuleScopeType {
 }
 
 enum AutomaticProductRuleRunStatus {
-  PENDING
-  PROCESSING
-  SUCCESS
+  TARGET_FREEZE_QUEUED
+  TARGET_FREEZING
+  TARGET_FROZEN
+  EXECUTING
+  VERIFYING
+  SUCCEEDED
   FAILED
-  SKIPPED
+  CANCELLED
+  UNDO_PENDING
+  UNDO_EXECUTING
 }
 
 enum AutomaticProductRuleTargetType {

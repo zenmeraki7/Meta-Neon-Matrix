@@ -13,6 +13,7 @@ import {
   IndexTable,
 } from "@shopify/polaris";
 import { importStatusBadge } from "../../shared/components/StatusBadge";
+import { protectedApiGet } from "../../../api/protectedApiClient";
 
 export default function ImportHistory() {
   const [items, setItems] = useState([]);
@@ -30,8 +31,7 @@ export default function ImportHistory() {
       setLoading(true);
       const params = new URLSearchParams({ limit: "10" });
       if (nextCursor) params.set("cursor", nextCursor);
-      const res = await fetch(`/api/history/get-shop-importhistory?${params.toString()}`);
-      const result = await res.json();
+      const result = await protectedApiGet(`/api/history/get-shop-importhistory?${params.toString()}`);
       if (result.success) {
         const payload = result.items || result.data || [];
         const info = result.pageInfo || {};

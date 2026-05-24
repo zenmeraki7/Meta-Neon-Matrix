@@ -6,6 +6,7 @@ import Routes from "./Routes";
 import { QueryProvider, PolarisProvider } from "./components";
 import { Link } from "react-router-dom";
 import { AuthenticatedFetchProvider } from "./components/providers";
+import { ToastProvider } from "./components/providers";
 
 import "./app.css";
 
@@ -25,8 +26,9 @@ export default function App() {
     <BrowserRouter>
       <PolarisProvider>
         <AuthenticatedFetchProvider>
-          <QueryProvider>
-            <NavMenu>
+          <ToastProvider>
+            <QueryProvider>
+              <NavMenu>
   <Link to="/" rel="home">{t("Home")}</Link>
   {!isSyncing && (
     <>
@@ -40,8 +42,9 @@ export default function App() {
   )}
 </NavMenu>
 
-            <Routes pages={pages} data={{ setIsSyncing }} />
-          </QueryProvider>
+              <Routes pages={pages} data={{ setIsSyncing }} />
+            </QueryProvider>
+          </ToastProvider>
         </AuthenticatedFetchProvider>
       </PolarisProvider>
     </BrowserRouter>

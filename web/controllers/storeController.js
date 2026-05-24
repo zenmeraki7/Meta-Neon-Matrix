@@ -5,6 +5,27 @@ import { logApiError } from "../utils/errorLogUtils.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 import { prisma } from "../config/database.js";
+import shopify from "../shopify.js";
+
+async function resolveShopTimezone(session) {
+  try {
+    const client = new shopify.api.clients.Graphql({ session });
+    const response = await client.query({
+      data: {
+        query: `
+          query GetShopTimezone {
+            shop {
+              ianaTimezone
+            }
+          }
+        `,
+      },
+    });
+    return response?.body?.data?.shop?.ianaTimezone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
 
 export const getStoreAccess = async (req, res) => {
   const session = res.locals.shopify.session;
@@ -65,6 +86,7 @@ export const getStoreAccess = async (req, res) => {
     const responseData = {
       message: "fetched store access successfully",
       shopUrl: store.shopUrl,
+      shopTimezone: await resolveShopTimezone(session),
       totalbulkEditCount: historiesCount,
       totalSyncCount: syncCount,
       isProductInitialySyning: store.isProductInitialySyning,

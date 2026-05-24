@@ -64,7 +64,7 @@ const Suggestion = () => {
           <Layout.Section>
             <BlockStack gap="500">
               {success && (
-                <Banner status="success" title="Thank you for your feedback!">
+                <Banner tone="success" title="Thank you for your feedback!">
                   <Text as="p">
                     {t("suggestionSuccessBanner",)}
                   </Text>

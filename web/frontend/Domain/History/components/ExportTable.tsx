@@ -17,6 +17,7 @@ import {
 import { ArrowDownIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
 import { exportStatusBadge } from "../../shared/components/StatusBadge";
+import { protectedApiGet } from "../../../api/protectedApiClient";
 
 const DEFAULT_PAGE_INFO = {
   hasNextPage: false,
@@ -156,10 +157,8 @@ const ExportTable = ({
         params.set("type", selectedType);
         params.set("limit", "20");
         if (nextCursor) params.set("cursor", nextCursor);
-        const res = await fetch(`/api/history/get-shop-exporthistory?${params.toString()}`);
-        const data = await res.json();
-
-        if (!res.ok || !data.success) {
+        const data = await protectedApiGet(`/api/history/get-shop-exporthistory?${params.toString()}`);
+        if (!data.success) {
           throw new Error(data.message || "Failed to fetch export history");
         }
 
@@ -222,11 +221,10 @@ const ExportTable = ({
         params.set("limit", "20");
         if (activeCursor) params.set("cursor", activeCursor);
 
-        const res = await fetch(
+        const data = await protectedApiGet(
           `/api/history/get-shop-exporthistory?${params.toString()}`,
         );
-        const data = await res.json();
-        if (res.ok && data.success) {
+        if (data.success) {
           setHistories(data.items || data.data || []);
           const info = data.pageInfo || data.meta?.pageInfo || {};
           setTabQueryState((prev) => ({

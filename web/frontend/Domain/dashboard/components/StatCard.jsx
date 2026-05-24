@@ -14,7 +14,7 @@ function StatCard({ icon, label, value, url }) {
         <InlineStack alignment="center" spacing="tight">
           <Icon source={icon} />
           <Text variation="strong">
-            {label} {value != null && `— ${value}`}
+            {label} {value != null && `- ${value}`}
           </Text>
         </InlineStack>
       </Card.Section>

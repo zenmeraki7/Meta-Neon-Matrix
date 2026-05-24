@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import {
   Modal,
-  LegacyCard,
+  Card,
   FormLayout,
   TextField,
   Select,
@@ -19,6 +19,7 @@ import {
   Divider,
 } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
+import { protectedApiPut } from "../../../api/protectedApiClient";
 
 const RecurringEditModal = ({ open, onClose, data, isLoading, error, onUpdated }) => {
   const { t } = useTranslation();
@@ -320,23 +321,18 @@ const getLastRunStatusBadge = (status) => {
         requestBody.daysOfWeekToRun = formData.daysOfWeekToRun;
       }
 
-      const response = await fetch(`/api/products/update-recurring-edit/${data.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      const responseData = await response.json();
-
-      if (!response.ok) {
-        if (response.status === 400 && responseData.details) {
+      try {
+        await protectedApiPut(`/api/products/update-recurring-edit/${data.id}`, requestBody, {
+          idempotent: true,
+        });
+      } catch (error) {
+        const responseData = error?.payload;
+        if (error?.status === 400 && responseData?.details) {
           setValidationErrors(responseData.details);
           throw new Error(responseData.message || "Validation failed");
         }
         throw new Error(
-          responseData.message || "Failed to update recurring edit"
+          responseData?.message || error?.message || "Failed to update recurring edit"
         );
       }
 
@@ -540,8 +536,9 @@ const getLastRunStatusBadge = (status) => {
           )}
 
           {/* Edit Form */}
-          <LegacyCard sectioned>
-            <FormLayout>
+          <Card>
+            <Box padding="400">
+              <FormLayout>
               {/* Title Field */}
               <TextField
                 label={t("title")}
@@ -585,14 +582,16 @@ const getLastRunStatusBadge = (status) => {
 
               {/* Frequency-specific fields */}
               {renderFrequencySpecificFields()}
-            </FormLayout>
-          </LegacyCard>
+              </FormLayout>
+            </Box>
+          </Card>
 
           <Divider />
 
           {/* Execution Details Section */}
-          <LegacyCard sectioned>
-            <BlockStack gap="400">
+          <Card>
+            <Box padding="400">
+              <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="start">
                 <Text variant="headingMd" as="h3">
                   {t("executionDetails")}
@@ -771,8 +770,9 @@ const getLastRunStatusBadge = (status) => {
                   </InlineStack>
                 </BlockStack>
               </BlockStack>
-            </BlockStack>
-          </LegacyCard>
+              </BlockStack>
+            </Box>
+          </Card>
         </BlockStack>
       </Modal.Section>
     </Modal>

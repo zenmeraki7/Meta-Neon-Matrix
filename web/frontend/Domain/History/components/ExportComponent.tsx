@@ -2,8 +2,8 @@
 import React from "react";
 import { BlockStack, Card, Tabs, Text, Box } from "@shopify/polaris";
 import ExportTable from "./ExportTable";
-import { useToast } from "./useToast";
 import { useTranslation } from "react-i18next";
+import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
 
 const EXPORT_TYPE = {
   MANUAL: "Manual export",
@@ -33,19 +33,17 @@ const ExportComponent: React.FC = () => {
     [selectedTab],
   );
 
-  const { toastMarkup, triggerToast } = useToast();
+  const { showSuccess, showError } = useAppToast();
 
   const handleExportSuccess = React.useCallback(() => {
-    triggerToast({
-      content: t("exportSuccess"),
-    });
-  }, [triggerToast, t]);
+    showSuccess(t("exportSuccess"));
+  }, [showSuccess, t]);
 
   const handleExportError = React.useCallback(
     (errorMessage: string) => {
-      triggerToast({ content: errorMessage, isError: true });
+      showError(errorMessage);
     },
-    [triggerToast],
+    [showError],
   );
 
   return (
@@ -75,8 +73,6 @@ const ExportComponent: React.FC = () => {
           onExportError={handleExportError}
         />
       </BlockStack>
-
-      {toastMarkup}
     </BlockStack>
   );
 };

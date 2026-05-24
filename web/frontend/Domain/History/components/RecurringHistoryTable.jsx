@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IndexTable,
   IndexFilters,
@@ -19,6 +19,7 @@ import {
 import { useTranslation } from "react-i18next";
 import RecurringEditViewModal from "./RecurringEditView";
 import { recurringStatusBadge } from "../../shared/components/StatusBadge";
+import { protectedApiDelete, protectedApiGet } from "../../../api/protectedApiClient";
 
 const STATUS_OPTIONS = [
   { label: "Active", value: "active" },
@@ -68,8 +69,12 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
     previousCursor: null,
   });
   const { t, i18n } = useTranslation();
+  const listRequestIdRef = useRef(0);
+  const detailsRequestIdRef = useRef(0);
 
   const fetchRecurring = useCallback(async (nextQuery) => {
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
     try {
       setIsLoading(true);
       const params = new URLSearchParams();
@@ -77,9 +82,10 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
         if (value == null || value === "") return;
         params.set(key, String(value));
       });
-      const response = await fetch(`/api/products/get-recurring-edits?${params.toString()}`);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.message || "Failed to fetch recurring edits");
+      const payload = await protectedApiGet(`/api/products/get-recurring-edits?${params.toString()}`);
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
 
       const nextItems = payload.items || payload.data || [];
       const info = payload.pageInfo || payload.meta?.pageInfo || {};
@@ -91,6 +97,9 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
         previousCursor: info.previousCursor || null,
       });
     } finally {
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
       setIsLoading(false);
     }
   }, [i18n.language]);
@@ -119,18 +128,27 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
   }, [query.status, query.frequency]);
 
   const onViewDetails = async (id) => {
+    const requestId = detailsRequestIdRef.current + 1;
+    detailsRequestIdRef.current = requestId;
     setIsLoadingDetails(true);
     setDetailsError(null);
     setHistoryItem(null);
     try {
       setOpen(true);
-      const response = await fetch(`/api/products/get-recurring-edit/${id}?lang=${i18n.language}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message);
+      const data = await protectedApiGet(`/api/products/get-recurring-edit/${id}?lang=${i18n.language}`);
+      if (requestId !== detailsRequestIdRef.current) {
+        return;
+      }
       setHistoryItem(data.data);
     } catch (error) {
+      if (requestId !== detailsRequestIdRef.current) {
+        return;
+      }
       setDetailsError(error.message || "Failed to load recurring edit details");
     } finally {
+      if (requestId !== detailsRequestIdRef.current) {
+        return;
+      }
       setIsLoadingDetails(false);
     }
   };
@@ -139,14 +157,11 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
     if (!deleteRecurringItem?.id) return;
     setDeleteLoading(true);
     try {
-      const response = await fetch(`/api/products/delete-recurring-edit/${deleteRecurringItem.id}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+      await protectedApiDelete(`/api/products/delete-recurring-edit/${deleteRecurringItem.id}`, {
+        idempotent: true,
       });
-      if (response.ok) {
-        setShowDeleteModal(false);
-        fetchRecurring(query);
-      }
+      setShowDeleteModal(false);
+      fetchRecurring(query);
     } finally {
       setDeleteLoading(false);
     }

@@ -207,6 +207,22 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
     setPageError("");
   };
 
+  const handleDiscardChanges = () => {
+    setPageError("");
+    setValidationMessage("");
+    if (isNew) {
+      setFormState(EMPTY_SNIPPET);
+      return;
+    }
+    if (savedSnippet) {
+      setFormState({
+        title: savedSnippet.title || "",
+        status: savedSnippet.status || "DRAFT",
+        code: savedSnippet.code || "",
+      });
+    }
+  };
+
   const handleSave = async () => {
     if (!canSave) return;
 
@@ -372,6 +388,25 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                   {validationMessage && (
                     <Banner tone="success" title="Snippet ready">
                       <p>{validationMessage}</p>
+                    </Banner>
+                  )}
+
+                  {isDirty && (
+                    <Banner
+                      tone="info"
+                      title="Unsaved changes"
+                      action={{
+                        content: saving ? "Saving" : "Save changes",
+                        onAction: handleSave,
+                        disabled: !canSave || saving,
+                      }}
+                      secondaryAction={{
+                        content: "Discard",
+                        onAction: handleDiscardChanges,
+                        disabled: saving,
+                      }}
+                    >
+                      <p>Review and save or discard changes before validating and previewing.</p>
                     </Banner>
                   )}
 

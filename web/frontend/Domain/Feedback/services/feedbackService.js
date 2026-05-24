@@ -1,21 +1,10 @@
+import { protectedApiPost } from "../../../api/protectedApiClient";
+
 export const feedbackService = {
 
     async submitSuggestion(data) {
       try {
-        const response = await fetch('/api/suggestion/submit', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(data),
-        });
-  
-        if (!response.ok) {
-          throw new Error(`Failed to submit suggestion: ${response.statusText}`);
-        }
-  
-        const result = await response.json();
-        return result;
+        return await protectedApiPost('/api/suggestion/submit', data);
   
       } catch (error) {
         console.error('Error submitting suggestion:', error);

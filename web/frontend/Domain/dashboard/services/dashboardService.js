@@ -1,11 +1,11 @@
 /**
  * Dashboard service with:
- * - Store‑specific in‑memory cache
+ * - Store-specific in-memory cache
  * - Invalidation API
  * - Batch fetching
  * - Intelligent caching (30s TTL)
  * - Request deduplication
- * - Exponential‑backoff retry
+ * - Exponential-backoff retry
  * - AbortSignal & timeout
  * - Detailed error metadata
  * - Performance metrics tracking
@@ -18,16 +18,15 @@ function createDashboardService(customFetch) {
   const pendingRequests = new Map();
   const fetchFn = customFetch || fetch;
 
-  function _trackMetrics({ operation, duration, success, timestamp }) {
-  }
+  function _trackMetrics({ operation, duration, success, timestamp }) {}
 
   async function _fetchStoreAccess({ signal }) {
     const start = Date.now();
     try {
-      const response = await fetchFn('/api/store/details', { signal });
+      const response = await fetchFn("/api/store/details", { signal });
       const json = await response.json();
       _trackMetrics({
-        operation: 'fetchStoreAccess',
+        operation: "fetchStoreAccess",
         duration: Date.now() - start,
         success: true,
         timestamp: new Date(),
@@ -35,7 +34,7 @@ function createDashboardService(customFetch) {
       return json;
     } catch (error) {
       _trackMetrics({
-        operation: 'fetchStoreAccess',
+        operation: "fetchStoreAccess",
         duration: Date.now() - start,
         success: false,
         timestamp: new Date(),
@@ -50,7 +49,11 @@ function createDashboardService(customFetch) {
     return data;
   }
 
-  async function getStoreAccessData({ signal, storeId = 'default', forceRefresh = false } = {}) {
+  async function getStoreAccessData({
+    signal,
+    storeId = "default",
+    forceRefresh = false,
+  } = {}) {
     const cacheKey = `store-access-${storeId}`;
     if (!forceRefresh) {
       const entry = _storeCache.get(cacheKey);
@@ -75,7 +78,7 @@ function createDashboardService(customFetch) {
   }
 
   function invalidateStoreCache(storeId) {
-    const cacheKey = `store-access-${storeId || 'default'}`;
+    const cacheKey = `store-access-${storeId || "default"}`;
     _storeCache.delete(cacheKey);
   }
 

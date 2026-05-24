@@ -32,15 +32,15 @@ const PromotionalContent = React.lazy(() =>
 const LANGUAGE_OPTIONS = [
   { label: "English", value: "en" },
   { label: "Deutsch", value: "de" },
-  { label: "Français", value: "fr" },
-  { label: "Español", value: "es" },
-  { label: "Português", value: "pt" },
-  { label: "العربية", value: "ar" },
-  { label: "हिंदी", value: "hi" },
-  { label: "中文", value: "zh" },
-  { label: "日本語", value: "ja" },
-  { label: "한국어", value: "ko" },
-  { label: "Русский", value: "ru" },
+  { label: "Francais", value: "fr" },
+  { label: "Espanol", value: "es" },
+  { label: "Portugues", value: "pt" },
+  { label: "Arabic", value: "ar" },
+  { label: "Hindi", value: "hi" },
+  { label: "Chinese", value: "zh" },
+  { label: "Japanese", value: "ja" },
+  { label: "Korean", value: "ko" },
+  { label: "Russian", value: "ru" },
 ];
 
 const MetricCard = memo(function MetricCard({

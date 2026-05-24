@@ -1,7 +1,6 @@
 import {
   Page,
   Text,
-  Banner,
   Card,
   Button,
   InlineStack,
@@ -21,6 +20,7 @@ import ProductsTable from "../components/ProductsTable";
 import useProducts from "../hooks/useProducts";
 import { useFilterRegistry } from "../hooks/useFilterRegistry";
 import { useApiClient } from "../../../../hooks/useApiClient";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 
 import {
   selectProducts,
@@ -64,11 +64,11 @@ useEffect(() => {
 
   const { loading, error, hasFetched, fetchProducts } = useProducts();
   const api = useApiClient();
+  const { showSuccess, showError } = useAppToast();
 
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
 
-   const [syncCompleted, setSyncCompleted] = useState(false);
    const wasSyncingRef = useRef(false);
 
 
@@ -140,7 +140,7 @@ useEffect(() => {
     fetchSyncStatus,
   ]);
 
-useEffect(() => {
+  useEffect(() => {
   const isSyncing =
     Boolean(syncStatus?.isProductSyncing) ||
     Boolean(syncStatus?.isProductInitialySyning);
@@ -152,7 +152,7 @@ useEffect(() => {
     Boolean(syncStatus?.activeMirrorBatchId);
 
   if (justCompleted) {
-    setSyncCompleted(true);
+    showSuccess("Products have been synced successfully.");
     fetchProducts({ filterParams: effectiveFilters });
   }
 
@@ -165,8 +165,13 @@ useEffect(() => {
   fetchProducts,
   filterState,
     effectiveFilters,
-
+  showSuccess,
 ]);
+
+  useEffect(() => {
+    if (!error) return;
+    showError(error);
+  }, [error, showError]);
 
   const onFilterChange = useCallback((field, nextFilter) => {
   const updated = (() => {
@@ -308,25 +313,6 @@ const appliedFilters = useMemo(
             </Box>
           </Card>
         </Layout.Section>
-  {syncCompleted && (
-         <Layout.Section>
-             <Banner
-               tone="success"
-               title="Sync complete"
-               onDismiss={() => setSyncCompleted(false)}
-             >
-               <p>Products have been synced successfully.</p>
-             </Banner>
-           </Layout.Section>
-      )}   
-        {error && (
-          <Layout.Section>
-            <Banner tone="critical" title="Error loading products">
-              <Text>{error}</Text>
-            </Banner>
-          </Layout.Section>
-        )}
-
         {isSyncInProgress && !products.length && (
           <Layout.Section>
             <Banner tone="info" title="Sync in progress">

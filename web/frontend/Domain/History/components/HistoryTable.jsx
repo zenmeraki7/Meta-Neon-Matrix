@@ -23,6 +23,7 @@ import AlertUndo from "../../products/edit/components/AlertUndo";
 import useProductSyncStatus from "../../../hooks/useProductSyncStatus";
 import { buildOperationTimeline } from "../../products/edit/utils/operationTimeline";
 import { operationStatusBadge } from "../../shared/components/StatusBadge";
+import { protectedApiPut } from "../../../api/protectedApiClient";
 
 function getLifecycleState(item) {
   return item?.executionState || item?.supportStatus?.executionState || item?.status || "UNKNOWN";
@@ -111,11 +112,10 @@ const HistoryTable = memo(function HistoryTable({
     if (!undoHistoryItem?.id) return;
     setUndoLoading(true);
     try {
-      const response = await fetch(`/api/products/undo-edit/${undoHistoryItem.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
+      await protectedApiPut(`/api/products/undo-edit/${undoHistoryItem.id}`, undefined, {
+        idempotent: true,
       });
-      if (response.ok) setShowUndoModal(false);
+      setShowUndoModal(false);
     } finally {
       setUndoLoading(false);
     }

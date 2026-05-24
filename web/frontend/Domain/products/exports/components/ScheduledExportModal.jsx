@@ -7,12 +7,14 @@ import {
   TextField,
   Banner,
   Box,
-  Frame,
-  Toast,
 } from "@shopify/polaris";
 
 import { useTranslation } from "react-i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
+import { protectedApiPost } from "../../../../api/protectedApiClient";
+import { useShopTimezone } from "../../../../hooks/useShopTimezone";
+import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 
 
 function ScheduledExportModal({
@@ -23,6 +25,9 @@ function ScheduledExportModal({
   filters,
 }) {
   const { t } = useTranslation();
+  const { shopTimezone } = useShopTimezone();
+  const resolvedTimezone = shopTimezone || "UTC";
+  const { showSuccess, showError } = useAppToast();
 
   const navigate = useNavigate();
   const [startExportChecked, setStartExportChecked] = useState(true);
@@ -31,11 +36,6 @@ function ScheduledExportModal({
   const [upgradeWarning, setUpgradeWarning] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [toastState, setToastState] = useState({
-    active: false,
-    message: "",
-    error: false,
-  });
 
   const isFormValid =
     startExportChecked &&
@@ -67,9 +67,7 @@ function ScheduledExportModal({
   setUpgradeWarning(null);
 
   try {
-    const scheduledAt = new Date(
-      `${startExportDate}T${startExportTime}:00`
-    ).toISOString();
+    const scheduledAt = zonedDateTimeToUtcIso(startExportDate, startExportTime, resolvedTimezone);
 
     const payload = {
       title: fileName.replace(/\.csv$/i, ""),
@@ -82,23 +80,19 @@ function ScheduledExportModal({
         source: "SCHEDULED_EXPORT_DEFINITION",
       }),
       scheduledAt,
+      timezone: resolvedTimezone,
       status: "Active",
     };
 
-    const response = await fetch("/api/products/create-scheduled-export", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
+    try {
+      await protectedApiPost("/api/products/create-scheduled-export", payload, {
+        idempotent: true,
+      });
+    } catch (requestError) {
       const errorCode =
-        data?.code ||
-        data?.message ||
+        requestError?.payload?.code ||
+        requestError?.payload?.message ||
+        requestError?.message ||
         "SCHEDULED_EXPORT_FAILED";
 
       // 🔥 Upgrade case
@@ -119,11 +113,7 @@ function ScheduledExportModal({
     }
 
     // ✅ Success
-    setToastState({
-      active: true,
-      message: t("scheduledExport.successMessage"),
-      error: false,
-    });
+    showSuccess(t("scheduledExport.successMessage"));
 
     setTimeout(() => {
       handleClose();
@@ -136,11 +126,7 @@ function ScheduledExportModal({
 
     setError(message);
 
-    setToastState({
-      active: true,
-      message,
-      error: true,
-    });
+    showError(message);
   } finally {
     setSubmitting(false);
   }
@@ -153,21 +139,14 @@ function ScheduledExportModal({
   selectedFields,
   startExportDate,
   startExportTime,
+  resolvedTimezone,
   t,
+  showError,
+  showSuccess,
 ]);
 
-  const toastMarkup = toastState.active ? (
-    <Toast
-      content={toastState.message}
-      error={toastState.error}
-      onDismiss={() =>
-        setToastState({ active: false, message: "", error: false })
-      }
-    />
-  ) : null;
-
   return (
-    <Frame>
+    <>
       <Modal
         open={show}
         onClose={handleClose}
@@ -213,6 +192,10 @@ function ScheduledExportModal({
               onChange={(checked) => setStartExportChecked(checked)}
             />
 
+            <Banner tone="info">
+              <p>All schedule times are interpreted in shop timezone: <strong>{resolvedTimezone}</strong>.</p>
+            </Banner>
+
             {startExportChecked && (
               <FormLayout.Group>
                 <TextField
@@ -221,7 +204,7 @@ function ScheduledExportModal({
                   value={startExportDate}
                   onChange={setStartExportDate}
                   helpText={t("scheduledExport.dateHelpText")}
-                  min={new Date().toISOString().split("T")[0]}
+                  min={getDateInputInTimezone(resolvedTimezone)}
                 />
                 <TextField
                    label={t("scheduledExport.timeLabel")}
@@ -237,8 +220,7 @@ function ScheduledExportModal({
           </FormLayout>
         </Modal.Section>
       </Modal>
-      {toastMarkup}
-    </Frame>
+    </>
   );
 }
 

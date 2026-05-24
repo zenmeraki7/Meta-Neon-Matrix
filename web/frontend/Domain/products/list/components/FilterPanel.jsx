@@ -20,6 +20,7 @@ import {
   getTranslatedOperatorLabel,
   normalizeAutocompleteOption,
 } from "../utils/filterUtils";
+import { protectedApiGet } from "../../../../api/protectedApiClient";
 
 const MIN_AUTOCOMPLETE_QUERY_LENGTH = 2;
 
@@ -35,19 +36,13 @@ async function fetchAutocompleteOptions({
   setLoading(true);
 
   try {
-    const res = await fetch(
+    const data = await protectedApiGet(
       `${filter.api}?search=${encodeURIComponent(query)}&isNameOnly=true`,
       {
-        method: "GET",
         headers: { Accept: "application/json" },
-        credentials: "same-origin",
         signal,
-      }
+      },
     );
-
-    if (!res.ok) throw new Error(`Autocomplete failed ${res.status}`);
-
-    const data = await res.json();
     if (signal.aborted) return;
 
     const items = Array.isArray(data?.data)

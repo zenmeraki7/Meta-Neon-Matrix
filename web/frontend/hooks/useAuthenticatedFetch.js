@@ -1,7 +1,7 @@
-// web/frontend/hooks/useAuthenticatedFetch.js
-
-import { useAppBridge } from '@shopify/app-bridge-react';
-import { authenticatedFetch } from '@shopify/app-bridge/utilities';
+import { useCallback, useMemo } from "react";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import { authenticatedFetch } from "@shopify/app-bridge/utilities";
+import { triggerGlobalReauth } from "../api/reauthHandler";
 
 /**
  * Returns an authenticated fetch function that includes the session token.
@@ -9,10 +9,8 @@ import { authenticatedFetch } from '@shopify/app-bridge/utilities';
  */
 export function useAuthenticatedFetch() {
   const app = useAppBridge();
-
-  const fetchFunction = authenticatedFetch(app);
-
-  return async (uri, options = {}) => {
+  const fetchFunction = useMemo(() => authenticatedFetch(app), [app]);
+  return useCallback(async (uri, options = {}) => {
     const response = await fetchFunction(uri, options);
 
     // Check for reauthentication header
@@ -23,14 +21,13 @@ export function useAuthenticatedFetch() {
         'X-Shopify-API-Request-Failure-Reauthorize-Url'
       );
 
-      if (redirectUrl) {
-        const reauthError = new Error("Reauthorization required");
-        reauthError.code = "REAUTH_REQUIRED";
-        reauthError.redirectUrl = redirectUrl;
-        throw reauthError;
-      }
+      if (redirectUrl) triggerGlobalReauth(redirectUrl);
+      const reauthError = new Error("Reauthorization required");
+      reauthError.code = "REAUTH_REQUIRED";
+      reauthError.redirectUrl = redirectUrl || null;
+      throw reauthError;
     }
 
     return response;
-  };
+  }, [fetchFunction]);
 }

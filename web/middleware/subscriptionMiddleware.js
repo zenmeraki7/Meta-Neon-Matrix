@@ -42,6 +42,10 @@ const store = await prisma.store.findUnique({
         subscriptionId: null,
         isCreditUser: true, // Flag to indicate this is a grandfathered user
       };
+      res.locals.entitlement = {
+        ...req.subscription,
+        source: "subscriptionMiddleware",
+      };
 
       console.log("[SUBSCRIPTION_MIDDLEWARE] Subscription info (Credit User):", req.subscription);
       return next();
@@ -91,6 +95,10 @@ const store = await prisma.store.findUnique({
       status: subscription?.status || "FREE",
       subscriptionId: subscription?.subscriptionId || null,
       isCreditUser : false
+    };
+    res.locals.entitlement = {
+      ...req.subscription,
+      source: "subscriptionMiddleware",
     };
 
     console.log("[SUBSCRIPTION_MIDDLEWARE] Subscription info:", req.subscription);

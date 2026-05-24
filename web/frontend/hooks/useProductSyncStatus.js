@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useApiClient } from "./useApiClient";
 
 function isActiveSyncStatus(syncStatus) {
@@ -26,16 +26,25 @@ export default function useProductSyncStatus() {
   const api = useApiClient();
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncStatusLoading, setSyncStatusLoading] = useState(true);
+  const requestIdRef = useRef(0);
 
   const fetchSyncStatus = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     try {
       const result = await api.get("/api/sync/sync-status");
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
       if (result?.syncStatus) {
         setSyncStatus(result.syncStatus);
       }
     } catch {
       // Keep consuming pages usable if sync status cannot be loaded.
     } finally {
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
       setSyncStatusLoading(false);
     }
   }, [api]);

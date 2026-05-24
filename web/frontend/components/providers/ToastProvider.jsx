@@ -20,19 +20,35 @@ export function ToastProvider({ children }) {
       content,
       error: options.error || false,
       active: true,
+      action: options.action || null,
+      duration: options.duration || undefined,
     });
   }, []);
+
+  const showSuccess = useCallback((content, options = {}) => {
+    showToast(content, { ...options, error: false });
+  }, [showToast]);
+
+  const showError = useCallback((content, options = {}) => {
+    showToast(content, { ...options, error: true });
+  }, [showToast]);
 
   const hideToast = useCallback(() => {
     setToast(prev => ({ ...prev, active: false }));
   }, []);
 
   const toastMarkup = toast.active ? (
-    <Toast content={toast.content} error={toast.error} onDismiss={hideToast} />
+    <Toast
+      content={toast.content}
+      error={toast.error}
+      action={toast.action || undefined}
+      duration={toast.duration}
+      onDismiss={hideToast}
+    />
   ) : null;
 
   return (
-    <ToastContext.Provider value={{ showToast }}>
+    <ToastContext.Provider value={{ showToast, showSuccess, showError }}>
       <Frame>
         {children}
         {toastMarkup}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Page,
   Card,
@@ -19,9 +19,13 @@ import {
   AlertCircleIcon,
 } from "@shopify/polaris-icons";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import { protectedApiGet } from "../api/protectedApiClient";
 
 export default function ProductSyncPage({verifyStoreAccess}) {
+  const { t } = useTranslation();
   const navigate = useNavigate()
+  const pollRequestIdRef = useRef(0);
   const [syncStatus, setSyncStatus] = useState({
     status: "syncing",
     progress: 0,
@@ -36,13 +40,15 @@ export default function ProductSyncPage({verifyStoreAccess}) {
 
   // 🔥 POLLING API
   useEffect(() => {
+    let isActive = true;
     const pollInterval = setInterval(async () => {
+      const requestId = pollRequestIdRef.current + 1;
+      pollRequestIdRef.current = requestId;
       try {
-        const response = await fetch(`/api/sync/product-track`);
-
-        if (!response.ok) throw new Error("Failed to fetch");
-
-        const data = await response.json();
+        const data = await protectedApiGet(`/api/sync/product-track`);
+        if (!isActive || pollRequestIdRef.current !== requestId) {
+          return;
+        }
 
         setSyncStatus({
           progress: data.progress || 0,
@@ -65,7 +71,10 @@ export default function ProductSyncPage({verifyStoreAccess}) {
       }
     }, 3000);
 
-    return () => clearInterval(pollInterval);
+    return () => {
+      isActive = false;
+      clearInterval(pollInterval);
+    };
   }, []);
 
   const getStatusBanner = () => {

@@ -30,6 +30,8 @@ import Papa from "papaparse";
 import { useTranslation } from "react-i18next";
 import { buildOperationTimeline } from "../utils/operationTimeline";
 import { operationStatusBadge } from "../../shared/components/StatusBadge";
+import { protectedApiGet } from "../../../../api/protectedApiClient";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 
 const FALLBACK_IMAGE = "https://www.otithee.com/img/fallback/fallback-2.png";
 
@@ -139,6 +141,7 @@ export default function EditDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
 const { t, i18n } = useTranslation();
+  const { showError } = useAppToast();
   const [historyItem, setHistoryItem] = useState(null);
   const [changes, setChanges] = useState([]);
   const [changeField, setChangeField] = useState("");
@@ -172,14 +175,9 @@ const { t, i18n } = useTranslation();
       setIsLoadingHistory(true);
       setError(null);
 
-const response = await fetch(
-  `/api/history/get-edit-history-details/${id}?lang=${i18n.language}`
-);
-      if (!response.ok) {
-        throw new Error("Failed to fetch history");
-      }
-
-      const json = await response.json();
+      const json = await protectedApiGet(
+        `/api/history/get-edit-history-details/${id}?lang=${i18n.language}`,
+      );
       setHistoryItem(json?.data || null);
     } catch (err) {
       setError(err?.message || "Failed to fetch history");
@@ -196,15 +194,9 @@ const response = await fetch(
         setChangesError(null);
         setIsLoadingChanges(true);
 
-        const response = await fetch(
-  `/api/history/get-edit-history/changes/${id}?page=${page}&limit=${itemsPerPage}&lang=${i18n.language}`
-);
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch changes");
-        }
-
-        const json = await response.json();
+        const json = await protectedApiGet(
+          `/api/history/get-edit-history/changes/${id}?page=${page}&limit=${itemsPerPage}&lang=${i18n.language}`,
+        );
         const changeRows = Array.isArray(json?.data) ? json.data : [];
         const meta = json?.meta || {};
 
@@ -262,6 +254,11 @@ const response = await fetch(
   }, [fetchChanges]);
 
   useEffect(() => {
+    if (!error) return;
+    showError(error);
+  }, [error, showError]);
+
+  useEffect(() => {
     if (!historyItem?.id) return;
 
     const primaryStatus = getPrimaryStatus(historyItem);
@@ -272,11 +269,9 @@ const response = await fetch(
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/history/get-edit-history-details/${id}?lang=${i18n.language}`);
-
-        if (!res.ok) return;
-
-        const json = await res.json();
+        const json = await protectedApiGet(
+          `/api/history/get-edit-history-details/${id}?lang=${i18n.language}`,
+        );
         const updated = json?.data;
         if (!updated) return;
 
@@ -417,7 +412,30 @@ const response = await fetch(
         title={t("errorPageTitle")}
         backAction={{ content: t("History"), onAction: handleBack }}
       >
-        <Banner tone="critical">{error}</Banner>
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <Box padding="500">
+                <BlockStack gap="300">
+                  <Text as="h2" variant="headingMd">
+                    Unable to load history details
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    {error}
+                  </Text>
+                  <InlineStack gap="200">
+                    <Button variant="primary" onClick={fetchHistoryDetails}>
+                      Retry
+                    </Button>
+                    <Button onClick={handleBack}>
+                      Back to history
+                    </Button>
+                  </InlineStack>
+                </BlockStack>
+              </Box>
+            </Card>
+          </Layout.Section>
+        </Layout>
       </Page>
     );
   }

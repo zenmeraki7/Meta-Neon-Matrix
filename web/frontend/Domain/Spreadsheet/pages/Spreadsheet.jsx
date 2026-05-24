@@ -1,12 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
     Page,
     Card,
-    Banner,
     Button,
     BlockStack,
     InlineStack,
-    Loading,
     Text,
     List,
     Box,
@@ -20,6 +18,8 @@ import ConfirmImportModal from "../components/ConfirmImportModal";
 import { parseCSV } from "../utils/csvParser";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { protectedApiRequest } from "../../../api/protectedApiClient";
+import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
 
 export default function Spreadsheet() {
     const { t } = useTranslation();
@@ -29,7 +29,19 @@ export default function Spreadsheet() {
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [status, setStatus] = useState(null);
     const [uploading, setUploading] = useState(false);
+    const { showSuccess, showError } = useAppToast();
     const navigate = useNavigate();
+
+    useEffect(() => {
+        if (!status?.message) return;
+        if (status.type === "error") {
+            showError(status.message);
+            return;
+        }
+        if (status.type === "success") {
+            showSuccess(status.message);
+        }
+    }, [showError, showSuccess, status]);
 
     const handleDrop = (_, acceptedFiles) => {
         const selectedFile = acceptedFiles[0];
@@ -53,25 +65,11 @@ export default function Spreadsheet() {
             formData.append("file", file);
             formData.append("columnMappings", JSON.stringify(columnMappings));
 
-            const res = await fetch("/api/products/csv/import", {
+            const result = await protectedApiRequest("/api/products/csv/import", {
                 method: "POST",
+                idempotent: true,
                 body: formData,
             });
-
-            let result;
-            try {
-                result = await res.json();
-            } catch {
-                throw new Error(t("spreadsheetInvalidServerResponse"));
-
-            }
-
-            if (!res.ok) {
-                throw new Error(
-                    result?.message || t("spreadsheetUploadFailed")
-                );
-
-            }
 
             setStatus({
                 type: "success",
@@ -105,8 +103,6 @@ export default function Spreadsheet() {
             subtitle={t("spreadsheetImportSubtitle")}
             fullWidth
         >
-            {uploading && <Loading />}
-
             <BlockStack gap="500">
                 {/* Intro / Guidance */}
                 <Card roundedAbove="sm">
@@ -183,14 +179,7 @@ export default function Spreadsheet() {
                     </Box>
                 </Card>
 
-                {/* Uploading / status banners */}
-                {uploading && (
-                    <Banner tone="info">
-                        {t("spreadsheetUploadingBanner")}
-                    </Banner>
-                )}
-
-                {status && <Banner tone={status.type}>{status.message}</Banner>}
+                {/* Uploading / status feedback is handled with Polaris Toast */}
 
                 {/* Upload area */}
                 <Card roundedAbove="sm">

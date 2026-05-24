@@ -300,6 +300,35 @@ async function reserveScheduledRun(ruleId, now) {
     }
 
     const scheduledFor = rule.nextRunAt;
+    const schedulerClaimId = crypto.randomUUID();
+    const claimResult = await tx.automaticProductRule.updateMany({
+      where: {
+        id: rule.id,
+        shop: rule.shop,
+        status: "ACTIVE",
+        isDeleted: false,
+        ...(Object.prototype.hasOwnProperty.call(rule, "schedulerDisabledAt")
+          ? { schedulerDisabledAt: null }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(rule, "revision")
+          ? { revision: rule.revision }
+          : {}),
+        nextRunAt: { lte: now },
+      },
+      data: {
+        ...(Object.prototype.hasOwnProperty.call(rule, "schedulerClaimedAt")
+          ? { schedulerClaimedAt: now }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(rule, "schedulerClaimId")
+          ? { schedulerClaimId }
+          : {}),
+        updatedAt: now,
+      },
+    });
+    if (claimResult.count !== 1) {
+      return null;
+    }
+
     const executionKey = buildScheduledExecutionKey(rule.id, scheduledFor);
     const existingRun = await automaticProductRuleRunRepository.findByExecutionKeyForShop(executionKey, rule.shop, tx);
 

@@ -1,6 +1,7 @@
 // web/frontend/components/ErrorBoundary.tsx
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { Banner, InlineStack, Text } from '@shopify/polaris';
+import { protectedApiPost } from '../../api/protectedApiClient';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -69,10 +70,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   // Report to your own logging endpoint
   private async reportError(error: Error, errorInfo: ErrorInfo) {
     try {
-      await fetch('/api/log-error', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await protectedApiPost('/api/log-error', {
           message: error.message,
           stack: error.stack,
           componentInlineStack: errorInfo.componentInlineStack,
@@ -80,7 +78,6 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
           retryCount: this.state.retryCount,
           timestamp: new Date().toISOString(),
           userAgent: navigator.userAgent,
-        }),
       });
     } catch (e) {
       // Never throw from within componentDidCatch
@@ -109,7 +106,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 
       return (
         <Banner
-          status="critical"
+          tone="critical"
           action={
             canRetry
               ? {

@@ -26,7 +26,6 @@
     "@sentry/webpack-plugin": "^3.5.0",
     "@shopify/app-bridge": "^3.7.7",
     "@shopify/app-bridge-react": "^4.2.1",
-    "@shopify/app-bridge-utils": "^3.5.1",
     "@shopify/i18next-shopify": "^0.2.9",
     "@shopify/polaris": "^13.9.5",
     "@shopify/polaris-icons": "^9.3.1",

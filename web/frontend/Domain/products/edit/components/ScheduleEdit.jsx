@@ -2,7 +2,6 @@ import React, { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Modal,
-  Button,
   FormLayout,
   Checkbox,
   TextField,
@@ -10,13 +9,14 @@ import {
   InlineStack,
   Text,
   Box,
-  Frame,
-  Toast,
 } from "@shopify/polaris";
 import { t } from "i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
+import { useShopTimezone } from "../../../../hooks/useShopTimezone";
+import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 
 function ScheduleEdit({
   onHide,
@@ -33,6 +33,9 @@ function ScheduleEdit({
 }) {
   const navigate = useNavigate();
   const api = useApiClient();
+  const { shopTimezone } = useShopTimezone();
+  const resolvedTimezone = shopTimezone || "UTC";
+  const { showSuccess, showError } = useAppToast();
   // State for form fields
   const [startEditChecked, setStartEditChecked] = useState(false);
   const [undoStartEditChecked, setUndoStartEditChecked] = useState(false);
@@ -46,11 +49,6 @@ function ScheduleEdit({
   // State for UI
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [toastState, setToastState] = useState({
-    active: false,
-    message: "",
-    error: false,
-  });
 
   // Check if the form is valid
   const isFormValid = startEditChecked && startEditDate && startEditTime;
@@ -109,15 +107,11 @@ function ScheduleEdit({
     setError(null);
 
     try {
-      const scheduledAt = new Date(
-        `${startEditDate}T${startEditTime}:00`
-      ).toISOString();
+      const scheduledAt = zonedDateTimeToUtcIso(startEditDate, startEditTime, resolvedTimezone);
 
       const scheduledUndoAt =
         undoStartEditChecked && undoStartEditDate && undoStartEditTime
-          ? new Date(
-              `${undoStartEditDate}T${undoStartEditTime}:00`
-            ).toISOString()
+          ? zonedDateTimeToUtcIso(undoStartEditDate, undoStartEditTime, resolvedTimezone)
           : null;
 
       if (
@@ -136,6 +130,7 @@ function ScheduleEdit({
         searchKey,
         replaceText,
         locationId: location,
+        timezone: resolvedTimezone,
         filterParams: filters,
         filterAst: buildFilterAstFromLegacyFilters({
           filterParams: filters,
@@ -145,13 +140,11 @@ function ScheduleEdit({
         supportValue,
       };
 
-      await api.post("/api/products/schedule-task", payload);
-      // Show success toast
-      setToastState({
-        active: true,
-        message: t("schedule_msg"),
-        error: false,
+      await api.post("/api/products/schedule-task", payload, {
+        idempotent: true,
       });
+      // Show success toast
+      showSuccess(t("schedule_msg"));
 
       // Reset form, close modal, and navigate to history
       setTimeout(() => {
@@ -168,11 +161,7 @@ function ScheduleEdit({
       console.error("Error scheduling edit:", error);
       const safeMessage = toSafeErrorMessage(error, t("try_again"));
       setError(safeMessage);
-      setToastState({
-        active: true,
-        message: safeMessage,
-        error: true,
-      });
+      showError(safeMessage);
     } finally {
       setSubmitting(false);
     }
@@ -195,22 +184,12 @@ function ScheduleEdit({
     resetForm,
     onHide,
     navigate,
-    setToastState,
+    showError,
+    showSuccess,
   ]);
 
-  // Toast to show success/error messages
-  const toastMarkup = toastState.active ? (
-    <Toast
-      content={toastState.message}
-      error={toastState.error}
-      onDismiss={() =>
-        setToastState({ active: false, message: "", error: false })
-      }
-    />
-  ) : null;
-
   return (
-    <Frame>
+    <>
       <Modal
         open={show}
         onClose={() => {
@@ -252,7 +231,7 @@ function ScheduleEdit({
 
 
             {error && (
-              <Banner status="critical" onDismiss={() => setError(null)}>
+              <Banner tone="critical" onDismiss={() => setError(null)}>
                 {error}
               </Banner>
             )}
@@ -263,6 +242,10 @@ function ScheduleEdit({
               onChange={(checked) => handleCheckboxChange(checked, "start")}
             />
 
+            <Banner tone="info">
+              <p>All schedule times are interpreted in shop timezone: <strong>{resolvedTimezone}</strong>.</p>
+            </Banner>
+
             {startEditChecked && (
               <FormLayout.Group>
                 <TextField
@@ -271,7 +254,7 @@ function ScheduleEdit({
                   value={startEditDate}
                   onChange={(value) => handleDateChange(value, "start")}
                   helpText={t("selectDateRunEdit")}
-                  min={new Date().toISOString().split("T")[0]} // Today or later
+                  min={getDateInputInTimezone(resolvedTimezone)}
                 />
                 <TextField
                   label={t("time")}
@@ -301,7 +284,7 @@ function ScheduleEdit({
                   value={undoStartEditDate}
                   onChange={(value) => handleDateChange(value, "undo")}
                   helpText={t("selectDateUndoEdit")}
-                  min={startEditDate || new Date().toISOString().split("T")[0]} // Start date or today
+                  min={startEditDate || getDateInputInTimezone(resolvedTimezone)}
                 />
                 <TextField
                   label={t("undoTime")}
@@ -315,7 +298,7 @@ function ScheduleEdit({
 
             {startEditChecked && startEditDate && startEditTime && (
               <Box paddingBlockStart="400">
-                <Banner status="info">
+                <Banner tone="info">
                   <InlineStack gap="200" direction="vertical">
                     <Text as="p" variant="bodyMd" fontWeight="semibold">
                       {t("edit_summary")}:
@@ -350,8 +333,7 @@ function ScheduleEdit({
           </FormLayout>
         </Modal.Section>
       </Modal>
-      {toastMarkup}
-    </Frame>
+    </>
   );
 }
 

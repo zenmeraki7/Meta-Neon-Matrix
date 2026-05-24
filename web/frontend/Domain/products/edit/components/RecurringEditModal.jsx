@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Modal,
@@ -10,22 +10,15 @@ import {
   BlockStack,
   InlineStack,
   Text,
-  Frame,
-  Toast,
 } from "@shopify/polaris";
 
 import { useTranslation } from "react-i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
-
-const TIMEZONE_OPTIONS = [
-  { label: "Asia/Kolkata (IST)", value: "Asia/Kolkata" },
-  { label: "UTC", value: "UTC" },
-  { label: "America/New_York", value: "America/New_York" },
-  { label: "America/Los_Angeles", value: "America/Los_Angeles" },
-  { label: "Europe/London", value: "Europe/London" },
-];
+import { useShopTimezone } from "../../../../hooks/useShopTimezone";
+import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 
 const FREQUENCY_OPTIONS = [
   { label: "Hourly", value: "Hourly" },
@@ -57,18 +50,6 @@ function getDefaultTitle(editedField, editedBy, t) {
   return `${safeField} ${t("recurringEditDefaultTitleConnector")} ${safeEditType}`;
 }
 
-function getCurrentDateInputValue() {
-  return new Date().toISOString().split("T")[0];
-}
-
-function buildIsoFromDateAndTime(dateValue, timeValue) {
-  if (!dateValue || !timeValue) {
-    return null;
-  }
-
-  return new Date(`${dateValue}T${timeValue}:00`).toISOString();
-}
-
 function RecurringEditModal({
   show,
   onHide,
@@ -85,6 +66,9 @@ function RecurringEditModal({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const api = useApiClient();
+  const { shopTimezone } = useShopTimezone();
+  const resolvedTimezone = shopTimezone || "UTC";
+  const { showSuccess, showError } = useAppToast();
 
   const dayOfMonthOptions = useMemo(
     () =>
@@ -99,12 +83,11 @@ function RecurringEditModal({
     getDefaultTitle(editedField, editedBy, t),
   );
   const [frequency, setFrequency] = useState("Daily");
-  const [timezone, setTimezone] = useState("Asia/Kolkata");
   const [timeToRun, setTimeToRun] = useState("12:00");
   const [dayOfMonthToRun, setDayOfMonthToRun] = useState("1");
   const [daysOfWeekToRun, setDaysOfWeekToRun] = useState([]);
   const [hasStartAt, setHasStartAt] = useState(false);
-  const [startDate, setStartDate] = useState(getCurrentDateInputValue());
+  const [startDate, setStartDate] = useState(getDateInputInTimezone(shopTimezone || "UTC"));
   const [startTime, setStartTime] = useState("12:00");
   const [hasEndAt, setHasEndAt] = useState(false);
   const [endDate, setEndDate] = useState("");
@@ -112,21 +95,19 @@ function RecurringEditModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [upgradeWarning, setUpgradeWarning] = useState("");
-  const [toastState, setToastState] = useState({
-    active: false,
-    message: "",
-    error: false,
-  });
+
+  useEffect(() => {
+    setStartDate((current) => current || getDateInputInTimezone(shopTimezone || "UTC"));
+  }, [shopTimezone]);
 
   const resetForm = useCallback(() => {
     setTitle(getDefaultTitle(editedField, editedBy, t));
     setFrequency("Daily");
-    setTimezone("Asia/Kolkata");
     setTimeToRun("12:00");
     setDayOfMonthToRun("1");
     setDaysOfWeekToRun([]);
     setHasStartAt(false);
-    setStartDate(getCurrentDateInputValue());
+    setStartDate(getDateInputInTimezone(shopTimezone || "UTC"));
     setStartTime("12:00");
     setHasEndAt(false);
     setEndDate("");
@@ -134,7 +115,7 @@ function RecurringEditModal({
     setSubmitting(false);
     setError("");
     setUpgradeWarning("");
-  }, [editedBy, editedField, t]);
+  }, [editedBy, editedField, shopTimezone, t]);
 
   const handleClose = useCallback(() => {
     resetForm();
@@ -178,9 +159,9 @@ function RecurringEditModal({
     }
 
     const startAt = hasStartAt
-      ? buildIsoFromDateAndTime(startDate, startTime)
+      ? zonedDateTimeToUtcIso(startDate, startTime, resolvedTimezone)
       : null;
-    const endAt = hasEndAt ? buildIsoFromDateAndTime(endDate, endTime) : null;
+    const endAt = hasEndAt ? zonedDateTimeToUtcIso(endDate, endTime, resolvedTimezone) : null;
 
     if (startAt && endAt && new Date(startAt) >= new Date(endAt)) {
       return t("recurringEditErrors.endAfterStart");
@@ -196,6 +177,7 @@ function RecurringEditModal({
     needsWeekdaySelection,
     startDate,
     startTime,
+    resolvedTimezone,
     title,
   ]);
 
@@ -214,7 +196,7 @@ function RecurringEditModal({
       const payload = {
         title: title.trim(),
         frequency,
-        timezone,
+        timezone: resolvedTimezone,
         filterParams: filters,
         filterAst: buildFilterAstFromLegacyFilters({
           filterParams: filters,
@@ -244,20 +226,18 @@ function RecurringEditModal({
       }
 
       if (hasStartAt) {
-        payload.startAt = buildIsoFromDateAndTime(startDate, startTime);
+        payload.startAt = zonedDateTimeToUtcIso(startDate, startTime, resolvedTimezone);
       }
 
       if (hasEndAt) {
-        payload.endAt = buildIsoFromDateAndTime(endDate, endTime);
+        payload.endAt = zonedDateTimeToUtcIso(endDate, endTime, resolvedTimezone);
       }
 
-      await api.post("/api/products/create-recurring-edit", payload);
-
-      setToastState({
-        active: true,
-        message: t("recurringEditSuccess.created"),
-        error: false,
+      await api.post("/api/products/create-recurring-edit", payload, {
+        idempotent: true,
       });
+
+      showSuccess(t("recurringEditSuccess.created"));
 
       setTimeout(() => {
         handleClose();
@@ -272,11 +252,7 @@ function RecurringEditModal({
         return;
       }
       setError(message);
-      setToastState({
-        active: true,
-        message,
-        error: true,
-      });
+      showError(message);
     } finally {
       setSubmitting(false);
     }
@@ -303,25 +279,17 @@ function RecurringEditModal({
     endTime,
     supportValue,
     timeToRun,
-    timezone,
+    resolvedTimezone,
     title,
     validate,
     value,
     api,
+    showError,
+    showSuccess,
   ]);
 
-  const toastMarkup = toastState.active ? (
-    <Toast
-      content={toastState.message}
-      error={toastState.error}
-      onDismiss={() =>
-        setToastState({ active: false, message: "", error: false })
-      }
-    />
-  ) : null;
-
   return (
-    <Frame>
+    <>
       <Modal
         open={show}
         onClose={handleClose}
@@ -387,16 +355,11 @@ function RecurringEditModal({
                   value={frequency}
                   onChange={setFrequency}
                 />
-                <Select
-                  label={t("recurringEditTimezoneLabel")}
-                  options={TIMEZONE_OPTIONS.map((opt) => ({
-                    ...opt,
-                    label: t(`recurringEditTimezoneOptions.${opt.value}`),
-                  }))}
-                  value={timezone}
-                  onChange={setTimezone}
-                />
               </FormLayout.Group>
+
+              <Banner tone="info">
+                <p>All recurring schedule times are interpreted in shop timezone: <strong>{resolvedTimezone}</strong>.</p>
+              </Banner>
 
               {requiresTime && (
                 <TextField
@@ -449,7 +412,7 @@ function RecurringEditModal({
                     type="date"
                     value={startDate}
                     onChange={setStartDate}
-                    min={getCurrentDateInputValue()}
+                    min={getDateInputInTimezone(resolvedTimezone)}
                   />
                   <TextField
                     label={t("recurringEditStartTimeLabel")}
@@ -473,7 +436,7 @@ function RecurringEditModal({
                     type="date"
                     value={endDate}
                     onChange={setEndDate}
-                    min={startDate || getCurrentDateInputValue()}
+                    min={startDate || getDateInputInTimezone(resolvedTimezone)}
                   />
                   <TextField
                     label={t("recurringEditEndTimeLabel")}
@@ -487,8 +450,7 @@ function RecurringEditModal({
           </BlockStack>
         </Modal.Section>
       </Modal>
-      {toastMarkup}
-    </Frame>
+    </>
   );
 }
 

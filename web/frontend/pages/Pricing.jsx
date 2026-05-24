@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import {
   Page,
   Card,
+  Frame,
+  Toast,
   Text,
   BlockStack,
   InlineStack,
@@ -12,7 +14,6 @@ import {
   Icon,
   Collapsible,
   Spinner,
-  Banner,
   Layout,
 } from '@shopify/polaris';
 import { CheckIcon, StarFilledIcon } from '@shopify/polaris-icons';
@@ -20,10 +21,14 @@ import { Modal } from "@shopify/polaris";
 import { useNavigate } from "react-router-dom"
 
 import { useTranslation } from "react-i18next";
+import { protectedApiPost } from "../api/protectedApiClient";
+import { subscriptionService } from "../Domain/Subscription/services/subscriptionService";
+import { useEmbeddedRedirect } from "../hooks/useEmbeddedRedirect";
 
 export default function PricingPage() {
   const navigate = useNavigate()
   const { t } = useTranslation();
+  const { redirectRemote } = useEmbeddedRedirect();
   const [openFaqIndex, setOpenFaqIndex] = useState(null);
   const [showFreeModal, setShowFreeModal] = useState(false);
   const [selectedFreePlan, setSelectedFreePlan] = useState(null);
@@ -31,13 +36,17 @@ export default function PricingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [subscribing, setSubscribing] = useState(null);
+  const [toastState, setToastState] = useState({
+    active: false,
+    message: "",
+    error: false,
+  });
 
   // ✅ Move fetchPlans outside of useEffect so we can reuse it
   const fetchPlans = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/subscription/get-plans');
-      const data = await response.json();
+      const data = await subscriptionService.getSubscriptionPlans();
 
       if (data.success && data.plans) {
         setPlans(data.plans);
@@ -67,6 +76,17 @@ export default function PricingPage() {
       fetchPlans();
     }
   }, []);
+
+  useEffect(() => {
+    if (!error) {
+      return;
+    }
+    setToastState({
+      active: true,
+      message: error,
+      error: true,
+    });
+  }, [error]);
 
   const faqs = [
     {
@@ -99,18 +119,12 @@ export default function PricingPage() {
     try {
       setSubscribing(plan.key);
 
-      const response = await fetch("/api/subscription/create-subscription", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          planKey: plan.key,
-          returnUrl: `${window.location.origin}/pricing`,
-        }),
+      const data = await protectedApiPost("/api/subscription/create-subscription", {
+        planKey: plan.key,
+        returnUrl: `${window.location.origin}/pricing`,
+      }, {
+        idempotent: true,
       });
-
-      const data = await response.json();
 
       if (!data.success) {
         throw new Error(data.message || "Subscription failed");
@@ -126,10 +140,14 @@ export default function PricingPage() {
       }
 
       // Redirect to Shopify payment page for paid plans
-      window.top.location.href = data.confirmationUrl;
+      redirectRemote(data.confirmationUrl);
     } catch (err) {
       console.error("Subscription error:", err);
-      alert("Failed to start subscription. Please try again.");
+      setToastState({
+        active: true,
+        message: "Failed to start subscription. Please try again.",
+        error: true,
+      });
       setSubscribing(null);
     }
   };
@@ -155,21 +173,43 @@ export default function PricingPage() {
 
   if (error) {
     return (
-      <Page>
-        <Layout>
-          <Layout.Section>
-            <Box paddingBlockStart="400">
-              <Banner tone="critical" title="Error loading plans">
-                <p>{error}</p>
-              </Banner>
-            </Box>
-          </Layout.Section>
-        </Layout>
-      </Page>
+      <Frame>
+        <Page>
+          <Layout>
+            <Layout.Section>
+              <Box paddingBlockStart="400">
+                <Card>
+                  <Box padding="500">
+                    <BlockStack gap="300" inlineAlign="center">
+                      <Text as="h2" variant="headingMd">
+                        Unable to load plans
+                      </Text>
+                      <Text as="p" tone="subdued">
+                        Please retry loading pricing data.
+                      </Text>
+                      <Button onClick={fetchPlans} variant="primary">
+                        Retry
+                      </Button>
+                    </BlockStack>
+                  </Box>
+                </Card>
+              </Box>
+            </Layout.Section>
+          </Layout>
+          {toastState.active ? (
+            <Toast
+              content={toastState.message}
+              error={toastState.error}
+              onDismiss={() => setToastState({ active: false, message: "", error: false })}
+            />
+          ) : null}
+        </Page>
+      </Frame>
     );
   }
 
   return (
+    <Frame>
     <Page
       title={t("pricingPageTitle")}
       subtitle={t("pricingPageSubtitle")}
@@ -443,6 +483,14 @@ export default function PricingPage() {
           </Text>
         </Modal.Section>
       </Modal>
+      {toastState.active ? (
+        <Toast
+          content={toastState.message}
+          error={toastState.error}
+          onDismiss={() => setToastState({ active: false, message: "", error: false })}
+        />
+      ) : null}
     </Page>
+    </Frame>
   );
 }

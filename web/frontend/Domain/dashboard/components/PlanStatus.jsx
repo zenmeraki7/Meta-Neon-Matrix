@@ -24,7 +24,7 @@ const PlanStatus = () => {
   return (
     <Banner
       title={t("plan.warningTitle", "Plan Required")}
-      status="warning"
+      tone="warning"
       onDismiss={dismissAlert}
       action={{ content: t("plan.upgrade", "Upgrade Plan"), url: "/plans" }}
     >

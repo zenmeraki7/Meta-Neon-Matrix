@@ -16,11 +16,14 @@ import { ArrowLeftIcon } from "@shopify/polaris-icons";
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { protectedApiGet } from "../../api/protectedApiClient";
+import { useToast as useAppToast } from "../../components/providers/ToastProvider";
 
 export default function ExportHistoryDetailsPage() {
   const { t } = useTranslation();
   const { id } = useParams();
   const navigate = useNavigate();
+  const { showError } = useAppToast();
 
   const [exportJob, setExportJob] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -152,10 +155,8 @@ export default function ExportHistoryDetailsPage() {
 
   const fetchExportDetails = useCallback(async () => {
     try {
-      const res = await fetch(`/api/history/get-export-details/${id}`);
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
+      const data = await protectedApiGet(`/api/history/get-export-details/${id}`);
+      if (!data.success) {
         throw new Error(data.message || "Failed to fetch export details");
       }
 
@@ -191,6 +192,11 @@ export default function ExportHistoryDetailsPage() {
     };
   }, [fetchExportDetails, stopPolling]);
 
+  useEffect(() => {
+    if (!error) return;
+    showError(error);
+  }, [error, showError]);
+
   const pageTitle = useMemo(() => {
     return exportJob?.filename || t("exportDetails.title");
   }, [exportJob?.filename, t]);
@@ -212,7 +218,26 @@ export default function ExportHistoryDetailsPage() {
       <Page title={t("exportDetails.title")}>
         <Layout>
           <Layout.Section>
-            <Banner tone="critical">{error}</Banner>
+            <Card>
+              <Box padding="500">
+                <BlockStack gap="300">
+                  <Text as="h2" variant="headingMd">
+                    Unable to load export details
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    {error}
+                  </Text>
+                  <InlineStack gap="200">
+                    <Button variant="primary" onClick={fetchExportDetails}>
+                      Retry
+                    </Button>
+                    <Button onClick={() => navigate(-1)}>
+                      Back
+                    </Button>
+                  </InlineStack>
+                </BlockStack>
+              </Box>
+            </Card>
           </Layout.Section>
         </Layout>
       </Page>

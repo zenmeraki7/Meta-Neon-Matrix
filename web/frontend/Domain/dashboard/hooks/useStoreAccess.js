@@ -1,8 +1,6 @@
 //web/frontend/Domain/Dashboard/hooks/useStoreAccess.js
 import { useReducer, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useAppBridge } from '@shopify/app-bridge-react';
-import { authenticatedFetch } from '@shopify/app-bridge-utils';
-import { Toast } from '@shopify/app-bridge/actions';
+import { useAuthenticatedFetch } from '../../../hooks/useAuthenticatedFetch';
 import { dashboardService } from '../services/dashboardService';
 
 // -- Reducer & initial state --
@@ -26,10 +24,7 @@ function reducer(state, action) {
 }
 
 export function useStoreAccess() {
-  // App Bridge fetch & error toast
-  const app = useAppBridge();
-  const fetchWithAuth = authenticatedFetch(app);
-  const toastError = Toast.create(app, { duration: 5000 });
+  const fetchWithAuth = useAuthenticatedFetch();
 
   const [state, dispatch] = useReducer(reducer, initialState);
   const controllerRef = useRef(null);
@@ -114,8 +109,6 @@ export function useStoreAccess() {
     type: 'FETCH_ERROR',
     payload: err.message || 'Failed to load store data',
   });
-  toastError.dispatch(Toast.Action.SlideDown(err.message || 'Error'));
-
   throw err;
 })
 
@@ -125,9 +118,9 @@ export function useStoreAccess() {
 
     pendingRef.current = promise;
     return promise;
-  }, [fetchWithAuth, isSlow, retryFetch, scheduleLoading, toastError]);
+  }, [fetchWithAuth, isSlow, retryFetch, scheduleLoading]);
 
-  // Auto‑fetch on mount
+  // Auto-fetch on mount
   useEffect(() => {
     verifyStoreAccess();
     return () => {
@@ -148,3 +141,4 @@ export function useStoreAccess() {
     [state.storeAccess, state.loading, state.error, computedAlert, verifyStoreAccess]
   );
 }
+

@@ -15,7 +15,7 @@ const PlanBanner = ({ plan }) => {
       <p>
         {editLimitReached ? (
           <>
-            You’ve reached your free plan limit! ({plan.currentEditCount}/{plan.maxEdits} edits).
+            You've reached your free plan limit! ({plan.currentEditCount}/{plan.maxEdits} edits).
           </>
         ) : (
           <>
