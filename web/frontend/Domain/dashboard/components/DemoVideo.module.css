@@ -1,0 +1,59 @@
+.previewBackdrop {
+  background: linear-gradient(180deg, #f6f6f7 0%, #ffffff 45%, #f6f6f7 100%);
+}
+
+.videoShell {
+  background: linear-gradient(135deg, #111827 0%, #1f2937 55%, #374151 100%);
+}
+
+.glowTop {
+  position: absolute;
+  top: -40px;
+  right: -20px;
+  width: 180px;
+  height: 180px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0) 70%);
+  pointer-events: none;
+}
+
+.glowBottom {
+  position: absolute;
+  bottom: -50px;
+  left: -20px;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 72%);
+  pointer-events: none;
+}
+
+.videoCenter {
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 2;
+}
+
+.videoFrame {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+}
+
+.videoVisible {
+  display: block;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+}
+
+.videoHidden {
+  display: none;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+}
+
+.videoIframe {
+  border: none;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}

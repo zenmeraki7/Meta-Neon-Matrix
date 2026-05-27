@@ -1,0 +1,51 @@
+.plansGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--p-space-500);
+  margin-bottom: var(--p-space-1000);
+}
+
+.planCardWrap {
+  position: relative;
+  height: 100%;
+}
+
+.headerBase {
+  background: transparent;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+}
+
+.popularHeader {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  margin: -20px -20px 0 -20px;
+  padding: 12px 20px;
+  border-radius: 16px 16px 0 0;
+}
+
+.comparePrice {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.featureRow {
+  display: flex;
+  align-items: flex-start;
+  column-gap: var(--p-space-300);
+  width: 100%;
+}
+
+.featureIconCell {
+  flex-shrink: 0;
+  width: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.featureTextCell {
+  flex: 1;
+  min-width: 0;
+}

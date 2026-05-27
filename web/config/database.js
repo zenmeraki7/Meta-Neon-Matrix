@@ -1,0 +1,214 @@
+// FILE: web/config/database.js
+
+import { PrismaClient } from "../generated/prisma/index.js";
+import {
+  normalizeEditHistoryExecutionState,
+  normalizeEditHistoryStatus,
+  normalizeExportJobExecutionState,
+  normalizeExportJobStatus,
+  normalizeWebhookDeliveryStatus,
+} from "../utils/normalizedStateUtils.js";
+
+// Ensure a single instance of PrismaClient is used across the application.
+const globalForPrisma = globalThis;
+
+const LEGACY_COMPAT = Object.freeze({
+  whereRewrite:
+    String(process.env.ENABLE_LEGACY_WHERE_REWRITE || "false").toLowerCase() ===
+    "true",
+});
+
+function mapFieldValue(model, field, value) {
+  if (model === "EditHistory" && field === "status") {
+    if (Array.isArray(value)) return value.map(normalizeEditHistoryStatus);
+    return normalizeEditHistoryStatus(value);
+  }
+
+  if (model === "EditHistory" && field === "executionState") {
+    if (Array.isArray(value)) {
+      return value.map(normalizeEditHistoryExecutionState);
+    }
+    return normalizeEditHistoryExecutionState(value);
+  }
+
+  if (model === "ExportJob" && field === "status") {
+    if (Array.isArray(value)) return value.map(normalizeExportJobStatus);
+    return normalizeExportJobStatus(value);
+  }
+
+  if (model === "ExportJob" && field === "executionState") {
+    if (Array.isArray(value)) {
+      return value.map(normalizeExportJobExecutionState);
+    }
+    return normalizeExportJobExecutionState(value);
+  }
+
+  if (model === "WebhookDelivery" && field === "status") {
+    if (Array.isArray(value)) return value.map(normalizeWebhookDeliveryStatus);
+    return normalizeWebhookDeliveryStatus(value);
+  }
+
+  return value;
+}
+
+function rewriteLegacyWhereToNormalized(model, where) {
+  if (!where || typeof where !== "object") return where;
+
+  if (Array.isArray(where)) {
+    return where.map((item) => rewriteLegacyWhereToNormalized(model, item));
+  }
+
+  const out = { ...where };
+
+  for (const key of Object.keys(out)) {
+    const value = out[key];
+
+    if (["AND", "OR", "NOT"].includes(key)) {
+      out[key] = rewriteLegacyWhereToNormalized(model, value);
+      continue;
+    }
+
+    if (key === "status") {
+      if (!Object.prototype.hasOwnProperty.call(out, "statusNormalized")) {
+        out.statusNormalized =
+          value && typeof value === "object" && !Array.isArray(value)
+            ? Object.fromEntries(
+                Object.entries(value).map(([op, opValue]) => [
+                  op,
+                  mapFieldValue(model, "status", opValue),
+                ]),
+              )
+            : mapFieldValue(model, "status", value);
+      }
+
+      delete out.status;
+      continue;
+    }
+
+    if (key === "executionState") {
+      if (
+        !Object.prototype.hasOwnProperty.call(out, "executionStateNormalized")
+      ) {
+        out.executionStateNormalized =
+          value && typeof value === "object" && !Array.isArray(value)
+            ? Object.fromEntries(
+                Object.entries(value).map(([op, opValue]) => [
+                  op,
+                  mapFieldValue(model, "executionState", opValue),
+                ]),
+              )
+            : mapFieldValue(model, "executionState", value);
+      }
+
+      delete out.executionState;
+      continue;
+    }
+
+    if (value && typeof value === "object") {
+      out[key] = rewriteLegacyWhereToNormalized(model, value);
+    }
+  }
+
+  return out;
+}
+
+function dualWriteNormalizedData(model, data) {
+  if (!data || typeof data !== "object") return data;
+
+  if (Array.isArray(data)) {
+    return data.map((row) => dualWriteNormalizedData(model, row));
+  }
+
+  const out = { ...data };
+
+  if (model === "EditHistory") {
+    if (Object.prototype.hasOwnProperty.call(out, "status")) {
+      out.statusNormalized = normalizeEditHistoryStatus(out.status);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(out, "executionState")) {
+      out.executionStateNormalized = normalizeEditHistoryExecutionState(
+        out.executionState,
+      );
+    }
+  } else if (model === "ExportJob") {
+    if (Object.prototype.hasOwnProperty.call(out, "status")) {
+      out.statusNormalized = normalizeExportJobStatus(out.status);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(out, "executionState")) {
+      out.executionStateNormalized = normalizeExportJobExecutionState(
+        out.executionState,
+      );
+    }
+  } else if (model === "WebhookDelivery") {
+    if (Object.prototype.hasOwnProperty.call(out, "status")) {
+      out.statusNormalized = normalizeWebhookDeliveryStatus(out.status);
+    }
+  }
+
+  return out;
+}
+
+function normalizePrismaArgsForModel(model, args = {}) {
+  if (!["EditHistory", "ExportJob", "WebhookDelivery"].includes(model || "")) {
+    return args;
+  }
+
+  const normalizedArgs = { ...args };
+
+  if (LEGACY_COMPAT.whereRewrite && normalizedArgs.where) {
+    normalizedArgs.where = rewriteLegacyWhereToNormalized(
+      model,
+      normalizedArgs.where,
+    );
+  }
+
+  // create, update, updateMany, createMany usually use args.data.
+  if (normalizedArgs.data) {
+    normalizedArgs.data = dualWriteNormalizedData(model, normalizedArgs.data);
+  }
+
+  // upsert uses args.create and args.update.
+  if (normalizedArgs.create) {
+    normalizedArgs.create = dualWriteNormalizedData(
+      model,
+      normalizedArgs.create,
+    );
+  }
+
+  if (normalizedArgs.update) {
+    normalizedArgs.update = dualWriteNormalizedData(
+      model,
+      normalizedArgs.update,
+    );
+  }
+
+  return normalizedArgs;
+}
+
+function createPrismaClient() {
+  const baseClient = new PrismaClient({
+    log: ["error", "warn"],
+  });
+
+  return baseClient.$extends({
+    name: "normalized-state-compat",
+    query: {
+      $allModels: {
+        async $allOperations({ model, args, query }) {
+          const normalizedArgs = normalizePrismaArgsForModel(model, args);
+          return query(normalizedArgs);
+        },
+      },
+    },
+  });
+}
+
+export const prisma = globalForPrisma.prisma || createPrismaClient();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
+
+export default prisma;
