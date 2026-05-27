@@ -111,16 +111,15 @@ test("sync status requires verified session shop and does not fallback to query 
   );
 });
 
-test("history controller maps import and recurring responses through DTO mappers", () => {
+test("history controller maps import responses through DTO mappers and avoids legacy recurring path", () => {
   const source = read("web/controllers/historyController.js");
 
   assert.ok(source.includes("function toImportHistoryListDto("));
   assert.ok(source.includes("function toImportHistoryDetailDto("));
-  assert.ok(source.includes("function toRecurringJobDto("));
   assert.ok(source.includes("histories.map(toImportHistoryListDto)"));
   assert.ok(source.includes("toImportHistoryDetailDto(history)"));
-  assert.ok(source.includes("datas.map(toRecurringJobDto)"));
-  assert.ok(source.includes("toRecurringJobDto(job)"));
+  assert.equal(source.includes("export const getRecurringEdits"), false);
+  assert.equal(source.includes("export const getRecurringEditById"), false);
 });
 
 test("history DTO contract blocks internal/private fields", () => {
@@ -159,5 +158,151 @@ test("cursor-only list endpoints explicitly reject page > 1", () => {
   assert.ok(
     productQueryController.includes("Use cursor pagination."),
     "productQueryController must reject offset pagination",
+  );
+});
+
+test("product query controller delegates query/status persistence concerns to services", () => {
+  const controller = read("web/controllers/productQueryController.js");
+  const commandService = read("web/services/productService/productQueryCommandService.js");
+
+  assert.ok(
+    controller.includes("executeProductQuery("),
+    "productQueryController must delegate /get-all execution to productQueryCommandService",
+  );
+  assert.ok(
+    controller.includes("getBulkEditStatus("),
+    "productQueryController must delegate /bulk-edit-status to bulkEditStatusService",
+  );
+  assert.equal(
+    controller.includes("prisma.filterTrack.create"),
+    false,
+    "productQueryController must not persist filter tracking directly",
+  );
+  assert.equal(
+    controller.includes("prisma.editHistory.findFirst"),
+    false,
+    "productQueryController must not query edit history directly for status",
+  );
+  assert.ok(
+    commandService.includes("Best-effort telemetry write"),
+    "productQueryCommandService must treat telemetry writes as non-fatal",
+  );
+});
+
+test("product import preview handlers delegate heavy preview pipeline to service", () => {
+  const controller = read("web/controllers/productImportController.js");
+
+  assert.ok(
+    controller.includes("createCsvPreview("),
+    "productImportController must delegate POST /csv/preview to preview service",
+  );
+  assert.ok(
+    controller.includes("previewCsvPage("),
+    "productImportController must delegate GET /csv/preview to preview service",
+  );
+  assert.equal(
+    controller.includes("prisma.spreadsheetFile"),
+    false,
+    "productImportController must not access spreadsheetFile model directly for preview endpoints",
+  );
+  assert.equal(
+    controller.includes("Papa.parse"),
+    false,
+    "productImportController must not parse CSV directly for preview endpoints",
+  );
+  assert.equal(
+    controller.includes("fs.promises.readFile"),
+    false,
+    "productImportController must not read preview CSV files directly",
+  );
+});
+
+test("sync status handlers delegate read-model logic and enforce locals session source", () => {
+  const controller = read("web/controllers/syncController.js");
+
+  assert.ok(
+    controller.includes("getSyncStatusDetailForShop("),
+    "syncController.getSyncStatus must delegate to syncStatusQueryService",
+  );
+  assert.ok(
+    controller.includes("getSyncStatusSummaryForShop("),
+    "syncController.getSyncStatusSummary must delegate to syncStatusQueryService",
+  );
+  assert.ok(
+    controller.includes("getTrackedProductSyncStatus("),
+    "syncController.trackProductSync must delegate to syncStatusQueryService",
+  );
+  assert.equal(
+    controller.includes("req.shopify?.session"),
+    false,
+    "syncController.trackProductSync must not fallback to req.shopify?.session",
+  );
+});
+
+test("automatic product rule delete policy is enforced in service layer, not controller", () => {
+  const controller = read("web/controllers/automaticProductRuleController.js");
+  const commandService = read("web/services/automaticProductRuleCommandService.js");
+  const mutateCommand = read("web/services/automaticProductRule/commands/mutateAutomaticProductRuleCommand.js");
+
+  assert.equal(
+    controller.includes("assertDeleteConfirmationIfActive("),
+    false,
+    "automaticProductRuleController must not enforce active-rule delete confirmation policy",
+  );
+  assert.ok(
+    controller.includes("deleteCommand"),
+    "automaticProductRuleController must forward delete command payload to service",
+  );
+  assert.ok(
+    commandService.includes("deleteCommand"),
+    "automaticProductRuleCommandService must pass delete command to mutation command",
+  );
+  assert.ok(
+    mutateCommand.includes("CONFIRMATION_REQUIRED"),
+    "automatic rule delete confirmation policy must be enforced in mutate command service",
+  );
+});
+
+test("product export uses a single canonical export mutation handler", () => {
+  const exportController = read("web/controllers/productExportController.js");
+  const productRoutes = read("web/routes/productRoutes.js");
+  const productController = read("web/controllers/productController.js");
+
+  assert.equal(
+    exportController.includes("handleExportProductsData"),
+    false,
+    "productExportController must not keep duplicate handleExportProductsData path",
+  );
+  assert.equal(
+    productRoutes.includes("handleExportProductsData"),
+    false,
+    "productRoutes must not import duplicate export handler",
+  );
+  assert.equal(
+    productController.includes("handleExportProductsData"),
+    false,
+    "productController must not re-export duplicate export handler",
+  );
+  assert.ok(
+    productRoutes.includes('"/export"') && productRoutes.includes("createProductExport"),
+    "POST /export must map to createProductExport",
+  );
+});
+
+test("suggestion submit route enforces authenticated session and body validation", () => {
+  const suggestionRoute = read("web/routes/SuggestionRoutes.js");
+  const suggestionController = read("web/controllers/suggestionController.js");
+
+  assert.ok(
+    suggestionRoute.includes("validateSession"),
+    "SuggestionRoutes POST /submit must enforce validateSession",
+  );
+  assert.ok(
+    suggestionRoute.includes("validateBody(suggestionCreateSchema)"),
+    "SuggestionRoutes POST /submit must enforce suggestionCreateSchema body validation",
+  );
+  assert.ok(
+    suggestionController.includes("UNAUTHENTICATED"),
+    "suggestionController.addSuggestion must reject unauthenticated requests",
   );
 });

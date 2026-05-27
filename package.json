@@ -29,7 +29,10 @@
     "test:perf-snapshots": "node --test web/frontend/perfProfilerSnapshot.contract.test.js",
     "test:csv-preview-cursor": "node --test web/csvPreviewCursor.contract.test.js"
     ,
-    "test:worker-manifest": "node --test web/workerManifest.contract.test.js"
+    "test:worker-manifest": "node --test web/workerManifest.contract.test.js",
+    "ci:preflight-runtime-parity": "node web/scripts/ciPreflightRuntimeParity.js",
+    "test:undo-determinism-recovery": "node --test web/undoDeterminismAndRecovery.contract.test.js",
+    "test:security-hardening": "node --test web/securityHardening.contract.test.js"
   },
   "dependencies": {
     "@apollo/client": "^3.13.8",

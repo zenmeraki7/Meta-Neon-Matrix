@@ -3,10 +3,13 @@
 import { ProductExportService } from "../services/productService/productExportService.js";
 import { successResponse, errorResponse } from "../utils/responseUtils.js";
 import { EditHistoryService } from "../services/historyService/historyService.js";
+import {
+  getImportHistoryDetail,
+  listImportHistories,
+} from "../services/historyService/importHistoryQueryService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import { NotFoundError } from "../utils/errorUtils.js";
-import { prisma } from "../config/database.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 function toImportHistoryListDto(history) {
@@ -33,17 +36,6 @@ function toImportHistoryDetailDto(history) {
     errors: Array.isArray(history.errors) ? history.errors : [],
     createdAt: history.createdAt,
     completedAt: history.completedAt ?? null,
-  };
-}
-
-function toRecurringJobDto(job) {
-  return {
-    id: job.id,
-    status: job.status,
-    ruleId: job.ruleId || null,
-    nextRunAt: job.nextRunAt ?? null,
-    lastRunAt: job.lastRunAt ?? null,
-    createdAt: job.createdAt,
   };
 }
 
@@ -357,7 +349,7 @@ export const getAllImportHistories = asyncHandler(async (req, res) => {
   }
 
   const { cursor = null, page } = req.query;
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "10", 10)));
+  const limit = req.query.limit || "10";
 
   if (page && String(page) !== "1") {
     return res.status(400).json({
@@ -366,50 +358,17 @@ export const getAllImportHistories = asyncHandler(async (req, res) => {
     });
   }
 
-  let cursorFilter = {};
-  if (cursor) {
-    const cursorRow = await prisma.spreadsheetFile.findFirst({
-      where: { id: cursor, shop: session.shop },
-      select: { id: true, createdAt: true },
-    });
-    if (cursorRow) {
-      cursorFilter = {
-        OR: [
-          { createdAt: { lt: cursorRow.createdAt } },
-          { AND: [{ createdAt: cursorRow.createdAt }, { id: { lt: cursorRow.id } }] },
-        ],
-      };
-    }
-  }
-
-  const [rows, totalCount] = await Promise.all([
-    prisma.spreadsheetFile.findMany({
-      where: {
-        AND: [
-          { shop: session.shop },
-          ...(Object.keys(cursorFilter).length ? [cursorFilter] : []),
-        ],
-      },
-      orderBy: { createdAt: "desc" },
-      take: limit + 1,
-    }),
-    prisma.spreadsheetFile.count({
-      where: { shop: session.shop },
-    }),
-  ]);
-
-  const hasNextPage = rows.length > limit;
-  const histories = hasNextPage ? rows.slice(0, limit) : rows;
-  const endCursor = histories.length ? histories[histories.length - 1].id : null;
+  const { histories, totalCount, pageInfo } = await listImportHistories({
+    shop: session.shop,
+    cursor,
+    limit,
+  });
 
   return res.status(200).json({
     success: true,
     count: histories.length,
     totalCount,
-    pageInfo: {
-      hasNextPage,
-      endCursor,
-    },
+    pageInfo,
     data: histories.map(toImportHistoryListDto),
   });
 });
@@ -426,11 +385,9 @@ export const getImportHistoryDetails = asyncHandler(async (req, res) => {
     return res.status(statusCode).json(body);
   }
 
-  const history = await prisma.spreadsheetFile.findFirst({
-    where: {
-      id,
-      shop: session.shop,
-    },
+  const history = await getImportHistoryDetail({
+    shop: session.shop,
+    id,
   });
 
   if (!history) {
@@ -445,72 +402,3 @@ export const getImportHistoryDetails = asyncHandler(async (req, res) => {
     data: toImportHistoryDetailDto(history),
   });
 });
-
-// ─────────────────────────────────────────────────────────────
-// Recurring edits
-// ─────────────────────────────────────────────────────────────
-
-export const getRecurringEdits = async (req, res) => {
-  try {
-    const { shop } = res.locals.shopify.session;
-    if (!shop) {
-      return res.status(400).json({ message: "Shop is required" });
-    }
-
-    if (!prisma.recurringEdit) {
-      return res.status(501).json({ message: "Recurring edit is not migrated to Prisma yet" });
-    }
-
-    const datas = await prisma.recurringEdit.findMany({
-      where: { shop },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        frequency: true,
-        dayOfMonthToRun: true,
-        daysOfWeekToRun: true,
-        isCurrentlyRunning: true,
-        createdAt: true,
-      },
-    });
-
-    return res.status(200).json({
-      data: datas.map(toRecurringJobDto),
-      message: "recurring edit fetched successfully",
-    });
-  } catch (err) {
-    console.error("getRecurringEdits error:", err);
-    return res.status(500).json({ message: "Internal Server Error" });
-  }
-};
-
-export const getRecurringEditById = async (req, res) => {
-  try {
-    const { shop } = res.locals.shopify.session;
-    const { id } = req.params;
-
-    if (!prisma.recurringEdit) {
-      return res.status(501).json({ message: "Recurring edit is not migrated to Prisma yet" });
-    }
-
-    const job = await prisma.recurringEdit.findFirst({
-      where: {
-        id,
-        shop,
-      },
-    });
-
-    if (!job) {
-      return res.status(404).json({ message: "Recurring edit not found" });
-    }
-
-    return res
-      .status(200)
-      .json({ data: toRecurringJobDto(job), message: "Job fetched successfully" });
-  } catch (err) {
-    console.error("getRecurringEditById error:", err);
-    return res.status(500).json({ message: "Internal Server Error" });
-  }
-};

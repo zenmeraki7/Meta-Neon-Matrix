@@ -49,6 +49,15 @@ function scalarExpr(path, operator, value) {
 
 function compileCondition(node, context = {}) {
   const fieldSpec = getFieldSpecOrThrow(node.field);
+  if (fieldSpec.pathKind === "relation") {
+    throw new TargetingValidationError(
+      "Relation fields require relation-aware resolver path",
+      {
+        code: "RELATION_FIELD_REQUIRES_RESOLVER",
+        meta: { field: node.field },
+      },
+    );
+  }
   const path = fieldSpec.prismaPath;
 
   if (fieldSpec.valueType === "string[]") {

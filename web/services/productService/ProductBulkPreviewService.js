@@ -88,32 +88,97 @@ export class ProductBulkPreviewService {
       queryParams: { cursor, limit },
       sampleLimit: Number.parseInt(limit, 10) || 20,
     });
-    const previewId = crypto.randomUUID();
-    await prisma.filterTrack.create({
-      data: {
-        id: previewId,
+    const previewSignatureHash = crypto
+      .createHash("sha256")
+      .update(JSON.stringify({
+        shop: this.session.shop,
+        actorId: actorId ? String(actorId) : null,
+        field,
+        editType,
+        editValue,
+        searchKey,
+        replaceText,
+        supportValue,
+        filterAst: target.normalizedFilterAst,
+        filterHash: target.filterHash,
+        mirrorBatchId: target.mirrorBatchId,
+        targetCount: Number(target.count || 0),
+        cursor: cursor || null,
+        limit: Number.parseInt(limit, 10) || 20,
+      }))
+      .digest("hex");
+    const dedupeWindowMs = Number.parseInt(
+      process.env.PREVIEW_DEDUPE_WINDOW_MS || "45000",
+      10,
+    );
+    const dedupeCutoff = new Date(Date.now() - Math.max(0, dedupeWindowMs));
+    const existingPreviewTrack = await prisma.filterTrack.findFirst({
+      where: {
         shop: this.session.shop,
         userId: actorId ? String(actorId) : null,
         type: "preview",
-        filterParams: Array.isArray(filterParams) ? filterParams : [],
-        previewResCount: target.count,
-        value: {
-          previewId,
-          actorId: actorId ? String(actorId) : null,
-          normalizedAst: target.normalizedFilterAst,
-          filterHash: target.filterHash,
-          mirrorBatchId: target.mirrorBatchId,
-          targetCount: target.count,
-          compilerVersion: target.versions?.targetingCompilerVersion || null,
-          registryVersion: {
-            fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,
-            operatorRegistryVersion: target.versions?.operatorRegistryVersion || null,
-          },
-        },
         source: "manual_preview",
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        searchKey: previewSignatureHash,
+        createdAt: { gte: dedupeCutoff },
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
       },
     });
+    const previewId = existingPreviewTrack?.id || crypto.randomUUID();
+    if (existingPreviewTrack?.id) {
+      await prisma.filterTrack.update({
+        where: { id: existingPreviewTrack.id },
+        data: {
+          previewResCount: target.count,
+          filterParams: Array.isArray(filterParams) ? filterParams : [],
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          value: {
+            previewId,
+            actorId: actorId ? String(actorId) : null,
+            normalizedAst: target.normalizedFilterAst,
+            filterHash: target.filterHash,
+            mirrorBatchId: target.mirrorBatchId,
+            targetCount: target.count,
+            compilerVersion: target.versions?.targetingCompilerVersion || null,
+            registryVersion: {
+              fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,
+              operatorRegistryVersion: target.versions?.operatorRegistryVersion || null,
+            },
+            previewSignatureHash,
+          },
+        },
+      });
+    } else {
+      await prisma.filterTrack.create({
+        data: {
+          id: previewId,
+          shop: this.session.shop,
+          userId: actorId ? String(actorId) : null,
+          type: "preview",
+          filterParams: Array.isArray(filterParams) ? filterParams : [],
+          previewResCount: target.count,
+          searchKey: previewSignatureHash,
+          value: {
+            previewId,
+            actorId: actorId ? String(actorId) : null,
+            normalizedAst: target.normalizedFilterAst,
+            filterHash: target.filterHash,
+            mirrorBatchId: target.mirrorBatchId,
+            targetCount: target.count,
+            compilerVersion: target.versions?.targetingCompilerVersion || null,
+            registryVersion: {
+              fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,
+              operatorRegistryVersion: target.versions?.operatorRegistryVersion || null,
+            },
+            previewSignatureHash,
+          },
+          source: "manual_preview",
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        },
+      });
+    }
 
     const productLimit = subscription?.limit || 100;
     const planName = subscription?.planName || "Free Plan";

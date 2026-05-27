@@ -3,6 +3,7 @@
 import { PLANS } from "../services/SubscriptionService/SubscriptionService.js";
 
 import { prisma } from "../config/database.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 
 export const subscriptionMiddleware = async (req, res, next) => {
@@ -12,10 +13,11 @@ export const subscriptionMiddleware = async (req, res, next) => {
     
     if (!session || !session.shop) {
       console.error("[SUBSCRIPTION_MIDDLEWARE] No session or shop found");
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized: No session found",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "UNAUTHENTICATED" },
+        "UNAUTHENTICATED",
+      );
+      return res.status(statusCode).json(body);
     }
 
     const shop = session.shop;
@@ -108,11 +110,11 @@ const store = await prisma.store.findUnique({
 
   } catch (error) {
     console.error("[SUBSCRIPTION_MIDDLEWARE] Error:", error);
-    
-    return res.status(500).json({
-      success: false,
-      message: "Failed to check subscription",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 
 };
@@ -120,10 +122,11 @@ const store = await prisma.store.findUnique({
 export const requirePaidPlanMiddleware = (req, res, next) => {
   try {
     if (!req.subscription) {
-      return res.status(500).json({
-        success: false,
-        message: "Subscription data not found",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "INTERNAL_ERROR" },
+        "INTERNAL_ERROR",
+      );
+      return res.status(statusCode).json(body);
     }
     
     const { planKey, status,isCreditUser } = req.subscription;
@@ -136,28 +139,29 @@ export const requirePaidPlanMiddleware = (req, res, next) => {
 
     // Block FREE plan
     if (planKey === "FREE") {
-      return res.status(403).json({
-        success: false,
-        message: "Schedule Edit is available only on paid plans. Please upgrade your plan.",
-        code: "UPGRADE_REQUIRED",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "FORBIDDEN" },
+        "FORBIDDEN",
+      );
+      return res.status(statusCode).json(body);
     }
 
     // Optional: Also ensure subscription is ACTIVE
     if (status !== "ACTIVE") {
-      return res.status(403).json({
-        success: false,
-        message: "Your subscription is not active.",
-        code: "SUBSCRIPTION_INACTIVE",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "FORBIDDEN" },
+        "FORBIDDEN",
+      );
+      return res.status(statusCode).json(body);
     }
 
     next();
   } catch (error) {
     console.error("[REQUIRE_PAID_PLAN] Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Subscription validation failed",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
   }
 };

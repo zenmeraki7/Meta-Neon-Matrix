@@ -192,29 +192,6 @@ function normalizeDeleteAutomaticProductRuleBody(body = {}) {
   };
 }
 
-function assertDeleteConfirmationIfActive(rule, deleteCommand) {
-  const status = rule?.statusKey || rule?.status;
-
-  if (status !== "ACTIVE") {
-    return;
-  }
-
-  const confirmedByPhrase =
-    deleteCommand.confirmation === "DELETE AUTOMATIC RULE";
-
-  const confirmedByFlag =
-    ALLOWED_DELETE_POLICIES.has(deleteCommand.deletePolicy) &&
-    deleteCommand.confirmationAccepted === true;
-
-  if (!confirmedByPhrase && !confirmedByFlag) {
-    throw createPublicControllerError(
-      "CONFIRMATION_REQUIRED",
-      400,
-      "Confirmation is required before deleting an active automatic rule.",
-    );
-  }
-}
-
 function buildRunNowCommand(req) {
   return validateRunAutomaticProductRuleNowCommand({
     automaticProductRuleId: req.params?.id,
@@ -526,18 +503,11 @@ export async function deleteAutomaticProductRuleController(req, res) {
     const ruleId = normalizeRuleIdParam(req.params);
     const deleteCommand = normalizeDeleteAutomaticProductRuleBody(req.body);
 
-    const rule = await automaticProductRuleQueryService.getRuleDetail({
-      shop: session.shop,
-      ruleId,
-    });
-
-    assertDeleteConfirmationIfActive(rule, deleteCommand);
-
     const result = await automaticProductRuleCommandService.deleteRule({
       shop: session.shop,
       actor,
       ruleId,
-      deletePolicy: deleteCommand.deletePolicy,
+      deleteCommand,
     });
 
     return res.status(200).json(

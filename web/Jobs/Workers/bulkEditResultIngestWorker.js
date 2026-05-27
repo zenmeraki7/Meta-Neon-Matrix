@@ -3,12 +3,8 @@ import { connection } from "../../config/redis.js";
 import shopify from "../../shopify.js";
 import { prisma } from "../../config/database.js";
 import { BulkEditResultIngestionService } from "../../services/bulkEdit/BulkEditResultIngestionService.js";
-import {
-  normalizeEditHistoryExecutionState,
-  normalizeEditHistoryStatus,
-} from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
-import { guardedEditHistoryUpdate } from "../../services/operationTransitionGuards.js";
+import { transitionOperation } from "../../services/operationTransitionService.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import { upsertOperationStageProgress } from "../../services/operationStageProgressService.js";
 
@@ -236,9 +232,9 @@ async function processBulkEditResultIngest(job) {
     const failureStage = cancelled
       ? "SHOPIFY_BULK_OPERATION_CANCELLED"
       : "SHOPIFY_BULK_OPERATION";
-    const failedUpdate = await guardedEditHistoryUpdate({
-      id: history.id,
+    const failedUpdate = await transitionOperation({
       shop,
+      operationId: history.id,
       expectedExecutionStates: [
         OPERATION_LIFECYCLE_STATES.QUEUED,
         OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
@@ -248,15 +244,14 @@ async function processBulkEditResultIngest(job) {
         OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
         OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
       ],
-      data: {
-        status: terminalStatus,
-        statusNormalized: normalizeEditHistoryStatus(terminalStatus),
-        executionState: terminalState,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          terminalState,
-        ),
+      expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+      nextExecutionState: terminalState,
+      transitionKey: "bulk_result_ingest_shopify_terminal_failure",
+      actor: { type: "worker", id: "bulkEditResultIngestWorker" },
+      reasonCode: cancelled ? "SHOPIFY_BULK_CANCELLED" : "SHOPIFY_BULK_FAILED",
+      metadata: { bulkOperationId, shopifyStatus: status, webhookStatus },
+      dataPatch: {
         failureStage,
-        completedAt: new Date(),
         batch: {
           ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
           shopifyBulkOperation: {
@@ -268,8 +263,9 @@ async function processBulkEditResultIngest(job) {
           },
         },
       },
+      db: prisma,
     });
-    if (!failedUpdate) {
+    if (!failedUpdate?.ok) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_SHOPIFY_FAILURE");
     }
     return {
@@ -299,23 +295,22 @@ async function processBulkEditResultIngest(job) {
     const exhausted = attemptNumber >= MAX_RESULT_URL_RETRIES;
 
     if (exhausted) {
-      const failedForMissingUrl = await guardedEditHistoryUpdate({
-        id: history.id,
+      const failedForMissingUrl = await transitionOperation({
         shop,
+        operationId: history.id,
         expectedExecutionStates: [
           OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
           OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
           OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
         ],
-        data: {
-          status: "failed",
-          statusNormalized: normalizeEditHistoryStatus("failed"),
-          executionState: OPERATION_LIFECYCLE_STATES.FAILED,
-          executionStateNormalized: normalizeEditHistoryExecutionState(
-            OPERATION_LIFECYCLE_STATES.FAILED,
-          ),
+        expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+        nextExecutionState: OPERATION_LIFECYCLE_STATES.FAILED,
+        transitionKey: "bulk_result_ingest_url_missing",
+        actor: { type: "worker", id: "bulkEditResultIngestWorker" },
+        reasonCode: "RESULT_INGESTION_URL_MISSING_OR_EXPIRED",
+        metadata: { bulkOperationId, status, attemptNumber },
+        dataPatch: {
           failureStage: "RESULT_INGESTION_URL_EXPIRED",
-          completedAt: new Date(),
           batch: mergeBatch(history.batch, {
             resultIngestionFailure: {
               code: "RESULT_URL_MISSING_OR_EXPIRED",
@@ -327,8 +322,9 @@ async function processBulkEditResultIngest(job) {
             },
           }),
         },
+        db: prisma,
       });
-      if (!failedForMissingUrl) {
+      if (!failedForMissingUrl?.ok) {
         throw new Error("EDIT_HISTORY_UPDATE_FAILED_RESULT_URL_MISSING_TERMINAL");
       }
       return {
@@ -343,29 +339,6 @@ async function processBulkEditResultIngest(job) {
     }
 
     throw new Error("RESULT_URL_MISSING_OR_EXPIRED_RETRYABLE");
-  }
-
-  const updated = await guardedEditHistoryUpdate({
-    id: history.id,
-    shop,
-    expectedExecutionStates: [
-      OPERATION_LIFECYCLE_STATES.QUEUED,
-      OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
-      OPERATION_LIFECYCLE_STATES.EXECUTING,
-      OPERATION_LIFECYCLE_STATES.SHOPIFY_BULK_SUBMITTED,
-      OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
-      OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
-      OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-    ],
-    data: {
-      executionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-      executionStateNormalized: normalizeEditHistoryExecutionState(
-        OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-      ),
-    },
-  });
-  if (!updated) {
-    throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_INGESTING");
   }
 
   const service = new BulkEditResultIngestionService();
@@ -393,6 +366,49 @@ async function processBulkEditResultIngest(job) {
     });
   } catch (error) {
     const message = String(error?.message || "");
+    const deterministicDataError =
+      message.includes("MALFORMED_RESULT_JSONL_ROWS")
+      || message.includes("UNMAPPED_RESULT_ROWS");
+    if (deterministicDataError) {
+      const failedForDataError = await transitionOperation({
+        shop,
+        operationId: history.id,
+        expectedExecutionStates: [
+          OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
+          OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+          OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+        ],
+        expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+        nextExecutionState: OPERATION_LIFECYCLE_STATES.FAILED,
+        transitionKey: "bulk_result_ingest_data_corruption",
+        actor: { type: "worker", id: "bulkEditResultIngestWorker" },
+        reasonCode: "RESULT_INGESTION_DATA_CORRUPTION",
+        metadata: { bulkOperationId, message },
+        dataPatch: {
+          failureStage: "RESULT_INGESTION_DATA_CORRUPTION",
+          batch: mergeBatch(history.batch, {
+            resultIngestionFailure: {
+              code: "RESULT_JSONL_DATA_CORRUPTION",
+              bulkOperationId,
+              failedAt: new Date().toISOString(),
+              message,
+            },
+          }),
+        },
+        db: prisma,
+      });
+      if (!failedForDataError?.ok) {
+        throw new Error("EDIT_HISTORY_UPDATE_FAILED_RESULT_JSONL_DATA_CORRUPTION_TERMINAL");
+      }
+      return {
+        success: false,
+        failed: true,
+        reason: "RESULT_JSONL_DATA_CORRUPTION",
+        historyId: history.id,
+        shop,
+        bulkOperationId,
+      };
+    }
     const isResultUrlError =
       message.includes("Failed to download Shopify result JSONL: 403")
       || message.includes("Failed to download Shopify result JSONL: 410")
@@ -408,23 +424,22 @@ async function processBulkEditResultIngest(job) {
       throw new Error("RESULT_URL_EXPIRED_RETRYABLE");
     }
 
-    const failedForExpiredUrl = await guardedEditHistoryUpdate({
-      id: history.id,
+    const failedForExpiredUrl = await transitionOperation({
       shop,
+      operationId: history.id,
       expectedExecutionStates: [
         OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
         OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
         OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
       ],
-      data: {
-        status: "failed",
-        statusNormalized: normalizeEditHistoryStatus("failed"),
-        executionState: OPERATION_LIFECYCLE_STATES.FAILED,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.FAILED,
-        ),
+      expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+      nextExecutionState: OPERATION_LIFECYCLE_STATES.FAILED,
+      transitionKey: "bulk_result_ingest_url_expired",
+      actor: { type: "worker", id: "bulkEditResultIngestWorker" },
+      reasonCode: "RESULT_INGESTION_URL_EXPIRED",
+      metadata: { bulkOperationId, attemptNumber, message },
+      dataPatch: {
         failureStage: "RESULT_INGESTION_URL_EXPIRED",
-        completedAt: new Date(),
         batch: mergeBatch(history.batch, {
           resultIngestionFailure: {
             code: "RESULT_URL_EXPIRED",
@@ -436,8 +451,9 @@ async function processBulkEditResultIngest(job) {
           },
         }),
       },
+      db: prisma,
     });
-    if (!failedForExpiredUrl) {
+    if (!failedForExpiredUrl?.ok) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_RESULT_URL_EXPIRED_TERMINAL");
     }
     return {

@@ -6,8 +6,9 @@
 import adminService from "../services/adminService.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
-// ✅ Add Prisma
-import  {prisma} from "../config/database.js"
+export function __setBulkEditRecoveryServiceFactory(factory) {
+  adminService.setBulkEditRecoveryServiceFactory(factory);
+}
 
 // Dashboard Overview
 export const getDashboard = async (req, res) => {
@@ -22,85 +23,16 @@ export const getDashboard = async (req, res) => {
 
 export const getCompletedEditHistorySummary = async (req, res) => {
   try {
-    // 1️⃣ groupBy shop where status = "completed"
-    const groups = await prisma.editHistory.groupBy({
-      by: ["shop"],
-      where: {
-        status: "completed",
-      },
-      _count: {
-        _all: true,
-      },
-      _max: {
-        completedAt: true,
-      },
-    });
-
-    // 2️⃣ Fetch Store rows for these shops
-    const shops = groups.map((g) => g.shop).filter(Boolean);
-    const stores = shops.length
-      ? await prisma.store.findMany({
-          where: { shopUrl: { in: shops } },
-          select: {
-            shopUrl: true,
-            isUnInstalled: true,
-          },
-        })
-      : [];
-
-    const storeMap = new Map(
-      stores.map((s) => [s.shopUrl, s.isUnInstalled]),
-    );
-
-    // 3️⃣ Build summary objects (shop, completedEdits, isUnInstalled, lastEditAt)
-    const rawSummaries = groups.map((g) => {
-      const shop = g.shop;
-      const completedEdits = g._count._all;
-      const lastEditAt = g._max.completedAt ?? null;
-      const isUnInstalled = storeMap.get(shop) ?? null;
-
-      return {
-        shop,
-        completedEdits,
-        isUnInstalled,
-        lastEditAt,
-      };
-    });
-
-    // 4️⃣ Sort latest first by lastEditAt
-    rawSummaries.sort((a, b) => {
-      const aTime = a.lastEditAt ? a.lastEditAt.getTime() : 0;
-      const bTime = b.lastEditAt ? b.lastEditAt.getTime() : 0;
-      return bTime - aTime;
-    });
-
-    // 5️⃣ Format lastEditAt into "DD Mon YYYY, hh:mm AM/PM" in Asia/Kolkata
-    const formattedData = rawSummaries.map((item) => ({
-      ...item,
-      lastEditAt: item.lastEditAt
-        ? new Date(item.lastEditAt).toLocaleString("en-IN", {
-            timeZone: "Asia/Kolkata",
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: true,
-          })
-        : null,
-    }));
+    const result = await adminService.getCompletedEditHistorySummary();
 
     res.status(200).json({
       success: true,
-      count: formattedData.length,
-      data: formattedData,
+      count: result.count,
+      data: result.data,
     });
   } catch (error) {
-    console.error("EditHistory Aggregate Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch completed edit history summary",
-    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    res.status(statusCode).json(body);
   }
 };
 
@@ -119,10 +51,11 @@ export const getAllStores = async (req, res) => {
   try {
     const { page, cursor, limit, status, search } = req.query;
     if (page && String(page) !== "1") {
-      return res.status(400).json({
-        success: false,
-        message: "Offset pagination is disabled. Use cursor pagination.",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "VALIDATION_FAILED" },
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
     }
     const result = await adminService.getAllStores({
       cursor: cursor || null,
@@ -164,10 +97,11 @@ export const getEditHistoryList = async (req, res) => {
   try {
     const { page, cursor, limit, status, type, shopUrl, sortBy, sortOrder } = req.query;
     if (page && String(page) !== "1") {
-      return res.status(400).json({
-        success: false,
-        message: "Offset pagination is disabled. Use cursor pagination.",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "VALIDATION_FAILED" },
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
     }
     const result = await adminService.getEditHistoryList({
       cursor: cursor || null,
@@ -189,10 +123,11 @@ export const getFailedEdits = async (req, res) => {
   try {
     const { page, cursor, limit, shopUrl } = req.query;
     if (page && String(page) !== "1") {
-      return res.status(400).json({
-        success: false,
-        message: "Offset pagination is disabled. Use cursor pagination.",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "VALIDATION_FAILED" },
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
     }
     const result = await adminService.getFailedEdits({
       cursor: cursor || null,
@@ -222,10 +157,11 @@ export const getSyncHistoryList = async (req, res) => {
   try {
     const { page, cursor, limit, status, operationType, shopUrl } = req.query;
     if (page && String(page) !== "1") {
-      return res.status(400).json({
-        success: false,
-        message: "Offset pagination is disabled. Use cursor pagination.",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "VALIDATION_FAILED" },
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
     }
     const result = await adminService.getSyncHistoryList({
       cursor: cursor || null,
@@ -238,5 +174,40 @@ export const getSyncHistoryList = async (req, res) => {
   } catch (error) {
     const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
     res.status(statusCode).json(body);
+  }
+};
+
+export const recoverStuckBulkEditOperation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { mode = "auto", reason } = req.body || {};
+    const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();
+    if (!id || !String(reason || "").trim()) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "VALIDATION_FAILED" },
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
+    }
+    if (!idempotencyKey) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "IDEMPOTENCY_KEY_REQUIRED" },
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
+    }
+    const response = await adminService.recoverStuckBulkEditOperation({
+      historyId: id,
+      mode,
+      reason,
+      idempotencyKey,
+      actorId: req.headers["x-admin-id"],
+      actorEmail: req.headers["x-admin-email"],
+    });
+
+    return res.status(200).json(response);
+  } catch (error) {
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
+    return res.status(statusCode).json(body);
   }
 };

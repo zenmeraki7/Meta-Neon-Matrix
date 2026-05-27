@@ -7,7 +7,17 @@ function pushParam(params, value) {
 }
 
 function compileConditionSql(node, params) {
-  const { prismaPath } = getFieldSpecOrThrow(node.field);
+  const fieldSpec = getFieldSpecOrThrow(node.field);
+  if (fieldSpec.pathKind === "relation") {
+    throw new TargetingValidationError(
+      "Relation fields require canonical relation-aware resolver path",
+      {
+        code: "RELATION_FIELD_REQUIRES_RESOLVER",
+        meta: { field: node.field },
+      },
+    );
+  }
+  const { prismaPath } = fieldSpec;
   const col = `"${prismaPath}"`;
 
   switch (node.operator) {

@@ -123,25 +123,38 @@ function toPreviewDto(result) {
   const preview = result?.data || {};
   const fingerprint = preview?.previewFingerprint || {};
   const risk = result?.risk || {};
+  const normalizedPreviewRows = Array.isArray(preview.preview) ? preview.preview : [];
+  const normalizedPagination = preview?.pagination && typeof preview.pagination === "object"
+    ? preview.pagination
+    : null;
+  const normalizedIsVariant =
+    String(preview.targetGranularity || "PRODUCT").toUpperCase() === "VARIANT";
+  const normalizedFingerprint = {
+    filterHash: fingerprint.filterHash || null,
+    mirrorBatchId: fingerprint.mirrorBatchId || null,
+    compilerVersion: fingerprint.compilerVersion || null,
+    fieldRegistryVersion: fingerprint.registryVersion?.fieldRegistryVersion || null,
+    operatorRegistryVersion: fingerprint.registryVersion?.operatorRegistryVersion || null,
+  };
   return {
     success: true,
     count: Number(preview.targetCount || 0),
     productCount: Number(preview.productCount || 0),
     variantCount: Number(preview.variantCount || 0),
     targetGranularity: String(preview.targetGranularity || "PRODUCT").toUpperCase(),
-    previewFingerprint: {
-      filterHash: fingerprint.filterHash || null,
-      mirrorBatchId: fingerprint.mirrorBatchId || null,
-      compilerVersion: fingerprint.compilerVersion || null,
-      fieldRegistryVersion: fingerprint.registryVersion?.fieldRegistryVersion || null,
-      operatorRegistryVersion: fingerprint.registryVersion?.operatorRegistryVersion || null,
-    },
+    previewFingerprint: normalizedFingerprint,
     risk: {
       riskLevel: risk.riskLevel || "NORMAL",
       riskScore: Number(risk.riskScore || 0),
       requiredCriticalConfirmation: risk.requiredCriticalConfirmation || null,
     },
-    data: Array.isArray(preview.preview) ? preview.preview : [],
+    data: {
+      preview: normalizedPreviewRows,
+      pagination: normalizedPagination,
+      isVariant: normalizedIsVariant,
+      previewFingerprint: normalizedFingerprint,
+      requiresConfirmation: Boolean(result?.broadTargetAssessment?.requiresConfirmation),
+    },
   };
 }
 
@@ -151,9 +164,15 @@ export const undoEdit = async (req, res) => {
 
   try {
     session = getSessionOrThrow(res);
+    const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();
+    if (!idempotencyKey) {
+      const err = new Error("IDEMPOTENCY_KEY_REQUIRED");
+      err.code = "VALIDATION_FAILED";
+      throw err;
+    }
 
     const service = new UndoEditService(session);
-    const result = await service.undoEdit(id);
+    const result = await service.undoEdit(id, { idempotencyKey });
 
     return res.status(202).json({
       success: true,
@@ -202,9 +221,11 @@ export const handleBulkEditProduct = async (req, res) => {
     });
 
     if (!result) {
-      return res.status(500).json({
-        message: "Bulk edit failed - no result returned.",
-      });
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "INTERNAL_ERROR" },
+        "INTERNAL_ERROR",
+      );
+      return res.status(statusCode).json(body);
     }
 
     await clearAllCachesForShop(session.shop);
@@ -417,4 +438,3 @@ export const retryFailedOnlyEditOperation = async (req, res) => {
     return res.status(statusCode).json(body);
   }
 };
-

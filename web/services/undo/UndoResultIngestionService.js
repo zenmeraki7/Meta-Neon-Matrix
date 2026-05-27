@@ -5,6 +5,12 @@ import {
   buildExecutionError,
   normalizeUndoState,
 } from "../bulkEditExecutionStateService.js";
+import {
+  acquireOperationLease,
+  assertOperationLeaseOwnership,
+  buildLeaseOwnerId,
+  releaseOperationLease,
+} from "../operationLeaseService.js";
 
 function mergeBatch(existingBatch, patch) {
   return {
@@ -25,6 +31,23 @@ export class UndoResultIngestionService {
     bulkOperationId,
     status,
   }) {
+    const leaseOwnerId = buildLeaseOwnerId("bulk-undo-result-ingest");
+    const lease = await acquireOperationLease({
+      shop,
+      namespace: "BULK_UNDO_RESULT_INGEST",
+      resourceId: String(bulkOperationId),
+      ownerId: leaseOwnerId,
+    });
+    if (!lease?.acquired) {
+      throw new Error("UNDO_RESULT_INGEST_LEASE_CONFLICT");
+    }
+    try {
+    await assertOperationLeaseOwnership({
+      shop,
+      namespace: "BULK_UNDO_RESULT_INGEST",
+      resourceId: String(bulkOperationId),
+      ownerId: leaseOwnerId,
+    });
     const normalizedStatus = String(status || "").toUpperCase();
     const history = await prisma.editHistory.findFirst({
       where: {
@@ -54,6 +77,7 @@ export class UndoResultIngestionService {
     }
 
     const undo = normalizeUndoState(history.undo, {});
+    const undoOperationId = String(undo?.undoOperationId || "").trim() || null;
     const batch = history.batch && typeof history.batch === "object" ? history.batch : {};
     const allowedWebhookTerminalStates = [
       BULK_UNDO_STATES.AWAITING_SHOPIFY,
@@ -79,6 +103,12 @@ export class UndoResultIngestionService {
     }
 
     if (["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(normalizedStatus)) {
+      await assertOperationLeaseOwnership({
+        shop,
+        namespace: "BULK_UNDO_RESULT_INGEST",
+        resourceId: String(bulkOperationId),
+        ownerId: leaseOwnerId,
+      });
       const movedFailed = await prisma.editHistory.updateMany({
         where: {
           id: history.id,
@@ -116,6 +146,17 @@ export class UndoResultIngestionService {
       if (movedFailed.count !== 1) {
         throw new Error("UNDO_TERMINAL_FAILURE_TRANSITION_REJECTED");
       }
+      if (undoOperationId) {
+        await prisma.undoOperation.updateMany({
+          where: { id: undoOperationId, shop },
+          data: {
+            status: "failed",
+            state: "failed",
+            bulkOperationId: null,
+            processedCount: Number(undo.processedCount || 0),
+          },
+        });
+      }
       return { success: true, failed: true, historyId: history.id };
     }
     if (!["COMPLETED", "COMPLETED_WITH_ERRORS"].includes(normalizedStatus)) {
@@ -132,6 +173,12 @@ export class UndoResultIngestionService {
     const hasMore = Boolean(batch.hasMore);
 
     if (hasMore) {
+      await assertOperationLeaseOwnership({
+        shop,
+        namespace: "BULK_UNDO_RESULT_INGEST",
+        resourceId: String(bulkOperationId),
+        ownerId: leaseOwnerId,
+      });
       const movedQueued = await prisma.editHistory.updateMany({
         where: {
           id: history.id,
@@ -168,6 +215,17 @@ export class UndoResultIngestionService {
       if (movedQueued.count !== 1) {
         throw new Error("UNDO_CONTINUATION_TRANSITION_REJECTED");
       }
+      if (undoOperationId) {
+        await prisma.undoOperation.updateMany({
+          where: { id: undoOperationId, shop },
+          data: {
+            status: "pending",
+            state: "queued",
+            bulkOperationId: null,
+            processedCount: nextProcessedCount,
+          },
+        });
+      }
 
       await addbulkUndoJob({
         historyId: history.id,
@@ -180,6 +238,12 @@ export class UndoResultIngestionService {
     }
 
     const completedAt = new Date();
+    await assertOperationLeaseOwnership({
+      shop,
+      namespace: "BULK_UNDO_RESULT_INGEST",
+      resourceId: String(bulkOperationId),
+      ownerId: leaseOwnerId,
+    });
     const movedCompleted = await prisma.editHistory.updateMany({
       where: {
         id: history.id,
@@ -220,7 +284,26 @@ export class UndoResultIngestionService {
     if (movedCompleted.count !== 1) {
       throw new Error("UNDO_COMPLETION_TRANSITION_REJECTED");
     }
+    if (undoOperationId) {
+      await prisma.undoOperation.updateMany({
+        where: { id: undoOperationId, shop },
+        data: {
+          status: "completed",
+          state: "completed",
+          bulkOperationId: null,
+          processedCount: nextProcessedCount,
+        },
+      });
+    }
 
     return { success: true, continued: false, historyId: history.id };
+    } finally {
+      await releaseOperationLease({
+        shop,
+        namespace: "BULK_UNDO_RESULT_INGEST",
+        resourceId: String(bulkOperationId),
+        ownerId: leaseOwnerId,
+      }).catch(() => {});
+    }
   }
 }

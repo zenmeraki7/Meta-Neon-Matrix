@@ -126,6 +126,7 @@ async function processTargetFreeze(jobData) {
         historyId,
         shop,
         stage: "targetFreeze",
+        executionId,
         retryable: true,
         error: error.message,
       });
@@ -156,6 +157,7 @@ async function processTargetFreeze(jobData) {
       historyId,
       shop,
       stage: "targetFreeze",
+      executionId,
       checkpoint: { frozenCount },
     });
   } finally {

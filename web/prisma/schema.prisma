@@ -460,6 +460,9 @@ model EditHistory {
   pausedAt                  DateTime?
   resumedAt                 DateTime?
   changeRecords             ChangeRecord[]
+  ingestionCheckpoints      EditHistoryIngestionCheckpoint[]
+  undoOperations            UndoOperation[]
+  recoveryAudits            BulkEditRecoveryAudit[]
 
   @@index([shop, status, type, updatedAt], map: "shop_status_type_recent")
   @@index([shop])
@@ -473,6 +476,86 @@ model EditHistory {
   @@index([automaticProductRuleId])
   @@index([automaticProductRuleRunId])
   @@index([shop, canonicalFilterKey])
+}
+
+model UndoOperation {
+  id                 String   @id @default(cuid())
+  shop               String
+  sourceEditHistoryId String
+  executionIdentity  String   @unique
+  idempotencyKeyHash String?
+  status             String   @default("pending")
+  state              String   @default("queued")
+  bulkOperationId    String?
+  processedCount     Int      @default(0)
+  totalEligibleCount Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  editHistory        EditHistory @relation(fields: [sourceEditHistoryId], references: [id], onDelete: Cascade)
+  conflictChunks     UndoOperationConflictChunk[]
+
+  @@unique([shop, sourceEditHistoryId])
+  @@index([shop, status, updatedAt])
+}
+
+model UndoOperationConflictChunk {
+  id              String   @id @default(cuid())
+  shop            String
+  undoOperationId String
+  chunkType       String
+  chunkIndex      Int
+  totalItems      Int      @default(0)
+  payload         Json
+  createdAt       DateTime @default(now())
+
+  undoOperation   UndoOperation @relation(fields: [undoOperationId], references: [id], onDelete: Cascade)
+
+  @@unique([shop, undoOperationId, chunkType, chunkIndex])
+  @@index([shop, undoOperationId, chunkType, chunkIndex])
+}
+
+model BulkEditRecoveryAudit {
+  id             String   @id @default(cuid())
+  shop           String
+  historyId      String
+  mode           String
+  reason         String
+  actorType      String?
+  actorId        String?
+  actorEmail     String?
+  result         String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  editHistory    EditHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
+
+  @@index([shop, historyId, createdAt])
+}
+
+model EditHistoryIngestionCheckpoint {
+  id               String   @id @default(cuid())
+  shop             String
+  historyId        String
+  ingestionRunId   String
+  attempt          Int      @default(1)
+  status           String   @default("IN_PROGRESS")
+  rowOffset        Int      @default(0)
+  rowCount         Int      @default(0)
+  successCount     Int      @default(0)
+  failureCount     Int      @default(0)
+  unmappedRowCount Int      @default(0)
+  malformedRowCount Int     @default(0)
+  rollingChecksum  String?
+  metadata         Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  editHistory      EditHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
+
+  @@unique([shop, historyId, ingestionRunId])
+  @@index([shop, historyId, status, updatedAt])
+  @@index([shop, historyId, updatedAt])
 }
 
 model RecurringEdit {
@@ -1495,6 +1578,9 @@ model WebhookDelivery {
   topic        String
   shop         String
   webhookId    String?
+  firstWebhookId String?
+  lastWebhookId String?
+  causalChainId String?
   entityId     String?
   dedupeKey    String    @unique
   payloadHash  String?

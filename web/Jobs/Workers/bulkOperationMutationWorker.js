@@ -64,6 +64,13 @@ function buildUnresolvedBulkWebhookDeliveryId({ shop, bulkOperationId }) {
     .digest("hex")}`;
 }
 
+function buildCausalChainId({ shop, bulkOperationId }) {
+  return `bulkop_chain_${crypto
+    .createHash("sha1")
+    .update(`${shop}:${bulkOperationId}:unresolved`)
+    .digest("hex")}`;
+}
+
 async function persistUnresolvedBulkMutationDelivery({
   shop,
   bulkOperationId,
@@ -82,6 +89,9 @@ async function persistUnresolvedBulkMutationDelivery({
       topic: "bulk_operations/finish_unresolved",
       shop,
       webhookId: String(payload?.webhookId || ""),
+      firstWebhookId: String(payload?.webhookId || "") || null,
+      lastWebhookId: String(payload?.webhookId || "") || null,
+      causalChainId: buildCausalChainId({ shop, bulkOperationId }),
       entityId: String(bulkOperationId),
       dedupeKey: `bulkop-unresolved:${shop}:${bulkOperationId}`,
       payloadHash,
@@ -92,6 +102,7 @@ async function persistUnresolvedBulkMutationDelivery({
       payloadHash,
       status: "QUEUED",
       lastError: "UNRESOLVED_BULK_OPERATION_OWNER",
+      lastWebhookId: String(payload?.webhookId || "") || null,
       attemptCount: { increment: 1 },
     },
   });

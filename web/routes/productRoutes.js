@@ -8,7 +8,6 @@ import {
 } from "../controllers/productExportController.js";
 import {
   handleDownloadExportProductsData,
-  handleExportProductsData,
 } from "../controllers/productExportController.js";
 import {
   clearProductTypes,
@@ -80,6 +79,7 @@ router
   .post(validateQuery(productQuerySchema), getProductsWithQuery);
 router.post(
   "/export",
+  subscriptionMiddleware,
   validateBody(exportRequestSchema),
   createProductExport
 );
@@ -100,7 +100,7 @@ router.put(
   subscriptionMiddleware,
   toggleScheduledExportStatusController
 );
-router.delete("/delete-scheduled-export/:id", deleteScheduledExportController);
+router.delete("/delete-scheduled-export/:id", subscriptionMiddleware, deleteScheduledExportController);
 router.get(
   "/download-export/:id",
   // restrictSubscribeUserWork,
@@ -124,7 +124,7 @@ router.post(
   handleBulkEditProduct
 );
 
-router.put("/undo-edit/:id", undoEdit);
+router.put("/undo-edit/:id", subscriptionMiddleware, undoEdit);
 router.post("/cancel-edit/:id", subscriptionMiddleware, cancelEditOperation);
 router.post("/pause-edit/:id", subscriptionMiddleware, pauseEditOperation);
 router.post("/resume-edit/:id", subscriptionMiddleware, resumePausedEditOperation);
@@ -148,7 +148,7 @@ router.put(
   subscriptionMiddleware,
   toggleRecurringEditStatusController
 );
-router.delete("/delete-recurring-edit/:id", deleteRecurringEditController);
+router.delete("/delete-recurring-edit/:id", subscriptionMiddleware, deleteRecurringEditController);
 router.post(
   "/schedule-task",
   subscriptionMiddleware,

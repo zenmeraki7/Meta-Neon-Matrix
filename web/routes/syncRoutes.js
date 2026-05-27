@@ -6,10 +6,11 @@ import {
   getSyncStatusDetail,
   trackProductSync,
 } from "../controllers/syncController.js";
+import { subscriptionMiddleware } from "../middleware/subscriptionMiddleware.js";
 
 const router = express.Router();
 
-router.get("/products", syncProductData);
+router.get("/products", subscriptionMiddleware, syncProductData);
 router.get("/sync-status", getSyncStatus);
 router.get("/sync-status/summary", getSyncStatusSummary);
 router.get("/sync-status/detail", getSyncStatusDetail);

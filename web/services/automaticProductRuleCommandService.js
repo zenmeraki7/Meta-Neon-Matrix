@@ -56,12 +56,12 @@ export const automaticProductRuleCommandService = {
     });
   },
 
-  async deleteRule({ shop, actor, ruleId, deletePolicy }) {
+  async deleteRule({ shop, actor, ruleId, deleteCommand }) {
     return softDeleteAutomaticProductRule({
       shop,
       automaticProductRuleId: ruleId,
       actor,
-      deletePolicy,
+      deleteCommand,
     });
   },
 };

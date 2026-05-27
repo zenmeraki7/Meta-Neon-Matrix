@@ -1,179 +1,193 @@
 // web/controllers/collectionController.js
-import Joi from "joi";
-import { getCurrentBulkOperationStatus } from "../utils/bulkOperationHelper.js";
-import logger from "../utils/loggerUtils.js";
-import { clearKeyCaches } from "../utils/cacheUtils.js";
-import { logApiError } from "../utils/errorLogUtils.js";
-import CollectionControllerService from "../services/collection/collectionService.js";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import {
+  toCollectionRefreshAcceptedDto,
+  toCollectionResponseDto,
+} from "../dtos/collectionDto.js";
 
-// ⛔️ REMOVE this:
-// import Store from "../schema/Store.js";
+const COLLECTION_LIST_KEYS = new Set(["search", "limit", "cursor"]);
+const COLLECTION_OPTIONS_KEYS = new Set(["search", "limit", "cursor"]);
+const LIVE_COLLECTION_KEYS = new Set(["search", "limit", "cursor"]);
 
-// ✅ ADD Prisma
-import { prisma } from "../config/database.js";
+function normalizeSearch(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-const collectionControllerService = new CollectionControllerService();
+function validateCollectionQuery(rawQuery = {}, allowedKeys = COLLECTION_LIST_KEYS) {
+  const unknownKeys = Object.keys(rawQuery || {}).filter(
+    (key) => !allowedKeys.has(key),
+  );
 
-
-// ✅ Validate query param "search"
-const getAllCollectionsQuerySchema = Joi.object({
-  search: Joi.string().trim().allow("").max(100).optional(),
-  isNameOnly: Joi.string().trim().allow("").max(100).optional(),
-  limit: Joi.number().integer().min(1).max(50).optional(),
-});
-
-export const getAllCollection =
-  (collectionService) => async (req, res, next) => {
-    try {
-      const { error, value } = getAllCollectionsQuerySchema.validate(req.query);
-      if (error) {
-        return res.status(400).json({
-          error: `Invalid query: ${error.details[0].message}`,
-        });
-      }
-
-      const session = res.locals?.shopify?.session;
-      if (!session?.shop) {
-        const { statusCode, body } = buildPublicApiErrorResponse(
-          { code: "UNAUTHENTICATED" },
-          "UNAUTHENTICATED",
-        );
-        return res.status(statusCode).json(body);
-      }
-
-      const searchText = value.search?.trim() || "";
-
-      const result = await collectionService.fetchCollections(
-        session,
-        searchText,
-      );
-
-      const data = Array.isArray(result?.data)
-        ? result.data
-            .filter((item) => item?.title)
-            .map((item) => ({
-              label: item.title,
-              value: item.shopifyId || item.id,
-              title: item.title,
-              id: item.shopifyId || item.id,
-            }))
-        : [];
-
-      return res.status(200).json({
-        success: true,
-        count: data.length,
-        message: result?.message || "Collections fetched successfully",
-        data,
-      });
-    } catch (error) {
-      logger.error("Failed to get collections", { error: error.message });
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        error,
-        "INTERNAL_ERROR",
-      );
-      return res.status(statusCode).json(body);
-    }
-  };
-
-export const getCollectionsFromShopify = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-  try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
-    const { error, value } = getAllCollectionsQuerySchema.validate(req.query);
-    if (error) {
-      return res.status(400).json({
-        error: `Invalid query: ${error.details[0].message}`,
-      });
-    }
-
-    const searchText = value.search?.trim() || "";
-    const collections = await collectionControllerService.fetchFromShopify({
-      session,
-      search: searchText,
-      limit: value.limit || 20,
-    });
-
-    return res.status(200).json({
-      success: true,
-      count: collections.length,
-      data: collections,
-    });
-  } catch (error) {
-    logger.error("Failed to get collections", {
-      error: error.message,
-    });
-    await logApiError({
-      shop: session?.shop,
-      err: error,
-      req,
-      source: "collectionController.getCollectionsFromShopify",
-    });
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
+  if (unknownKeys.length > 0) {
+    const error = new Error(`Invalid query keys: ${unknownKeys.join(",")}`);
+    error.code = "VALIDATION_ERROR";
+    throw error;
   }
-};
 
-export const clearCollections =
+  const search = normalizeSearch(rawQuery.search);
+
+  const limitRaw = rawQuery.limit;
+  const limit =
+    limitRaw === undefined || limitRaw === null || limitRaw === ""
+      ? 20
+      : Number(limitRaw);
+
+  const cursor =
+    typeof rawQuery.cursor === "string" && rawQuery.cursor.trim()
+      ? rawQuery.cursor.trim()
+      : undefined;
+
+  if (search.length > 100) {
+    const error = new Error("Invalid query: search must be <= 100 chars");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    const error = new Error("Invalid query: limit must be an integer between 1 and 50");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+
+  if (cursor && cursor.length > 500) {
+    const error = new Error("Invalid query: cursor must be <= 500 chars");
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+
+  return Object.freeze({ search, limit, cursor });
+}
+
+function requireShopifySession(res) {
+  const session = res.locals?.shopify?.session;
+
+  if (!session?.shop) {
+    const error = new Error("Unauthenticated Shopify session");
+    error.code = "UNAUTHENTICATED";
+    throw error;
+  }
+
+  return session;
+}
+
+function requireIdempotencyKey(req) {
+  const idempotencyKey = req.get("Idempotency-Key")?.trim();
+
+  if (!idempotencyKey) {
+    const error = new Error("Idempotency-Key header is required");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+
+  return idempotencyKey;
+}
+
+function buildActorFromSession(session) {
+  const associatedUser = session?.onlineAccessInfo?.associated_user;
+
+  return Object.freeze({
+    type: associatedUser?.id ? "SHOPIFY_USER" : "SHOPIFY_SESSION",
+    userId: associatedUser?.id ? String(associatedUser.id) : null,
+    email: associatedUser?.email || null,
+  });
+}
+
+export const listCollections =
   (collectionService) => async (req, res, next) => {
     try {
-      const session = res.locals?.shopify?.session;
-      if (!session?.shop) {
-        const { statusCode, body } = buildPublicApiErrorResponse(
-          { code: "UNAUTHENTICATED" },
-          "UNAUTHENTICATED",
-        );
-        return res.status(statusCode).json(body);
-      }
+      const session = requireShopifySession(res);
+      const query = validateCollectionQuery(req.query, COLLECTION_LIST_KEYS);
 
-      const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
-      if (status === "RUNNING") {
-        return res.status(400).json({
-          message: "Another operation is running in background",
-        });
-      }
-
-      const result = await collectionService.clearCollections(session);
-
-      // 🔁 Mongo → Prisma: update flattened sync fields
-      const store = await prisma.store.update({
-        where: { shopUrl: session.shop },
-        data: {
-          isCollectionSyncing: true,
-          lastCollectionSyncAt: new Date(),
-        },
+      const command = Object.freeze({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
+        search: query.search,
+        limit: query.limit,
+        cursor: query.cursor,
       });
 
-      if (!store) {
-        // In practice prisma.update would throw if not found
-        return res.status(404).json({
-          error: "Store not found",
-        });
-      }
+      const result = await collectionService.fetchCollections(command);
 
-      // 🧹 Clear cached sync details after updating DB
-      await clearKeyCaches(`${session.shop}:sync_details`);
-
-      return res.status(200).json({
-        message: "Collections refreshed successfully",
-        result,
-      });
+      return res
+        .status(200)
+        .json(toCollectionResponseDto(result, { isNameOnly: false }));
     } catch (error) {
-      logger.error("Failed to clear collections", { error: error.message });
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        error,
-        "INTERNAL_ERROR",
-      );
-      return res.status(statusCode).json(body);
+      return next(error);
     }
   };
 
+export const listCollectionOptions =
+  (collectionService) => async (req, res, next) => {
+    try {
+      const session = requireShopifySession(res);
+      const query = validateCollectionQuery(req.query, COLLECTION_OPTIONS_KEYS);
+
+      const command = Object.freeze({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
+        search: query.search,
+        limit: query.limit,
+        cursor: query.cursor,
+      });
+
+      const result = await collectionService.fetchCollections(command);
+
+      return res
+        .status(200)
+        .json(toCollectionResponseDto(result, { isNameOnly: true }));
+    } catch (error) {
+      return next(error);
+    }
+  };
+
+export const listLiveCollections =
+  (collectionService) => async (req, res, next) => {
+    try {
+      const session = requireShopifySession(res);
+      const query = validateCollectionQuery(req.query, LIVE_COLLECTION_KEYS);
+
+      const command = Object.freeze({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
+        search: query.search,
+        limit: query.limit,
+        cursor: query.cursor,
+        subscription: req.subscription || null,
+      });
+
+      const result = await collectionService.fetchFromShopify(command);
+
+      return res
+        .status(200)
+        .json(toCollectionResponseDto(result, { isNameOnly: false }));
+    } catch (error) {
+      return next(error);
+    }
+  };
+
+export const requestCollectionRefresh =
+  (collectionService) => async (req, res, next) => {
+    try {
+      const session = requireShopifySession(res);
+
+      const command = Object.freeze({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
+        idempotencyKey: requireIdempotencyKey(req),
+        subscription: req.subscription || null,
+      });
+
+      const result = await collectionService.requestCollectionRefresh(command);
+
+      return res.status(202).json({
+        success: true,
+        data: toCollectionRefreshAcceptedDto(result),
+        meta: { accepted: true },
+      });
+    } catch (error) {
+      return next(error);
+    }
+  };

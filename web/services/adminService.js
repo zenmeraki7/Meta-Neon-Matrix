@@ -6,9 +6,25 @@
 
 // ✅ Prisma
 import { prisma } from "../config/database.js";
+import { BulkEditRecoveryService } from "./bulkEdit/BulkEditRecoveryService.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "./idempotency/IdempotencyStoreService.js";
 
 
 class AdminService {
+  constructor() {
+    this.createBulkEditRecoveryService = () => new BulkEditRecoveryService();
+  }
+
+  setBulkEditRecoveryServiceFactory(factory) {
+    this.createBulkEditRecoveryService =
+      typeof factory === "function"
+        ? factory
+        : () => new BulkEditRecoveryService();
+  }
+
   decodeCursor(cursor) {
     if (!cursor) return null;
     try {
@@ -20,6 +36,155 @@ class AdminService {
 
   encodeCursor(payload) {
     return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  }
+
+  async getCompletedEditHistorySummary() {
+    const groups = await prisma.editHistory.groupBy({
+      by: ["shop"],
+      where: {
+        status: "completed",
+      },
+      _count: {
+        _all: true,
+      },
+      _max: {
+        completedAt: true,
+      },
+    });
+
+    const shops = groups.map((g) => g.shop).filter(Boolean);
+    const stores = shops.length
+      ? await prisma.store.findMany({
+          where: { shopUrl: { in: shops } },
+          select: {
+            shopUrl: true,
+            isUnInstalled: true,
+          },
+        })
+      : [];
+
+    const storeMap = new Map(stores.map((s) => [s.shopUrl, s.isUnInstalled]));
+
+    const rawSummaries = groups.map((g) => {
+      const shop = g.shop;
+      const completedEdits = g._count._all;
+      const lastEditAt = g._max.completedAt ?? null;
+      const isUnInstalled = storeMap.get(shop) ?? null;
+
+      return {
+        shop,
+        completedEdits,
+        isUnInstalled,
+        lastEditAt,
+      };
+    });
+
+    rawSummaries.sort((a, b) => {
+      const aTime = a.lastEditAt ? a.lastEditAt.getTime() : 0;
+      const bTime = b.lastEditAt ? b.lastEditAt.getTime() : 0;
+      return bTime - aTime;
+    });
+
+    const data = rawSummaries.map((item) => ({
+      ...item,
+      lastEditAt: item.lastEditAt
+        ? new Date(item.lastEditAt).toLocaleString("en-IN", {
+            timeZone: "Asia/Kolkata",
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: true,
+          })
+        : null,
+    }));
+
+    return {
+      count: data.length,
+      data,
+    };
+  }
+
+  async recoverStuckBulkEditOperation({
+    historyId,
+    mode = "auto",
+    reason,
+    idempotencyKey,
+    actorId = null,
+    actorEmail = null,
+  }) {
+    const normalizedHistoryId = String(historyId || "").trim();
+    const normalizedMode = String(mode || "auto").toLowerCase();
+    const normalizedReason = String(reason || "").trim();
+    const normalizedIdempotencyKey = String(idempotencyKey || "").trim();
+    const normalizedActorId = String(actorId || "").trim() || null;
+    const normalizedActorEmail = String(actorEmail || "").trim() || null;
+
+    if (!normalizedHistoryId || !normalizedReason) {
+      const error = new Error("VALIDATION_FAILED");
+      error.code = "VALIDATION_FAILED";
+      throw error;
+    }
+
+    if (!normalizedIdempotencyKey) {
+      const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+      error.code = "IDEMPOTENCY_KEY_REQUIRED";
+      throw error;
+    }
+
+    const history = await prisma.editHistory.findUnique({
+      where: { id: normalizedHistoryId },
+      select: { shop: true },
+    });
+
+    const shop = String(history?.shop || "").trim();
+    if (!shop) {
+      const error = new Error("NOT_FOUND");
+      error.code = "NOT_FOUND";
+      throw error;
+    }
+
+    const idempotencyStore = new IdempotencyStoreService(prisma);
+    const requestHash = buildIdempotencyRequestHash({
+      historyId: normalizedHistoryId,
+      shop,
+      mode: normalizedMode,
+      reason: normalizedReason,
+      actorId: normalizedActorId || "",
+      actorEmail: normalizedActorEmail || "",
+    });
+    const begin = await idempotencyStore.begin({
+      shop,
+      scope: "BULK_EDIT_RECOVERY_API",
+      key: normalizedIdempotencyKey,
+      requestHash,
+    });
+
+    if (begin.mode === "replay" && begin.response) {
+      return begin.response;
+    }
+
+    const recoveryService = this.createBulkEditRecoveryService();
+    const result = await recoveryService.recoverStuckState({
+      historyId: normalizedHistoryId,
+      shop,
+      mode: normalizedMode,
+      reason: normalizedReason,
+      actor: {
+        actorType: "ADMIN_RECOVERY",
+        actorId: normalizedActorId,
+        actorEmail: normalizedActorEmail,
+      },
+    });
+
+    const response = { success: true, data: result };
+    await idempotencyStore.complete({
+      recordId: begin.recordId,
+      response,
+    });
+
+    return response;
   }
   // ==================== STORE ANALYTICS ====================
 

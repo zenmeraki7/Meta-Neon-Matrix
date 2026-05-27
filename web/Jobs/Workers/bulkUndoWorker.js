@@ -64,6 +64,56 @@ function isRetryableError(error) {
   return Boolean(error?.retryable);
 }
 
+const CONFLICT_CHUNK_SIZE = 500;
+
+async function persistUndoConflictChunks({
+  shop,
+  undoOperationId,
+  safeProducts = [],
+  conflicts = [],
+}) {
+  if (!undoOperationId) return;
+  await prisma.undoOperationConflictChunk.deleteMany({
+    where: { shop, undoOperationId },
+  });
+
+  const safeTargetIdentities = safeProducts
+    .map((row) => row?.targetIdentity)
+    .filter(Boolean);
+
+  const safeChunks = [];
+  for (let i = 0; i < safeTargetIdentities.length; i += CONFLICT_CHUNK_SIZE) {
+    safeChunks.push({
+      shop,
+      undoOperationId,
+      chunkType: "SAFE_IDENTITIES",
+      chunkIndex: Math.floor(i / CONFLICT_CHUNK_SIZE),
+      totalItems: safeTargetIdentities.length,
+      payload: { targetIdentities: safeTargetIdentities.slice(i, i + CONFLICT_CHUNK_SIZE) },
+    });
+  }
+  const conflictChunks = [];
+  for (let i = 0; i < conflicts.length; i += CONFLICT_CHUNK_SIZE) {
+    conflictChunks.push({
+      shop,
+      undoOperationId,
+      chunkType: "CONFLICTS",
+      chunkIndex: Math.floor(i / CONFLICT_CHUNK_SIZE),
+      totalItems: conflicts.length,
+      payload: { conflicts: conflicts.slice(i, i + CONFLICT_CHUNK_SIZE) },
+    });
+  }
+  const all = [...safeChunks, ...conflictChunks];
+  if (!all.length) return;
+  for (let i = 0; i < all.length; i += 250) {
+    // eslint-disable-next-line no-await-in-loop
+    await prisma.undoOperationConflictChunk.createMany({
+      data: all.slice(i, i + 250),
+      skipDuplicates: true,
+    });
+  }
+}
+
 async function claimUndo(historyId, shop, executionId, jobId, attempt) {
   const history = await prisma.editHistory.findFirst({
     where: {
@@ -238,6 +288,7 @@ const bulkUndoWorker = new Worker(
       const rule = Array.isArray(history?.rules) ? history.rules[0] || {} : {};
       const batch = history?.batch && typeof history.batch === "object" ? history.batch : {};
       const undo = normalizeUndoState(history?.undo);
+      const undoOperationId = String(undo?.undoOperationId || "").trim() || null;
       const limit = batch.size || 75;
       const cursorId = batch.lastProductId || null;
 
@@ -245,6 +296,7 @@ const bulkUndoWorker = new Worker(
         where: {
           editHistoryId: historyId,
           shop,
+          status: { in: ["SUCCESS", "VERIFIED"] },
         },
         orderBy: { id: "asc" },
         take: limit,
@@ -288,6 +340,53 @@ const bulkUndoWorker = new Worker(
 
       await clearKeyCaches(`${shop}:fetchHistories`);
       const { safeProducts, conflicts } = await service.verifyUndoConflicts(replayableProducts);
+      const conflictReport = {
+        generatedAt: new Date().toISOString(),
+        totalReplayable: replayableProducts.length,
+        safeReplayableCount: safeProducts.length,
+        conflictCount: conflicts.length,
+        sampleConflicts: conflicts.slice(0, 200),
+      };
+      await persistUndoConflictChunks({
+        shop,
+        undoOperationId,
+        safeProducts,
+        conflicts,
+      });
+      await prisma.editHistory.updateMany({
+        where: {
+          id: historyId,
+          shop,
+          OR: [
+            { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
+            { undo: { path: ["state"], equals: BULK_UNDO_STATES.QUEUED } },
+            { undo: { path: ["state"], equals: BULK_UNDO_STATES.RETRYABLE_FAILURE } },
+          ],
+        },
+        data: {
+          undo: {
+            ...undo,
+            conflictReport,
+            safeReplaySubset: null,
+            conflictChunking: {
+              chunkType: "UndoOperationConflictChunk",
+              undoOperationId,
+              chunkSize: CONFLICT_CHUNK_SIZE,
+              safeTotal: safeProducts.length,
+              conflictTotal: conflicts.length,
+            },
+          },
+        },
+      });
+      if (undoOperationId) {
+        await prisma.undoOperation.updateMany({
+          where: { id: undoOperationId, shop },
+          data: {
+            status: "processing",
+            state: "dispatching",
+          },
+        });
+      }
       if (!safeProducts.length) {
         const err = new Error("UNDO_CONFLICT_REQUIRES_CONFIRMATION");
         err.code = "UNDO_CONFLICT_REQUIRES_CONFIRMATION";
@@ -336,6 +435,17 @@ const bulkUndoWorker = new Worker(
       if (movedAwaitingShopify.count !== 1) {
         throw new Error("BULK_UNDO_STATE_TRANSITION_REJECTED_AWAITING_SHOPIFY");
       }
+      if (undoOperationId) {
+        await prisma.undoOperation.updateMany({
+          where: { id: undoOperationId, shop },
+          data: {
+            status: "processing",
+            state: "awaiting_shopify",
+            bulkOperationId,
+            processedCount: Number(undo?.processedCount || 0),
+          },
+        });
+      }
       await assertOperationLeaseOwnership({
         shop,
         namespace: "bulk_undo_execution",
@@ -346,6 +456,7 @@ const bulkUndoWorker = new Worker(
         historyId,
         shop,
         stage: "undo",
+        executionId: executionId || undo.executionIdentity || null,
         checkpoint: {
           bulkOperationId,
           count,
@@ -376,6 +487,7 @@ const bulkUndoWorker = new Worker(
         historyId,
         shop,
         stage: "undo",
+        executionId,
         retryable: isRetryableError(error),
         error: error.message,
       }).catch(() => {});
@@ -436,6 +548,15 @@ const bulkUndoWorker = new Worker(
             attempt,
             source,
           });
+        }
+        const undoOperationId = String(undo?.undoOperationId || "").trim() || null;
+        if (undoOperationId) {
+          await prisma.undoOperation.updateMany({
+            where: { id: undoOperationId, shop },
+            data: isRetryableError(error)
+              ? { status: "pending", state: "queued" }
+              : { status: "failed", state: "failed" },
+          }).catch(() => {});
         }
       }
 

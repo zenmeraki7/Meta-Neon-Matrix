@@ -1,4 +1,5 @@
 import { prisma } from "../../config/database.js";
+import crypto from "crypto";
 import { adaptLegacyFilterParamsToAst } from "./adapters/legacyFilterParamsAdapter.js";
 import { normalizeFilterAst } from "./normalize/filterAstNormalizer.js";
 import { validateFilterAstOrThrow } from "./validate/filterAstValidator.js";
@@ -8,10 +9,12 @@ import {
 } from "./validate/mutationIntentPreflightValidator.js";
 import { assertQueryShapeGuardrails } from "./validate/queryShapeGuardrails.js";
 import { compileFilterAst } from "./compile/compileFilterAst.js";
+import { compileRelationAwareAstWhereSql } from "./compile/relationAwareSqlResolver.js";
 import { enforceMirrorScope, enforceMirrorScopeSql } from "./enforceMirrorScope.js";
 import { hashFilterAst } from "./hashFilterAst.js";
 import { getTargetingVersionBundle } from "./versioning.js";
 import { TargetingValidationError } from "./errors/TargetingValidationError.js";
+import { getFieldSpecOrThrow } from "./registry/fieldRegistry.js";
 import {
   TARGET_GRANULARITIES,
   TARGET_SNAPSHOT_OWNER_TYPES,
@@ -69,6 +72,168 @@ function collectPredicateFields(node, acc = new Set()) {
   return acc;
 }
 
+
+function collectPredicates(node, acc = []) {
+  if (!node || typeof node !== "object") return acc;
+  if (node.nodeType === "group") {
+    const children = Array.isArray(node.children) ? node.children : [];
+    children.forEach((child) => collectPredicates(child, acc));
+    return acc;
+  }
+  if (node.nodeType === "predicate") {
+    acc.push(node);
+  }
+  return acc;
+}
+
+function hasRelationFieldPredicates(ast) {
+  const predicates = collectPredicates(ast?.root, []);
+  return predicates.some((predicate) => {
+    const spec = getFieldSpecOrThrow(predicate.field);
+    return String(spec.pathKind || "scalar") === "relation";
+  });
+}
+
+function hasNodeWithNot(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.not === true) return true;
+  if (node.nodeType === "group") {
+    return (Array.isArray(node.children) ? node.children : []).some((child) => hasNodeWithNot(child));
+  }
+  return false;
+}
+
+function hasGroupLogic(node, logic) {
+  if (!node || typeof node !== "object") return false;
+  if (node.nodeType === "group") {
+    if (String(node.logic || "").toUpperCase() === String(logic || "").toUpperCase()) return true;
+    return (Array.isArray(node.children) ? node.children : []).some((child) => hasGroupLogic(child, logic));
+  }
+  return false;
+}
+
+function collectPredicateModels(ast) {
+  const predicates = collectPredicates(ast?.root, []);
+  const models = new Set();
+  for (const predicate of predicates) {
+    const spec = getFieldSpecOrThrow(predicate.field);
+    const model = String(spec.model || "");
+    if (model) models.add(model);
+  }
+  return models;
+}
+
+function shouldRunTargetingParity({ freeze, normalizedFilterAst }) {
+  if (!freeze) return false;
+  const predicates = collectPredicates(normalizedFilterAst?.root, []);
+  if (!predicates.length) return false;
+  const hasRelation = predicates.some((p) => String(getFieldSpecOrThrow(p.field).pathKind || "") === "relation");
+  const hasVariant = predicates.some((p) => String(getFieldSpecOrThrow(p.field).model || "") === "Variant");
+  const hasProduct = predicates.some((p) => String(getFieldSpecOrThrow(p.field).model || "") === "Product");
+  const hasOr = hasGroupLogic(normalizedFilterAst?.root, "OR");
+  const hasNot = hasNodeWithNot(normalizedFilterAst?.root);
+  return hasRelation || hasVariant || (hasProduct && hasVariant) || hasOr || hasNot;
+}
+
+function buildTargetingParityError({
+  shop,
+  mirrorBatchId,
+  canonicalResult,
+  alternateResult,
+  filterHash,
+}) {
+  const error = new Error("TARGETING_PARITY_MISMATCH");
+  error.code = "TARGETING_PARITY_MISMATCH";
+  error.meta = {
+    shop,
+    mirrorBatchId,
+    previewCount: Number(canonicalResult?.count || 0),
+    alternateCount: Number(alternateResult?.count || 0),
+    previewChecksum: String(canonicalResult?.checksum || ""),
+    alternateChecksum: String(alternateResult?.checksum || ""),
+    previewFirstIds: canonicalResult?.firstIds || [],
+    alternateFirstIds: alternateResult?.firstIds || [],
+    previewLastIds: canonicalResult?.lastIds || [],
+    alternateLastIds: alternateResult?.lastIds || [],
+    filterFingerprint: filterHash || null,
+  };
+  return error;
+}
+
+async function computeOrderedTargetIdentityDigestFromSql({
+  db,
+  targetType,
+  whereSql,
+  params,
+}) {
+  const PAGE_SIZE = 2000;
+  const firstIds = [];
+  const tailIds = [];
+  const hash = crypto.createHash("sha256");
+  let count = 0;
+  let cursorProductId = null;
+  let cursorVariantId = null;
+
+  const targetIdentityExpr = targetType === "VARIANT"
+    ? `('VARIANT:' || v."id") AS "targetIdentity"`
+    : `('PRODUCT:' || p."id") AS "targetIdentity"`;
+  const productExpr = targetType === "VARIANT" ? `v."productId"` : `p."id"`;
+  const variantExpr = targetType === "VARIANT" ? `v."id"` : `NULL`;
+  const baseFrom = targetType === "VARIANT"
+    ? `FROM "Variant" v
+       INNER JOIN "Product" p
+         ON p."shop" = v."shop"
+        AND p."mirrorBatchId" = v."mirrorBatchId"
+        AND p."id" = v."productId"
+       WHERE v."shop" = $1 AND v."mirrorBatchId" = $2 AND (${whereSql})`
+    : `FROM "Product" p
+       WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})`;
+
+  while (true) {
+    const cursorClause = targetType === "VARIANT"
+      ? (cursorVariantId
+        ? ` AND (${productExpr} > $${params.length + 1} OR (${productExpr} = $${params.length + 1} AND ${variantExpr} > $${params.length + 2}))`
+        : "")
+      : (cursorProductId ? ` AND ${productExpr} > $${params.length + 1}` : "");
+    const orderBy = targetType === "VARIANT"
+      ? `ORDER BY ${productExpr} ASC, ${variantExpr} ASC`
+      : `ORDER BY ${productExpr} ASC`;
+    const sql = `
+      SELECT ${productExpr} AS "productId", ${variantExpr} AS "variantId", ${targetIdentityExpr}
+      ${baseFrom}
+      ${cursorClause}
+      ${orderBy}
+      LIMIT $${params.length + (targetType === "VARIANT" ? (cursorVariantId ? 3 : 1) : (cursorProductId ? 2 : 1))}
+    `;
+    const bindParams = targetType === "VARIANT"
+      ? (cursorVariantId ? [...params, cursorProductId, cursorVariantId, PAGE_SIZE] : [...params, PAGE_SIZE])
+      : (cursorProductId ? [...params, cursorProductId, PAGE_SIZE] : [...params, PAGE_SIZE]);
+    const rows = await db.$queryRawUnsafe(sql, ...bindParams);
+    if (!rows?.length) break;
+    for (const row of rows) {
+      const identity = String(row?.targetIdentity || "").trim();
+      if (!identity) continue;
+      count += 1;
+      if (firstIds.length < 20) firstIds.push(identity);
+      tailIds.push(identity);
+      if (tailIds.length > 20) tailIds.shift();
+      hash.update(identity);
+      hash.update("\n");
+    }
+    const last = rows[rows.length - 1];
+    cursorProductId = String(last?.productId || "");
+    cursorVariantId = targetType === "VARIANT" ? String(last?.variantId || "") : null;
+    if (rows.length < PAGE_SIZE) break;
+  }
+
+  return {
+    count,
+    checksum: hash.digest("hex"),
+    firstIds,
+    lastIds: tailIds,
+  };
+}
+
 function buildTargetingExplain({
   normalizedAst,
   compiled,
@@ -95,6 +260,95 @@ function buildTargetingExplain({
     estimatedTargetCount: Number(estimatedTargetCount || 0),
     compilerVersion: versions?.targetingCompilerVersion || null,
   };
+}
+
+function hashValues(values = []) {
+  const hash = crypto.createHash("sha256");
+  for (const value of values) {
+    hash.update(String(value || ""));
+    hash.update("\n");
+  }
+  return hash.digest("hex");
+}
+
+function getOrderedSampleIds({ sampleProducts = [], sampleVariants = [] } = {}) {
+  const ids = [];
+  for (const row of Array.isArray(sampleProducts) ? sampleProducts : []) {
+    ids.push(`PRODUCT:${String(row?.id || "")}`);
+  }
+  for (const row of Array.isArray(sampleVariants) ? sampleVariants : []) {
+    ids.push(`VARIANT:${String(row?.id || "")}`);
+  }
+  return ids;
+}
+
+async function computeTargetTypeDistribution({
+  db,
+  shop,
+  ownerType,
+  ownerId,
+  mirrorBatchId,
+}) {
+  const [productCount, variantCount] = await Promise.all([
+    db.targetSnapshot.count({
+      where: {
+        shop,
+        ownerType,
+        ownerId,
+        mirrorBatchId,
+        targetType: TARGET_TYPES.PRODUCT,
+      },
+    }),
+    db.targetSnapshot.count({
+      where: {
+        shop,
+        ownerType,
+        ownerId,
+        mirrorBatchId,
+        targetType: TARGET_TYPES.VARIANT,
+      },
+    }),
+  ]);
+
+  return {
+    PRODUCT: Number(productCount || 0),
+    VARIANT: Number(variantCount || 0),
+  };
+}
+
+async function computeTargetTypeChecksum({
+  db,
+  shop,
+  ownerType,
+  ownerId,
+  mirrorBatchId,
+  targetType,
+}) {
+  const PAGE_SIZE = 2000;
+  let cursorOrdinal = null;
+  const values = [];
+  while (true) {
+    const rows = await db.targetSnapshot.findMany({
+      where: {
+        shop,
+        ownerType,
+        ownerId,
+        mirrorBatchId,
+        targetType,
+        ...(cursorOrdinal !== null ? { ordinal: { gt: cursorOrdinal } } : {}),
+      },
+      select: { ordinal: true, targetIdentity: true, id: true },
+      orderBy: [{ ordinal: "asc" }, { id: "asc" }],
+      take: PAGE_SIZE,
+    });
+    if (!rows.length) break;
+    for (const row of rows) {
+      values.push(row.targetIdentity);
+    }
+    cursorOrdinal = rows[rows.length - 1].ordinal;
+    if (rows.length < PAGE_SIZE) break;
+  }
+  return hashValues(values);
 }
 
 function getTargetingStatementTimeoutMs({ flow, freeze }) {
@@ -524,29 +778,129 @@ async function resolveAndMaybeFreeze({
   });
   const queryShape = assertQueryShapeGuardrails(normalized.normalizedFilterAst);
   const filterHash = hashFilterAst(normalized.normalizedFilterAst);
-  const compiled = compileWithScope({
+  const hasRelationPredicates = hasRelationFieldPredicates(normalized.normalizedFilterAst);
+  const shouldRunParity = shouldRunTargetingParity({
+    freeze,
     normalizedFilterAst: normalized.normalizedFilterAst,
-    targetGranularity: normalized.targetGranularity,
-    source,
-    shop,
-    mirrorBatchId,
-    dialect: "prisma",
   });
+  const compiled = hasRelationPredicates
+    ? {
+      where: null,
+      targetModel: targetType === "VARIANT" ? "Variant" : "Product",
+      targetGranularity: normalized.targetGranularity,
+      orderBy: [{ id: "asc" }],
+    }
+    : compileWithScope({
+      normalizedFilterAst: normalized.normalizedFilterAst,
+      targetGranularity: normalized.targetGranularity,
+      source,
+      shop,
+      mirrorBatchId,
+      dialect: "prisma",
+    });
 
   const whereWithoutScope = compiled.where?.AND?.[0] || compiled.where;
   const timeoutMs = getTargetingStatementTimeoutMs({ flow, freeze });
   await withTargetingStatementTimeout(db, timeoutMs);
   let resolved;
+  let paritySqlText = null;
+  let paritySqlParams = null;
   try {
-    resolved = await resolveCanonicalTarget({
-      shop,
-      targetType,
-      filterParams: [],
-      explicitWhere: whereWithoutScope,
-      queryParams,
-      sampleLimit,
-      freeze: false,
-    });
+    if (hasRelationPredicates) {
+      const targetModel = targetType === "VARIANT" ? "Variant" : "Product";
+      const { whereSql, params } = compileRelationAwareAstWhereSql(
+        normalized.normalizedFilterAst,
+        {
+          targetType,
+          targetModel,
+          targetGranularity: normalized.targetGranularity,
+          shop,
+          mirrorBatchId,
+        },
+      );
+      paritySqlText = whereSql;
+      paritySqlParams = params;
+      if (targetType === "PRODUCT") {
+        const countRows = await db.$queryRawUnsafe(
+          `SELECT COUNT(*)::bigint AS count
+           FROM "Product" p
+           WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})`,
+          ...params,
+        );
+        const sampleRows = await db.$queryRawUnsafe(
+          `SELECT p."id", p."title", p."status", p."productType", p."vendor", p."totalInventory",
+                  p."featuredImageUrl", p."categoryName", p."handle", p."templateSuffix",
+                  p."variantCount", p."visibleOnlineStore"
+           FROM "Product" p
+           WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})
+           ORDER BY p."id" ASC
+           LIMIT $${params.length + 1}`,
+          ...params,
+          Number(sampleLimit || 20),
+        );
+        resolved = {
+          mirrorBatchId,
+          where: null,
+          count: Number(countRows?.[0]?.count || 0),
+          sampleProducts: sampleRows || [],
+          sampleVariants: [],
+          pagination: null,
+        };
+      } else {
+        const countRows = await db.$queryRawUnsafe(
+          `SELECT COUNT(*)::bigint AS count
+           FROM "Variant" v
+           INNER JOIN "Product" p
+             ON p."shop" = v."shop"
+            AND p."mirrorBatchId" = v."mirrorBatchId"
+            AND p."id" = v."productId"
+           WHERE v."shop" = $1 AND v."mirrorBatchId" = $2 AND (${whereSql})`,
+          ...params,
+        );
+        const sampleRows = await db.$queryRawUnsafe(
+          `SELECT v."id", v."productId", v."title", v."sku", v."barcode", v."price",
+                  v."compareAtPrice", v."inventoryQuantity", p."title" AS "productTitle"
+           FROM "Variant" v
+           INNER JOIN "Product" p
+             ON p."shop" = v."shop"
+            AND p."mirrorBatchId" = v."mirrorBatchId"
+            AND p."id" = v."productId"
+           WHERE v."shop" = $1 AND v."mirrorBatchId" = $2 AND (${whereSql})
+           ORDER BY v."id" ASC
+           LIMIT $${params.length + 1}`,
+          ...params,
+          Number(sampleLimit || 20),
+        );
+        resolved = {
+          mirrorBatchId,
+          where: null,
+          count: Number(countRows?.[0]?.count || 0),
+          sampleProducts: [],
+          sampleVariants: sampleRows || [],
+          pagination: null,
+        };
+      }
+    } else {
+      const parityCompiled = compileWithScope({
+        normalizedFilterAst: normalized.normalizedFilterAst,
+        targetGranularity: normalized.targetGranularity,
+        source,
+        shop,
+        mirrorBatchId,
+        dialect: "sql",
+      });
+      paritySqlText = parityCompiled.sql?.text || null;
+      paritySqlParams = parityCompiled.sql?.params || null;
+      resolved = await resolveCanonicalTarget({
+        shop,
+        targetType,
+        filterParams: [],
+        explicitWhere: whereWithoutScope,
+        queryParams,
+        sampleLimit,
+        freeze: false,
+      });
+    }
   } catch (error) {
     if (isStatementTimeoutError(error)) {
       throw new TargetingValidationError(
@@ -555,6 +909,36 @@ async function resolveAndMaybeFreeze({
       );
     }
     throw error;
+  }
+  if (shouldRunParity && paritySqlText && Array.isArray(paritySqlParams)) {
+    const canonicalSampleIds = getOrderedSampleIds({
+      sampleProducts: resolved?.sampleProducts || [],
+      sampleVariants: resolved?.sampleVariants || [],
+    });
+    const alternateResult = await computeOrderedTargetIdentityDigestFromSql({
+      db,
+      targetType,
+      whereSql: paritySqlText,
+      params: paritySqlParams,
+    });
+    const canonicalResult = {
+      count: Number(resolved?.count || 0),
+      checksum: hashValues(canonicalSampleIds),
+      firstIds: canonicalSampleIds.slice(0, 20),
+      lastIds: canonicalSampleIds.slice(-20),
+    };
+    if (
+      Number(canonicalResult.count) !== Number(alternateResult.count)
+      || JSON.stringify(canonicalResult.firstIds) !== JSON.stringify(alternateResult.firstIds.slice(0, canonicalResult.firstIds.length))
+    ) {
+      throw buildTargetingParityError({
+        shop,
+        mirrorBatchId: resolved.mirrorBatchId,
+        canonicalResult,
+        alternateResult,
+        filterHash,
+      });
+    }
   }
   const explain = buildTargetingExplain({
     normalizedAst: normalized.normalizedFilterAst,
@@ -589,6 +973,14 @@ async function resolveAndMaybeFreeze({
 
   let frozenCount = null;
   let freezeStats = null;
+  const sampleIds = getOrderedSampleIds({
+    sampleProducts: resolved?.sampleProducts || [],
+    sampleVariants: resolved?.sampleVariants || [],
+  });
+  const sampleChecksum = hashValues(sampleIds);
+  let targetTypeDistribution = null;
+  let productTargetChecksum = null;
+  let variantTargetChecksum = null;
   if (
     Number.isFinite(Number(maxTargetCount)) &&
     Number(maxTargetCount) > 0 &&
@@ -661,19 +1053,141 @@ async function resolveAndMaybeFreeze({
       }
     }
 
-    freezeStats = reusedSnapshot || await freezeTargetSnapshot({
-      ownerType,
-      ownerId,
-      shop,
-      source,
-      where: resolved.where,
-      mirrorBatchId: resolved.mirrorBatchId,
-      filterHash,
-      targetType,
-      targetGranularity: normalized.targetGranularity,
-      returnStats: true,
-      db,
-    });
+    if (hasRelationPredicates) {
+      await db.targetSnapshot.deleteMany({
+        where: { shop, ownerType, ownerId },
+      });
+      const BATCH_SIZE = 1000;
+      let cursor = null;
+      let ordinal = 0;
+      let inserted = 0;
+      const { whereSql, params } = compileRelationAwareAstWhereSql(
+        normalized.normalizedFilterAst,
+        {
+          targetType,
+          targetGranularity: normalized.targetGranularity,
+          shop,
+          mirrorBatchId: resolved.mirrorBatchId,
+        },
+      );
+      while (true) {
+        const cursorClause = cursor ? ` AND t."id" > $${params.length + 1}` : "";
+        const rows = await db.$queryRawUnsafe(
+          targetType === "PRODUCT"
+            ? `SELECT t."id"
+               FROM "Product" t
+               WHERE t."shop" = $1 AND t."mirrorBatchId" = $2
+                 AND (${whereSql})${cursorClause}
+               ORDER BY t."id" ASC
+               LIMIT $${params.length + (cursor ? 2 : 1)}`
+            : `SELECT t."id"
+               FROM "Variant" t
+               INNER JOIN "Product" p
+                 ON p."shop" = t."shop"
+                AND p."mirrorBatchId" = t."mirrorBatchId"
+                AND p."id" = t."productId"
+               WHERE t."shop" = $1 AND t."mirrorBatchId" = $2
+                 AND (${whereSql})${cursorClause}
+               ORDER BY t."id" ASC
+               LIMIT $${params.length + (cursor ? 2 : 1)}`,
+          ...(cursor ? [...params, cursor, BATCH_SIZE] : [...params, BATCH_SIZE]),
+        );
+        if (!rows?.length) break;
+        const ids = rows.map((r) => String(r.id));
+        if (targetType === "PRODUCT") {
+          const products = await db.product.findMany({
+            where: { shop, mirrorBatchId: resolved.mirrorBatchId, id: { in: ids } },
+            select: { id: true, title: true, status: true, vendor: true, productType: true, handle: true },
+            orderBy: { id: "asc" },
+          });
+          await db.targetSnapshot.createMany({
+            data: products.map((p, idx) => ({
+              ownerType, ownerId, shop, mirrorBatchId: resolved.mirrorBatchId,
+              targetType: TARGET_TYPES.PRODUCT,
+              targetGranularity: normalized.targetGranularity,
+              source,
+              productId: p.id,
+              variantId: null,
+              targetIdentity: `PRODUCT:${p.id}`,
+              ordinal: ordinal + idx,
+              filterHash,
+              beforeValues: {
+                title: p.title ?? null,
+                status: p.status ?? null,
+                vendor: p.vendor ?? null,
+                productType: p.productType ?? null,
+                handle: p.handle ?? null,
+              },
+            })),
+            skipDuplicates: true,
+          });
+          inserted += products.length;
+          ordinal += products.length;
+        } else {
+          const variants = await db.variant.findMany({
+            where: { shop, mirrorBatchId: resolved.mirrorBatchId, id: { in: ids } },
+            select: {
+              id: true, productId: true, title: true, sku: true, barcode: true, price: true,
+              compareAtPrice: true, inventoryQuantity: true, inventoryItemId: true, inventoryPolicy: true,
+              taxable: true, taxCode: true, cost: true, tracked: true, physicalProduct: true,
+              option1Value: true, option2Value: true, option3Value: true, weight: true, weightUnit: true,
+            },
+            orderBy: { id: "asc" },
+          });
+          await db.targetSnapshot.createMany({
+            data: variants.map((v, idx) => ({
+              ownerType, ownerId, shop, mirrorBatchId: resolved.mirrorBatchId,
+              targetType: TARGET_TYPES.VARIANT,
+              targetGranularity: normalized.targetGranularity,
+              source,
+              productId: v.productId,
+              variantId: v.id,
+              targetIdentity: `VARIANT:${v.id}`,
+              ordinal: ordinal + idx,
+              filterHash,
+              beforeValues: {
+                title: v.title ?? null, sku: v.sku ?? null, barcode: v.barcode ?? null,
+                price: v.price?.toString?.() ?? null, compareAtPrice: v.compareAtPrice?.toString?.() ?? null,
+                inventoryQuantity: v.inventoryQuantity ?? null, inventoryItemId: v.inventoryItemId ?? null,
+                inventoryPolicy: v.inventoryPolicy ?? null, taxable: v.taxable ?? null, taxCode: v.taxCode ?? null,
+                cost: v.cost?.toString?.() ?? null, tracked: v.tracked ?? null, physicalProduct: v.physicalProduct ?? null,
+                option1Value: v.option1Value ?? null, option2Value: v.option2Value ?? null, option3Value: v.option3Value ?? null,
+                weight: v.weight ?? null, weightUnit: v.weightUnit ?? null,
+              },
+            })),
+            skipDuplicates: true,
+          });
+          inserted += variants.length;
+          ordinal += variants.length;
+        }
+        cursor = ids[ids.length - 1];
+        if (rows.length < BATCH_SIZE) break;
+      }
+      const finalSnapshotCount = await db.targetSnapshot.count({
+        where: { shop, ownerType, ownerId, mirrorBatchId: resolved.mirrorBatchId },
+      });
+      freezeStats = {
+        resolvedCount: Number(resolved.count || 0),
+        attemptedInsertCount: inserted,
+        insertedCount: inserted,
+        existingDuplicateCount: 0,
+        finalSnapshotCount,
+      };
+    } else {
+      freezeStats = reusedSnapshot || await freezeTargetSnapshot({
+        ownerType,
+        ownerId,
+        shop,
+        source,
+        where: resolved.where,
+        mirrorBatchId: resolved.mirrorBatchId,
+        filterHash,
+        targetType,
+        targetGranularity: normalized.targetGranularity,
+        returnStats: true,
+        db,
+      });
+    }
     freezeStats.resolvedCount = Number(resolved.count);
     freezeStats.snapshotChecksum = await computeTargetSnapshotChecksum({
       ownerType,
@@ -699,6 +1213,45 @@ async function resolveAndMaybeFreeze({
         },
       });
     }
+    targetTypeDistribution = await computeTargetTypeDistribution({
+      db,
+      shop,
+      ownerType,
+      ownerId,
+      mirrorBatchId: resolved.mirrorBatchId,
+    });
+    const distributionTotal = Number(targetTypeDistribution.PRODUCT || 0)
+      + Number(targetTypeDistribution.VARIANT || 0);
+    if (distributionTotal !== Number(freezeStats.finalSnapshotCount || 0)) {
+      throw new TargetingValidationError("TARGET_TYPE_DISTRIBUTION_MISMATCH", {
+        code: "TARGET_TYPE_DISTRIBUTION_MISMATCH",
+        meta: {
+          distributionTotal,
+          finalSnapshotCount: Number(freezeStats.finalSnapshotCount || 0),
+          targetTypeDistribution,
+          shop,
+          ownerType,
+          ownerId,
+          mirrorBatchId: resolved.mirrorBatchId,
+        },
+      });
+    }
+    productTargetChecksum = await computeTargetTypeChecksum({
+      db,
+      shop,
+      ownerType,
+      ownerId,
+      mirrorBatchId: resolved.mirrorBatchId,
+      targetType: TARGET_TYPES.PRODUCT,
+    });
+    variantTargetChecksum = await computeTargetTypeChecksum({
+      db,
+      shop,
+      ownerType,
+      ownerId,
+      mirrorBatchId: resolved.mirrorBatchId,
+      targetType: TARGET_TYPES.VARIANT,
+    });
 
     await persistTargetingMetadata({
       ownerType,
@@ -767,6 +1320,16 @@ async function resolveAndMaybeFreeze({
     queryShape,
     filterHash,
     snapshotChecksum: freezeStats?.snapshotChecksum || null,
+    parity: {
+      count: Number(resolved.count || 0),
+      sampleChecksum,
+      freezeChecksum: freezeStats?.snapshotChecksum || null,
+      productTargetChecksum: productTargetChecksum || null,
+      variantTargetChecksum: variantTargetChecksum || null,
+      targetTypeDistribution: targetTypeDistribution || null,
+      mirrorBatchId: resolved.mirrorBatchId,
+      filterHash,
+    },
     filterAst: normalized.filterAst,
     normalizedFilterAst: normalized.normalizedFilterAst,
     targetGranularity: normalized.targetGranularity,

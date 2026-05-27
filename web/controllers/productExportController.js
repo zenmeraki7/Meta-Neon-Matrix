@@ -30,46 +30,6 @@ function getSessionOrThrow(res) {
   return session;
 }
 
-export const handleExportProductsData = async (req, res) => {
-  let session;
-
-  try {
-    session = getSessionOrThrow(res);
-
-    const { filterParams, filterAst, fields, fileName } = req.body;
-    const commandService = new ProductExportCommandService(session);
-    const exportJob = await commandService.createExportCommand({
-      fields,
-      fileName,
-      filterParams,
-      filterAst,
-      actor: buildActorContext({
-        req,
-        session,
-        fallbackType: "MERCHANT_ADMIN",
-      }),
-      entitlementSnapshot: buildEntitlementSnapshot(req.subscription),
-    });
-
-    return res.status(200).json({
-      ...toExportJobDto(exportJob),
-    });
-  } catch (err) {
-    await logApiError({
-      shop: session?.shop,
-      err,
-      req,
-      source: "POST /api/export-products",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
-  }
-};
-
 export const createProductExport = async (req, res) => {
   let session;
 

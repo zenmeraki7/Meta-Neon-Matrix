@@ -9,6 +9,14 @@ const FEATURE_FLAGS = Object.freeze({
     env: "REQUIRE_PAID_PLAN_FOR_PRODUCT_SYNC",
     defaultRequirePaid: false,
   },
+  COLLECTION_REFRESH: {
+    env: "REQUIRE_PAID_PLAN_FOR_COLLECTION_REFRESH",
+    defaultRequirePaid: true,
+  },
+  COLLECTION_LIVE_LOOKUP: {
+    env: "REQUIRE_PAID_PLAN_FOR_COLLECTION_LIVE_LOOKUP",
+    defaultRequirePaid: true,
+  },
 });
 
 function isActivePaidSubscription(subscription = {}) {
@@ -56,4 +64,3 @@ export async function assertFeatureEntitlement({
 
   return authoritative;
 }
-

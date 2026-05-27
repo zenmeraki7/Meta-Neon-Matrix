@@ -15,6 +15,10 @@ import {
   normalizeUndoState,
 } from "../bulkEditExecutionStateService.js";
 import { ProductEditOperationRegistry } from "../bulkEdit/planner/productEditOperationRegistry.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "../idempotency/IdempotencyStoreService.js";
 
 
 const OPTION_NAME_FIELDS = new Set([
@@ -27,9 +31,29 @@ class UndoEditService {
   constructor(session) {
     this.client = new shopify.api.clients.Graphql({ session });
     this.session = session;
+    this.idempotencyStore = new IdempotencyStoreService(prisma);
   }
 
-  async undoEdit(historyId) {
+  async undoEdit(historyId, options = {}) {
+    const idempotencyKey = String(options?.idempotencyKey || "").trim();
+    if (!idempotencyKey) {
+      const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+      error.code = "VALIDATION_FAILED";
+      throw error;
+    }
+    const begin = await this.idempotencyStore.begin({
+      shop: this.session.shop,
+      scope: "BULK_EDIT_UNDO",
+      key: idempotencyKey,
+      requestHash: buildIdempotencyRequestHash({
+        shop: this.session.shop,
+        historyId,
+      }),
+    });
+    if (begin.mode === "replay") {
+      return begin.response;
+    }
+
     const editedHistory = await prisma.editHistory.findFirst({
       where: {
         id: historyId,
@@ -40,6 +64,7 @@ class UndoEditService {
         status: true,
         undo: true,
         batch: true,
+        executionState: true,
       },
     });
 
@@ -52,8 +77,8 @@ class UndoEditService {
       buildPlannedUndoState({ allowed: false }),
     );
 
-    if (editedHistory.status !== "completed" || undoData.allowed === false) {
-      throw new Error("Undo can only be performed on completed edits");
+    if (!["completed", "partial"].includes(String(editedHistory.status || "").toLowerCase()) || undoData.allowed === false) {
+      throw new Error("Undo can only be performed on completed or partially completed edits");
     }
     const operationKey =
       editedHistory?.batch?.operationKey ||
@@ -78,13 +103,47 @@ class UndoEditService {
       throw new Error("Undo is already queued or completed");
     }
 
+    const eligibleCount = await prisma.changeRecord.count({
+      where: {
+        editHistoryId: historyId,
+        shop: this.session.shop,
+        status: { in: ["SUCCESS", "VERIFIED"] },
+      },
+    });
+    if (eligibleCount <= 0) {
+      throw new Error("UNDO_ELIGIBLE_TARGETS_NOT_FOUND");
+    }
+
     const executionIdentity = undoData.executionIdentity || crypto.randomUUID();
+    const idempotencyKeyHash = crypto
+      .createHash("sha256")
+      .update(idempotencyKey)
+      .digest("hex");
+
+    const undoOperation = await prisma.undoOperation.upsert({
+      where: {
+        shop_sourceEditHistoryId: {
+          shop: this.session.shop,
+          sourceEditHistoryId: historyId,
+        },
+      },
+      create: {
+        shop: this.session.shop,
+        sourceEditHistoryId: historyId,
+        executionIdentity,
+        idempotencyKeyHash,
+        status: "pending",
+        state: "queued",
+        totalEligibleCount: Number(eligibleCount || 0),
+      },
+      update: {},
+    });
 
     const updatedHistory = await prisma.editHistory.updateMany({
       where: {
         id: historyId,
         shop: this.session.shop,
-        status: "completed",
+        status: { in: ["completed", "partial"] },
       },
       data: {
         undo: {
@@ -98,7 +157,13 @@ class UndoEditService {
           durationMs: 0,
           bulkOperationId: null,
           executionIdentity,
+          undoOperationId: undoOperation.id,
           error: null,
+          eligibility: {
+            sourceStatuses: ["SUCCESS", "VERIFIED"],
+            eligibleCount,
+            computedAt: new Date().toISOString(),
+          },
         },
       },
     });
@@ -117,10 +182,15 @@ class UndoEditService {
       executionId: executionIdentity,
     });
 
-    return {
+    const response = {
       data: { id: historyId },
       message: "Undo processing started",
     };
+    await this.idempotencyStore.complete({
+      recordId: begin.recordId,
+      response,
+    });
+    return response;
   }
 
   async undoEditBulkOperation(products, field = "") {

@@ -14,7 +14,6 @@ export {
 export {
   createProductExport,
   handleDownloadExportProductsData,
-  handleExportProductsData,
 } from "./productExportController.js";
 
 export {

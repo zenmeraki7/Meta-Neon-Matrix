@@ -1,8 +1,8 @@
 import readline from "node:readline";
 import { Readable } from "node:stream";
+import crypto from "crypto";
 import { prisma } from "../../config/database.js";
 import {
-  normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
@@ -13,6 +13,7 @@ import {
   releaseOperationLease,
 } from "../operationLeaseService.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
+import { transitionOperation } from "../operationTransitionService.js";
 
 function normalizeTargetIdentity(row) {
   return String(
@@ -58,14 +59,18 @@ async function processJsonlLines(url, onRow) {
   for await (const line of rl) {
     const trimmed = String(line || "").trim();
     if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed);
-      // eslint-disable-next-line no-await-in-loop
-      await onRow(parsed);
-    } catch {
-      // ignore malformed lines and continue ingesting
-    }
+    // eslint-disable-next-line no-await-in-loop
+    await onRow(trimmed);
   }
+}
+
+async function processJsonlLinesFromOffset(url, rowOffset, onRow) {
+  let currentRow = 0;
+  await processJsonlLines(url, async (line) => {
+    currentRow += 1;
+    if (currentRow <= Number(rowOffset || 0)) return;
+    await onRow(line, currentRow);
+  });
 }
 
 function mergeBatch(existingBatch, patch) {
@@ -73,6 +78,13 @@ function mergeBatch(existingBatch, patch) {
     ...(existingBatch && typeof existingBatch === "object" ? existingBatch : {}),
     ...patch,
   };
+}
+
+function checkpointChecksum(prevChecksum, entry) {
+  return crypto
+    .createHash("sha256")
+    .update(`${String(prevChecksum || "")}|${String(entry || "")}`)
+    .digest("hex");
 }
 
 export class BulkEditResultIngestionService {
@@ -140,9 +152,9 @@ export class BulkEditResultIngestionService {
       || history.processingBatchId
       || null;
 
-    const ingestingUpdate = await guardedEditHistoryUpdate({
-      id: historyId,
+    const ingestingTransition = await transitionOperation({
       shop,
+      operationId: historyId,
       expectedExecutionStates: [
         OPERATION_LIFECYCLE_STATES.QUEUED,
         OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
@@ -152,20 +164,15 @@ export class BulkEditResultIngestionService {
         OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
         OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
       ],
-      data: {
-        executionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-        ),
-      },
-      extraWhere: {
-        batch: {
-          path: ["resultIngestion", "ingestedAt"],
-          equals: null,
-        },
-      },
+      nextExecutionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+      expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+      transitionKey: "bulk_result_ingest_started",
+      actor: { type: "worker", id: "bulkEditResultIngestionService" },
+      reasonCode: "SHOPIFY_BULK_RESULT_AVAILABLE",
+      metadata: { bulkOperationId, attempt, historyId },
+      db: prisma,
     });
-    if (!ingestingUpdate) {
+    if (!ingestingTransition?.ok) {
       return {
         skipped: true,
         reason: "ingestion_state_claim_lost",
@@ -174,14 +181,110 @@ export class BulkEditResultIngestionService {
       };
     }
 
-    let successCount = 0;
-    let failureCount = 0;
-    let rowCount = 0;
-    let unmappedRowCount = 0;
-    const ingestionRunId = `${historyId}:${batchId || "none"}:${attempt}:${Date.now()}`;
+    const existingInProgressCheckpoint = await prisma.editHistoryIngestionCheckpoint.findFirst({
+      where: {
+        shop,
+        historyId,
+        status: "IN_PROGRESS",
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    const ingestionRunId = String(
+      existingInProgressCheckpoint?.ingestionRunId
+      || `${historyId}:${batchId || "none"}:${attempt}`,
+    );
+
+    let successCount = Number(existingInProgressCheckpoint?.successCount || 0);
+    let failureCount = Number(existingInProgressCheckpoint?.failureCount || 0);
+    let rowCount = Number(existingInProgressCheckpoint?.rowCount || 0);
+    let unmappedRowCount = Number(existingInProgressCheckpoint?.unmappedRowCount || 0);
+    let malformedRowCount = Number(existingInProgressCheckpoint?.malformedRowCount || 0);
+    const checkpoint = {
+      checkpointVersion: 2,
+      ingestionRunId,
+      attempt,
+      rowOffset: Number(existingInProgressCheckpoint?.rowOffset || 0),
+      rowCount,
+      successCount,
+      failureCount,
+      unmappedRowCount,
+      malformedRowCount,
+      rollingChecksum: String(existingInProgressCheckpoint?.rollingChecksum || ""),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await prisma.editHistoryIngestionCheckpoint.upsert({
+      where: {
+        shop_historyId_ingestionRunId: {
+          shop,
+          historyId,
+          ingestionRunId,
+        },
+      },
+      create: {
+        shop,
+        historyId,
+        ingestionRunId,
+        attempt: Number(attempt || 1),
+        status: "IN_PROGRESS",
+        rowOffset: Number(checkpoint.rowOffset || 0),
+        rowCount,
+        successCount,
+        failureCount,
+        unmappedRowCount,
+        malformedRowCount,
+        rollingChecksum: checkpoint.rollingChecksum,
+        metadata: {
+          bulkOperationId,
+          batchId,
+        },
+      },
+      update: {
+        attempt: Number(attempt || 1),
+        status: "IN_PROGRESS",
+        metadata: {
+          bulkOperationId,
+          batchId,
+        },
+      },
+    });
 
     const pendingUpdates = [];
     const FLUSH_SIZE = 500;
+
+    const flushCheckpoint = async () => {
+      checkpoint.rowOffset = rowCount;
+      checkpoint.rowCount = rowCount;
+      checkpoint.successCount = successCount;
+      checkpoint.failureCount = failureCount;
+      checkpoint.unmappedRowCount = unmappedRowCount;
+      checkpoint.malformedRowCount = malformedRowCount;
+      checkpoint.updatedAt = new Date().toISOString();
+
+      await prisma.editHistoryIngestionCheckpoint.updateMany({
+        where: {
+          shop,
+          historyId,
+          ingestionRunId,
+          status: "IN_PROGRESS",
+        },
+        data: {
+          rowOffset: Number(checkpoint.rowOffset || 0),
+          rowCount: Number(checkpoint.rowCount || 0),
+          successCount: Number(checkpoint.successCount || 0),
+          failureCount: Number(checkpoint.failureCount || 0),
+          unmappedRowCount: Number(checkpoint.unmappedRowCount || 0),
+          malformedRowCount: Number(checkpoint.malformedRowCount || 0),
+          rollingChecksum: String(checkpoint.rollingChecksum || ""),
+          metadata: {
+            bulkOperationId,
+            batchId,
+            checkpointVersion: checkpoint.checkpointVersion,
+          },
+        },
+      });
+    };
 
     const flushPending = async () => {
       if (!pendingUpdates.length) return;
@@ -217,15 +320,37 @@ export class BulkEditResultIngestionService {
         if (row.status === "SUCCESS") successCount += count;
         else failureCount += count;
       }
+      await flushCheckpoint();
     };
 
-    await processJsonlLines(resultUrl, async (row) => {
-      rowCount += 1;
-      const item = extractRowResult(row);
-      if (!item.targetIdentity) {
-        unmappedRowCount += 1;
+    await processJsonlLinesFromOffset(resultUrl, checkpoint.rowOffset, async (line, absoluteRow) => {
+      rowCount = Number(absoluteRow || (rowCount + 1));
+      let parsed = null;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        malformedRowCount += 1;
+        checkpoint.rollingChecksum = checkpointChecksum(
+          checkpoint.rollingChecksum,
+          `malformed:${rowCount}:${line.slice(0, 256)}`,
+        );
+        await flushCheckpoint();
         return;
       }
+      const item = extractRowResult(parsed);
+      if (!item.targetIdentity) {
+        unmappedRowCount += 1;
+        checkpoint.rollingChecksum = checkpointChecksum(
+          checkpoint.rollingChecksum,
+          `unmapped:${rowCount}`,
+        );
+        await flushCheckpoint();
+        return;
+      }
+      checkpoint.rollingChecksum = checkpointChecksum(
+        checkpoint.rollingChecksum,
+        `${rowCount}:${item.targetIdentity}:${item.status}`,
+      );
 
       pendingUpdates.push({
         targetIdentity: item.targetIdentity,
@@ -237,16 +362,73 @@ export class BulkEditResultIngestionService {
       }
     });
     await flushPending();
+    await flushCheckpoint();
+
+    if (malformedRowCount > 0) {
+      await prisma.editHistoryIngestionCheckpoint.updateMany({
+        where: { shop, historyId, ingestionRunId, status: "IN_PROGRESS" },
+        data: {
+          status: "FAILED",
+          metadata: {
+            bulkOperationId,
+            batchId,
+            failureCode: "MALFORMED_RESULT_JSONL_ROWS",
+          },
+        },
+      });
+      await prisma.editHistory.updateMany({
+        where: { id: historyId, shop },
+        data: {
+          batch: mergeBatch(history.batch, {
+            resultIngestionFailure: {
+              code: "MALFORMED_RESULT_JSONL_ROWS",
+              malformedRowCount,
+              rowCount,
+              ingestionRunId,
+              checkpoint,
+              failedAt: new Date().toISOString(),
+            },
+          }),
+        },
+      });
+      throw new Error(`MALFORMED_RESULT_JSONL_ROWS:${malformedRowCount}`);
+    }
 
     if (unmappedRowCount > 0) {
+      await prisma.editHistoryIngestionCheckpoint.updateMany({
+        where: { shop, historyId, ingestionRunId, status: "IN_PROGRESS" },
+        data: {
+          status: "FAILED",
+          metadata: {
+            bulkOperationId,
+            batchId,
+            failureCode: "UNMAPPED_RESULT_ROWS",
+          },
+        },
+      });
+      await prisma.editHistory.updateMany({
+        where: { id: historyId, shop },
+        data: {
+          batch: mergeBatch(history.batch, {
+            resultIngestionFailure: {
+              code: "UNMAPPED_RESULT_ROWS",
+              unmappedRowCount,
+              rowCount,
+              ingestionRunId,
+              checkpoint,
+              failedAt: new Date().toISOString(),
+            },
+          }),
+        },
+      });
       throw new Error(`UNMAPPED_RESULT_ROWS:${unmappedRowCount}`);
     }
 
-    const completedUpdate = await prisma.editHistory.updateMany({
-      where: {
-        id: historyId,
-        shop,
-        executionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+    const completedUpdate = await guardedEditHistoryUpdate({
+      id: historyId,
+      shop,
+      expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS],
+      extraWhere: {
         batch: {
           path: ["resultIngestion", "ingestedAt"],
           equals: null,
@@ -258,10 +440,6 @@ export class BulkEditResultIngestionService {
         },
         status: failureCount > 0 ? "partial" : "completed",
         statusNormalized: normalizeEditHistoryStatus(failureCount > 0 ? "partial" : "completed"),
-        executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
-        ),
         batch: mergeBatch(history.batch, {
           resultIngestion: {
             ingestedAt: new Date().toISOString(),
@@ -270,12 +448,16 @@ export class BulkEditResultIngestionService {
             successCount,
             failureCount,
             unmappedRowCount,
+            malformedRowCount,
             rowCount,
+            rollingChecksum: checkpoint.rollingChecksum,
+            checkpoint,
           },
         }),
       },
+      db: prisma,
     });
-    if (completedUpdate.count !== 1) {
+    if (!completedUpdate) {
       return {
         skipped: true,
         reason: "already_ingested",
@@ -285,9 +467,41 @@ export class BulkEditResultIngestionService {
         successCount: 0,
         failureCount: 0,
         unmappedRowCount: 0,
+        malformedRowCount: 0,
         rowCount: 0,
       };
     }
+    await transitionOperation({
+      shop,
+      operationId: historyId,
+      expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS],
+      nextExecutionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+      expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+      transitionKey: "bulk_result_ingest_completed",
+      actor: { type: "worker", id: "bulkEditResultIngestionService" },
+      reasonCode: failureCount > 0 ? "SHOPIFY_RESULT_PARTIAL" : "SHOPIFY_RESULT_COMPLETE",
+      metadata: { bulkOperationId, successCount, failureCount, ingestionRunId },
+      db: prisma,
+    });
+
+    await prisma.editHistoryIngestionCheckpoint.updateMany({
+      where: { shop, historyId, ingestionRunId, status: "IN_PROGRESS" },
+      data: {
+        status: "COMPLETED",
+        rowOffset: Number(rowCount || 0),
+        rowCount: Number(rowCount || 0),
+        successCount: Number(successCount || 0),
+        failureCount: Number(failureCount || 0),
+        unmappedRowCount: Number(unmappedRowCount || 0),
+        malformedRowCount: Number(malformedRowCount || 0),
+        rollingChecksum: String(checkpoint.rollingChecksum || ""),
+        metadata: {
+          bulkOperationId,
+          batchId,
+          completedAt: new Date().toISOString(),
+        },
+      },
+    });
 
     return {
       historyId,
@@ -296,7 +510,9 @@ export class BulkEditResultIngestionService {
       successCount,
       failureCount,
       unmappedRowCount,
+      malformedRowCount,
       rowCount,
+      rollingChecksum: checkpoint.rollingChecksum,
     };
     } finally {
       clearInterval(leaseHeartbeat);

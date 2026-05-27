@@ -8,6 +8,7 @@ import {
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
 import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
 import { upsertOperationStageProgress } from "../operationStageProgressService.js";
+import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
 
 const VERIFY_MODES = Object.freeze({
   NONE: "NONE",
@@ -596,8 +597,14 @@ export class BulkEditVerificationService {
 
     const fullCoverageAchieved = verifyRows.length === verificationTargetCount;
     const completionBlockedByCoverage = deterministicFullRequired && !fullCoverageAchieved;
-    await prisma.editHistory.updateMany({
-      where: { id: historyId, shop },
+    const movedToMirrorUpdating = await guardedEditHistoryUpdate({
+      id: historyId,
+      shop,
+      expectedExecutionStates: [
+        OPERATION_LIFECYCLE_STATES.VERIFYING,
+        OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+        OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+      ],
       data: {
         executionState: OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
         executionStateNormalized: normalizeEditHistoryExecutionState(
@@ -605,6 +612,9 @@ export class BulkEditVerificationService {
         ),
       },
     });
+    if (!movedToMirrorUpdating) {
+      throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_MIRROR_UPDATING");
+    }
 
     const verificationStatus = failed > 0 ? "FAILED" : "SUCCESS";
     await schedulePostMutationMirrorReconciliation({
@@ -621,8 +631,19 @@ export class BulkEditVerificationService {
       : OPERATION_LIFECYCLE_STATES.COMPLETED;
     const finalStatus = failed > 0 || completionBlockedByCoverage ? "partial" : "completed";
 
-    const historyUpdate = await prisma.editHistory.updateMany({
-      where: { id: historyId, shop },
+    const historyUpdate = await guardedEditHistoryUpdate({
+      id: historyId,
+      shop,
+      expectedExecutionStates: [
+        OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
+        OPERATION_LIFECYCLE_STATES.VERIFYING,
+      ],
+      extraWhere: {
+        batch: {
+          path: ["verification", "verifiedAt"],
+          equals: null,
+        },
+      },
       data: {
         status: finalStatus,
         statusNormalized: normalizeEditHistoryStatus(finalStatus),
@@ -645,7 +666,7 @@ export class BulkEditVerificationService {
         },
       },
     });
-    if (historyUpdate.count !== 1) {
+    if (!historyUpdate) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFICATION_RESULT");
     }
     await upsertOperationStageProgress({

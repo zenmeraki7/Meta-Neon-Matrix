@@ -89,6 +89,30 @@ async function cancelQueuedRunsForRule({ tx, shop, ruleId, actor, reason }) {
   });
 }
 
+function assertDeleteConfirmationIfActiveRule(rule, deleteCommand = {}) {
+  const status = rule?.status;
+  if (status !== RULE_STATUS.ACTIVE) {
+    return;
+  }
+
+  const confirmation = typeof deleteCommand.confirmation === "string"
+    ? deleteCommand.confirmation.trim()
+    : null;
+
+  const confirmedByPhrase = confirmation === "DELETE AUTOMATIC RULE";
+  const confirmedByFlag =
+    deleteCommand.confirmationAccepted === true &&
+    Object.values(DELETE_POLICY).includes(deleteCommand.deletePolicy);
+
+  if (!confirmedByPhrase && !confirmedByFlag) {
+    throw publicError(
+      "CONFIRMATION_REQUIRED",
+      400,
+      "Confirmation is required before deleting an active automatic rule.",
+    );
+  }
+}
+
 export async function createAutomaticProductRule({ shop, actor, command, entitlement }) {
   const safeShop = assertShop(shop);
   const safeActor = assertActor(actor, safeShop);
@@ -401,13 +425,14 @@ export async function softDeleteAutomaticProductRule({
   shop,
   actor,
   automaticProductRuleId,
-  deletePolicy = DELETE_POLICY.BLOCK_FUTURE_RUNS,
+  deleteCommand = {},
 }) {
   const safeShop = assertShop(shop);
   const safeActor = assertActor(actor, safeShop);
   const safeRuleId = assertRuleId(automaticProductRuleId);
+  const safeDeletePolicy = deleteCommand?.deletePolicy || DELETE_POLICY.BLOCK_FUTURE_RUNS;
 
-  if (!Object.values(DELETE_POLICY).includes(deletePolicy)) {
+  if (!Object.values(DELETE_POLICY).includes(safeDeletePolicy)) {
     throw publicError("INVALID_DELETE_POLICY", 400, "Invalid delete policy.");
   }
 
@@ -421,6 +446,11 @@ export async function softDeleteAutomaticProductRule({
     if (rule.status === RULE_STATUS.DELETED) {
       return rule;
     }
+
+    assertDeleteConfirmationIfActiveRule(rule, {
+      ...deleteCommand,
+      deletePolicy: safeDeletePolicy,
+    });
 
     assertValidStateTransition({
       from: rule.status,
@@ -453,7 +483,7 @@ export async function softDeleteAutomaticProductRule({
       throw publicError("RULE_REVISION_CONFLICT", 409, "Automatic rule changed while deleting.");
     }
 
-    if (deletePolicy === DELETE_POLICY.CANCEL_QUEUED) {
+    if (safeDeletePolicy === DELETE_POLICY.CANCEL_QUEUED) {
       await cancelQueuedRunsForRule({
         tx,
         shop: safeShop,
@@ -479,7 +509,7 @@ export async function softDeleteAutomaticProductRule({
       resourceId: safeRuleId,
       metadata: {
         previousStatus: rule.status,
-        deletePolicy,
+        deletePolicy: safeDeletePolicy,
         revision: deletedRule?.revision ?? null,
       },
     });

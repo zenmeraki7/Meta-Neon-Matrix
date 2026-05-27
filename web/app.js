@@ -34,6 +34,7 @@ import {
   shopPreInstallation,
 } from "./middleware/appInstallMiddleware.js";
 import { createResponseBudgetMiddleware } from "./middleware/responseBudgetMiddleware.js";
+import { createPublicApiErrorMiddleware } from "./middleware/publicApiErrorMiddleware.js";
 
 const STATIC_PATH =
   process.env.NODE_ENV === "production"
@@ -203,16 +204,7 @@ export const buildApp = (_server, io) => {
   );
 
   // Error handler
-  app.use((err, req, res, _next) => {
-    logger.error({
-      err,
-      path: req.path,
-    });
-
-    res.status(err.status || 500).json({
-      error: err.message || "Internal Server Error",
-    });
-  });
+  app.use(createPublicApiErrorMiddleware({ logger }));
 
   return app;
 };

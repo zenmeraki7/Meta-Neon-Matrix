@@ -186,7 +186,7 @@ export const fieldRegistry = Object.freeze({
   collections: def({
     key: "collections",
     model: "Product",
-    column: "collectionIds",
+    column: "__relation:ProductCollection",
     valueType: "string[]",
     operators: ["IN", "NOT_IN", "EXISTS", "NOT_EXISTS"],
     granularities: ["PRODUCT", "PRODUCT_WITH_MATCHING_VARIANTS"],
@@ -199,7 +199,7 @@ export const fieldRegistry = Object.freeze({
   productMetafield: def({
     key: "productMetafield",
     model: "Product",
-    column: "productMetafields",
+    column: "__relation:MetafieldMirror:PRODUCT",
     valueType: "string",
     operators: ["EQ", "NEQ", "CONTAINS", "NOT_CONTAINS", "EXISTS", "NOT_EXISTS", "IS_EMPTY", "IS_NOT_EMPTY"],
     granularities: ["PRODUCT", "PRODUCT_WITH_MATCHING_VARIANTS"],
@@ -212,7 +212,7 @@ export const fieldRegistry = Object.freeze({
   variantMetafield: def({
     key: "variantMetafield",
     model: "Variant",
-    column: "variantMetafields",
+    column: "__relation:MetafieldMirror:VARIANT",
     valueType: "string",
     operators: ["EQ", "NEQ", "CONTAINS", "NOT_CONTAINS", "EXISTS", "NOT_EXISTS", "IS_EMPTY", "IS_NOT_EMPTY"],
     granularities: ["VARIANT", "PRODUCT", "PRODUCT_WITH_MATCHING_VARIANTS"],

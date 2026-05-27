@@ -6,6 +6,7 @@ import {
   normalizeEditHistoryExecutionState,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
+import { guardedEditHistoryUpdate } from "../../services/operationTransitionGuards.js";
 
 const QUEUE_NAME = process.env.BULK_EDIT_VERIFICATION_QUEUE || "bulk-edit-verification";
 
@@ -51,16 +52,29 @@ async function processBulkEditVerification(job) {
     return { skipped: true, reason: "already_verified", historyId, shop };
   }
 
-  const updated = await prisma.editHistory.updateMany({
-    where: { id: historyId, shop },
+  const updated = await guardedEditHistoryUpdate({
+    id: historyId,
+    shop,
+    expectedExecutionStates: [
+      OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+      OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+      OPERATION_LIFECYCLE_STATES.VERIFYING,
+      OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
+    ],
     data: {
       executionState: OPERATION_LIFECYCLE_STATES.VERIFYING,
       executionStateNormalized: normalizeEditHistoryExecutionState(
         OPERATION_LIFECYCLE_STATES.VERIFYING,
       ),
     },
+    extraWhere: {
+      batch: {
+        path: ["verification", "verifiedAt"],
+        equals: null,
+      },
+    },
   });
-  if (updated.count !== 1) {
+  if (!updated) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFYING");
   }
 

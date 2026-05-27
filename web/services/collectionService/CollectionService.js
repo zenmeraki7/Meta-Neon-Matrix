@@ -1,9 +1,20 @@
 import logger from "../../utils/loggerUtils.js";
 import promClient from "prom-client";
-import { getCache, setCache } from "../../utils/cacheUtils.js";
+import { getCache, setCache, clearKeyCaches } from "../../utils/cacheUtils.js";
+import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 
 import { prisma } from "../../config/database.js";
 import { createMirrorBatchId } from "../mirrorHealthService.js";
+import { assertFeatureEntitlement } from "../entitlement/featureEntitlementService.js";
+import {
+  IdempotencyStoreService,
+  buildIdempotencyRequestHash,
+} from "../idempotency/IdempotencyStoreService.js";
+import {
+  acquireExclusiveShopWork,
+  releaseExclusiveShopWork,
+  LOCK_NS,
+} from "../shopWorkLeaseService.js";
 
 export const metrics = {
   collectionFetchLatency: new promClient.Histogram({
@@ -20,7 +31,7 @@ export const metrics = {
   cacheMisses: new promClient.Counter({
     name: "collection_cache_miss_total",
     help: "Cache misses total",
-    labelNames: ["level"], // version | data
+    labelNames: ["level"],
   }),
   syncJobs: new promClient.Counter({
     name: "collection_sync_jobs_total",
@@ -30,50 +41,91 @@ export const metrics = {
 };
 
 const BULK_OPERATION_MUTATION = `mutation {
-      bulkOperationRunQuery(
-        query: """
-          {
-      collections {
-        edges {
-          node {
-            id
-            title
+  bulkOperationRunQuery(
+    query: """
+      {
+        collections {
+          edges {
+            node {
+              id
+              title
+              handle
+            }
           }
         }
       }
+    """
+  ) {
+    bulkOperation {
+      id
+      status
     }
-        """
-      ) {
-        bulkOperation {
+    userErrors {
+      field
+      message
+    }
+  }
+}`;
+
+const GET_COLLECTIONS_QUERY = `#graphql
+  query GetCollections($first: Int!, $query: String) {
+    collections(first: $first, query: $query) {
+      edges {
+        node {
           id
-          status
-        }
-        userErrors {
-          field
-          message
+          title
+          handle
         }
       }
-    }`;
+    }
+  }
+`;
+
+function assertShop(command) {
+  const shop = command?.shop;
+  if (!shop || typeof shop !== "string") {
+    const error = new Error("Shop isolation violation");
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  return shop;
+}
 
 export class CollectionService {
   constructor(shopifyClient) {
     this.shopify = shopifyClient;
+    this.idempotencyStore = new IdempotencyStoreService(prisma);
   }
 
-  async fetchCollections(session, search = "") {
-    const shop = session.shop;
-    const cacheKey = `${shop}:fetchCollections:${search}`;
+  async #loadOfflineSession(shop) {
+    const offlineSessionId = this.shopify.api.session.getOfflineId(shop);
+    const session = await this.shopify.config.sessionStorage.loadSession(offlineSessionId);
+    if (!session?.shop || session.shop !== shop) {
+      const error = new Error("Unauthenticated Shopify session");
+      error.code = "UNAUTHENTICATED";
+      throw error;
+    }
+    return session;
+  }
+
+  async fetchCollections(command) {
+    const shop = assertShop(command);
+    const search = String(command?.search || "").trim();
+    const limit = Math.min(Math.max(Number(command?.limit) || 20, 1), 50);
+
+    const cacheKey = `${shop}:fetchCollections:${search}:${limit}`;
     const cacheCollections = await getCache(cacheKey);
 
-    if (cacheCollections)
-      return { message: "Collections from cache", data: cacheCollections };
+    if (cacheCollections) {
+      return { source: "CACHE", collections: cacheCollections };
+    }
 
     const store = await prisma.store.findUnique({
       where: { shopUrl: shop },
       select: { activeCollectionBatchId: true },
     });
 
-    const dbCollection = await prisma.collection.findMany({
+    const dbCollections = await prisma.collection.findMany({
       where: {
         shop,
         ...(store?.activeCollectionBatchId
@@ -88,10 +140,77 @@ export class CollectionService {
             }
           : {}),
       },
-      take: 20,
+      take: limit,
+      select: {
+        id: true,
+        shopifyId: true,
+        title: true,
+        handle: true,
+      },
     });
-    await setCache(cacheKey, dbCollection, 300); // Cache for 5 minutes
-    return { message: "Collection from database", data: dbCollection };
+
+    await setCache(cacheKey, dbCollections, 300);
+    return { source: "MIRROR", collections: dbCollections };
+  }
+
+  async fetchFromShopify(command) {
+    const shop = assertShop(command);
+    const session = await this.#loadOfflineSession(shop);
+    await assertFeatureEntitlement({
+      shop,
+      feature: "COLLECTION_LIVE_LOOKUP",
+      subscription: command?.subscription || null,
+    });
+
+    const search = String(command?.search || "").trim();
+    const first = Math.min(Math.max(Number(command?.limit) || 20, 1), 50);
+    const queryString = search ? `title:${search}*` : null;
+
+    const client = new this.shopify.api.clients.Graphql({ session });
+
+    let response;
+    try {
+      response = await Promise.race([
+        client.query({
+          data: {
+            query: GET_COLLECTIONS_QUERY,
+            variables: {
+              first,
+              query: queryString,
+            },
+          },
+        }),
+        new Promise((_, reject) => {
+          setTimeout(() => {
+            const timeoutError = new Error("Shopify collection lookup timed out");
+            timeoutError.code = "RATE_LIMITED";
+            reject(timeoutError);
+          }, 8000);
+        }),
+      ]);
+    } catch (error) {
+      const message = String(error?.message || "").toLowerCase();
+      if (
+        message.includes("throttle")
+        || message.includes("rate")
+        || message.includes("too many requests")
+      ) {
+        const throttleError = new Error("Shopify API throttled request");
+        throttleError.code = "RATE_LIMITED";
+        throw throttleError;
+      }
+      throw error;
+    }
+
+    const edges = response?.body?.data?.collections?.edges || [];
+    return {
+      source: "SHOPIFY_LIVE",
+      collections: edges.map((edge) => ({
+        shopifyId: edge?.node?.id || null,
+        title: edge?.node?.title || null,
+        handle: edge?.node?.handle || null,
+      })),
+    };
   }
 
   async clearCollections(session) {
@@ -104,41 +223,120 @@ export class CollectionService {
         },
       });
       if (bulkResponse.body.errors) {
-        throw new Error(bulkResponse.body.errors[0].message);
+        const error = new Error(bulkResponse.body.errors[0].message);
+        error.code = "INTERNAL_ERROR";
+        throw error;
       }
       const bulkOperationId =
         bulkResponse.body.data.bulkOperationRunQuery.bulkOperation.id;
       const syncBatchId = createMirrorBatchId("collection_sync");
 
-     await prisma.store.update({
-  where: { shopUrl: shop },
-  data: {
-    isCollectionSyncing: true,
-    lastCollectionSyncAt: new Date(),
-  },
-});
-     await prisma.syncHistory.create({
-  data: {
-    shop,
-    status: "processing",
-    bulkOperationId,
-    syncBatchId,
-    stage: "SHOPIFY_BULK_RUNNING",
-    operationType: "Collection",
-    duration: 0,
-    recordCount: 0,
-  },
-});
+      await prisma.store.update({
+        where: { shopUrl: shop },
+        data: {
+          isCollectionSyncing: true,
+          lastCollectionSyncAt: new Date(),
+        },
+      });
+
+      await prisma.syncHistory.create({
+        data: {
+          shop,
+          status: "processing",
+          bulkOperationId,
+          syncBatchId,
+          stage: "SHOPIFY_BULK_RUNNING",
+          operationType: "Collection",
+          duration: 0,
+          recordCount: 0,
+        },
+      });
+
       return {
-        message: `Collections syncing started`,
         operationId: bulkOperationId,
+        status: "ACCEPTED",
       };
     } catch (err) {
       logger.error("Failed to clear collections", {
         shop: session.shop,
         error: err.message,
       });
-      throw new Error(err.message);
+      throw err;
     }
+  }
+
+  async performCollectionRefresh(command) {
+    const shop = assertShop(command);
+    const session = await this.#loadOfflineSession(shop);
+    await assertFeatureEntitlement({
+      shop,
+      feature: "COLLECTION_REFRESH",
+      subscription: command?.subscription || null,
+    });
+
+    if (!command?.idempotencyKey) {
+      const error = new Error("Idempotency key required");
+      error.code = "IDEMPOTENCY_KEY_REQUIRED";
+      throw error;
+    }
+
+    const requestHash = buildIdempotencyRequestHash({
+      shop,
+      operation: "collection_refresh",
+      actorType: command?.actor?.type || "UNKNOWN",
+      actorUserId: command?.actor?.userId || null,
+    });
+    const begin = await this.idempotencyStore.begin({
+      shop,
+      scope: "collection_refresh",
+      key: String(command.idempotencyKey).trim(),
+      requestHash,
+    });
+    if (begin.mode === "replay") {
+      return begin.response;
+    }
+
+    let lockKey = null;
+    try {
+      const lock = await acquireExclusiveShopWork({
+        shop,
+        namespace: LOCK_NS.WRITE_CATALOG,
+        activity: "collection_refresh",
+        worker: "CollectionService.performCollectionRefresh",
+        queue: "http",
+      });
+      if (!lock?.acquired) {
+        const error = new Error("CONFLICT");
+        error.code = "CONFLICT";
+        throw error;
+      }
+      lockKey = lock.lockKey;
+
+      const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
+      if (status === "RUNNING") {
+        const error = new Error("CONFLICT");
+        error.code = "CONFLICT";
+        throw error;
+      }
+
+      const result = await this.clearCollections(session);
+      await clearKeyCaches(`${shop}:sync_details`);
+      await this.idempotencyStore.complete({
+        recordId: begin.recordId,
+        response: result,
+      });
+      return result;
+    } catch (error) {
+      if (begin?.recordId) {
+        await prisma.filterTrack.delete({ where: { id: begin.recordId } }).catch(() => {});
+      }
+      throw error;
+    } finally {
+      await releaseExclusiveShopWork(lockKey);
+    }
+  }
+
+  async requestCollectionRefresh(command) {
+    return this.performCollectionRefresh(command);
   }
 }

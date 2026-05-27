@@ -1,9 +1,11 @@
 import fs from "fs";
-import Papa from "papaparse";
-import { prisma } from "../config/database.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 import { buildActorContext } from "../utils/operationContextUtils.js";
 import { ProductImportCommandService } from "../services/productImport/ProductImportCommandService.js";
+import {
+  createCsvPreview,
+  previewCsvPage,
+} from "../services/productImport/productImportPreviewService.js";
 
 const MAX_COLUMN_MAPPING_KEYS = 100;
 const MAX_COLUMN_MAPPING_JSON_BYTES = 20_000;
@@ -13,8 +15,6 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/vnd.ms-excel",
   "application/csv",
 ]);
-const DEFAULT_PREVIEW_LIMIT = 25;
-const MAX_PREVIEW_LIMIT = 250;
 const productImportCommandService = new ProductImportCommandService();
 
 function removeUploadedFile(filePath) {
@@ -78,71 +78,6 @@ function assertUploadBounds(file) {
     error.code = "INVALID_CSV_MIME_TYPE";
     throw error;
   }
-}
-
-function decodeCursor(cursor) {
-  if (!cursor) return 0;
-  try {
-    const raw = Buffer.from(String(cursor), "base64").toString("utf8");
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function encodeCursor(offset) {
-  return Buffer.from(String(Math.max(0, Number(offset) || 0)), "utf8").toString("base64");
-}
-
-function clampLimit(limit) {
-  const parsed = Number.parseInt(String(limit || DEFAULT_PREVIEW_LIMIT), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PREVIEW_LIMIT;
-  return Math.min(parsed, MAX_PREVIEW_LIMIT);
-}
-
-function parseCsvRows(fileContents) {
-  const parsed = Papa.parse(fileContents, {
-    header: true,
-    skipEmptyLines: true,
-    dynamicTyping: false,
-    transform: (value) => {
-      if (value === null || value === undefined) return "";
-      return String(value).trim();
-    },
-  });
-
-  if (parsed.errors?.length) {
-    const error = new Error(parsed.errors[0]?.message || "CSV parse failed");
-    error.code = "CSV_PREVIEW_PARSE_FAILED";
-    throw error;
-  }
-
-  return {
-    items: Array.isArray(parsed.data) ? parsed.data : [],
-    headers: Array.isArray(parsed.meta?.fields) ? parsed.meta.fields : [],
-  };
-}
-
-function buildPreviewResponse({ allItems, headers, cursor, limit }) {
-  const totalCount = allItems.length;
-  const start = Math.min(cursor, totalCount);
-  const end = Math.min(start + limit, totalCount);
-  const items = allItems.slice(start, end);
-  const hasNextPage = end < totalCount;
-  const hasPreviousPage = start > 0;
-
-  return {
-    items,
-    headers,
-    pageInfo: {
-      hasNextPage,
-      hasPreviousPage,
-      nextCursor: hasNextPage ? encodeCursor(end) : null,
-      previousCursor: hasPreviousPage ? encodeCursor(Math.max(0, start - limit)) : null,
-    },
-    totalCount,
-  };
 }
 
 export const importCsvController = async (req, res) => {
@@ -219,32 +154,13 @@ export const previewCsvController = async (req, res) => {
       });
     }
 
-    const spreadsheetFile = await prisma.spreadsheetFile.findFirst({
-      where: {
-        id: uploadToken,
-        shop: session.shop,
-      },
-      select: {
-        id: true,
-        fileUrl: true,
-      },
+    const payload = await previewCsvPage({
+      shop: session.shop,
+      uploadToken,
+      cursor: req.query?.cursor,
+      limit: req.query?.limit,
     });
-
-    if (!spreadsheetFile?.fileUrl) {
-      return res.status(404).json({
-        code: "UPLOAD_NOT_FOUND",
-        message: "CSV upload token not found for this shop",
-      });
-    }
-
-    const fileContents = await fs.promises.readFile(spreadsheetFile.fileUrl, "utf8");
-    const { items: allItems, headers } = parseCsvRows(fileContents);
-    const limit = clampLimit(req.query?.limit);
-    const currentOffset = decodeCursor(req.query?.cursor);
-
-    return res
-      .status(200)
-      .json(buildPreviewResponse({ allItems, headers, cursor: currentOffset, limit }));
+    return res.status(200).json(payload);
   } catch (err) {
     const { statusCode, body } = buildPublicApiErrorResponse(
       err,
@@ -267,27 +183,12 @@ export const createCsvPreviewController = async (req, res) => {
 
     assertUploadBounds(req.file);
 
-    const previewDoc = await prisma.spreadsheetFile.create({
-      data: {
-        shop: session.shop,
-        fileUrl: req.file.path,
-        originalFilename: req.file.originalname || null,
-        status: "UPLOADED",
-      },
-      select: {
-        id: true,
-        fileUrl: true,
-      },
+    const payload = await createCsvPreview({
+      shop: session.shop,
+      file: req.file,
+      limit: req.query?.limit,
     });
-
-    const fileContents = await fs.promises.readFile(previewDoc.fileUrl, "utf8");
-    const { items: allItems, headers } = parseCsvRows(fileContents);
-    const limit = clampLimit(req.query?.limit);
-    const payload = buildPreviewResponse({ allItems, headers, cursor: 0, limit });
-    return res.status(200).json({
-      uploadToken: previewDoc.id,
-      ...payload,
-    });
+    return res.status(200).json(payload);
   } catch (err) {
     removeUploadedFile(req.file?.path);
     const { statusCode, body } = buildPublicApiErrorResponse(
