@@ -10,7 +10,6 @@ import {
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
-import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
 import { computeBlastRadiusRisk } from "../targeting/validate/mutationIntentPreflightValidator.js";
 import { buildImmutableEditCommand } from "./immutableEditCommand.js";
 import { enqueueBulkEditTargetFreezeJob } from "../../Jobs/Queues/bulkEditPipelineJob.js";
@@ -213,10 +212,13 @@ export class BulkEditCommandService {
     const executionActorId = String(
       operationContext.actor?.actorId || "",
     ).trim();
-    if (
-      previewActorId &&
-      (!executionActorId || executionActorId !== previewActorId)
-    ) {
+    if (!previewActorId) {
+      throw new Error("PREVIEW_OWNERSHIP_UNBOUND");
+    }
+    if (!executionActorId) {
+      throw new Error("ACTOR_ID_REQUIRED_FOR_EXECUTE");
+    }
+    if (executionActorId !== previewActorId) {
       throw new Error("PREVIEW_ACTOR_MISMATCH");
     }
 
@@ -231,27 +233,34 @@ export class BulkEditCommandService {
       throw new Error("Preview is stale. Please re-preview before executing.");
     }
 
-    const targetGranularity = resolveTargetGranularityFromRules(rules);
+    const targetGranularity =
+      String(fingerprint.targetGranularity || "").trim()
+      || resolveTargetGranularityFromRules(rules);
 
-    const resolvedTarget = await TargetingEngineService.resolvePreviewTargets({
-      shop: this.session.shop,
-      source: "MANUAL_EXECUTION",
-      targetType: targetGranularity,
-      targetGranularity,
-      filterAst: filterAst ?? null,
-      legacyFilterParams: Array.isArray(filterParams) ? filterParams : [],
-      queryParams: {
-        cursor: null,
-        limit: 20,
-      },
-      sampleLimit: 20,
-    });
+    const previewWhere =
+      fingerprint.where && typeof fingerprint.where === "object"
+        ? fingerprint.where
+        : null;
+    const previewCount = Number(fingerprint.count);
+    const previewFilterAst =
+      fingerprint.filterAst && typeof fingerprint.filterAst === "object"
+        ? fingerprint.filterAst
+        : null;
+    const previewBroadTargetAssessment =
+      fingerprint.broadTargetAssessment
+      && typeof fingerprint.broadTargetAssessment === "object"
+        ? fingerprint.broadTargetAssessment
+        : null;
 
-    if (String(resolvedTarget.mirrorBatchId || "") !== expectedBatch) {
-      throw new Error("Mirror batch changed since preview. Please re-preview before executing.");
+    if (
+      !previewWhere
+      || !Number.isFinite(previewCount)
+      || previewCount < 0
+    ) {
+      throw new Error("PREVIEW_SNAPSHOT_INCOMPLETE");
     }
 
-    const count = Number(resolvedTarget.count || 0);
+    const count = previewCount;
     const limit = subscription?.limit || 100;
     const planName = subscription?.planName || "Free Plan";
     const isUnlimited = subscription?.isUnlimited || false;
@@ -283,7 +292,7 @@ export class BulkEditCommandService {
     const blastRadiusAssessment = computeBlastRadiusRisk({
       targetCount: count,
       totalCatalogCount: Number(
-        resolvedTarget?.broadTargetAssessment?.totalInBatch || 0,
+        previewBroadTargetAssessment?.totalInBatch || 0,
       ),
       fieldsEdited: rules.map((rule) => rule?.field).filter(Boolean),
       destructiveNature: rules.some(
@@ -310,7 +319,7 @@ export class BulkEditCommandService {
     return {
       shop: this.session.shop,
       title,
-      queryFilter: JSON.stringify(resolvedTarget.where),
+      queryFilter: JSON.stringify(previewWhere),
       rules,
       startedAt: new Date(),
       status: "pending",
@@ -323,7 +332,7 @@ export class BulkEditCommandService {
       processedCount: 0,
       totalItems: count,
       targetSnapshotCount: 0,
-      targetMirrorBatchId: resolvedTarget.mirrorBatchId,
+      targetMirrorBatchId: expectedBatch,
       durationMs: 0,
       batch: {
         frozen: true,
@@ -333,21 +342,22 @@ export class BulkEditCommandService {
         previewCount: count,
         currentBatchTargetCount: 0,
         queuedAt: new Date().toISOString(),
-        filterParams: Array.isArray(filterParams) ? filterParams : [],
-        filterAst: resolvedTarget.filterAst ?? filterAst ?? null,
+        // Execute must reuse preview snapshot targeting material only.
+        filterParams: [],
+        filterAst: previewFilterAst,
         previewId,
         previewFingerprint: {
-          filterHash: resolvedTarget.filterHash,
-          mirrorBatchId: resolvedTarget.mirrorBatchId,
+          filterHash: expectedHash,
+          mirrorBatchId: expectedBatch,
         },
         maxBulkEditTargets,
         executionPlan,
         operationKey: executionPlan.operationKey,
-        explicitProductIds: Array.isArray(productIds) ? productIds : [],
-        explicitWhere: queryWhere || null,
+        explicitProductIds: [],
+        explicitWhere: null,
         targetGranularity,
         requiresBroadTargetConfirmation:
-          resolvedTarget?.broadTargetAssessment?.requiresConfirmation === true,
+          previewBroadTargetAssessment?.requiresConfirmation === true,
         confirmBroadTarget: confirmBroadTarget === true,
         criticalConfirmationText:
           String(criticalConfirmationText || "").trim() || null,

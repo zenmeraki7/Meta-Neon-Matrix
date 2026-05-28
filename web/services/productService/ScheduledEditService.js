@@ -18,6 +18,10 @@ import {
   ENQUEUE_QUEUE_KEYS,
 } from "../operationEnqueueIntentService.js";
 import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "../idempotency/IdempotencyStoreService.js";
+import {
   buildEditIntentFromRules,
   buildExecutionPlanForEdit,
   isVariantLevelField,
@@ -30,14 +34,40 @@ export class ScheduledEditService {
   }) {
     this.session = session;
     this.freezeEditHistoryTargets = freezeEditHistoryTargets;
+    this.idempotencyStore = new IdempotencyStoreService(prisma);
   }
 
-  async createScheduledEdit({
-    body = {},
-    subscription = {},
-    actor = null,
-    entitlementSnapshot = null,
-  }) {
+  async createScheduledEdit(input = {}) {
+    const body = input?.command && typeof input.command === "object"
+      ? input.command
+      : (input?.body && typeof input.body === "object" ? input.body : {});
+    const subscription = input?.subscription || {};
+    const actor = input?.actor || null;
+    const entitlementSnapshot = input?.entitlementSnapshot || null;
+    const idempotencyKey = String(input?.idempotencyKey || "").trim();
+
+    if (!idempotencyKey) {
+      const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+      error.code = "IDEMPOTENCY_KEY_REQUIRED";
+      throw error;
+    }
+
+    const begin = await this.idempotencyStore.begin({
+      shop: this.session.shop,
+      scope: "BULK_EDIT_SCHEDULE",
+      key: idempotencyKey,
+      requestHash: buildIdempotencyRequestHash({
+        shop: this.session.shop,
+        operationType: "BULK_EDIT_SCHEDULE",
+        command: body,
+      }),
+    });
+
+    if (begin.mode === "replay") {
+      return begin.response;
+    }
+
+    try {
     const {
       editedField,
       editedBy,
@@ -323,6 +353,14 @@ export class ScheduledEditService {
       }
     }
 
-    return history;
+      await this.idempotencyStore.complete({
+        recordId: begin.recordId,
+        response: history,
+      });
+
+      return history;
+    } catch (error) {
+      throw error;
+    }
   }
 }

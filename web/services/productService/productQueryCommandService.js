@@ -1,6 +1,9 @@
 import { Services } from "./productFilterService.js";
 import { prisma } from "../../config/database.js";
 import { getStoreMirrorState } from "../mirrorHealthService.js";
+import { getCache, setCache } from "../../utils/cacheUtils.js";
+import { fieldRegistry } from "../targeting/registry/fieldRegistry.js";
+import { getTargetingVersionBundle } from "../targeting/versioning.js";
 
 const productService = new Services();
 const MAX_LIMIT = 250;
@@ -86,3 +89,81 @@ export async function executeProductQuery({ shop, query = {}, body = {} }) {
   };
 }
 
+export async function getProductTypeOptions({ shop, search = "", limit = 20 }) {
+  const cacheKey = `${shop}:productTypes:${String(search).toLowerCase()}:${limit}`;
+  const cached = await getCache(cacheKey);
+  if (cached) return cached;
+
+  const data = await productService.getDistinctProductFilterValues({
+    shop,
+    field: "product_type",
+    search,
+    take: limit,
+  });
+  await setCache(cacheKey, data, 300);
+  return data;
+}
+
+export async function getProductFilterValueOptions({
+  shop,
+  field,
+  search = "",
+  limit = 20,
+}) {
+  return productService.getDistinctProductFilterValues({
+    shop,
+    field,
+    search,
+    take: limit,
+  });
+}
+
+function mapValueTypeToUiType(valueType) {
+  if (valueType === "number") return "number";
+  if (valueType === "date") return "date";
+  return "string";
+}
+
+function mapOperatorToLegacyLabel(operator) {
+  const map = {
+    EQ: "equals",
+    NEQ: "does not equal",
+    CONTAINS: "contains",
+    NOT_CONTAINS: "does not contain",
+    STARTS_WITH: "starts with",
+    ENDS_WITH: "ends with",
+    LT: "<",
+    LTE: "<=",
+    GT: ">",
+    GTE: ">=",
+    IN: "is",
+    NOT_IN: "is not",
+    IS_EMPTY: "is empty/blank",
+    IS_NOT_EMPTY: "is not empty",
+    BETWEEN: "between",
+  };
+  return map[operator] || String(operator || "").toLowerCase();
+}
+
+export async function getPreviewFilterRegistry() {
+  const versions = getTargetingVersionBundle();
+  const fields = Object.values(fieldRegistry)
+    .filter((field) => field?.contexts?.includes("PREVIEW"))
+    .map((field) => ({
+      key: field.key,
+      label: field.key,
+      type: mapValueTypeToUiType(field.valueType),
+      isSearchable: field.valueType === "string",
+      operators: Array.isArray(field.operators)
+        ? field.operators.map(mapOperatorToLegacyLabel)
+        : [],
+    }));
+
+  return {
+    versions: {
+      fieldRegistryVersion: versions.fieldRegistryVersion,
+      operatorRegistryVersion: versions.operatorRegistryVersion,
+    },
+    fields,
+  };
+}

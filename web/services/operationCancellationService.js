@@ -12,6 +12,17 @@ import {
   normalizeExportJobStatus,
 } from "../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
+import {
+  acquireOperationLease,
+  buildLeaseOwnerId,
+  releaseOperationLease,
+} from "./operationLeaseService.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "./idempotency/IdempotencyStoreService.js";
+
+const idempotencyStore = new IdempotencyStoreService(prisma);
 
 function normalizeCancelReason(reason) {
   if (typeof reason !== "string") return null;
@@ -47,7 +58,44 @@ function buildStage(executionStateRaw) {
   return "UNKNOWN";
 }
 
-export async function requestEditHistoryCancellation({ shop, historyId, reason }) {
+export async function requestEditHistoryCancellation({
+  shop,
+  historyId,
+  reason,
+  idempotencyKey,
+}) {
+  const idemKey = String(idempotencyKey || "").trim();
+  if (!idemKey) {
+    const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const begin = await idempotencyStore.begin({
+    shop,
+    scope: "EDIT_HISTORY_CANCEL",
+    key: idemKey,
+    requestHash: buildIdempotencyRequestHash({
+      shop,
+      historyId,
+      reason: normalizeCancelReason(reason),
+    }),
+  });
+  if (begin.mode === "replay") {
+    return begin.response;
+  }
+  const leaseOwnerId = buildLeaseOwnerId("cancel-edit-history");
+  const lease = await acquireOperationLease({
+    shop,
+    namespace: "EDIT_HISTORY_LIFECYCLE",
+    resourceId: String(historyId),
+    ownerId: leaseOwnerId,
+  });
+  if (!lease?.acquired) {
+    const error = new Error("OPERATION_LEASE_CONFLICT");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  try {
   const history = await prisma.editHistory.findFirst({
     where: { id: historyId, shop },
     select: {
@@ -87,8 +135,7 @@ export async function requestEditHistoryCancellation({ shop, historyId, reason }
     where: { id: history.id, shop },
     data: update,
   });
-
-  return {
+  const response = {
     id: history.id,
     stage,
     cancellation: stage === "DURING_VERIFICATION"
@@ -97,9 +144,60 @@ export async function requestEditHistoryCancellation({ shop, historyId, reason }
         ? "STOP_AFTER_CURRENT_BATCH"
         : "CANCELLED",
   };
+  await idempotencyStore.complete({
+    recordId: begin.recordId,
+    response,
+  });
+  return response;
+  } finally {
+    await releaseOperationLease({
+      shop,
+      namespace: "EDIT_HISTORY_LIFECYCLE",
+      resourceId: String(historyId),
+      ownerId: leaseOwnerId,
+    });
+  }
 }
 
-export async function requestExportJobCancellation({ shop, exportJobId, reason }) {
+export async function requestExportJobCancellation({
+  shop,
+  exportJobId,
+  reason,
+  idempotencyKey,
+}) {
+  const idemKey = String(idempotencyKey || "").trim();
+  if (!idemKey) {
+    const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const begin = await idempotencyStore.begin({
+    shop,
+    scope: "EXPORT_JOB_CANCEL",
+    key: idemKey,
+    requestHash: buildIdempotencyRequestHash({
+      shop,
+      operationType: "EXPORT_JOB_CANCEL",
+      exportJobId,
+      reason: normalizeCancelReason(reason),
+    }),
+  });
+  if (begin.mode === "replay") {
+    return begin.response;
+  }
+  const leaseOwnerId = buildLeaseOwnerId("cancel-export-job");
+  const lease = await acquireOperationLease({
+    shop,
+    namespace: "EXPORT_JOB_LIFECYCLE",
+    resourceId: String(exportJobId),
+    ownerId: leaseOwnerId,
+  });
+  if (!lease?.acquired) {
+    const error = new Error("OPERATION_LEASE_CONFLICT");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  try {
   const job = await prisma.exportJob.findFirst({
     where: { id: exportJobId, shop },
     select: {
@@ -139,7 +237,7 @@ export async function requestExportJobCancellation({ shop, exportJobId, reason }
     data: update,
   });
 
-  return {
+  const response = {
     id: job.id,
     stage,
     cancellation: stage === "DURING_VERIFICATION"
@@ -148,4 +246,17 @@ export async function requestExportJobCancellation({ shop, exportJobId, reason }
         ? "STOP_AFTER_CURRENT_BATCH"
         : "CANCELLED",
   };
+  await idempotencyStore.complete({
+    recordId: begin.recordId,
+    response,
+  });
+  return response;
+  } finally {
+    await releaseOperationLease({
+      shop,
+      namespace: "EXPORT_JOB_LIFECYCLE",
+      resourceId: String(exportJobId),
+      ownerId: leaseOwnerId,
+    });
+  }
 }

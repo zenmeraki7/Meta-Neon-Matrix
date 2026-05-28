@@ -1,0 +1,770 @@
+const MAX_ID_LENGTH = 200;
+const MAX_TEXT_LENGTH = 500;
+const MAX_LONG_TEXT_LENGTH = 5_000;
+const MAX_CURSOR_LENGTH = 500;
+const MAX_LIMIT = 250;
+
+const MAX_FILTER_PARAMS = 500;
+const MAX_FILTER_PARAM_ARRAY_VALUES = 250;
+const MAX_FILTER_PARAM_VALUE_LENGTH = 5_000;
+
+const MAX_PRODUCT_IDS = 5_000;
+
+const MAX_FILTER_AST_DEPTH = 12;
+const MAX_FILTER_AST_NODES = 1_000;
+const MAX_FILTER_AST_JSON_LENGTH = 200_000;
+
+const MAX_EDIT_VALUE_JSON_LENGTH = 50_000;
+const MAX_EDIT_VALUE_DEPTH = 8;
+const MAX_EDIT_VALUE_NODES = 500;
+
+const MAX_CONTEXT_JSON_LENGTH = 50_000;
+
+const EMPTY_OBJECT = Object.freeze({});
+const EMPTY_ARRAY = Object.freeze([]);
+
+const FREEZE_MODES = new Set([
+  "STATIC_AT_SCHEDULE_CREATE",
+  "DYNAMIC_AT_RUN",
+]);
+
+function buildRequestError(message, code = "VALIDATION_FAILED") {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function isPlainObject(value) {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function assertPlainObject(value, fieldName) {
+  if (!isPlainObject(value)) {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+
+  return value;
+}
+
+function optionalPlainObject(value, fieldName) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  return assertPlainObject(value, fieldName);
+}
+
+function assertNoPoisonKeys(value, fieldName) {
+  if (!isPlainObject(value)) {
+    return;
+  }
+
+  for (const key of Object.keys(value)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+      throw buildRequestError(`Invalid ${fieldName}: unsafe key`);
+    }
+  }
+}
+
+function safeJsonClone(value, fieldName, maxLength) {
+  let json;
+
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+
+  if (!json || json.length > maxLength) {
+    throw buildRequestError(`Invalid ${fieldName}: too large`);
+  }
+
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+
+  Object.freeze(value);
+
+  for (const child of Object.values(value)) {
+    deepFreeze(child);
+  }
+
+  return value;
+}
+
+function countJsonNodes(value, {
+  fieldName,
+  maxDepth,
+  maxNodes,
+  depth = 0,
+  state = { count: 0 },
+}) {
+  if (depth > maxDepth) {
+    throw buildRequestError(`Invalid ${fieldName}: too deep`);
+  }
+
+  state.count += 1;
+
+  if (state.count > maxNodes) {
+    throw buildRequestError(`Invalid ${fieldName}: too many nodes`);
+  }
+
+  if (value === null) {
+    return state.count;
+  }
+
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      countJsonNodes(child, {
+        fieldName,
+        maxDepth,
+        maxNodes,
+        depth: depth + 1,
+        state,
+      });
+    }
+
+    return state.count;
+  }
+
+  if (typeof value === "object") {
+    assertPlainObject(value, fieldName);
+    assertNoPoisonKeys(value, fieldName);
+
+    for (const child of Object.values(value)) {
+      countJsonNodes(child, {
+        fieldName,
+        maxDepth,
+        maxNodes,
+        depth: depth + 1,
+        state,
+      });
+    }
+  }
+
+  return state.count;
+}
+
+function normalizeText(value, fieldName, maxLength = MAX_TEXT_LENGTH) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    throw buildRequestError(`Invalid ${fieldName}: must be a string`);
+  }
+
+  if (/[\u0000-\u001F\u007F]/.test(value)) {
+    throw buildRequestError(
+      `Invalid ${fieldName}: control characters are not allowed`,
+    );
+  }
+
+  const trimmed = value.normalize("NFKC").replace(/\s+/g, " ").trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.length > maxLength) {
+    throw buildRequestError(`Invalid ${fieldName}: too long`);
+  }
+
+  return trimmed;
+}
+
+function normalizeRequiredText(value, fieldName, maxLength = MAX_TEXT_LENGTH) {
+  const normalized = normalizeText(value, fieldName, maxLength);
+
+  if (!normalized) {
+    throw buildRequestError(`${fieldName} is required`);
+  }
+
+  return normalized;
+}
+
+function normalizeId(value, fieldName = "id") {
+  const normalized = normalizeRequiredText(value, fieldName, MAX_ID_LENGTH);
+
+  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+
+  return normalized;
+}
+
+function normalizeOptionalId(value, fieldName = "id") {
+  const normalized = normalizeText(value, fieldName, MAX_ID_LENGTH);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+
+  return normalized;
+}
+
+function normalizeLimit(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const limit = Number(value);
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+    throw buildRequestError(`Invalid limit: must be 1-${MAX_LIMIT}`);
+  }
+
+  return limit;
+}
+
+function normalizeCursor(value) {
+  return normalizeText(value, "cursor", MAX_CURSOR_LENGTH);
+}
+
+function normalizeLang(value) {
+  const lang = normalizeText(value, "lang", 20) || "en";
+
+  if (!/^[A-Za-z]{2,8}(?:[-_][A-Za-z0-9]{2,8})?$/.test(lang)) {
+    throw buildRequestError("Invalid lang");
+  }
+
+  return lang;
+}
+
+function normalizeIdempotencyKey(headers = {}) {
+  const safeHeaders = headers && typeof headers === "object" ? headers : {};
+  const key = normalizeText(safeHeaders.idempotencyKey, "Idempotency-Key", 200);
+
+  if (!key) {
+    throw buildRequestError(
+      "Idempotency-Key header is required",
+      "IDEMPOTENCY_KEY_REQUIRED",
+    );
+  }
+
+  return key;
+}
+
+function normalizeFilterAst(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  assertPlainObject(value, "filterAst");
+  assertNoPoisonKeys(value, "filterAst");
+
+  const cloned = safeJsonClone(
+    value,
+    "filterAst",
+    MAX_FILTER_AST_JSON_LENGTH,
+  );
+
+  countJsonNodes(cloned, {
+    fieldName: "filterAst",
+    maxDepth: MAX_FILTER_AST_DEPTH,
+    maxNodes: MAX_FILTER_AST_NODES,
+  });
+
+  return deepFreeze(cloned);
+}
+
+function normalizeFilterParamValue(value, fieldName = "filter value") {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return normalizeText(value, fieldName, MAX_FILTER_PARAM_VALUE_LENGTH);
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw buildRequestError(`Invalid ${fieldName}`);
+    }
+
+    return value;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length > MAX_FILTER_PARAM_ARRAY_VALUES) {
+      throw buildRequestError(`Invalid ${fieldName}: too many values`);
+    }
+
+    return Object.freeze(
+      value.map((item, index) =>
+        normalizeFilterParamValue(item, `${fieldName}[${index}]`),
+      ),
+    );
+  }
+
+  throw buildRequestError(`Invalid ${fieldName}`);
+}
+
+function normalizeFilterParam(item, index) {
+  const safe = assertPlainObject(item, `filterParams[${index}]`);
+  assertNoPoisonKeys(safe, `filterParams[${index}]`);
+
+  return Object.freeze({
+    field: normalizeRequiredText(
+      safe.field,
+      `filterParams[${index}].field`,
+      160,
+    ),
+    operator: normalizeRequiredText(
+      safe.operator,
+      `filterParams[${index}].operator`,
+      160,
+    ),
+    value: normalizeFilterParamValue(
+      safe.value,
+      `filterParams[${index}].value`,
+    ),
+  });
+}
+
+function normalizeFilterParams(value) {
+  if (value === undefined || value === null) {
+    return EMPTY_ARRAY;
+  }
+
+  if (!Array.isArray(value)) {
+    throw buildRequestError("Invalid filterParams: must be an array");
+  }
+
+  if (value.length > MAX_FILTER_PARAMS) {
+    throw buildRequestError("Invalid filterParams: too many filters");
+  }
+
+  return Object.freeze(value.map(normalizeFilterParam));
+}
+
+function normalizeProductIds(value) {
+  if (value === undefined || value === null) {
+    return EMPTY_ARRAY;
+  }
+
+  if (!Array.isArray(value)) {
+    throw buildRequestError("Invalid productIds: must be an array");
+  }
+
+  if (value.length > MAX_PRODUCT_IDS) {
+    throw buildRequestError("Invalid productIds: too many ids");
+  }
+
+  return Object.freeze(value.map((id) => normalizeId(id, "productId")));
+}
+
+function normalizeEditValue(value, fieldName = "editValue") {
+  if (value === undefined) {
+    return null;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return normalizeText(value, fieldName, MAX_LONG_TEXT_LENGTH);
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw buildRequestError(`Invalid ${fieldName}`);
+    }
+
+    return value;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (isPlainObject(value)) {
+    assertNoPoisonKeys(value, fieldName);
+
+    const cloned = safeJsonClone(
+      value,
+      fieldName,
+      MAX_EDIT_VALUE_JSON_LENGTH,
+    );
+
+    countJsonNodes(cloned, {
+      fieldName,
+      maxDepth: MAX_EDIT_VALUE_DEPTH,
+      maxNodes: MAX_EDIT_VALUE_NODES,
+    });
+
+    return deepFreeze(cloned);
+  }
+
+  throw buildRequestError(`Invalid ${fieldName}`);
+}
+
+function normalizeDateString(value, fieldName, required = false) {
+  const text = normalizeText(value, fieldName, 80);
+
+  if (!text) {
+    if (required) {
+      throw buildRequestError(`${fieldName} is required`);
+    }
+
+    return null;
+  }
+
+  const date = new Date(text);
+
+  if (Number.isNaN(date.getTime())) {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+
+  return date.toISOString();
+}
+
+function normalizeFutureDateString(value, fieldName, required = false) {
+  const iso = normalizeDateString(value, fieldName, required);
+
+  if (!iso) {
+    return null;
+  }
+
+  if (new Date(iso).getTime() <= Date.now()) {
+    throw buildRequestError(`Invalid ${fieldName}: must be in the future`);
+  }
+
+  return iso;
+}
+
+function normalizeFreezeMode(value) {
+  const mode = normalizeRequiredText(value, "freezeMode", 80);
+
+  if (!FREEZE_MODES.has(mode)) {
+    throw buildRequestError("INVALID_FREEZE_MODE", "VALIDATION_FAILED");
+  }
+
+  return mode;
+}
+
+function normalizeCancelReason(value) {
+  return normalizeText(value, "cancelReason", 300);
+}
+
+function normalizeOptionalPlainObject(value, fieldName) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  assertPlainObject(value, fieldName);
+  assertNoPoisonKeys(value, fieldName);
+
+  const cloned = safeJsonClone(value, fieldName, MAX_CONTEXT_JSON_LENGTH);
+
+  countJsonNodes(cloned, {
+    fieldName,
+    maxDepth: 4,
+    maxNodes: 100,
+  });
+
+  return deepFreeze(cloned);
+}
+
+function normalizeOptionalPlainObjectFallback(value, fieldName) {
+  return normalizeOptionalPlainObject(value, fieldName) || EMPTY_OBJECT;
+}
+
+function assertCommandContext(context) {
+  const safe = assertPlainObject(context, "command context");
+
+  if (!safe.shop || typeof safe.shop !== "string") {
+    throw buildRequestError("Authentication required", "UNAUTHENTICATED");
+  }
+
+  return Object.freeze({
+    shop: normalizeRequiredText(safe.shop, "shop", 255),
+    actor: normalizeOptionalPlainObject(safe.actor, "actor"),
+    subscription: normalizeOptionalPlainObject(safe.subscription, "subscription"),
+    entitlement: normalizeOptionalPlainObject(safe.entitlement, "entitlement"),
+    activePlan: normalizeOptionalPlainObjectFallback(
+      safe.activePlan,
+      "activePlan",
+    ),
+  });
+}
+
+function normalizeEditPayload({ body = {}, query = {} }) {
+  const safeBody = assertPlainObject(body, "body");
+  const safeQuery =
+    query && typeof query === "object" && !Array.isArray(query) ? query : {};
+
+  const previewFingerprint =
+    optionalPlainObject(safeBody.previewFingerprint, "previewFingerprint") ||
+    EMPTY_OBJECT;
+
+  return Object.freeze({
+    editedField: normalizeRequiredText(
+      safeBody.editedField ?? safeBody.field,
+      "editedField",
+      160,
+    ),
+    editType: normalizeRequiredText(
+      safeBody.editType ?? safeBody.editedType,
+      "editType",
+      160,
+    ),
+    editValue: normalizeEditValue(
+      safeBody.editValue ?? safeBody.value,
+      "editValue",
+    ),
+    searchKey: normalizeText(safeBody.searchKey, "searchKey", 300),
+    replaceText: normalizeText(
+      safeBody.replaceText,
+      "replaceText",
+      MAX_LONG_TEXT_LENGTH,
+    ),
+    supportValue: normalizeEditValue(safeBody.supportValue, "supportValue"),
+    locationId: normalizeText(
+      safeBody.locationId ?? safeBody.location,
+      "locationId",
+      200,
+    ),
+    filterParams: normalizeFilterParams(safeBody.filterParams),
+    filterAst: normalizeFilterAst(safeBody.filterAst),
+    previewId: normalizeOptionalId(safeBody.previewId, "previewId"),
+    previewFilterHash: normalizeText(
+      safeBody.previewFilterHash ?? previewFingerprint.filterHash,
+      "previewFilterHash",
+      500,
+    ),
+    previewMirrorBatchId: normalizeText(
+      safeBody.previewMirrorBatchId ?? previewFingerprint.mirrorBatchId,
+      "previewMirrorBatchId",
+      200,
+    ),
+    previewFieldRegistryVersion: normalizeText(
+      safeBody.previewFieldRegistryVersion ??
+        previewFingerprint.fieldRegistryVersion,
+      "previewFieldRegistryVersion",
+      120,
+    ),
+    previewOperatorRegistryVersion: normalizeText(
+      safeBody.previewOperatorRegistryVersion ??
+        previewFingerprint.operatorRegistryVersion,
+      "previewOperatorRegistryVersion",
+      120,
+    ),
+    confirmBroadTarget: safeBody.confirmBroadTarget === true,
+    criticalConfirmationText: normalizeText(
+      safeBody.criticalConfirmationText,
+      "criticalConfirmationText",
+      500,
+    ),
+    operationKey: normalizeText(safeBody.operationKey, "operationKey", 200),
+    productIds: normalizeProductIds(safeBody.productIds),
+    title: normalizeText(safeBody.title, "title", 255),
+    cursor: normalizeCursor(safeBody.cursor ?? safeQuery.cursor),
+    limit: normalizeLimit(safeBody.limit ?? safeQuery.limit),
+  });
+}
+
+function normalizeQueryObject(query) {
+  return query && typeof query === "object" && !Array.isArray(query)
+    ? query
+    : EMPTY_OBJECT;
+}
+
+function requirePreviewFingerprint(command) {
+  if (!command.previewId) {
+    throw buildRequestError("PREVIEW_ID_REQUIRED", "VALIDATION_FAILED");
+  }
+
+  if (!command.previewFilterHash) {
+    throw buildRequestError("PREVIEW_FINGERPRINT_REQUIRED", "VALIDATION_FAILED");
+  }
+
+  if (
+    !command.previewFieldRegistryVersion ||
+    !command.previewOperatorRegistryVersion
+  ) {
+    throw buildRequestError(
+      "PREVIEW_REGISTRY_VERSION_REQUIRED",
+      "VALIDATION_FAILED",
+    );
+  }
+}
+
+function assertScheduledUndoAfterScheduledAt(scheduledAt, scheduledUndoAt) {
+  if (!scheduledAt || !scheduledUndoAt) {
+    return;
+  }
+
+  if (new Date(scheduledUndoAt).getTime() <= new Date(scheduledAt).getTime()) {
+    throw buildRequestError(
+      "Invalid scheduledUndoAt: must be after scheduledAt",
+    );
+  }
+}
+
+export function buildBulkEditPreviewCommand({
+  body = {},
+  query = {},
+  context,
+}) {
+  const safeQuery = normalizeQueryObject(query);
+  const safeContext = assertCommandContext(context);
+  const payload = normalizeEditPayload({ body, query: safeQuery });
+
+  return Object.freeze({
+    ...safeContext,
+    ...payload,
+    lang: normalizeLang(safeQuery.lang),
+  });
+}
+
+export function buildBulkEditExecuteCommand({
+  body = {},
+  query = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+  const payload = normalizeEditPayload({ body, query });
+
+  requirePreviewFingerprint(payload);
+
+  return Object.freeze({
+    ...safeContext,
+    ...payload,
+    idempotencyKey: normalizeIdempotencyKey(headers),
+  });
+}
+
+export function buildScheduledEditCommand({
+  body = {},
+  query = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+  const payload = normalizeEditPayload({ body, query });
+
+  const safeBody = assertPlainObject(body, "body");
+
+  const scheduledAt = normalizeFutureDateString(
+    safeBody.scheduledAt,
+    "scheduledAt",
+    true,
+  );
+
+  const scheduledUndoAt = normalizeFutureDateString(
+    safeBody.scheduledUndoAt,
+    "scheduledUndoAt",
+    false,
+  );
+
+  assertScheduledUndoAfterScheduledAt(scheduledAt, scheduledUndoAt);
+
+  return Object.freeze({
+    ...safeContext,
+    ...payload,
+    scheduledAt,
+    scheduledUndoAt,
+    freezeMode: normalizeFreezeMode(safeBody.freezeMode),
+    idempotencyKey: normalizeIdempotencyKey(headers),
+  });
+}
+
+export function buildUndoEditCommand({
+  params = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+
+  return Object.freeze({
+    ...safeContext,
+    historyId: normalizeId(params.id, "historyId"),
+    idempotencyKey: normalizeIdempotencyKey(headers),
+  });
+}
+
+export function buildCancelEditCommand({
+  params = {},
+  body = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+  const safeBody =
+    body === undefined || body === null
+      ? EMPTY_OBJECT
+      : assertPlainObject(body, "body");
+
+  return Object.freeze({
+    ...safeContext,
+    historyId: normalizeId(params.id, "historyId"),
+    reason: normalizeCancelReason(safeBody.cancelReason),
+    idempotencyKey: normalizeIdempotencyKey(headers),
+  });
+}
+
+export function buildPauseEditCommand({
+  params = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+
+  return Object.freeze({
+    ...safeContext,
+    historyId: normalizeId(params.id, "historyId"),
+    idempotencyKey: normalizeIdempotencyKey(headers),
+  });
+}
+
+export function buildResumeEditCommand({
+  params = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+
+  return Object.freeze({
+    ...safeContext,
+    historyId: normalizeId(params.id, "historyId"),
+    idempotencyKey: normalizeIdempotencyKey(headers),
+  });
+}
+
+export function buildRetryFailedOnlyCommand({
+  params = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+
+  return Object.freeze({
+    ...safeContext,
+    historyId: normalizeId(params.id, "historyId"),
+    idempotencyKey: normalizeIdempotencyKey(headers),
+  });
+}

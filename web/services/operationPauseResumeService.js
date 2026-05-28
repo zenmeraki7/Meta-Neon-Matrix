@@ -11,6 +11,17 @@ import {
   normalizeExportJobStatus,
 } from "../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
+import {
+  acquireOperationLease,
+  buildLeaseOwnerId,
+  releaseOperationLease,
+} from "./operationLeaseService.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "./idempotency/IdempotencyStoreService.js";
+
+const idempotencyStore = new IdempotencyStoreService(prisma);
 
 function normalizeToLifecycleState(rawState) {
   return normalizeExecutionStateLiteral(rawState);
@@ -26,8 +37,39 @@ function assertPremiumPlan(subscription = {}) {
   }
 }
 
-export async function requestPauseEditOperation({ shop, historyId, subscription }) {
+export async function requestPauseEditOperation({
+  shop,
+  historyId,
+  subscription,
+  idempotencyKey,
+}) {
   assertPremiumPlan(subscription);
+  const idemKey = String(idempotencyKey || "").trim();
+  if (!idemKey) {
+    const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const begin = await idempotencyStore.begin({
+    shop,
+    scope: "EDIT_HISTORY_PAUSE",
+    key: idemKey,
+    requestHash: buildIdempotencyRequestHash({ shop, historyId }),
+  });
+  if (begin.mode === "replay") return begin.response;
+  const leaseOwnerId = buildLeaseOwnerId("pause-edit-history");
+  const lease = await acquireOperationLease({
+    shop,
+    namespace: "EDIT_HISTORY_LIFECYCLE",
+    resourceId: String(historyId),
+    ownerId: leaseOwnerId,
+  });
+  if (!lease?.acquired) {
+    const error = new Error("OPERATION_LEASE_CONFLICT");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  try {
   const history = await prisma.editHistory.findFirst({ where: { id: historyId, shop } });
   if (!history) throw new Error("Edit history not found");
   const state = normalizeToLifecycleState(history.executionState);
@@ -59,11 +101,55 @@ export async function requestPauseEditOperation({ shop, historyId, subscription 
         pauseRequestedAt: now,
       },
   });
-  return { id: historyId, paused: immediate, mode: immediate ? "PAUSED" : "PAUSE_AFTER_CURRENT_BATCH" };
+  const response = { id: historyId, paused: immediate, mode: immediate ? "PAUSED" : "PAUSE_AFTER_CURRENT_BATCH" };
+  await idempotencyStore.complete({
+    recordId: begin.recordId,
+    response,
+  });
+  return response;
+  } finally {
+    await releaseOperationLease({
+      shop,
+      namespace: "EDIT_HISTORY_LIFECYCLE",
+      resourceId: String(historyId),
+      ownerId: leaseOwnerId,
+    });
+  }
 }
 
-export async function resumeEditOperation({ shop, historyId, subscription }) {
+export async function resumeEditOperation({
+  shop,
+  historyId,
+  subscription,
+  idempotencyKey,
+}) {
   assertPremiumPlan(subscription);
+  const idemKey = String(idempotencyKey || "").trim();
+  if (!idemKey) {
+    const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const begin = await idempotencyStore.begin({
+    shop,
+    scope: "EDIT_HISTORY_RESUME",
+    key: idemKey,
+    requestHash: buildIdempotencyRequestHash({ shop, historyId }),
+  });
+  if (begin.mode === "replay") return begin.response;
+  const leaseOwnerId = buildLeaseOwnerId("resume-edit-history");
+  const lease = await acquireOperationLease({
+    shop,
+    namespace: "EDIT_HISTORY_LIFECYCLE",
+    resourceId: String(historyId),
+    ownerId: leaseOwnerId,
+  });
+  if (!lease?.acquired) {
+    const error = new Error("OPERATION_LEASE_CONFLICT");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  try {
   const history = await prisma.editHistory.findFirst({ where: { id: historyId, shop } });
   if (!history) throw new Error("Edit history not found");
   if (normalizeToLifecycleState(history.executionState) !== OPERATION_LIFECYCLE_STATES.PAUSED) {
@@ -89,11 +175,59 @@ export async function resumeEditOperation({ shop, historyId, subscription }) {
     source: "manual_resume",
     executionId: history.executionIdentity || historyId,
   });
-  return { id: historyId, resumed: true };
+  const response = { id: historyId, resumed: true };
+  await idempotencyStore.complete({
+    recordId: begin.recordId,
+    response,
+  });
+  return response;
+  } finally {
+    await releaseOperationLease({
+      shop,
+      namespace: "EDIT_HISTORY_LIFECYCLE",
+      resourceId: String(historyId),
+      ownerId: leaseOwnerId,
+    });
+  }
 }
 
-export async function requestPauseExportOperation({ shop, exportJobId, subscription }) {
+export async function requestPauseExportOperation({
+  shop,
+  exportJobId,
+  subscription,
+  idempotencyKey,
+}) {
   assertPremiumPlan(subscription);
+  const idemKey = String(idempotencyKey || "").trim();
+  if (!idemKey) {
+    const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const begin = await idempotencyStore.begin({
+    shop,
+    scope: "EXPORT_JOB_PAUSE",
+    key: idemKey,
+    requestHash: buildIdempotencyRequestHash({
+      shop,
+      operationType: "EXPORT_JOB_PAUSE",
+      exportJobId,
+    }),
+  });
+  if (begin.mode === "replay") return begin.response;
+  const leaseOwnerId = buildLeaseOwnerId("pause-export-job");
+  const lease = await acquireOperationLease({
+    shop,
+    namespace: "EXPORT_JOB_LIFECYCLE",
+    resourceId: String(exportJobId),
+    ownerId: leaseOwnerId,
+  });
+  if (!lease?.acquired) {
+    const error = new Error("OPERATION_LEASE_CONFLICT");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  try {
   const job = await prisma.exportJob.findFirst({ where: { id: exportJobId, shop } });
   if (!job) throw new Error("Export job not found");
   const state = normalizeToLifecycleState(job.executionState);
@@ -123,11 +257,59 @@ export async function requestPauseExportOperation({ shop, exportJobId, subscript
         pauseRequestedAt: now,
       },
   });
-  return { id: exportJobId, paused: immediate, mode: immediate ? "PAUSED" : "PAUSE_AFTER_CURRENT_BATCH" };
+  const response = { id: exportJobId, paused: immediate, mode: immediate ? "PAUSED" : "PAUSE_AFTER_CURRENT_BATCH" };
+  await idempotencyStore.complete({
+    recordId: begin.recordId,
+    response,
+  });
+  return response;
+  } finally {
+    await releaseOperationLease({
+      shop,
+      namespace: "EXPORT_JOB_LIFECYCLE",
+      resourceId: String(exportJobId),
+      ownerId: leaseOwnerId,
+    });
+  }
 }
 
-export async function resumeExportOperation({ shop, exportJobId, subscription }) {
+export async function resumeExportOperation({
+  shop,
+  exportJobId,
+  subscription,
+  idempotencyKey,
+}) {
   assertPremiumPlan(subscription);
+  const idemKey = String(idempotencyKey || "").trim();
+  if (!idemKey) {
+    const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const begin = await idempotencyStore.begin({
+    shop,
+    scope: "EXPORT_JOB_RESUME",
+    key: idemKey,
+    requestHash: buildIdempotencyRequestHash({
+      shop,
+      operationType: "EXPORT_JOB_RESUME",
+      exportJobId,
+    }),
+  });
+  if (begin.mode === "replay") return begin.response;
+  const leaseOwnerId = buildLeaseOwnerId("resume-export-job");
+  const lease = await acquireOperationLease({
+    shop,
+    namespace: "EXPORT_JOB_LIFECYCLE",
+    resourceId: String(exportJobId),
+    ownerId: leaseOwnerId,
+  });
+  if (!lease?.acquired) {
+    const error = new Error("OPERATION_LEASE_CONFLICT");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  try {
   const job = await prisma.exportJob.findFirst({ where: { id: exportJobId, shop } });
   if (!job) throw new Error("Export job not found");
   if (normalizeToLifecycleState(job.executionState) !== "PAUSED") {
@@ -152,5 +334,18 @@ export async function resumeExportOperation({ shop, exportJobId, subscription })
     source: "manual_resume",
     executionId: exportJobId,
   });
-  return { id: exportJobId, resumed: true };
+  const response = { id: exportJobId, resumed: true };
+  await idempotencyStore.complete({
+    recordId: begin.recordId,
+    response,
+  });
+  return response;
+  } finally {
+    await releaseOperationLease({
+      shop,
+      namespace: "EXPORT_JOB_LIFECYCLE",
+      resourceId: String(exportJobId),
+      ownerId: leaseOwnerId,
+    });
+  }
 }

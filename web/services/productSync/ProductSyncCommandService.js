@@ -3,16 +3,44 @@ import { prisma } from "../../config/database.js";
 import { addProductSyncClearProductTypesJob } from "../../Jobs/Queues/productSyncClearProductTypesJob.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { assertFeatureEntitlement } from "../entitlement/featureEntitlementService.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "../idempotency/IdempotencyStoreService.js";
 
 export class ProductSyncCommandService {
-  async createClearProductTypesCommand({ shop }) {
+  constructor() {
+    this.idempotencyStore = new IdempotencyStoreService(prisma);
+  }
+
+  async createClearProductTypesCommand({ shop, idempotencyKey, subscription }) {
     if (!shop) {
       throw new Error("SHOP_REQUIRED");
+    }
+    const idemKey = String(idempotencyKey || "").trim();
+    if (!idemKey) {
+      const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+      error.code = "IDEMPOTENCY_KEY_REQUIRED";
+      throw error;
+    }
+
+    const begin = await this.idempotencyStore.begin({
+      shop,
+      scope: "PRODUCT_SYNC_CLEAR_TYPES",
+      key: idemKey,
+      requestHash: buildIdempotencyRequestHash({
+        shop,
+        operationType: "PRODUCT_SYNC_CLEAR_TYPES",
+      }),
+    });
+    if (begin.mode === "replay") {
+      return begin.response;
     }
 
     await assertFeatureEntitlement({
       shop,
       feature: "PRODUCT_SYNC",
+      subscription,
     });
 
     const operationId = crypto.randomUUID();
@@ -40,10 +68,15 @@ export class ProductSyncCommandService {
 
     await clearKeyCaches(`${shop}:sync_details`);
 
-    return {
+    const response = {
       operationId,
       status: "QUEUED",
     };
+    await this.idempotencyStore.complete({
+      recordId: begin.recordId,
+      response,
+    });
+    return response;
   }
 }
 

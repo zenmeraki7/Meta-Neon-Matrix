@@ -1,176 +1,140 @@
-import { ProductExportCommandService } from "../services/productExport/ProductExportCommandService.js";
-import { logApiError } from "../utils/errorLogUtils.js";
+import { requireShopifySession } from "../http/shopifySession.js";
+import { buildActorFromSession } from "../http/actorContext.js";
+import { setPrivateNoStore } from "../http/cacheHeaders.js";
 import {
-  buildActorContext,
-  buildEntitlementSnapshot,
-} from "../utils/operationContextUtils.js";
-import { requestExportJobCancellation } from "../services/operationCancellationService.js";
+  buildCreateProductExportCommand,
+  buildDownloadProductExportCommand,
+  buildCancelExportCommand,
+  buildPauseExportCommand,
+  buildResumeExportCommand,
+} from "../normalizers/productExportCommandNormalizer.js";
 import {
-  requestPauseExportOperation,
-  resumeExportOperation,
-} from "../services/operationPauseResumeService.js";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+  toExportJobQueuedResponseDto,
+  toExportCancellationResponseDto,
+  toExportPauseResponseDto,
+  toExportResumeResponseDto,
+  toExportDownloadRedirectDto,
+} from "../dtos/productExportDto.js";
+import {
+  productExportUseCases,
+  productExportLifecycleUseCases,
+} from "../useCases/productExportUseCases.js";
 
-function toExportJobDto(exportJob) {
-  return {
-    success: true,
-    exportJobId: exportJob.id,
-    status: "QUEUED",
-    queuedAt: exportJob.createdAt,
-  };
-}
-
-function getSessionOrThrow(res) {
-  const session = res.locals.shopify?.session;
-  if (!session?.shop) {
-    const error = new Error("UNAUTHENTICATED");
-    error.code = "UNAUTHENTICATED";
+function assertSafeDownloadUrl(rawUrl) {
+  if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+    const error = new Error("EXPORT_FILE_URL_INVALID");
+    error.code = "CONFLICT";
     throw error;
   }
-  return session;
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    const error = new Error("EXPORT_FILE_URL_INVALID");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  if (parsed.protocol !== "https:") {
+    const error = new Error("EXPORT_FILE_URL_UNSAFE");
+    error.code = "CONFLICT";
+    throw error;
+  }
+  return parsed.toString();
 }
 
-export const createProductExport = async (req, res) => {
-  let session;
+function buildContext(req, session) {
+  return Object.freeze({
+    shop: session.shop,
+    actor: buildActorFromSession(session),
+    subscription: req.subscription || null,
+    entitlement: req.entitlement || null,
+    activePlan: req.activePlan || {},
+  });
+}
 
+function buildHeaders(req) {
+  return Object.freeze({
+    idempotencyKey: req.get("Idempotency-Key") || null,
+  });
+}
+
+export const createProductExport = async (req, res, next) => {
   try {
-    session = getSessionOrThrow(res);
-    const { fields, fileName, filterParams, filterAst } = req.body;
-
-    if (!Array.isArray(fields) || fields.length === 0) {
-      const error = new Error("FIELDS_REQUIRED");
-      error.code = "VALIDATION_FAILED";
-      throw error;
-    }
-
-    if (!fileName?.trim()) {
-      const error = new Error("FILE_NAME_REQUIRED");
-      error.code = "VALIDATION_FAILED";
-      throw error;
-    }
-
-    const commandService = new ProductExportCommandService(session);
-    const job = await commandService.createExportCommand({
-      fields,
-      fileName,
-      filterParams,
-      filterAst,
-      actor: buildActorContext({
-        req,
-        session,
-        fallbackType: "MERCHANT_ADMIN",
-      }),
-      entitlementSnapshot: buildEntitlementSnapshot(req.subscription),
+    setPrivateNoStore(res);
+    const session = requireShopifySession(res, "UNAUTHENTICATED");
+    const command = buildCreateProductExportCommand({
+      body: req.body || {},
+      headers: buildHeaders(req),
+      context: buildContext(req, session),
     });
-
-    return res.status(200).json(toExportJobDto(job));
+    const result = await productExportUseCases.create(command);
+    return res.status(200).json(toExportJobQueuedResponseDto(result));
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
-      req,
-      source: "POST /api/create-export",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
+    return next(error);
   }
 };
 
-export const handleDownloadExportProductsData = async (req, res) => {
-  let session;
-
+export const handleDownloadExportProductsData = async (req, res, next) => {
   try {
-    session = getSessionOrThrow(res);
-
-    const commandService = new ProductExportCommandService(session);
-    const result = await commandService.getExportDetails(req.params.id);
-
-    if (!result) {
-      const error = new Error("EXPORT_HISTORY_NOT_FOUND");
-      error.code = "NOT_FOUND";
-      throw error;
-    }
-
-    if (!result.fileUrl) {
-      const error = new Error("EXPORT_FILE_NOT_READY");
-      error.code = "CONFLICT";
-      throw error;
-    }
-
-    return res.redirect(result.fileUrl);
-  } catch (err) {
-    await logApiError({
-      shop: session?.shop,
-      err,
-      req,
-      source: "GET /api/export-products/:id/download",
+    setPrivateNoStore(res);
+    const session = requireShopifySession(res, "UNAUTHENTICATED");
+    const command = buildDownloadProductExportCommand({
+      params: req.params || {},
+      context: buildContext(req, session),
     });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
+    const result = await productExportUseCases.download(command);
+    const redirect = toExportDownloadRedirectDto(result);
+    return res.redirect(assertSafeDownloadUrl(redirect.downloadUrl));
+  } catch (error) {
+    return next(error);
   }
 };
 
-export const cancelExportOperation = async (req, res) => {
-  let session;
+export const cancelExportOperation = async (req, res, next) => {
   try {
-    session = getSessionOrThrow(res);
-    const result = await requestExportJobCancellation({
-      shop: session.shop,
-      exportJobId: req.params.id,
-      reason: req.body?.cancelReason,
+    setPrivateNoStore(res);
+    const session = requireShopifySession(res, "UNAUTHENTICATED");
+    const command = buildCancelExportCommand({
+      params: req.params || {},
+      body: req.body || {},
+      headers: buildHeaders(req),
+      context: buildContext(req, session),
     });
-    return res.status(200).json({ success: true, data: result });
-  } catch (err) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
+    const result = await productExportLifecycleUseCases.cancel(command);
+    return res.status(200).json(toExportCancellationResponseDto(result));
+  } catch (error) {
+    return next(error);
   }
 };
 
-export const pauseExportOperation = async (req, res) => {
-  let session;
+export const pauseExportOperation = async (req, res, next) => {
   try {
-    session = getSessionOrThrow(res);
-    const data = await requestPauseExportOperation({
-      shop: session.shop,
-      exportJobId: req.params.id,
-      subscription: req.subscription || {},
+    setPrivateNoStore(res);
+    const session = requireShopifySession(res, "UNAUTHENTICATED");
+    const command = buildPauseExportCommand({
+      params: req.params || {},
+      headers: buildHeaders(req),
+      context: buildContext(req, session),
     });
-    return res.status(200).json({ success: true, data });
-  } catch (err) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
+    const result = await productExportLifecycleUseCases.pause(command);
+    return res.status(200).json(toExportPauseResponseDto(result));
+  } catch (error) {
+    return next(error);
   }
 };
 
-export const resumePausedExportOperation = async (req, res) => {
-  let session;
+export const resumePausedExportOperation = async (req, res, next) => {
   try {
-    session = getSessionOrThrow(res);
-    const data = await resumeExportOperation({
-      shop: session.shop,
-      exportJobId: req.params.id,
-      subscription: req.subscription || {},
+    setPrivateNoStore(res);
+    const session = requireShopifySession(res, "UNAUTHENTICATED");
+    const command = buildResumeExportCommand({
+      params: req.params || {},
+      headers: buildHeaders(req),
+      context: buildContext(req, session),
     });
-    return res.status(200).json({ success: true, data });
-  } catch (err) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
+    const result = await productExportLifecycleUseCases.resume(command);
+    return res.status(200).json(toExportResumeResponseDto(result));
+  } catch (error) {
+    return next(error);
   }
 };

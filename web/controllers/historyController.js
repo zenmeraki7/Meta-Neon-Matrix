@@ -1,404 +1,312 @@
 // web/controllers/historyController.js
 
-import { ProductExportService } from "../services/productService/productExportService.js";
-import { successResponse, errorResponse } from "../utils/responseUtils.js";
-import { EditHistoryService } from "../services/historyService/historyService.js";
-import {
-  getImportHistoryDetail,
-  listImportHistories,
-} from "../services/historyService/importHistoryQueryService.js";
-import { asyncHandler } from "../utils/asyncHandler.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import { NotFoundError } from "../utils/errorUtils.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
-function toImportHistoryListDto(history) {
-  return {
-    id: history.id,
-    status: history.status,
-    fileName: history.fileName ?? null,
-    createdAt: history.createdAt,
-    completedAt: history.completedAt ?? null,
-    totalRows: history.totalRows ?? 0,
-    successCount: history.successCount ?? 0,
-    failedCount: history.failedCount ?? 0,
-  };
+import { historyUseCases } from "../useCases/historyUseCases.js";
+
+import {
+  buildExportHistoryDetailCommand,
+  buildExportHistoryListCommand,
+  buildEditHistoryChangesCommand,
+  buildEditHistoryDetailCommand,
+  buildEditHistoryListCommand,
+  buildEditHistorySummaryCommand,
+  buildImportHistoryDetailCommand,
+  buildImportHistoryListCommand,
+} from "../normalizers/historyCommandNormalizer.js";
+
+import {
+  toEditHistoryChangesResponseDto,
+  toEditHistoryDetailResponseDto,
+  toEditHistoryListResponseDto,
+  toEditHistorySummaryResponseDto,
+  toExportHistoryDetailResponseDto,
+  toExportHistoryListResponseDto,
+  toImportHistoryDetailResponseDto,
+  toImportHistoryListResponseDto,
+} from "../dtos/historyDto.js";
+
+function buildControllerError(message, code = "VALIDATION_ERROR") {
+  const error = new Error(message);
+  error.code = code;
+  return error;
 }
 
-function toImportHistoryDetailDto(history) {
-  return {
-    id: history.id,
-    status: history.status,
-    fileName: history.fileName ?? null,
-    totalRows: history.totalRows ?? 0,
-    successCount: history.successCount ?? 0,
-    failedCount: history.failedCount ?? 0,
-    errors: Array.isArray(history.errors) ? history.errors : [],
-    createdAt: history.createdAt,
-    completedAt: history.completedAt ?? null,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-// Export histories
-// ─────────────────────────────────────────────────────────────
-
-export const getAllExportHistories = asyncHandler(async (req, res) => {
-  const session = res.locals.shopify.session;
-  const { lang = "en", type = "", cursor = null, limit = 20, page } = req.query;
+function requireShopifySession(res) {
+  const session = res.locals?.shopify?.session;
 
   if (!session?.shop) {
+    throw buildControllerError("Authentication required", "UNAUTHENTICATED");
+  }
+
+  return session;
+}
+
+function buildActorFromSession(session) {
+  const associatedUser = session?.onlineAccessInfo?.associated_user;
+
+  return Object.freeze({
+    type: associatedUser?.id ? "SHOPIFY_USER" : "SHOPIFY_SESSION",
+    userId: associatedUser?.id ? String(associatedUser.id) : null,
+    email: associatedUser?.email || null,
+  });
+}
+
+function buildBaseCommandContext({ req, session }) {
+  return Object.freeze({
+    shop: session.shop,
+    actor: buildActorFromSession(session),
+    entitlement: req.entitlement || null,
+    subscription: req.subscription || null,
+    activePlan: req.activePlan || {},
+  });
+}
+
+function setPrivateNoStore(res) {
+  res.set("Cache-Control", "no-store");
+}
+
+function buildSafeRequestLogContext(req) {
+  return Object.freeze({
+    method: req.method,
+    originalUrl: req.originalUrl,
+    path: req.path,
+    requestId: req.id || req.get?.("X-Request-Id") || null,
+  });
+}
+
+async function logAndSendError({ res, req, error, shop, source }) {
+  await logApiError({
+    shop,
+    err: error,
+    req: buildSafeRequestLogContext(req),
+    source,
+  });
+
+  if (error instanceof NotFoundError || error?.code === "NOT_FOUND") {
     const { statusCode, body } = buildPublicApiErrorResponse(
-      { code: "UNAUTHENTICATED" },
-      "UNAUTHENTICATED",
+      { code: "NOT_FOUND" },
+      "NOT_FOUND",
     );
     return res.status(statusCode).json(body);
   }
 
-  if (page && String(page) !== "1") {
-    return res.status(400).json(errorResponse("Offset pagination is disabled. Use cursor pagination."));
-  }
+  const fallbackCode =
+    error?.code === "UNAUTHENTICATED"
+      ? "UNAUTHENTICATED"
+      : error?.code === "VALIDATION_ERROR"
+        ? "VALIDATION_FAILED"
+        : error?.code === "PRECONDITION_REQUIRED"
+          ? "VALIDATION_FAILED"
+          : "INTERNAL_ERROR";
 
-  const service = new ProductExportService(session);
+  const { statusCode, body } = buildPublicApiErrorResponse(error, fallbackCode);
+  return res.status(statusCode).json(body);
+}
+
+function buildCommand(req, res, normalizer) {
+  const session = requireShopifySession(res);
+
+  const command = normalizer({
+    params: req.params || {},
+    query: req.query || {},
+    context: buildBaseCommandContext({ req, session }),
+  });
+
+  return Object.freeze({
+    session,
+    command: Object.freeze(command),
+  });
+}
+
+// Export histories
+export const getAllExportHistories = async (req, res) => {
+  let session;
 
   try {
-    const result = await service.getAllExportHistories({
-      lang,
-      type,
-      cursor,
-      limit,
-    });
+    setPrivateNoStore(res);
 
-    return res
-      .status(200)
-      .json(successResponse("Fetched export histories", result.items, {
-        pageInfo: result.pageInfo,
-        totalCount: result.totalCount,
-      }));
+    const built = buildCommand(req, res, buildExportHistoryListCommand);
+    session = built.session;
+
+    const result = await historyUseCases.exports.list(built.command);
+
+    return res.status(200).json(toExportHistoryListResponseDto(result));
   } catch (error) {
-    console.error("Error in getAllExportHistories:", error);
-    await logApiError({
-      shop: session.shop,
-      err: error,
+    return logAndSendError({
+      res,
       req,
+      error,
+      shop: session?.shop,
       source: "historyController.getAllExportHistories",
     });
-    return res.status(500).json(errorResponse("Failed to fetch histories"));
   }
-});
-
-export const getExportHistoryListSummary = getAllExportHistories;
+};
 
 export const getExportHistoryDetails = async (req, res) => {
-  const session = res.locals.shopify?.session;
-  const id = req.params.id;
+  let session;
 
   try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    setPrivateNoStore(res);
 
-    const service = new ProductExportService(session);
-    const result = await service.getExportHistoryDetails(id);
+    const built = buildCommand(req, res, buildExportHistoryDetailCommand);
+    session = built.session;
 
-    return res
-      .status(200)
-      .json(successResponse("Fetched history detail", result));
-  } catch (err) {
-    await logApiError({
-      shop: session?.shop,
-      err,
+    const result = await historyUseCases.exports.detail(built.command);
+
+    return res.status(200).json(toExportHistoryDetailResponseDto(result));
+  } catch (error) {
+    return logAndSendError({
+      res,
       req,
-      source: "GET /api/export-history/:id",
+      error,
+      shop: session?.shop,
+      source: "historyController.getExportHistoryDetails",
     });
-
-    return res
-      .status(500)
-      .json(errorResponse("Failed to fetch export history details"));
   }
 };
 
 export const getExportHistoryDetail = getExportHistoryDetails;
+export const getExportHistoryListSummary = getAllExportHistories;
 
-// ─────────────────────────────────────────────────────────────
 // Edit histories
-// ─────────────────────────────────────────────────────────────
-
-export const getAllEditHistories = asyncHandler(async (req, res) => {
-  const session = res.locals.shopify.session;
-  const { type, search, cursor, limit, lang } = req.query;
-
-  if (!session?.shop) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      { code: "UNAUTHENTICATED" },
-      "UNAUTHENTICATED",
-    );
-    return res.status(statusCode).json(body);
-  }
-
-  const service = new EditHistoryService(session, req.activePlan || {});
+export const getAllEditHistories = async (req, res) => {
+  let session;
 
   try {
-    const result = await service.getEditHistories({
-      type,
-      search,
-      cursor: cursor || null,
-      limit: limit || 10,
-      lang: lang || "en",
-    });
+    setPrivateNoStore(res);
 
-    return res.status(200).json(
-      successResponse("Fetched edit histories", result.edges, {
-        pageInfo: result.pageInfo,
-        total: result.totalCount,
-        planLimit: result.planLimit,
-      }),
-    );
+    const built = buildCommand(req, res, buildEditHistoryListCommand);
+    session = built.session;
+
+    const result = await historyUseCases.edits.list(built.command);
+
+    return res.status(200).json(toEditHistoryListResponseDto(result));
   } catch (error) {
-    console.error("Error in getAllEditHistories:", error);
-    await logApiError({
-      shop: session.shop,
-      err: error,
+    return logAndSendError({
+      res,
       req,
+      error,
+      shop: session?.shop,
       source: "historyController.getAllEditHistories",
     });
-    return res.status(500).json(errorResponse("Failed to fetch histories"));
   }
-});
+};
 
 export const getHistoryDetails = async (req, res) => {
-  const session = res.locals.shopify?.session;
-  const id =
-    req.params?.id ||
-    req.query?.id ||
-    req.query?.historyId ||
-    null;
-  const { lang } = req.query;
+  let session;
 
   try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    setPrivateNoStore(res);
 
-    if (!id || id === "undefined" || id === "null") {
-      return res.status(400).json(errorResponse("History id is required"));
-    }
+    const built = buildCommand(req, res, buildEditHistoryDetailCommand);
+    session = built.session;
 
-    const service = new EditHistoryService(session, req.activePlan || {});
-    const result = await service.getHistoryDetails(id, lang || "en");
+    const result = await historyUseCases.edits.detail(built.command);
 
-    return res
-      .status(200)
-      .json(successResponse("Fetched history detail", result));
-  } catch (err) {
-    await logApiError({
-      shop: session?.shop,
-      err,
+    return res.status(200).json(toEditHistoryDetailResponseDto(result));
+  } catch (error) {
+    return logAndSendError({
+      res,
       req,
-      source: "GET /api/history/:id",
+      error,
+      shop: session?.shop,
+      source: "historyController.getHistoryDetails",
     });
-
-    if (err instanceof NotFoundError) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "NOT_FOUND" },
-        "NOT_FOUND",
-      );
-      return res.status(statusCode).json(body);
-    }
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
   }
 };
 
 export const getHistorySummary = async (req, res) => {
-  const session = res.locals.shopify?.session;
-  const id =
-    req.params?.id ||
-    req.query?.id ||
-    req.query?.historyId ||
-    null;
-  const { lang } = req.query;
+  let session;
 
   try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    setPrivateNoStore(res);
 
-    if (!id || id === "undefined" || id === "null") {
-      return res.status(400).json(errorResponse("History id is required"));
-    }
+    const built = buildCommand(req, res, buildEditHistorySummaryCommand);
+    session = built.session;
 
-    const service = new EditHistoryService(session, req.activePlan || {});
-    const result = await service.getHistorySummary(id, lang || "en");
+    const result = await historyUseCases.edits.summary(built.command);
 
-    return res
-      .status(200)
-      .json(successResponse("Fetched history summary", result));
-  } catch (err) {
-    await logApiError({
-      shop: session?.shop,
-      err,
+    return res.status(200).json(toEditHistorySummaryResponseDto(result));
+  } catch (error) {
+    return logAndSendError({
+      res,
       req,
-      source: "GET /api/history/:id/summary",
+      error,
+      shop: session?.shop,
+      source: "historyController.getHistorySummary",
     });
-
-    if (err instanceof NotFoundError) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "NOT_FOUND" },
-        "NOT_FOUND",
-      );
-      return res.status(statusCode).json(body);
-    }
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
   }
 };
 
 export const getHistoryChanges = async (req, res) => {
-  const session = res.locals.shopify?.session;
-  const id =
-    req.params?.id ||
-    req.query?.id ||
-    req.query?.historyId ||
-    null;
-  const { cursor = null, limit = 10, page } = req.query;
+  let session;
 
   try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    setPrivateNoStore(res);
 
-    if (!id || id === "undefined" || id === "null") {
-      return res.status(400).json(errorResponse("History id is required"));
-    }
+    const built = buildCommand(req, res, buildEditHistoryChangesCommand);
+    session = built.session;
 
-    if (page && String(page) !== "1") {
-      return res.status(400).json(errorResponse("Offset pagination is disabled. Use cursor pagination."));
-    }
+    const result = await historyUseCases.edits.changes(built.command);
 
-    const service = new EditHistoryService(session, req.activePlan || {});
-    const result = await service.getHistoryEditChanges(id, cursor, limit);
-
-    return res
-      .status(200)
-      .json(successResponse("Fetched history changes", result.changes, {
-        pageInfo: result.pageInfo,
-        totalCount: result.totalCount,
-      }));
-  } catch (err) {
-    await logApiError({
-      shop: session?.shop,
-      err,
+    return res.status(200).json(toEditHistoryChangesResponseDto(result));
+  } catch (error) {
+    return logAndSendError({
+      res,
       req,
-      source: "GET /api/history/:id/changes",
+      error,
+      shop: session?.shop,
+      source: "historyController.getHistoryChanges",
     });
-
-    if (err instanceof NotFoundError) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "NOT_FOUND" },
-        "NOT_FOUND",
-      );
-      return res.status(statusCode).json(body);
-    }
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
   }
 };
 
-// ─────────────────────────────────────────────────────────────
 // Import histories
-// ─────────────────────────────────────────────────────────────
+export const getAllImportHistories = async (req, res) => {
+  let session;
 
-export const getAllImportHistories = asyncHandler(async (req, res) => {
-  const session = res.locals.shopify.session;
+  try {
+    setPrivateNoStore(res);
 
-  if (!session?.shop) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      { code: "UNAUTHENTICATED" },
-      "UNAUTHENTICATED",
-    );
-    return res.status(statusCode).json(body);
-  }
+    const built = buildCommand(req, res, buildImportHistoryListCommand);
+    session = built.session;
 
-  const { cursor = null, page } = req.query;
-  const limit = req.query.limit || "10";
+    const result = await historyUseCases.imports.list(built.command);
 
-  if (page && String(page) !== "1") {
-    return res.status(400).json({
-      success: false,
-      message: "Offset pagination is disabled. Use cursor pagination.",
+    return res.status(200).json(toImportHistoryListResponseDto(result));
+  } catch (error) {
+    return logAndSendError({
+      res,
+      req,
+      error,
+      shop: session?.shop,
+      source: "historyController.getAllImportHistories",
     });
   }
+};
 
-  const { histories, totalCount, pageInfo } = await listImportHistories({
-    shop: session.shop,
-    cursor,
-    limit,
-  });
+export const getImportHistoryDetails = async (req, res) => {
+  let session;
 
-  return res.status(200).json({
-    success: true,
-    count: histories.length,
-    totalCount,
-    pageInfo,
-    data: histories.map(toImportHistoryListDto),
-  });
-});
+  try {
+    setPrivateNoStore(res);
 
-export const getImportHistoryDetails = asyncHandler(async (req, res) => {
-  const session = res.locals.shopify.session;
-  const { id } = req.params;
+    const built = buildCommand(req, res, buildImportHistoryDetailCommand);
+    session = built.session;
 
-  if (!session?.shop) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      { code: "UNAUTHENTICATED" },
-      "UNAUTHENTICATED",
-    );
-    return res.status(statusCode).json(body);
-  }
+    const result = await historyUseCases.imports.detail(built.command);
 
-  const history = await getImportHistoryDetail({
-    shop: session.shop,
-    id,
-  });
-
-  if (!history) {
-    return res.status(404).json({
-      error: "Not Found",
-      message: "Import history record not found",
+    return res.status(200).json(toImportHistoryDetailResponseDto(result));
+  } catch (error) {
+    return logAndSendError({
+      res,
+      req,
+      error,
+      shop: session?.shop,
+      source: "historyController.getImportHistoryDetails",
     });
   }
-
-  return res.status(200).json({
-    success: true,
-    data: toImportHistoryDetailDto(history),
-  });
-});
+};

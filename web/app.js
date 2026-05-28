@@ -25,6 +25,7 @@ import LocationRoutes from "./routes/locationRoutes.js";
 import intelligenceRoutes from "./routes/intelligenceRoutes.js";
 import AdminRoutes from "./routes/adminRoutes.js";
 import metricsRoute from "./routes/metricsRoute.js";
+import filterCombinationRoutes from "./routes/filterCombinationRoutes.js";
 
 // Socket
 import { initSocket } from "./socket.js";
@@ -181,6 +182,7 @@ export const buildApp = (_server, io) => {
   app.use("/api/sync", SyncRoutes);
   app.use("/api/intelligence", intelligenceRoutes);
   app.use("/api/admin", AdminRoutes);
+  app.use("/api", filterCombinationRoutes);
   app.use("/metrics", metricsRoute);
   app.use("/referral", AffiliateRoutes);
 

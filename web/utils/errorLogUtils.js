@@ -3,6 +3,26 @@
 import { prisma } from "../config/database.js";
 import { redactSensitive } from "./redactionUtils.js";
 
+function sanitizeRequestForLogging(req = {}) {
+  const headers = req?.headers && typeof req.headers === "object"
+    ? { ...req.headers }
+    : {};
+
+  const payload = {
+    method: req?.method,
+    url: req?.originalUrl || req?.url || null,
+    headers,
+    query: req?.query,
+    params: req?.params,
+    body: req?.body ? "[REDACTED]" : undefined,
+    rawBody: req?.rawBody ? "[REDACTED]" : undefined,
+    session: req?.session ? "[REDACTED]" : undefined,
+    accessToken: req?.accessToken ? "[REDACTED]" : undefined,
+  };
+
+  return redactSensitive(payload);
+}
+
 function safeJson(value) {
   try {
     return JSON.parse(JSON.stringify(redactSensitive(value ?? null)));
@@ -35,15 +55,11 @@ export const logApiError = async ({
           params: req?.params,
           query: req?.query,
           hasBody: Boolean(req?.body && Object.keys(req.body).length > 0),
+          hasSession: Boolean(req?.session),
         }),
         request: safeJson({
-          method: req?.method,
-          url: req?.originalUrl,
+          ...sanitizeRequestForLogging(req),
           statusCode: err?.statusCode || 500,
-          headers: req?.headers,
-          body: req?.body,
-          query: req?.query,
-          params: req?.params,
         }),
       },
     });
@@ -102,13 +118,8 @@ export const logWebhookError = async ({
           shopDomain: req?.headers?.["x-shopify-shop-domain"] || shop || null,
         }),
         request: safeJson({
-          method: req?.method,
-          url: req?.originalUrl,
+          ...sanitizeRequestForLogging(req),
           statusCode: err?.statusCode || 500,
-          headers: req?.headers,
-          body: req?.body,
-          query: req?.query,
-          params: req?.params,
         }),
       },
     });

@@ -1,12 +1,17 @@
 import fs from "fs";
 import Papa from "papaparse";
 import { prisma } from "../../config/database.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "../idempotency/IdempotencyStoreService.js";
 
 const DEFAULT_PREVIEW_LIMIT = 25;
 const MAX_PREVIEW_LIMIT = 250;
 const MAX_PREVIEW_ROWS = 5000;
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 const PREVIEW_PARSE_TIMEOUT_MS = 1500;
+const idempotencyStore = new IdempotencyStoreService(prisma);
 
 function decodeCursor(cursor) {
   if (!cursor) return 0;
@@ -110,7 +115,32 @@ async function parseCsvWithGuardrails(filePath) {
   return parsed;
 }
 
-export async function createCsvPreview({ shop, file, limit }) {
+export async function createCsvPreview({ shop, file, limit, idempotencyKey }) {
+  const idemKey = String(idempotencyKey || "").trim();
+  if (!idemKey) {
+    const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+    error.code = "IDEMPOTENCY_KEY_REQUIRED";
+    throw error;
+  }
+  const begin = await idempotencyStore.begin({
+    shop,
+    scope: "CSV_PREVIEW_CREATE",
+    key: idemKey,
+    requestHash: buildIdempotencyRequestHash({
+      shop,
+      operationType: "CSV_PREVIEW_CREATE",
+      fileName: file?.originalname || null,
+      size: Number(file?.size || 0),
+      limit: Number(limit || 0),
+    }),
+  });
+  if (begin.mode === "replay") {
+    return {
+      ...begin.response,
+      durable: begin.response?.durable !== false,
+    };
+  }
+
   const previewDoc = await prisma.spreadsheetFile.create({
     data: {
       shop,
@@ -133,10 +163,16 @@ export async function createCsvPreview({ shop, file, limit }) {
     limit: normalizedLimit,
   });
 
-  return {
+  const response = {
     uploadToken: previewDoc.id,
+    durable: true,
     ...payload,
   };
+  await idempotencyStore.complete({
+    recordId: begin.recordId,
+    response,
+  });
+  return response;
 }
 
 export async function previewCsvPage({ shop, uploadToken, cursor, limit }) {
@@ -168,4 +204,3 @@ export async function previewCsvPage({ shop, uploadToken, cursor, limit }) {
     limit: normalizedLimit,
   });
 }
-

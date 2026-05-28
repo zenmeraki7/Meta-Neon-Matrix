@@ -1,5 +1,5 @@
 const SENSITIVE_KEY_PATTERN =
-  /(accessToken|access_token|authorization|token|password|secret|cookie|set-cookie)/i;
+  /(accessToken|access_token|authorization|token|password|secret|cookie|set-cookie|x-shopify-access-token|x-shopify-hmac-sha256|x-shopify-topic|x-shopify-shop-domain|session|body|rawBody)/i;
 
 function redactPrimitive(value) {
   if (typeof value === "string") {

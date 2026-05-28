@@ -1,7 +1,7 @@
-import FilterCombinationService from "../services/filterCombination/FilterCombinationService.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
-
-const filterCombinationService = new FilterCombinationService();
+import { requireShopifySession } from "../http/shopifySession.js";
+import { buildActorFromSession } from "../http/actorContext.js";
+import { setPrivateNoStore } from "../http/cacheHeaders.js";
 
 function toFilterCombinationDto(item) {
   return {
@@ -14,120 +14,106 @@ function toFilterCombinationDto(item) {
   };
 }
 
-export const addFilterCombination = async (req, res) => {
-  try {
-    const session = res.locals?.shopify?.session;
-    if (!session?.shop) {
-      return res.status(401).json({
-        success: false,
-        code: "UNAUTHENTICATED",
-        message: "Session expired",
+export const addFilterCombination =
+  (filterCombinationService) => async (req, res, next) => {
+    try {
+      setPrivateNoStore(res);
+      const session = requireShopifySession(res, "Session expired");
+
+      const saved = await filterCombinationService.add({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
+        filterParams: req.body?.filterParams,
+        customTitle: req.body?.customTitle,
       });
-    }
 
-    const saved = await filterCombinationService.add({
-      shop: session.shop,
-      filterParams: req.body?.filterParams,
-      customTitle: req.body?.customTitle,
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: "Filter combination saved successfully",
-      data: toFilterCombinationDto(saved),
-    });
-  } catch (error) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
-  }
-};
-
-export const getFilterCombinations = async (req, res) => {
-  try {
-    const session = res.locals?.shopify?.session;
-    if (!session?.shop) {
-      return res.status(401).json({
-        success: false,
-        code: "UNAUTHENTICATED",
-        message: "Session expired",
+      return res.status(201).json({
+        success: true,
+        message: "Filter combination saved successfully",
+        data: toFilterCombinationDto(saved),
       });
+    } catch (error) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        error,
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
     }
+  };
 
-    const result = await filterCombinationService.list({ shop: session.shop });
-    return res.status(200).json({
-      success: true,
-      message: "Filter combinations fetched successfully",
-      data: result.map(toFilterCombinationDto),
-    });
-  } catch (error) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
-  }
-};
+export const getFilterCombinations =
+  (filterCombinationService) => async (req, res, next) => {
+    try {
+      setPrivateNoStore(res);
+      const session = requireShopifySession(res, "Session expired");
 
-export const updateFilterCombination = async (req, res) => {
-  try {
-    const session = res.locals?.shopify?.session;
-    if (!session?.shop) {
-      return res.status(401).json({
-        success: false,
-        code: "UNAUTHENTICATED",
-        message: "Session expired",
+      const result = await filterCombinationService.list({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
       });
-    }
 
-    const updated = await filterCombinationService.update({
-      shop: session.shop,
-      id: req.params.id,
-      filters: req.body?.filters,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Filter combination updated successfully",
-      data: toFilterCombinationDto(updated),
-    });
-  } catch (error) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
-  }
-};
-
-export const deleteFilterCombination = async (req, res) => {
-  try {
-    const session = res.locals?.shopify?.session;
-    if (!session?.shop) {
-      return res.status(401).json({
-        success: false,
-        code: "UNAUTHENTICATED",
-        message: "Session expired",
+      return res.status(200).json({
+        success: true,
+        message: "Filter combinations fetched successfully",
+        data: result.map(toFilterCombinationDto),
       });
+    } catch (error) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        error,
+        "INTERNAL_ERROR",
+      );
+      return res.status(statusCode).json(body);
     }
+  };
 
-    await filterCombinationService.remove({
-      shop: session.shop,
-      id: req.params.id,
-    });
+export const updateFilterCombination =
+  (filterCombinationService) => async (req, res, next) => {
+    try {
+      setPrivateNoStore(res);
+      const session = requireShopifySession(res, "Session expired");
 
-    return res.status(200).json({
-      success: true,
-      message: "Filter combination deleted successfully",
-    });
-  } catch (error) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
-  }
-};
+      const updated = await filterCombinationService.update({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
+        id: req.params.id,
+        filters: req.body?.filters,
+      });
 
+      return res.status(200).json({
+        success: true,
+        message: "Filter combination updated successfully",
+        data: toFilterCombinationDto(updated),
+      });
+    } catch (error) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        error,
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
+    }
+  };
+
+export const deleteFilterCombination =
+  (filterCombinationService) => async (req, res, next) => {
+    try {
+      setPrivateNoStore(res);
+      const session = requireShopifySession(res, "Session expired");
+
+      await filterCombinationService.remove({
+        shop: session.shop,
+        actor: buildActorFromSession(session),
+        id: req.params.id,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Filter combination deleted successfully",
+      });
+    } catch (error) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        error,
+        "VALIDATION_FAILED",
+      );
+      return res.status(statusCode).json(body);
+    }
+  };

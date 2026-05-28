@@ -23,12 +23,34 @@ import {
   releaseExclusiveShopWork,
   LOCK_NS,
 } from "../shopWorkLeaseService.js";
+import {
+  buildIdempotencyRequestHash,
+  IdempotencyStoreService,
+} from "../idempotency/IdempotencyStoreService.js";
 
 export class ProductExportService {
   constructor(session) {
     this.session = session;
     this.client = new shopify.api.clients.Graphql({ session });
     this.fieldMappings = fieldMappings;
+    this.idempotencyStore = new IdempotencyStoreService(prisma);
+  }
+
+  _assertSupportedExportFields(fields = []) {
+    if (!Array.isArray(fields) || fields.length === 0) {
+      const error = new Error("FIELDS_REQUIRED");
+      error.code = "VALIDATION_FAILED";
+      throw error;
+    }
+    const supported = new Set(Object.keys(this.fieldMappings || {}));
+    for (const field of fields) {
+      const key = String(field || "");
+      if (!supported.has(key)) {
+        const error = new Error(`Unsupported export field: ${key}`);
+        error.code = "VALIDATION_FAILED";
+        throw error;
+      }
+    }
   }
 
   async _countProducts({ queryFilter = null }) {
@@ -331,7 +353,33 @@ transformToCSV(products, requestedColumns) {
     filterAst = null,
     actor = null,
     entitlementSnapshot = null,
+    idempotencyKey = null,
   }) {
+    this._assertSupportedExportFields(fields);
+
+    const normalizedIdempotencyKey = String(idempotencyKey || "").trim();
+    if (!normalizedIdempotencyKey) {
+      const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
+      error.code = "IDEMPOTENCY_KEY_REQUIRED";
+      throw error;
+    }
+    const begin = await this.idempotencyStore.begin({
+      shop: this.session.shop,
+      scope: "EXPORT_CREATE",
+      key: normalizedIdempotencyKey,
+      requestHash: buildIdempotencyRequestHash({
+        shop: this.session.shop,
+        operationType: "EXPORT_CREATE",
+        fields,
+        fileName,
+        filterParams,
+        filterAst,
+      }),
+    });
+    if (begin.mode === "replay") {
+      return begin.response;
+    }
+
     const filename = fileName?.endsWith(".csv") ? fileName : `${fileName}.csv`;
     const shop = this.session.shop;
     let writeCatalogLock = null;
@@ -434,12 +482,17 @@ transformToCSV(products, requestedColumns) {
         },
       });
 
-      return prisma.exportJob.findFirst({
+      const response = await prisma.exportJob.findFirst({
         where: {
           id: jobId,
           shop: this.session.shop,
         },
       });
+      await this.idempotencyStore.complete({
+        recordId: begin.recordId,
+        response,
+      });
+      return response;
     } finally {
       await releaseExclusiveShopWork(writeCatalogLock?.lockKey);
     }

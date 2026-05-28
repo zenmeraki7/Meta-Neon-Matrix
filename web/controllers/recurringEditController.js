@@ -1,4 +1,11 @@
 import {
+  buildAuthenticatedActor,
+  getIdempotencyKey,
+  handleLoggedControllerError,
+  requireShopifySession,
+} from "./controllerUtils.js";
+
+import {
   createRecurringEdit,
   deleteRecurringEdit,
   getRecurringEditById,
@@ -6,49 +13,69 @@ import {
   toggleRecurringEditStatus,
   updateRecurringEdit,
 } from "../services/recurringEditService.js";
-import { logApiError } from "../utils/errorLogUtils.js";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
-function getSessionOrThrow(res) {
-  const session = res.locals.shopify?.session;
-  if (!session?.shop) {
-    const error = new Error("UNAUTHENTICATED");
-    error.code = "UNAUTHENTICATED";
-    throw error;
+import {
+  buildCreateRecurringEditCommand,
+  buildDeleteRecurringEditCommand,
+  buildGetRecurringEditCommand,
+  buildListRecurringEditsCommand,
+  buildToggleRecurringEditStatusCommand,
+  buildUpdateRecurringEditCommand,
+} from "../normalizers/recurringEditCommandNormalizer.js";
+
+import {
+  toRecurringEditCreatedDto,
+  toRecurringEditDeletedDto,
+  toRecurringEditDetailDto,
+  toRecurringEditListDto,
+  toRecurringEditStatusUpdatedDto,
+  toRecurringEditUpdatedDto,
+} from "../dtos/recurringEditDto.js";
+
+function resolveRecurringEditFallbackCode(error, fallbackCode) {
+  if (
+    error?.code === "RECURRING_EDIT_NOT_FOUND" ||
+    error?.code === "NOT_FOUND"
+  ) {
+    return "NOT_FOUND";
   }
 
-  return session;
+  return fallbackCode;
 }
 
 export async function createRecurringEditController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await createRecurringEdit({
+    session = requireShopifySession(res);
+
+    const command = buildCreateRecurringEditCommand({
       shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
       body: req.body,
-      subscription: req.subscription,
+      subscription: req.subscription || null,
+      idempotencyKey: getIdempotencyKey(req),
     });
 
-    return res.status(201).json({
-      success: true,
-      data,
-      message: "Recurring edit created successfully",
+    const result = await createRecurringEdit({
+      shop: command.shop,
+      body: command.input,
+      subscription: command.subscription,
     });
+
+    return res.status(201).json(toRecurringEditCreatedDto(result));
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleLoggedControllerError({
+      res,
       req,
-      source: "recurringEditController.create",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      session,
       error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
+      source: "recurringEditController.create",
+      fallbackCode: resolveRecurringEditFallbackCode(
+        error,
+        "RECURRING_EDIT_CREATE_FAILED",
+      ),
+    });
   }
 }
 
@@ -56,117 +83,97 @@ export async function listRecurringEditsController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    if (req.query?.page && String(req.query.page) !== "1") {
-      return res.status(400).json({
-        success: false,
-        message: "Offset pagination is disabled. Use cursor pagination.",
-      });
-    }
+    session = requireShopifySession(res);
 
-    const limit = Math.min(100, Math.max(1, parseInt(req.query?.limit || "20", 10)));
-    const data = await listRecurringEdits({
+    const command = buildListRecurringEditsCommand({
       shop: session.shop,
-      cursor: req.query?.cursor || null,
-      limit,
-      search: req.query?.search || "",
-      status: req.query?.status || "",
-      frequency: req.query?.frequency || "",
+      actor: buildAuthenticatedActor(req, session),
+      query: req.query,
     });
 
-    return res.status(200).json({
-      success: true,
-      data: data.items,
-      items: data.items,
-      pageInfo: data.pageInfo,
-      totalCount: data.totalCount,
-      message: "Recurring edits fetched successfully",
-    });
+    const result = await listRecurringEdits(command);
+
+    return res.status(200).json(toRecurringEditListDto(result));
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleLoggedControllerError({
+      res,
       req,
-      source: "recurringEditController.list",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      session,
       error,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
+      source: "recurringEditController.list",
+      fallbackCode: resolveRecurringEditFallbackCode(
+        error,
+        "RECURRING_EDIT_LIST_FAILED",
+      ),
+    });
   }
 }
-export const listRecurringEditsSummaryController = listRecurringEditsController;
 
 export async function getRecurringEditByIdController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await getRecurringEditById({
+    session = requireShopifySession(res);
+
+    const command = buildGetRecurringEditCommand({
       shop: session.shop,
-      recurringEditId: req.params.id,
+      actor: buildAuthenticatedActor(req, session),
+      params: req.params,
     });
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Recurring edit fetched successfully",
-    });
+    const result = await getRecurringEditById(command);
+
+    return res.status(200).json(toRecurringEditDetailDto(result));
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleLoggedControllerError({
+      res,
       req,
-      source: "recurringEditController.getById",
-    });
-
-    const fallbackCode = error?.message === "Recurring edit not found"
-      ? "NOT_FOUND"
-      : "VALIDATION_FAILED";
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      session,
       error,
-      fallbackCode,
-    );
-    return res.status(statusCode).json(body);
+      source: "recurringEditController.getById",
+      fallbackCode: resolveRecurringEditFallbackCode(
+        error,
+        "RECURRING_EDIT_GET_FAILED",
+      ),
+    });
   }
 }
-export const getRecurringEditDetailController = getRecurringEditByIdController;
 
 export async function updateRecurringEditController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await updateRecurringEdit({
+    session = requireShopifySession(res);
+
+    const command = buildUpdateRecurringEditCommand({
       shop: session.shop,
-      recurringEditId: req.params.id,
+      actor: buildAuthenticatedActor(req, session),
+      params: req.params,
       body: req.body,
-      subscription: req.subscription,
+      subscription: req.subscription || null,
+      idempotencyKey: getIdempotencyKey(req),
     });
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Recurring edit updated successfully",
+    const result = await updateRecurringEdit({
+      shop: command.shop,
+      recurringEditId: command.recurringEditId,
+      body: command.patch,
+      subscription: command.subscription,
     });
+
+    return res.status(200).json(toRecurringEditUpdatedDto(result));
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleLoggedControllerError({
+      res,
       req,
-      source: "recurringEditController.update",
-    });
-
-    const fallbackCode = error?.message === "Recurring edit not found"
-      ? "NOT_FOUND"
-      : "VALIDATION_FAILED";
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      session,
       error,
-      fallbackCode,
-    );
-    return res.status(statusCode).json(body);
+      source: "recurringEditController.update",
+      fallbackCode: resolveRecurringEditFallbackCode(
+        error,
+        "RECURRING_EDIT_UPDATE_FAILED",
+      ),
+    });
   }
 }
 
@@ -174,35 +181,32 @@ export async function toggleRecurringEditStatusController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await toggleRecurringEditStatus({
+    session = requireShopifySession(res);
+
+    const command = buildToggleRecurringEditStatusCommand({
       shop: session.shop,
-      recurringEditId: req.params.id,
-      status: req.body?.status,
-      subscription: req.subscription,
+      actor: buildAuthenticatedActor(req, session),
+      params: req.params,
+      body: req.body,
+      subscription: req.subscription || null,
+      idempotencyKey: getIdempotencyKey(req),
     });
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Recurring edit status updated successfully",
-    });
+    const result = await toggleRecurringEditStatus(command);
+
+    return res.status(200).json(toRecurringEditStatusUpdatedDto(result));
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleLoggedControllerError({
+      res,
       req,
-      source: "recurringEditController.toggleStatus",
-    });
-
-    const fallbackCode = error?.message === "Recurring edit not found"
-      ? "NOT_FOUND"
-      : "VALIDATION_FAILED";
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      session,
       error,
-      fallbackCode,
-    );
-    return res.status(statusCode).json(body);
+      source: "recurringEditController.toggleStatus",
+      fallbackCode: resolveRecurringEditFallbackCode(
+        error,
+        "RECURRING_EDIT_STATUS_UPDATE_FAILED",
+      ),
+    });
   }
 }
 
@@ -210,32 +214,36 @@ export async function deleteRecurringEditController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await deleteRecurringEdit({
+    session = requireShopifySession(res);
+
+    const command = buildDeleteRecurringEditCommand({
       shop: session.shop,
-      recurringEditId: req.params.id,
+      actor: buildAuthenticatedActor(req, session),
+      params: req.params,
+      idempotencyKey: getIdempotencyKey(req),
     });
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Recurring edit deleted successfully",
-    });
+    const result = await deleteRecurringEdit(command);
+
+    return res.status(200).json(toRecurringEditDeletedDto(result));
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleLoggedControllerError({
+      res,
       req,
-      source: "recurringEditController.delete",
-    });
-
-    const fallbackCode = error?.message === "Recurring edit not found"
-      ? "NOT_FOUND"
-      : "VALIDATION_FAILED";
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      session,
       error,
-      fallbackCode,
-    );
-    return res.status(statusCode).json(body);
+      source: "recurringEditController.delete",
+      fallbackCode: resolveRecurringEditFallbackCode(
+        error,
+        "RECURRING_EDIT_DELETE_FAILED",
+      ),
+    });
   }
 }
+
+/**
+ * Keep these aliases only if the route contract is intentionally identical.
+ * Otherwise create dedicated summary/detail handlers and DTOs.
+ */
+export const listRecurringEditsSummaryController = listRecurringEditsController;
+export const getRecurringEditDetailController = getRecurringEditByIdController;

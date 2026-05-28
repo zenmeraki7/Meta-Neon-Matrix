@@ -12,6 +12,7 @@ export class ProductExportCommandService {
     filterAst = null,
     actor = null,
     entitlementSnapshot = null,
+    idempotencyKey = null,
   }) {
     return this.service.createExportJob({
       fields,
@@ -20,6 +21,7 @@ export class ProductExportCommandService {
       filterAst,
       actor,
       entitlementSnapshot,
+      idempotencyKey,
     });
   }
 
@@ -29,4 +31,3 @@ export class ProductExportCommandService {
 }
 
 export default ProductExportCommandService;
-
