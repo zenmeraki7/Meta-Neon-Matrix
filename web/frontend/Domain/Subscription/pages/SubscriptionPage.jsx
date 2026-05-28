@@ -4,8 +4,6 @@ import {
   Page,
   Layout,
   BlockStack,
-  Banner,
-  Toast,
   Card,
   Text,
   InlineStack,
@@ -34,10 +32,12 @@ import SubscriptionDetails from "../components/SubscriptionDetails";
 
 import { useTranslation } from "react-i18next";
 import { toSafeErrorMessage } from "../../../utils/frontendError";
+import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
 
 const SubscriptionPage = () => {
   const [openItems, setOpenItems] = useState({});
   const { t } = useTranslation();
+  const { showError, showSuccess } = useAppToast();
 
   const {
     plans,
@@ -65,33 +65,15 @@ const SubscriptionPage = () => {
     setShowConfirmModal,
   } = useSubscription();
 
-  const [toastState, setToastState] = useState({
-    active: false,
-    content: "",
-    error: false,
-  });
-
-  const showErrorToast = (message) => {
-    setToastState({
-      active: true,
-      content: message,
-      error: true,
-    });
-  };
-
   useEffect(() => {
     if (!subscriptionError) {
       return;
     }
-    showErrorToast(toSafeErrorMessage(t, subscriptionError, "common.errors.generic"));
-  }, [subscriptionError, t]);
+    showError(toSafeErrorMessage(t, subscriptionError, "common.errors.generic"));
+  }, [showError, subscriptionError, t]);
 
   const handleManageSubscription = () => {
-    setToastState({
-      active: true,
-      content: "Subscription management will open here",
-      error: false,
-    });
+    showSuccess("Subscription management will open here");
   };
 
   const memoizedConfirmSubscription = useCallback(() => {
@@ -257,16 +239,6 @@ const SubscriptionPage = () => {
           onCancel={memoizedCancelSelection}
           isLoading={isSubscribing}
         />
-
-        {/* Toast */}
-        {toastState.active && (
-          <Toast
-            content={toastState.content}
-            tone={toastState.error ? "critical" : "success"}
-            onDismiss={() => setToastState({ ...toastState, active: false })}
-            duration={4500}
-          />
-        )}
       </Page>
   );
 };

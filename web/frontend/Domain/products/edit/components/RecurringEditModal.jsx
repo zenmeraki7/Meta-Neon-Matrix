@@ -1,4 +1,10 @@
-import React, { useMemo, useState, useCallback, useEffect } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Modal,
@@ -14,21 +20,52 @@ import {
 
 import { useTranslation } from "react-i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
-import { useApiClient } from "../../../../hooks/useApiClient";
-import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import { useShopTimezone } from "../../../../hooks/useShopTimezone";
-import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
+import {
+  getDateInputInTimezone,
+  zonedDateTimeToUtcIso,
+} from "../../../../utils/timezoneDateTime";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
+import {
+  mapCreateRecurringEditError,
+  useCreateRecurringEditMutation,
+} from "../hooks/useCreateRecurringEditMutation";
 
-const FREQUENCY_OPTIONS = [
-  { label: "Hourly", value: "Hourly" },
-  { label: "Every 2 Hours", value: "Every 2 Hours" },
-  { label: "Daily", value: "Daily" },
-  { label: "Weekly", value: "Weekly" },
-  { label: "Monthly", value: "Monthly" },
-];
+const DEFAULT_FREQUENCY = "Daily";
+const DEFAULT_TIME = "12:00";
+const DEFAULT_DAY_OF_MONTH = "1";
+const ACTIVE_STATUS = "Active";
+const FALLBACK_TIMEZONE = "UTC";
 
-const DAYS_OF_WEEK = [
+const FREQUENCY_OPTIONS = Object.freeze([
+  {
+    labelKey: "recurringEditFrequencyOptions.Hourly",
+    label: "Hourly",
+    value: "Hourly",
+  },
+  {
+    labelKey: "recurringEditFrequencyOptions.Every 2 Hours",
+    label: "Every 2 Hours",
+    value: "Every 2 Hours",
+  },
+  {
+    labelKey: "recurringEditFrequencyOptions.Daily",
+    label: "Daily",
+    value: "Daily",
+  },
+  {
+    labelKey: "recurringEditFrequencyOptions.Weekly",
+    label: "Weekly",
+    value: "Weekly",
+  },
+  {
+    labelKey: "recurringEditFrequencyOptions.Monthly",
+    label: "Monthly",
+    value: "Monthly",
+  },
+]);
+
+const DAYS_OF_WEEK = Object.freeze([
   "Sunday",
   "Monday",
   "Tuesday",
@@ -36,18 +73,168 @@ const DAYS_OF_WEEK = [
   "Thursday",
   "Friday",
   "Saturday",
-];
+]);
+
+function safeString(value, fallback = "") {
+  if (value === undefined || value === null) return fallback;
+
+  const stringValue = String(value).trim();
+
+  return stringValue || fallback;
+}
+
+function safeCount(value) {
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue) || numberValue < 0) {
+    return 0;
+  }
+
+  return Math.floor(numberValue);
+}
+
+function createSubmissionKey() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `recurring-edit:${Date.now()}:${Math.random()
+    .toString(36)
+    .slice(2)}`;
+}
+
+function isValidTime(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || ""));
+}
 
 function getDefaultTitle(editedField, editedBy, t) {
   const safeField = editedField
-    ? t(`recurringEditFields.${editedField}`, { defaultValue: editedField })
-    : t("recurringEditDefaultField");
+    ? t(`recurringEditFields.${editedField}`, {
+        defaultValue: editedField,
+      })
+    : t("recurringEditDefaultField", {
+        defaultValue: "Field",
+      });
 
   const safeEditType = editedBy
-    ? t(`recurringEditEditTypes.${editedBy}`, { defaultValue: editedBy })
-    : t("recurringEditDefaultEditType");
+    ? t(`recurringEditEditTypes.${editedBy}`, {
+        defaultValue: editedBy,
+      })
+    : t("recurringEditDefaultEditType", {
+        defaultValue: "edit",
+      });
 
-  return `${safeField} ${t("recurringEditDefaultTitleConnector")} ${safeEditType}`;
+  return `${safeField} ${t("recurringEditDefaultTitleConnector", {
+    defaultValue: "by",
+  })} ${safeEditType}`;
+}
+
+function buildInitialFormState({ editedField, editedBy, timezone, t }) {
+  return {
+    title: getDefaultTitle(editedField, editedBy, t),
+    frequency: DEFAULT_FREQUENCY,
+    timeToRun: DEFAULT_TIME,
+    dayOfMonthToRun: DEFAULT_DAY_OF_MONTH,
+    daysOfWeekToRun: [],
+    hasStartAt: false,
+    startDate: getDateInputInTimezone(timezone),
+    startTime: DEFAULT_TIME,
+    hasEndAt: false,
+    endDate: "",
+    endTime: DEFAULT_TIME,
+  };
+}
+
+function frequencyRequiresTime(frequency) {
+  return (
+    frequency === "Daily" ||
+    frequency === "Weekly" ||
+    frequency === "Monthly"
+  );
+}
+
+function frequencyNeedsWeekdaySelection(frequency) {
+  return frequency === "Weekly";
+}
+
+function frequencyNeedsDayOfMonthSelection(frequency) {
+  return frequency === "Monthly";
+}
+
+function buildRecurringEditPayload({
+  title,
+  frequency,
+  resolvedTimezone,
+  filters,
+  editedField,
+  editedBy,
+  value,
+  searchKey,
+  replaceText,
+  supportValue,
+  location,
+  requiresTime,
+  timeToRun,
+  needsWeekdaySelection,
+  daysOfWeekToRun,
+  needsDayOfMonthSelection,
+  dayOfMonthToRun,
+  hasStartAt,
+  startDate,
+  startTime,
+  hasEndAt,
+  endDate,
+  endTime,
+}) {
+  const payload = {
+    title: title.trim(),
+    frequency,
+    timezone: resolvedTimezone,
+    filterParams: filters,
+    filterAst: buildFilterAstFromLegacyFilters({
+      filterParams: filters,
+      targetGranularity: "PRODUCT",
+      source: "RECURRING_DEFINITION",
+    }),
+    editedField,
+    editedBy,
+    value,
+    searchKey,
+    replaceText,
+    supportValue,
+    locationId: safeString(location, null),
+    status: ACTIVE_STATUS,
+  };
+
+  if (requiresTime) {
+    payload.timeToRun = timeToRun;
+  }
+
+  if (needsWeekdaySelection) {
+    payload.daysOfWeekToRun = daysOfWeekToRun;
+  }
+
+  if (needsDayOfMonthSelection) {
+    payload.dayOfMonthToRun = Number.parseInt(dayOfMonthToRun, 10);
+  }
+
+  if (hasStartAt) {
+    payload.startAt = zonedDateTimeToUtcIso(
+      startDate,
+      startTime,
+      resolvedTimezone
+    );
+  }
+
+  if (hasEndAt) {
+    payload.endAt = zonedDateTimeToUtcIso(
+      endDate,
+      endTime,
+      resolvedTimezone
+    );
+  }
+
+  return payload;
 }
 
 function RecurringEditModal({
@@ -65,10 +252,45 @@ function RecurringEditModal({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const api = useApiClient();
   const { shopTimezone } = useShopTimezone();
-  const resolvedTimezone = shopTimezone || "UTC";
   const { showSuccess, showError } = useAppToast();
+  const createRecurringEditMutation = useCreateRecurringEditMutation();
+
+  const resolvedTimezone = shopTimezone || FALLBACK_TIMEZONE;
+  const safeProductCount = safeCount(count);
+  const submitting = createRecurringEditMutation.isPending;
+
+  const [submissionKey, setSubmissionKey] = useState(createSubmissionKey);
+
+  const initialFormState = useMemo(
+    () =>
+      buildInitialFormState({
+        editedField,
+        editedBy,
+        timezone: resolvedTimezone,
+        t,
+      }),
+    [editedBy, editedField, resolvedTimezone, t]
+  );
+
+  const [title, setTitle] = useState(initialFormState.title);
+  const [frequency, setFrequency] = useState(initialFormState.frequency);
+  const [timeToRun, setTimeToRun] = useState(initialFormState.timeToRun);
+  const [dayOfMonthToRun, setDayOfMonthToRun] = useState(
+    initialFormState.dayOfMonthToRun
+  );
+  const [daysOfWeekToRun, setDaysOfWeekToRun] = useState(
+    initialFormState.daysOfWeekToRun
+  );
+  const [hasStartAt, setHasStartAt] = useState(initialFormState.hasStartAt);
+  const [startDate, setStartDate] = useState(initialFormState.startDate);
+  const [startTime, setStartTime] = useState(initialFormState.startTime);
+  const [hasEndAt, setHasEndAt] = useState(initialFormState.hasEndAt);
+  const [endDate, setEndDate] = useState(initialFormState.endDate);
+  const [endTime, setEndTime] = useState(initialFormState.endTime);
+
+  const [error, setError] = useState("");
+  const [upgradeWarning, setUpgradeWarning] = useState("");
 
   const dayOfMonthOptions = useMemo(
     () =>
@@ -76,51 +298,72 @@ function RecurringEditModal({
         label: String(index + 1),
         value: String(index + 1),
       })),
-    [],
+    []
   );
 
-  const [title, setTitle] = useState(() =>
-    getDefaultTitle(editedField, editedBy, t),
+  const translatedFrequencyOptions = useMemo(
+    () =>
+      FREQUENCY_OPTIONS.map((option) => ({
+        label: t(option.labelKey, {
+          defaultValue: option.label,
+        }),
+        value: option.value,
+      })),
+    [t]
   );
-  const [frequency, setFrequency] = useState("Daily");
-  const [timeToRun, setTimeToRun] = useState("12:00");
-  const [dayOfMonthToRun, setDayOfMonthToRun] = useState("1");
-  const [daysOfWeekToRun, setDaysOfWeekToRun] = useState([]);
-  const [hasStartAt, setHasStartAt] = useState(false);
-  const [startDate, setStartDate] = useState(getDateInputInTimezone(shopTimezone || "UTC"));
-  const [startTime, setStartTime] = useState("12:00");
-  const [hasEndAt, setHasEndAt] = useState(false);
-  const [endDate, setEndDate] = useState("");
-  const [endTime, setEndTime] = useState("12:00");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const [upgradeWarning, setUpgradeWarning] = useState("");
 
-  useEffect(() => {
-    setStartDate((current) => current || getDateInputInTimezone(shopTimezone || "UTC"));
-  }, [shopTimezone]);
+  const requiresTime = frequencyRequiresTime(frequency);
+  const needsWeekdaySelection = frequencyNeedsWeekdaySelection(frequency);
+  const needsDayOfMonthSelection = frequencyNeedsDayOfMonthSelection(frequency);
+
+  const startDateMin = useMemo(
+    () => getDateInputInTimezone(resolvedTimezone),
+    [resolvedTimezone]
+  );
+
+  const endDateMin = startDate || startDateMin;
 
   const resetForm = useCallback(() => {
-    setTitle(getDefaultTitle(editedField, editedBy, t));
-    setFrequency("Daily");
-    setTimeToRun("12:00");
-    setDayOfMonthToRun("1");
-    setDaysOfWeekToRun([]);
-    setHasStartAt(false);
-    setStartDate(getDateInputInTimezone(shopTimezone || "UTC"));
-    setStartTime("12:00");
-    setHasEndAt(false);
-    setEndDate("");
-    setEndTime("12:00");
-    setSubmitting(false);
+    setTitle(initialFormState.title);
+    setFrequency(initialFormState.frequency);
+    setTimeToRun(initialFormState.timeToRun);
+    setDayOfMonthToRun(initialFormState.dayOfMonthToRun);
+    setDaysOfWeekToRun(initialFormState.daysOfWeekToRun);
+    setHasStartAt(initialFormState.hasStartAt);
+    setStartDate(initialFormState.startDate);
+    setStartTime(initialFormState.startTime);
+    setHasEndAt(initialFormState.hasEndAt);
+    setEndDate(initialFormState.endDate);
+    setEndTime(initialFormState.endTime);
     setError("");
     setUpgradeWarning("");
-  }, [editedBy, editedField, shopTimezone, t]);
+    setSubmissionKey(createSubmissionKey());
+    createRecurringEditMutation.reset();
+  }, [createRecurringEditMutation, initialFormState]);
+
+  useEffect(() => {
+    if (!show) {
+      resetForm();
+    }
+  }, [resetForm, show]);
+
+  useEffect(() => {
+    if (!show) return;
+
+    setStartDate((current) => {
+      return current || getDateInputInTimezone(resolvedTimezone);
+    });
+  }, [resolvedTimezone, show]);
 
   const handleClose = useCallback(() => {
+    if (submitting) return;
+
     resetForm();
-    onHide();
-  }, [onHide, resetForm]);
+
+    if (typeof onHide === "function") {
+      onHide();
+    }
+  }, [onHide, resetForm, submitting]);
 
   const handleWeekdayChange = useCallback((day, checked) => {
     setDaysOfWeekToRun((current) => {
@@ -132,39 +375,63 @@ function RecurringEditModal({
     });
   }, []);
 
-  const requiresTime =
-    frequency === "Daily" || frequency === "Weekly" || frequency === "Monthly";
-  const needsWeekdaySelection = frequency === "Weekly";
-  const needsDayOfMonthSelection = frequency === "Monthly";
-
   const validate = useCallback(() => {
-    if (!title.trim()) {
-      return t("recurringEditErrors.titleRequired");
+    const trimmedTitle = title.trim();
 
+    if (!trimmedTitle) {
+      return t("recurringEditErrors.titleRequired", {
+        defaultValue: "Title is required.",
+      });
+    }
 
+    if (requiresTime && !isValidTime(timeToRun)) {
+      return t("recurringEditErrors.timeRequired", {
+        defaultValue: "Enter a valid time.",
+      });
     }
 
     if (needsWeekdaySelection && daysOfWeekToRun.length === 0) {
-      return t("recurringEditErrors.weekdayRequired");
-
+      return t("recurringEditErrors.weekdayRequired", {
+        defaultValue: "Select at least one weekday.",
+      });
     }
 
     if (hasStartAt && !startDate) {
-      return t("recurringEditErrors.startDateRequired");
+      return t("recurringEditErrors.startDateRequired", {
+        defaultValue: "Start date is required.",
+      });
+    }
+
+    if (hasStartAt && !isValidTime(startTime)) {
+      return t("recurringEditErrors.startTimeRequired", {
+        defaultValue: "Enter a valid start time.",
+      });
     }
 
     if (hasEndAt && !endDate) {
-      return t("recurringEditErrors.endDateRequired");
+      return t("recurringEditErrors.endDateRequired", {
+        defaultValue: "End date is required.",
+      });
+    }
 
+    if (hasEndAt && !isValidTime(endTime)) {
+      return t("recurringEditErrors.endTimeRequired", {
+        defaultValue: "Enter a valid end time.",
+      });
     }
 
     const startAt = hasStartAt
       ? zonedDateTimeToUtcIso(startDate, startTime, resolvedTimezone)
       : null;
-    const endAt = hasEndAt ? zonedDateTimeToUtcIso(endDate, endTime, resolvedTimezone) : null;
+
+    const endAt = hasEndAt
+      ? zonedDateTimeToUtcIso(endDate, endTime, resolvedTimezone)
+      : null;
 
     if (startAt && endAt && new Date(startAt) >= new Date(endAt)) {
-      return t("recurringEditErrors.endAfterStart");
+      return t("recurringEditErrors.endAfterStart", {
+        defaultValue: "End date must be after start date.",
+      });
     }
 
     return "";
@@ -175,287 +442,364 @@ function RecurringEditModal({
     hasEndAt,
     hasStartAt,
     needsWeekdaySelection,
+    requiresTime,
+    resolvedTimezone,
     startDate,
     startTime,
-    resolvedTimezone,
+    timeToRun,
     title,
+    t,
   ]);
 
-  const handleSubmit = useCallback(async () => {
-    const validationMessage = validate();
-    if (validationMessage) {
-      setError(validationMessage);
-      return;
-    }
-
-    setSubmitting(true);
-    setError("");
-    setUpgradeWarning("");
-
-    try {
-      const payload = {
-        title: title.trim(),
-        frequency,
-        timezone: resolvedTimezone,
-        filterParams: filters,
-        filterAst: buildFilterAstFromLegacyFilters({
-          filterParams: filters,
-          targetGranularity: "PRODUCT",
-          source: "RECURRING_DEFINITION",
-        }),
-        editedField,
-        editedBy,
-        value,
-        searchKey,
-        replaceText,
-        supportValue,
-        locationId: location || null,
-        status: "Active",
-      };
-
-      if (requiresTime) {
-        payload.timeToRun = timeToRun;
-      }
-
-      if (needsWeekdaySelection) {
-        payload.daysOfWeekToRun = daysOfWeekToRun;
-      }
-
-      if (needsDayOfMonthSelection) {
-        payload.dayOfMonthToRun = Number.parseInt(dayOfMonthToRun, 10);
-      }
-
-      if (hasStartAt) {
-        payload.startAt = zonedDateTimeToUtcIso(startDate, startTime, resolvedTimezone);
-      }
-
-      if (hasEndAt) {
-        payload.endAt = zonedDateTimeToUtcIso(endDate, endTime, resolvedTimezone);
-      }
-
-      await api.post("/api/products/create-recurring-edit", payload, {
-        idempotent: true,
-      });
-
-      showSuccess(t("recurringEditSuccess.created"));
-
-      setTimeout(() => {
-        handleClose();
-        navigate("/history");
-      }, 800);
-    } catch (requestError) {
-      const detail = requestError?.details || null;
-      const message = toSafeErrorMessage(
-        t,
-        requestError,
-        "common.errors.generic",
-      );
-      if (detail?.code === "UPGRADE_REQUIRED" || (typeof message === "string" && message.toLowerCase().includes("pro"))) {
-        setUpgradeWarning(message);
-        setSubmitting(false);
-        return;
-      }
-      setError(message);
-      showError(message);
-    } finally {
-      setSubmitting(false);
-    }
+  const buildSubmitPayload = useCallback(() => {
+    return buildRecurringEditPayload({
+      title,
+      frequency,
+      resolvedTimezone,
+      filters,
+      editedField,
+      editedBy,
+      value,
+      searchKey,
+      replaceText,
+      supportValue,
+      location,
+      requiresTime,
+      timeToRun,
+      needsWeekdaySelection,
+      daysOfWeekToRun,
+      needsDayOfMonthSelection,
+      dayOfMonthToRun,
+      hasStartAt,
+      startDate,
+      startTime,
+      hasEndAt,
+      endDate,
+      endTime,
+    });
   }, [
     dayOfMonthToRun,
     daysOfWeekToRun,
     editedBy,
     editedField,
+    endDate,
+    endTime,
     filters,
     frequency,
-    handleClose,
     hasEndAt,
     hasStartAt,
     location,
-    navigate,
     needsDayOfMonthSelection,
     needsWeekdaySelection,
     replaceText,
     requiresTime,
+    resolvedTimezone,
     searchKey,
     startDate,
     startTime,
-    endDate,
-    endTime,
     supportValue,
     timeToRun,
-    resolvedTimezone,
     title,
-    validate,
     value,
-    api,
-    showError,
-    showSuccess,
   ]);
 
-  return (
-    <>
-      <Modal
-        open={show}
-        onClose={handleClose}
-        title={t("recurringEditModalTitle")}
-        primaryAction={{
-          content: t("recurringEditSaveButton"),
-          onAction: handleSubmit,
-          loading: submitting,
-          disabled: submitting,
-        }}
-        secondaryActions={[
-          {
-            content: t("commonCancelButton"),
-            onAction: handleClose,
-          },
-        ]}
-      >
-        <Modal.Section>
-          <BlockStack gap="400">
-            {upgradeWarning && (
-              <Banner
-                tone="warning"
-                title={t("recurringEditUpgradeRequired")}
-                onDismiss={() => setUpgradeWarning("")}
-                action={{
-                  content: t("recurringEditUpgradePlan"),
-                  onAction: () => navigate("/pricing"),
-                }}
-              >
-                <p>{upgradeWarning}</p>
-              </Banner>
-            )}
+  const handleSubmit = useCallback(async () => {
+    if (submitting) return;
 
-            {error && (
-              <Banner tone="critical" onDismiss={() => setError("")}>
-                <p>{error}</p>
-              </Banner>
-            )}
+    const validationMessage = validate();
+
+    if (validationMessage) {
+      setError(validationMessage);
+      setUpgradeWarning("");
+      return;
+    }
+
+    setError("");
+    setUpgradeWarning("");
+
+    try {
+      await createRecurringEditMutation.mutateAsync({
+        payload: buildSubmitPayload(),
+        idempotencyKey: submissionKey,
+      });
+
+      showSuccess(
+        t("recurringEditSuccess.created", {
+          defaultValue: "Recurring edit created.",
+        })
+      );
+
+      resetForm();
+
+      if (typeof onHide === "function") {
+        onHide();
+      }
+
+      navigate("/history");
+    } catch (requestError) {
+      const mappedError = mapCreateRecurringEditError(t, requestError);
+
+      if (mappedError.isUpgradeRequired) {
+        setUpgradeWarning(mappedError.message);
+        return;
+      }
+
+      setError(mappedError.message);
+      showError(mappedError.message);
+    }
+  }, [
+    buildSubmitPayload,
+    createRecurringEditMutation,
+    navigate,
+    onHide,
+    resetForm,
+    showError,
+    showSuccess,
+    submissionKey,
+    submitting,
+    t,
+    validate,
+  ]);
+
+  const primaryAction = useMemo(
+    () => ({
+      content: t("recurringEditSaveButton", {
+        defaultValue: "Save recurring edit",
+      }),
+      onAction: handleSubmit,
+      loading: submitting,
+      disabled: submitting,
+    }),
+    [handleSubmit, submitting, t]
+  );
+
+  const secondaryActions = useMemo(
+    () => [
+      {
+        content: t("commonCancelButton", {
+          defaultValue: "Cancel",
+        }),
+        onAction: handleClose,
+        disabled: submitting,
+      },
+    ],
+    [handleClose, submitting, t]
+  );
+
+  return (
+    <Modal
+      open={Boolean(show)}
+      onClose={handleClose}
+      title={t("recurringEditModalTitle", {
+        defaultValue: "Create recurring edit",
+      })}
+      primaryAction={primaryAction}
+      secondaryActions={secondaryActions}
+    >
+      <Modal.Section>
+        <BlockStack gap="400">
+          {upgradeWarning ? (
+            <Banner
+              tone="warning"
+              title={t("recurringEditUpgradeRequired", {
+                defaultValue: "Upgrade required",
+              })}
+              onDismiss={() => setUpgradeWarning("")}
+              action={{
+                content: t("recurringEditUpgradePlan", {
+                  defaultValue: "View plans",
+                }),
+                onAction: () => navigate("/pricing"),
+              }}
+            >
+              <p>{upgradeWarning}</p>
+            </Banner>
+          ) : null}
+
+          {error ? (
+            <Banner tone="critical" onDismiss={() => setError("")}>
+              <p>{error}</p>
+            </Banner>
+          ) : null}
+
+          <Banner tone="info">
+            <p>
+              {t("recurringEditDescriptionPrefix", {
+                defaultValue: "This recurring edit will apply to",
+              })}{" "}
+              <strong>{safeProductCount}</strong>{" "}
+              {t("recurringEditDescriptionSuffix", {
+                defaultValue: "matching products.",
+              })}
+            </p>
+          </Banner>
+
+          <FormLayout>
+            <TextField
+              label={t("recurringEditTitleLabel", {
+                defaultValue: "Title",
+              })}
+              value={title}
+              onChange={setTitle}
+              autoComplete="off"
+              placeholder={t("recurringEditTitlePlaceholder", {
+                defaultValue: "Recurring edit title",
+              })}
+              disabled={submitting}
+            />
+
+            <FormLayout.Group>
+              <Select
+                label={t("recurringEditFrequencyLabel", {
+                  defaultValue: "Frequency",
+                })}
+                options={translatedFrequencyOptions}
+                value={frequency}
+                onChange={setFrequency}
+                disabled={submitting}
+              />
+            </FormLayout.Group>
 
             <Banner tone="info">
               <p>
-                {t("recurringEditDescriptionPrefix")} <strong>{count}</strong>{" "}
-                {t("recurringEditDescriptionSuffix")}
+                {t("recurringEditTimezoneNotice", {
+                  defaultValue:
+                    "All recurring schedule times are interpreted in shop timezone:",
+                })}{" "}
+                <strong>{resolvedTimezone}</strong>.
               </p>
             </Banner>
 
-            <FormLayout>
+            {requiresTime ? (
               <TextField
-                label={t("recurringEditTitleLabel")}
-                value={title}
-                onChange={setTitle}
-                autoComplete="off"
-                placeholder={t("recurringEditTitlePlaceholder")}
+                label={t("recurringEditTimeLabel", {
+                  defaultValue: "Time to run",
+                })}
+                type="time"
+                value={timeToRun}
+                onChange={setTimeToRun}
+                helpText={t("recurringEditTimeHelpText", {
+                  defaultValue:
+                    "Choose the time this recurring edit should run.",
+                })}
+                disabled={submitting}
               />
+            ) : null}
 
+            {needsWeekdaySelection ? (
+              <BlockStack gap="200">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  {t("recurringEditDaysOfWeekLabel", {
+                    defaultValue: "Days of week",
+                  })}
+                </Text>
+
+                <InlineStack gap="300" wrap>
+                  {DAYS_OF_WEEK.map((day) => (
+                    <Checkbox
+                      key={day}
+                      label={t(`weekdays.${day}`, {
+                        defaultValue: day,
+                      })}
+                      checked={daysOfWeekToRun.includes(day)}
+                      onChange={(checked) =>
+                        handleWeekdayChange(day, checked)
+                      }
+                      disabled={submitting}
+                    />
+                  ))}
+                </InlineStack>
+              </BlockStack>
+            ) : null}
+
+            {needsDayOfMonthSelection ? (
+              <Select
+                label={t("recurringEditDayOfMonthLabel", {
+                  defaultValue: "Day of month",
+                })}
+                options={dayOfMonthOptions}
+                value={dayOfMonthToRun}
+                onChange={setDayOfMonthToRun}
+                helpText={t("recurringEditDayOfMonthHelpText", {
+                  defaultValue:
+                    "If the selected day does not exist in a month, the backend should skip or run on the last valid day according to your scheduling policy.",
+                })}
+                disabled={submitting}
+              />
+            ) : null}
+
+            <Checkbox
+              label={t("recurringEditStartSpecificDateLabel", {
+                defaultValue: "Start on a specific date",
+              })}
+              checked={hasStartAt}
+              onChange={setHasStartAt}
+              disabled={submitting}
+            />
+
+            {hasStartAt ? (
               <FormLayout.Group>
-                <Select
-                  label={t("recurringEditFrequencyLabel")}
-                  options={FREQUENCY_OPTIONS.map((opt) => ({
-                    ...opt,
-                    label: t(`recurringEditFrequencyOptions.${opt.value}`),
-                  }))}
-                  value={frequency}
-                  onChange={setFrequency}
+                <TextField
+                  label={t("recurringEditStartDateLabel", {
+                    defaultValue: "Start date",
+                  })}
+                  type="date"
+                  value={startDate}
+                  onChange={setStartDate}
+                  min={startDateMin}
+                  disabled={submitting}
+                />
+
+                <TextField
+                  label={t("recurringEditStartTimeLabel", {
+                    defaultValue: "Start time",
+                  })}
+                  type="time"
+                  value={startTime}
+                  onChange={setStartTime}
+                  disabled={submitting}
                 />
               </FormLayout.Group>
+            ) : null}
 
-              <Banner tone="info">
-                <p>All recurring schedule times are interpreted in shop timezone: <strong>{resolvedTimezone}</strong>.</p>
-              </Banner>
+            <Checkbox
+              label={t("recurringEditStopAfterDateLabel", {
+                defaultValue: "Stop after a specific date",
+              })}
+              checked={hasEndAt}
+              onChange={setHasEndAt}
+              disabled={submitting}
+            />
 
-              {requiresTime && (
+            {hasEndAt ? (
+              <FormLayout.Group>
                 <TextField
-                  label={t("recurringEditTimeLabel")}
-                  type="time"
-                  value={timeToRun}
-                  onChange={setTimeToRun}
-                  helpText={t("recurringEditTimeHelpText")}
-                />  
-              )}
-
-              {needsWeekdaySelection && (
-                <BlockStack gap="200">
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">
-                    {t("recurringEditDaysOfWeekLabel")}
-                  </Text>
-                  <InlineStack gap="300" wrap>
-                    {DAYS_OF_WEEK.map((day) => (
-                      <Checkbox
-                        key={day}
-                        label={t(`weekdays.${day}`)}
-                        checked={daysOfWeekToRun.includes(day)}
-                        onChange={(checked) => handleWeekdayChange(day, checked)}
-                      />
-                    ))}
-                  </InlineStack>
-                </BlockStack>
-              )}
-
-              {needsDayOfMonthSelection && (
-                <Select
-                  label={t("recurringEditDayOfMonthLabel")}
-                  options={dayOfMonthOptions}
-                  value={dayOfMonthToRun}
-                  onChange={setDayOfMonthToRun}
-                  helpText={t("recurringEditDayOfMonthHelpText")}
+                  label={t("recurringEditEndDateLabel", {
+                    defaultValue: "End date",
+                  })}
+                  type="date"
+                  value={endDate}
+                  onChange={setEndDate}
+                  min={endDateMin}
+                  disabled={submitting}
                 />
-              )}
 
-              <Checkbox
-                label={t("recurringEditStartSpecificDateLabel")}
-                checked={hasStartAt}
-                onChange={(checked) => setHasStartAt(checked)}
-              />
-
-              {hasStartAt && (
-                <FormLayout.Group>
-                  <TextField
-                    label={t("recurringEditStartDateLabel")}
-                    type="date"
-                    value={startDate}
-                    onChange={setStartDate}
-                    min={getDateInputInTimezone(resolvedTimezone)}
-                  />
-                  <TextField
-                    label={t("recurringEditStartTimeLabel")}
-                    type="time"
-                    value={startTime}
-                    onChange={setStartTime}
-                  />
-                </FormLayout.Group>
-              )}
-
-              <Checkbox
-                label={t("recurringEditStopAfterDateLabel")}
-                checked={hasEndAt}
-                onChange={(checked) => setHasEndAt(checked)}
-              />
-
-              {hasEndAt && (
-                <FormLayout.Group>
-                  <TextField
-                    label={t("recurringEditEndDateLabel")}
-                    type="date"
-                    value={endDate}
-                    onChange={setEndDate}
-                    min={startDate || getDateInputInTimezone(resolvedTimezone)}
-                  />
-                  <TextField
-                    label={t("recurringEditEndTimeLabel")}
-                    type="time"
-                    value={endTime}
-                    onChange={setEndTime}
-                  />
-                </FormLayout.Group>
-              )}
-            </FormLayout>
-          </BlockStack>
-        </Modal.Section>
-      </Modal>
-    </>
+                <TextField
+                  label={t("recurringEditEndTimeLabel", {
+                    defaultValue: "End time",
+                  })}
+                  type="time"
+                  value={endTime}
+                  onChange={setEndTime}
+                  disabled={submitting}
+                />
+              </FormLayout.Group>
+            ) : null}
+          </FormLayout>
+        </BlockStack>
+      </Modal.Section>
+    </Modal>
   );
 }
 
-export default React.memo(RecurringEditModal);
+export default memo(RecurringEditModal);

@@ -1,4 +1,5 @@
 import { Suspense, lazy } from "react";
+import { Card, Page, SkeletonBodyText, Box } from "@shopify/polaris";
 
 const DashboardPage = lazy(() =>
   import("../Domain/dashboard/pages/DashboardPage"),
@@ -6,7 +7,17 @@ const DashboardPage = lazy(() =>
 
 export default function Index() {
   return (
-    <Suspense fallback={<div className="embedded-context-error">Loading dashboard...</div>}>
+    <Suspense
+      fallback={
+        <Page title="Dashboard">
+          <Card roundedAbove="sm">
+            <Box padding="500">
+              <SkeletonBodyText lines={6} />
+            </Box>
+          </Card>
+        </Page>
+      }
+    >
       <DashboardPage />
     </Suspense>
   );

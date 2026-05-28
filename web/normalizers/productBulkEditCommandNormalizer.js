@@ -768,3 +768,20 @@ export function buildRetryFailedOnlyCommand({
     idempotencyKey: normalizeIdempotencyKey(headers),
   });
 }
+
+export function buildPreviewVariantDetailsCommand({
+  params = {},
+  query = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+  const safeQuery = normalizeQueryObject(query);
+
+  return Object.freeze({
+    ...safeContext,
+    previewId: normalizeId(params.previewId, "previewId"),
+    productId: normalizeId(params.productId, "productId"),
+    page: normalizeLimit(safeQuery.page) || 1,
+    limit: normalizeLimit(safeQuery.limit) || 50,
+  });
+}

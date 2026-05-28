@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   IndexTable,
   IndexFilters,
@@ -22,6 +23,7 @@ import { recurringStatusBadge } from "../../shared/components/StatusBadge";
 import { protectedApiDelete, protectedApiGet } from "../../../api/protectedApiClient";
 import { useLocaleFormatters } from "../../../hooks/useLocaleFormatters";
 import useDebouncedValue from "../../../hooks/useDebouncedValue";
+import { useRecurringHistoryQuery } from "../hooks/useRecurringHistoryQuery";
 
 const STATUS_OPTIONS = [
   { label: "recurringStatusActive", value: "active" },
@@ -48,6 +50,21 @@ const DEFAULT_QUERY = {
   sortKey: "createdAt",
   sortDirection: "desc",
 };
+
+function getRecurringRowId(item) {
+  if (item?._id != null && String(item._id).trim() !== "") {
+    return String(item._id);
+  }
+  if (item?.id != null && String(item.id).trim() !== "") {
+    return String(item.id);
+  }
+
+  const title = String(item?.title || "").trim();
+  const createdAt = String(item?.createdAt || "").trim();
+  const frequency = String(item?.frequency || "").trim();
+  const status = String(item?.status || "").trim();
+  return `derived:${title}|${createdAt}|${frequency}|${status}`;
+}
 
 const RecurringRowActions = memo(function RecurringRowActions({
   rowId,
@@ -82,8 +99,6 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteRecurringItem, setDeleteRecurringItem] = useState(null);
-  const [items, setItems] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [query, setQuery] = useState(DEFAULT_QUERY);
   const [cursorStack, setCursorStack] = useState([null]);
   const [cursorIndex, setCursorIndex] = useState(0);
@@ -96,45 +111,27 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
     previousCursor: null,
   });
   const { t, i18n } = useTranslation(["history", "common"]);
+  const queryClient = useQueryClient();
   const { dateTimeFormatter, numberFormatter } = useLocaleFormatters();
-  const listRequestIdRef = useRef(0);
   const detailsRequestIdRef = useRef(0);
+  const activeCursor = cursorStack[cursorIndex] || null;
+  const recurringQuery = useRecurringHistoryQuery({
+    query,
+    cursor: activeCursor,
+    lang: i18n.language || "en",
+  });
 
-  const fetchRecurring = useCallback(async (nextQuery) => {
-    const requestId = listRequestIdRef.current + 1;
-    listRequestIdRef.current = requestId;
-    try {
-      setIsLoading(true);
-      const params = new URLSearchParams();
-      const cursor = cursorStack[cursorIndex] || null;
-      Object.entries({ ...nextQuery, cursor, lang: i18n.language || "en" }).forEach(([key, value]) => {
-        if (value == null || value === "") return;
-        params.set(key, String(value));
-      });
-      const payload = await protectedApiGet(`/api/products/recurring/list-summary?${params.toString()}`);
-      if (requestId !== listRequestIdRef.current) {
-        return;
-      }
-
-      const nextItems = payload.items || payload.data || [];
-      const info = payload.pageInfo || payload.meta?.pageInfo || {};
-      setItems(nextItems);
-      setPageInfo({
-        hasNextPage: Boolean(info.hasNextPage),
-        hasPreviousPage: cursorIndex > 0,
-        nextCursor: info.nextCursor || info.endCursor || null,
-      });
-    } finally {
-      if (requestId !== listRequestIdRef.current) {
-        return;
-      }
-      setIsLoading(false);
-    }
-  }, [cursorIndex, cursorStack, i18n.language]);
+  const items = recurringQuery.data?.items || recurringQuery.data?.data || [];
+  const info = recurringQuery.data?.pageInfo || recurringQuery.data?.meta?.pageInfo || {};
 
   useEffect(() => {
-    fetchRecurring(query);
-  }, [query, fetchRecurring]);
+    setPageInfo({
+      hasNextPage: Boolean(info.hasNextPage),
+      hasPreviousPage: cursorIndex > 0,
+      nextCursor: info.nextCursor || info.endCursor || null,
+      previousCursor: null,
+    });
+  }, [cursorIndex, info.endCursor, info.hasNextPage, info.nextCursor]);
 
   useEffect(() => {
     setCursorStack([null]);
@@ -272,7 +269,7 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
   const rows = useMemo(
     () =>
       items.map((item, index) => {
-        const id = item._id || item.id || `rec-${index}`;
+        const id = getRecurringRowId(item);
         return (
           <IndexTable.Row id={String(id)} key={String(id)} position={index}>
             <IndexTable.Cell>
@@ -323,14 +320,14 @@ const RecurringHistoryTable = memo(function RecurringHistoryTable({
       await protectedApiDelete(`/api/products/delete-recurring-edit/${deleteRecurringItem.id}`, {
         idempotent: true,
       });
+      await queryClient.invalidateQueries({ queryKey: ["recurring-history-list"] });
       setShowDeleteModal(false);
-      fetchRecurring(query);
     } finally {
       setDeleteLoading(false);
     }
-  }, [deleteRecurringItem, fetchRecurring, query]);
+  }, [deleteRecurringItem, queryClient]);
 
-  if (isLoading) {
+  if (recurringQuery.isLoading) {
     return (
       <Box padding="400" textAlign="center">
         <Spinner

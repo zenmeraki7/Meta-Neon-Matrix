@@ -20,11 +20,12 @@ import {
   getTranslatedOperatorLabel,
   normalizeAutocompleteOption,
 } from "../utils/filterUtils";
-import { protectedApiGet } from "../../../../api/protectedApiClient";
+import { useApiClient } from "../../../../hooks/useApiClient";
 
 const MIN_AUTOCOMPLETE_QUERY_LENGTH = 2;
 
 async function fetchAutocompleteOptions({
+  api,
   filter,
   query,
   signal,
@@ -36,7 +37,7 @@ async function fetchAutocompleteOptions({
   setLoading(true);
 
   try {
-    const data = await protectedApiGet(
+    const data = await api.get(
       `${filter.api}?search=${encodeURIComponent(query)}&isNameOnly=true`,
       {
         headers: { Accept: "application/json" },
@@ -69,6 +70,7 @@ const FilterPanel = memo(function FilterPanel({
   onCancel,
   t,
 }) {
+  const api = useApiClient();
   const [draft, setDraft] = useState({
     operator: initialFilter?.operator || filter.operators[0] || "",
     value: initialFilter?.value || "",
@@ -164,6 +166,7 @@ const FilterPanel = memo(function FilterPanel({
         abortControllerRef.current = controller;
 
         fetchAutocompleteOptions({
+          api,
           filter,
           query: "",
           signal: controller.signal,
@@ -178,6 +181,7 @@ const FilterPanel = memo(function FilterPanel({
         abortControllerRef.current = controller;
 
         fetchAutocompleteOptions({
+          api,
           filter,
           query: q,
           signal: controller.signal,
@@ -186,7 +190,7 @@ const FilterPanel = memo(function FilterPanel({
         });
       }, 300);
     },
-    [filter]
+    [api, filter]
   );
 
   const handleValueChange = useCallback((val, text = val) => {

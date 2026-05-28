@@ -135,6 +135,13 @@ useEffect(() => {
     setCursor(null);
   };
 
+  const handleRemoveFilter = useCallback(
+    (field) => {
+      dispatch(setFilters(filterState.filter((f) => f.field !== field)));
+    },
+    [dispatch, filterState],
+  );
+
 const appliedFilters = useMemo(
   () =>
     filterState
@@ -159,11 +166,10 @@ const appliedFilters = useMemo(
           label: `${translatedFieldLabel} ${translatedOperator} ${translatedValue}`,
           operator,
           value,
-          onRemove: () =>
-            dispatch(setFilters(filterState.filter((f) => f.field !== field))),
+          onRemove: () => handleRemoveFilter(field),
         };
       }),
-  [filterState, dispatch, t, getFilterByKey]
+  [filterState, t, getFilterByKey, handleRemoveFilter]
 );
 
   const shouldShowLoadingState =

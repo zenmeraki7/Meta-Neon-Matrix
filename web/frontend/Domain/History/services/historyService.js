@@ -105,7 +105,7 @@ export const historyService = {
     }
   },
 
-  async getExportHistories({ lang, type, cursor, limit, search, sortKey, sortDirection }) {
+  async getExportHistories({ lang, type, cursor, limit, search, sortKey, sortDirection }, signal) {
     try {
       return await authRequest(
         `/api/history/export/list-summary?${buildQuery({
@@ -117,7 +117,7 @@ export const historyService = {
           sortKey,
           sortDirection,
         })}`,
-        { method: "GET", headers: { "Content-Type": "application/json" } },
+        { method: "GET", headers: { "Content-Type": "application/json" }, signal },
       );
     } catch (error) {
       if (error.name === "AbortError") throw error;

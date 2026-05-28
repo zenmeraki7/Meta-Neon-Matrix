@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
   Spinner,
@@ -10,100 +11,75 @@ import {
   Button,
   Divider,
   EmptyState,
-  Toast,
-  Frame,
   Modal,
-  Box,
 } from "@shopify/polaris";
 import { CalendarIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
 import { protectedApiDelete, protectedApiGet, protectedApiPut } from "../../../api/protectedApiClient";
 import { toSafeErrorMessage } from "../../../utils/frontendError";
+import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
 
 export default function RecurringHistory() {
   const { t } = useTranslation();
+  const { showSuccess, showError } = useAppToast();
+  const queryClient = useQueryClient();
 
-  // === State Management ===
-  const [loading, setLoading] = useState(true);
-  const [recurringEdits, setRecurringEdits] = useState([]);
-  const [toastState, setToastState] = useState({ active: false, message: "", error: false });
   const [modalState, setModalState] = useState({
     open: false,
     type: null,
     targetId: null,
   });
-  const [error, setError] = useState("");
+  const recurringQuery = useQuery({
+    queryKey: ["recurring-list-summary", 50],
+    queryFn: async ({ signal }) => {
+      const data = await protectedApiGet("/api/products/recurring/list-summary?limit=50", { signal });
+      return data?.items || data?.data || [];
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
 
-  // === API: Fetch Recurring Edits ===
-  const fetchRecurringEdits = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await protectedApiGet("/api/products/recurring/list-summary?limit=50");
-      const items = data?.items || data?.data || [];
-      setRecurringEdits(items);
-    } catch (err) {
-      console.error(err);
-      setError(toSafeErrorMessage(t, err, "common.errors.generic"));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchRecurringEdits();
-  }, [fetchRecurringEdits]);
-
-  // === API: Pause/Resume Edit ===
-  const handleToggleStatus = async (id, currentStatus) => {
-    try {
-      const nextStatus = currentStatus ? "PAUSED" : "ACTIVE";
-      await protectedApiPut(`/api/products/update-recurring-edit/${id}/toggle`, { status: nextStatus }, {
-        idempotent: true,
-      });
-
-      // Optimistic UI update
-      setRecurringEdits((prev) =>
-        prev.map((item) =>
-          item.id === id ? { ...item, statusKey: nextStatus, status: nextStatus === "ACTIVE" ? "Active" : "Inactive" } : item
-        )
+  const toggleMutation = useMutation({
+    mutationFn: async ({ id, nextStatus }) =>
+      protectedApiPut(
+        `/api/products/update-recurring-edit/${id}/toggle`,
+        { status: nextStatus },
+        { idempotent: true },
+      ),
+    retry: false,
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: ["recurring-list-summary"] });
+      showSuccess(
+        variables.nextStatus === "ACTIVE"
+          ? t("resumedSuccessfully")
+          : t("pausedSuccessfully"),
       );
-
-      setToastState({
-        active: true,
-        message: nextStatus === "ACTIVE" ? t("resumedSuccessfully") : t("pausedSuccessfully"),
-        error: false,
-      });
-    } catch (err) {
-      setToastState({
-        active: true,
-        message: toSafeErrorMessage(t, err, "common.errors.generic"),
-        error: true,
-      });
-    } finally {
+    },
+    onError: (err) => {
+      showError(toSafeErrorMessage(t, err, "common.errors.generic"));
+    },
+    onSettled: () => {
       setModalState({ open: false, type: null, targetId: null });
-    }
-  };
+    },
+  });
 
-  // === API: Cancel Edit ===
-  const handleCancelEdit = async (id) => {
-    try {
-      await protectedApiDelete(`/api/products/delete-recurring-edit/${id}`, {
+  const deleteMutation = useMutation({
+    mutationFn: async (id) =>
+      protectedApiDelete(`/api/products/delete-recurring-edit/${id}`, {
         idempotent: true,
-      });
-
-      setRecurringEdits((prev) => prev.filter((edit) => edit.id !== id));
-      setToastState({ active: true, message: t("cancelledSuccessfully"), error: false });
-    } catch (err) {
-      setToastState({
-        active: true,
-        message: toSafeErrorMessage(t, err, "common.errors.generic"),
-        error: true,
-      });
-    } finally {
+      }),
+    retry: false,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["recurring-list-summary"] });
+      showSuccess(t("cancelledSuccessfully"));
+    },
+    onError: (err) => {
+      showError(toSafeErrorMessage(t, err, "common.errors.generic"));
+    },
+    onSettled: () => {
       setModalState({ open: false, type: null, targetId: null });
-    }
-  };
+    },
+  });
 
   // === Modal Confirmation Handlers ===
   const openModal = (type, id) => setModalState({ open: true, type, targetId: id });
@@ -112,28 +88,24 @@ export default function RecurringHistory() {
   const confirmAction = () => {
     const { type, targetId } = modalState;
     if (!targetId || !type) return;
-    if (type === "cancel") handleCancelEdit(targetId);
+    if (type === "cancel") {
+      deleteMutation.mutate(targetId);
+    }
     else if (type === "toggle") {
+      const recurringEdits = recurringQuery.data || [];
       const target = recurringEdits.find((r) => r.id === targetId);
       if (target) {
         const isActive = String(target.statusKey || "").toUpperCase() === "ACTIVE";
-        handleToggleStatus(targetId, isActive);
+        toggleMutation.mutate({
+          id: targetId,
+          nextStatus: isActive ? "PAUSED" : "ACTIVE",
+        });
       }
     }
   };
 
-  // === Toast ===
-  const toastMarkup = toastState.active ? (
-    <Toast
-      content={toastState.message}
-      error={toastState.error}
-      duration={4000}
-      onDismiss={() => setToastState({ active: false, message: "", error: false })}
-    />
-  ) : null;
-
   // === Render States ===
-  if (loading) {
+  if (recurringQuery.isLoading) {
     return (
       <BlockStack align="center" gap="400" padding="400">
         <Spinner accessibilityLabel={t("loading")} size="large" />
@@ -142,13 +114,16 @@ export default function RecurringHistory() {
     );
   }
 
-  if (error) {
+  if (recurringQuery.isError) {
+    const error = toSafeErrorMessage(t, recurringQuery.error, "common.errors.generic");
     return (
-      <Banner tone="critical" title={t("errorLoadingRecurring")} action={{ content: t("retry"), onAction: fetchRecurringEdits }}>
+      <Banner tone="critical" title={t("errorLoadingRecurring")} action={{ content: t("retry"), onAction: recurringQuery.refetch }}>
         <p>{error}</p>
       </Banner>
     );
   }
+
+  const recurringEdits = recurringQuery.data || [];
 
   if (recurringEdits.length === 0) {
     return (
@@ -165,7 +140,7 @@ export default function RecurringHistory() {
   }
 
   return (
-    <Frame>
+    <>
       <BlockStack gap="400">
         {recurringEdits.map((edit) => (
           <Card key={edit.id}>
@@ -221,11 +196,13 @@ export default function RecurringHistory() {
             modalState.type === "cancel" ? t("confirmCancel") : t("confirm"),
           tone: modalState.type === "cancel" ? "critical" : "success",
           onAction: confirmAction,
+          loading: toggleMutation.isPending || deleteMutation.isPending,
         }}
         secondaryActions={[
           {
             content: t("back"),
             onAction: closeModal,
+            disabled: toggleMutation.isPending || deleteMutation.isPending,
           },
         ]}
       >
@@ -237,8 +214,6 @@ export default function RecurringHistory() {
           </Text>
         </Modal.Section>
       </Modal>
-
-      {toastMarkup}
-    </Frame>
+    </>
   );
 }

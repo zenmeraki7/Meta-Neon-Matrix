@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   IndexTable,
   IndexFilters,
@@ -28,6 +29,18 @@ import TableErrorBoundary from "../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../components/Error/CellErrorBoundary";
 
 const HISTORY_TABLE_MIN_HEIGHT = "560px";
+
+function getHistoryRowId(item) {
+  if (item?.id != null && String(item.id).trim() !== "") {
+    return String(item.id);
+  }
+
+  const shop = String(item?.shop || "").trim();
+  const title = String(item?.title || "").trim();
+  const updatedAt = String(item?.updatedAt || "").trim();
+  const status = String(item?.status || "").trim();
+  return `derived:${shop}|${title}|${updatedAt}|${status}`;
+}
 
 function formatStageTimestamp(entry, formatter) {
   if (!entry) return "No stage timestamps yet";
@@ -82,6 +95,7 @@ const HistoryTable = memo(function HistoryTable({
 }) {
   const navigate = useNavigate();
   const { t } = useTranslation(["history", "common"]);
+  const queryClient = useQueryClient();
   const { dateTimeFormatter, numberFormatter } = useLocaleFormatters();
   const { isSyncInProgress } = useProductSyncStatus();
   const [showUndoModal, setShowUndoModal] = useState(false);
@@ -189,10 +203,34 @@ const HistoryTable = memo(function HistoryTable({
       await protectedApiPut(`/api/products/undo-edit/${undoHistoryItem.id}`, undefined, {
         idempotent: true,
       });
+      await queryClient.invalidateQueries({ queryKey: ["history-list"] });
+      await queryClient.invalidateQueries({ queryKey: ["edit-history-summary"] });
       setShowUndoModal(false);
     } finally {
       setUndoLoading(false);
     }
+  }, [queryClient, undoHistoryItem]);
+
+  const undoSummary = useMemo(() => {
+    if (!undoHistoryItem) return null;
+    return {
+      label:
+        undoHistoryItem.editTypeLabel ||
+        undoHistoryItem.title ||
+        undoHistoryItem.label ||
+        null,
+      affectedProducts:
+        undoHistoryItem.affectedProducts ??
+        undoHistoryItem.productCount ??
+        undoHistoryItem.processedCount ??
+        null,
+      affectedVariants:
+        undoHistoryItem.affectedVariants ??
+        undoHistoryItem.variantCount ??
+        null,
+      createdAt: undoHistoryItem.createdAt || undoHistoryItem.updatedAt || null,
+      operationId: undoHistoryItem.id || null,
+    };
   }, [undoHistoryItem]);
 
   if (isLoading) {
@@ -273,7 +311,7 @@ const HistoryTable = memo(function HistoryTable({
               headings={headings}
             >
               {(localHistories || []).map((item, index) => {
-                const id = item.id || `row-${index}`;
+                const id = getHistoryRowId(item);
                 const timelineSummary = item?.timelineSummary || {};
                 const stageBadges = Array.isArray(timelineSummary.stageBadges) ? timelineSummary.stageBadges : [];
                 const activeStageLabel = t(
@@ -374,6 +412,7 @@ const HistoryTable = memo(function HistoryTable({
         handleClose={() => setShowUndoModal(false)}
         undoEditHistory={handleUndoEditHistory}
         loading={undoLoading}
+        undoSummary={undoSummary}
       />
       </Box>
     </Card>

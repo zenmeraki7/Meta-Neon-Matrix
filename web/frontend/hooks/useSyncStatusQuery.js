@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "./useApiClient";
+import { protectedApiGet } from "../api/protectedApiClient";
 
 function isActiveSyncStatus(syncStatus) {
   if (!syncStatus) {
@@ -22,6 +23,14 @@ function isActiveSyncStatus(syncStatus) {
     syncStatus.syncProgressStage === "MIRROR_STAGING"
   );
 }
+
+const PRODUCT_TRACK_TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "error",
+  "cancelled",
+  "reauth_required",
+]);
 
 function usePageVisibility() {
   const [isVisible, setIsVisible] = useState(() =>
@@ -53,8 +62,13 @@ export function useSyncStatusQuery() {
       return result?.syncStatus || null;
     },
     enabled: isVisible,
-    refetchInterval: (query) =>
-      isVisible && isActiveSyncStatus(query.state.data) ? 4000 : false,
+    refetchInterval: (query) => {
+      if (!isVisible || !isActiveSyncStatus(query.state.data)) {
+        return false;
+      }
+      const jitterMs = Math.floor(Math.random() * 750);
+      return 4000 + jitterMs;
+    },
     refetchOnWindowFocus: false,
     refetchIntervalInBackground: false,
     refetchOnReconnect: true,
@@ -71,8 +85,50 @@ export function useStartProductSyncMutation() {
       const suffix = force ? "?force=true" : "";
       return api.get(`/api/sync/products${suffix}`);
     },
+    retry: false,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["sync-status"] });
+      await queryClient.invalidateQueries({ queryKey: ["product-sync-status"] });
+    },
+  });
+}
+
+export function useProductTrackQuery() {
+  return useQuery({
+    queryKey: ["product-sync-status"],
+    queryFn: async ({ signal }) => {
+      const data = await protectedApiGet("/api/sync/product-track", { signal });
+      return {
+        progress: Number(data?.progress || 0),
+        processedProducts: Number(data?.processedProducts || 0),
+        totalProducts: Number(data?.totalProducts || 0),
+        status: String(data?.status || "pending"),
+        message: data?.message || "",
+      };
+    },
+    staleTime: 2_000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchIntervalInBackground: false,
+    refetchInterval: (query) => {
+      const status = String(query.state.data?.status || "")
+        .trim()
+        .toLowerCase();
+
+      if (PRODUCT_TRACK_TERMINAL_STATUSES.has(status)) {
+        return false;
+      }
+
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden"
+      ) {
+        return false;
+      }
+
+      const jitterMs = Math.floor(Math.random() * 750);
+      return 3_000 + jitterMs;
     },
   });
 }

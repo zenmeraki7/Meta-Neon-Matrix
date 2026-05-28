@@ -1,4 +1,4 @@
-import React, { memo, Suspense, useMemo } from "react";
+import React, { memo, Suspense, useMemo, useState } from "react";
 import {
   Page,
   Layout,
@@ -129,10 +129,22 @@ export default function DashboardPage() {
   const { i18n, t } = useTranslation();
   const { storeAccess, loadingStoreData } = useStoreAccess();
   const navigate = useNavigate();
+  const [showPromotionalContent, setShowPromotionalContent] = useState(false);
 
   const handleLanguageChange = (value) => {
     i18n.changeLanguage(value);
-    localStorage.setItem("appLanguage", value);
+    const persistLanguage = () => {
+      try {
+        localStorage.setItem("appLanguage", value);
+      } catch {
+        // ignore
+      }
+    };
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(persistLanguage);
+    } else {
+      setTimeout(persistLanguage, 0);
+    }
   };
 
   const metricCards = useMemo(
@@ -372,15 +384,35 @@ export default function DashboardPage() {
                   </Text>
                 </BlockStack>
 
-                <Suspense
-                  fallback={
-                    <Box minHeight="320px">
-                      <SkeletonBodyText lines={8} />
-                    </Box>
-                  }
-                >
-                  <PromotionalContent />
-                </Suspense>
+                {!showPromotionalContent ? (
+                  <Box
+                    background="bg-surface-secondary"
+                    borderRadius="300"
+                    padding="400"
+                    borderWidth="025"
+                    borderColor="border-secondary"
+                    borderStyle="solid"
+                  >
+                    <InlineStack align="space-between" blockAlign="center" wrap gap="300">
+                      <Text as="p" variant="bodyMd" tone="subdued">
+                        {t("learnAndOptimizeDescription")}
+                      </Text>
+                      <Button onClick={() => setShowPromotionalContent(true)}>
+                        {t("watchDemo")}
+                      </Button>
+                    </InlineStack>
+                  </Box>
+                ) : (
+                  <Suspense
+                    fallback={
+                      <Box minHeight="320px">
+                        <SkeletonBodyText lines={8} />
+                      </Box>
+                    }
+                  >
+                    <PromotionalContent />
+                  </Suspense>
+                )}
               </BlockStack>
             </Box>
           </Card>

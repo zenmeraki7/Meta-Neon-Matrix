@@ -26,6 +26,7 @@ import intelligenceRoutes from "./routes/intelligenceRoutes.js";
 import AdminRoutes from "./routes/adminRoutes.js";
 import metricsRoute from "./routes/metricsRoute.js";
 import filterCombinationRoutes from "./routes/filterCombinationRoutes.js";
+import rumRoutes from "./routes/rumRoutes.js";
 
 // Socket
 import { initSocket } from "./socket.js";
@@ -145,6 +146,15 @@ export const buildApp = (_server, io) => {
   // Normal API body parser after webhooks
   app.use(express.json({ limit: "300kb" }));
   app.use(compression({ threshold: 1024 }));
+
+  const rumLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 500,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use("/api/rum", rumLimiter);
+  app.use("/api/rum", rumRoutes);
 
   if (process.env.NODE_ENV !== "production") {
     app.use(

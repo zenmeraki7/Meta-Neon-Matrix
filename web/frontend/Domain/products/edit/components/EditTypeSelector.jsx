@@ -1,41 +1,110 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { memo, useCallback, useMemo } from "react";
 import { Select } from "@shopify/polaris";
-import { getFieldActions } from "../constants";
 import { useTranslation } from "react-i18next";
+import { getFieldActions } from "../constants";
 
-const EditTypeSelector = ({ selectedField, editType, onEditTypeChange }) => {
-  const { t } = useTranslation();
-  const [localValue, setLocalValue] = useState(editType?.value || "");
+function safeString(value, fallback = "") {
+  if (value === undefined || value === null) return fallback;
+  const stringValue = String(value).trim();
+  return stringValue || fallback;
+}
 
-  const editOptions = useMemo(
-    () => getFieldActions(selectedField?.value),
-    [selectedField?.value],
+function normalizeActionOptions(rawOptions) {
+  if (!Array.isArray(rawOptions)) return [];
+
+  const seenValues = new Set();
+  const normalized = [];
+
+  for (const option of rawOptions) {
+    const value = safeString(option?.value);
+    const label = safeString(option?.label);
+
+    if (!value || !label || seenValues.has(value)) continue;
+
+    seenValues.add(value);
+    normalized.push({
+      ...option,
+      value,
+      label,
+    });
+  }
+
+  return normalized;
+}
+
+function resolveEditTypeValue(editType) {
+  if (typeof editType === "string") {
+    return safeString(editType);
+  }
+  return safeString(editType?.value);
+}
+
+function EditTypeSelector({
+  selectedField,
+  editType,
+  onEditTypeChange,
+  disabled = false,
+}) {
+  const { t } = useTranslation(["products", "common"]);
+
+  const selectedFieldValue = safeString(selectedField?.value);
+
+  const editOptions = useMemo(() => {
+    if (!selectedFieldValue) return [];
+    return normalizeActionOptions(getFieldActions(selectedFieldValue));
+  }, [selectedFieldValue]);
+
+  const optionValues = useMemo(
+    () => new Set(editOptions.map((option) => option.value)),
+    [editOptions],
   );
 
-  useEffect(() => {
-    setLocalValue(editType?.value || "");
-  }, [editType]);
+  const rawSelectedValue = resolveEditTypeValue(editType);
+  const selectedValue = optionValues.has(rawSelectedValue) ? rawSelectedValue : "";
 
-  const handleChange = (value) => {
-    const selected = editOptions.find((opt) => opt.value === value);
-    setLocalValue(value);
-    onEditTypeChange(selected);
-  };
+  const options = useMemo(() => {
+    const placeholder = {
+      label: t("products:selectEditTypePlaceholder", {
+        defaultValue: "Select how to edit",
+      }),
+      value: "",
+    };
 
-  const options = editOptions.map((option) => ({
-    label: t(option.label, { defaultValue: option.label }),
-    value: option.value,
-  }));
+    return [
+      placeholder,
+      ...editOptions.map((option) => ({
+        label: t(option.label, { defaultValue: option.label }),
+        value: option.value,
+      })),
+    ];
+  }, [editOptions, t]);
+
+  const handleChange = useCallback(
+    (value) => {
+      if (typeof onEditTypeChange !== "function") return;
+
+      if (!value) {
+        onEditTypeChange(null);
+        return;
+      }
+
+      const selected = editOptions.find((option) => option.value === value);
+      onEditTypeChange(selected || null);
+    },
+    [editOptions, onEditTypeChange],
+  );
+
+  const isDisabled = disabled || !selectedFieldValue || editOptions.length === 0;
 
   return (
     <Select
-      label={t("HowToEdit", { defaultValue: "How to edit" })}
+      label={t("products:HowToEdit", { defaultValue: "How to edit" })}
       options={options}
-      value={localValue}
+      value={selectedValue}
       onChange={handleChange}
-      disabled={!selectedField || editOptions.length === 0}
+      disabled={isDisabled}
     />
   );
-};
+}
 
-export default EditTypeSelector;
+export default memo(EditTypeSelector);

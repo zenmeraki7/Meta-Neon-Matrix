@@ -1,11 +1,11 @@
 // web/frontend/domains/history/hooks/useHistorySearch.js
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { debounce } from '../../../utils/debounce';
 import { 
   setSearchQuery, 
   selectHistoryFilters 
 } from '../../../store/slices/historySlice';
-import { debounce } from 'lodash';
 
 /**
  * Custom hook for managing history search
@@ -23,12 +23,14 @@ export const useHistorySearch = () => {
   }, [dispatch]);
   
   // Debounced search handler
-  const debouncedSearchChange = useCallback(
-    debounce((value) => {
+  const debouncedSearchChange = useMemo(
+    () => debounce((value) => {
       dispatch(setSearchQuery(value));
     }, 300),
-    [dispatch]
+    [dispatch],
   );
+
+  useEffect(() => () => debouncedSearchChange.cancel(), [debouncedSearchChange]);
   
   return {
     searchValue: search,

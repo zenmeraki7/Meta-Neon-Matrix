@@ -17,6 +17,17 @@ import { protectedApiGet } from "../../../api/protectedApiClient";
 import { useTranslation } from "react-i18next";
 import { useLocaleFormatters } from "../../../hooks/useLocaleFormatters";
 
+function getImportRowId(item) {
+  if (item?.id != null && String(item.id).trim() !== "") {
+    return String(item.id);
+  }
+
+  const filename = String(item?.filename || "").trim();
+  const createdAt = String(item?.createdAt || "").trim();
+  const status = String(item?.status || "").trim();
+  return `derived:${filename}|${createdAt}|${status}`;
+}
+
 export default function ImportHistory() {
   const { t } = useTranslation(["history", "common"]);
   const { dateTimeFormatter, numberFormatter } = useLocaleFormatters();
@@ -69,8 +80,10 @@ export default function ImportHistory() {
 
   const rowMarkup = useMemo(
     () =>
-      items.map((item, index) => (
-        <IndexTable.Row id={String(item.id || index)} key={String(item.id || index)} position={index}>
+      items.map((item, index) => {
+        const rowId = getImportRowId(item);
+        return (
+        <IndexTable.Row id={rowId} key={rowId} position={index}>
           <IndexTable.Cell>
             <BlockStack gap="050">
               <Text as="span" variant="bodyMd" fontWeight="medium">
@@ -101,7 +114,7 @@ export default function ImportHistory() {
             <Button variant="plain" size="slim">{t("view", { defaultValue: "View" })}</Button>
           </IndexTable.Cell>
         </IndexTable.Row>
-      )),
+      )}),
     [items, t, numberFormatter, dateTimeFormatter],
   );
 

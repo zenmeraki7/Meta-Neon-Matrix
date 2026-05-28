@@ -49,6 +49,8 @@ const ValueInput = ({
   const [loadingAutocomplete, setLoadingAutocomplete] = useState(false);
   // State for locations
   const [apiLocations, setApiLocations] = useState([]);
+  const autocompleteAbortRef = useRef(null);
+  const locationAbortRef = useRef(null);
 
   // Debounce ref
   const debounceTimerRef = useRef(null);
@@ -70,14 +72,18 @@ const ValueInput = ({
   }, [selectedField, editType]);
 
   useEffect(() => {
-    autocompleteInputValue && setSupportValue(autocompleteInputValue);
-  }, [autocompleteInputValue]);
+    if (autocompleteInputValue && typeof setSupportValue === "function") {
+      setSupportValue(autocompleteInputValue);
+    }
+  }, [autocompleteInputValue, setSupportValue]);
   // Cleanup debounce timer on unmount
   useEffect(() => {
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
+      autocompleteAbortRef.current?.abort();
+      locationAbortRef.current?.abort();
     };
   }, []);
 
@@ -93,6 +99,9 @@ const ValueInput = ({
     async (searchQuery) => {
       if (!config.apiEndpoint) return;
 
+      autocompleteAbortRef.current?.abort();
+      const controller = new AbortController();
+      autocompleteAbortRef.current = controller;
       setLoadingAutocomplete(true);
       try {
         // Add search query as parameter if provided
@@ -102,7 +111,7 @@ const ValueInput = ({
           )}`
           : config.apiEndpoint;
 
-        const json = await api.get(url);
+        const json = await api.get(url, { signal: controller.signal });
 
         // Transform API response to autocomplete options format
         const options = (json.data || json).map((item) => ({
@@ -112,7 +121,12 @@ const ValueInput = ({
 
         setAutocompleteOptions(options);
       } catch (err) {
-        console.error("Failed to fetch autocomplete options:", err);
+        if (err?.name === "AbortError") {
+          return;
+        }
+        if (import.meta.env.DEV) {
+          console.error("Failed to fetch autocomplete options:", err);
+        }
         setHelperText(toSafeErrorMessage(t, err, "common.errors.generic"));
         setAutocompleteOptions([]);
       } finally {
@@ -125,7 +139,12 @@ const ValueInput = ({
   // Fetch locations
   const fetchLocations = async () => {
       try {
-      const json = await api.get("/api/location/get-all");
+      locationAbortRef.current?.abort();
+      const controller = new AbortController();
+      locationAbortRef.current = controller;
+      const json = await api.get("/api/location/get-all", {
+        signal: controller.signal,
+      });
 
       const locationOptions = [
         ...json.data.map((loc) => ({
@@ -133,23 +152,23 @@ const ValueInput = ({
           value: String(loc.id),
         })),
       ];
-      onLocationChange(
-        locationOptions.length > 0 ? locationOptions[0].value : "all"
-      );
+      if (!locationValue && typeof onLocationChange === "function") {
+        onLocationChange(
+          locationOptions.length > 0 ? locationOptions[0].value : "all"
+        );
+      }
 
       setApiLocations(locationOptions);
     } catch (err) {
-      console.error("Failed to fetch locations:", err);
+      if (err?.name === "AbortError") {
+        return;
+      }
+      if (import.meta.env.DEV) {
+        console.error("Failed to fetch locations:", err);
+      }
       setHelperText(toSafeErrorMessage(t, err, "common.errors.generic"));
     }
   };
-
-  // Initial fetch for autocomplete
-  useEffect(() => {
-    if (inputType === InputType.API_AUTOCOMPLETE) {
-      fetchAutocompleteOptions("");
-    }
-  }, [inputType, fetchAutocompleteOptions]);
 
   const validationRules = useMemo(
     () => getValueValidationRules(isPercentage, isFixedValue),
@@ -202,14 +221,15 @@ const ValueInput = ({
 
       // Set new timer
       debounceTimerRef.current = setTimeout(() => {
-        if (newValue.length > 0) {
+        const trimmedValue = String(newValue || "").trim();
+        if (trimmedValue.length >= 2) {
           fetchAutocompleteOptions(newValue);
-        } else {
+        } else if (trimmedValue.length === 0 && autocompleteOptions.length === 0) {
           fetchAutocompleteOptions("");
         }
       }, 500); // 500ms debounce delay
     },
-    [fetchAutocompleteOptions]
+    [fetchAutocompleteOptions, autocompleteOptions.length]
   );
 
   const updateSelection = useCallback(
@@ -258,6 +278,11 @@ const ValueInput = ({
   const autocompleteTextField = (
     <Autocomplete.TextField
       onChange={updateAutocompleteText}
+      onFocus={() => {
+        if (autocompleteOptions.length === 0) {
+          fetchAutocompleteOptions("");
+        }
+      }}
       label={
         config.inputHelperLabel
           ? t(config.inputHelperLabel)

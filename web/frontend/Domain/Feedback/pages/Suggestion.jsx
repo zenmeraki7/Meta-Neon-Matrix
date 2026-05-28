@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect } from "react";
 import {
   Page,
   Layout,
@@ -7,7 +7,6 @@ import {
   Button,
   InlineStack as Stack,
   FormLayout,
-  Toast,
   Banner,
   ButtonGroup,
   Text,
@@ -20,6 +19,7 @@ import {
 import { useSuggestionForm } from "../hooks/useSuggestionForm";
 import { useTranslation } from "react-i18next";
 import { i18n as appI18n } from "../../../utils/i18nUtils";
+import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
 import heroStyles from "../../shared/styles/HeroSurface.module.css";
 
 /**
@@ -40,19 +40,15 @@ const Suggestion = () => {
   } = useSuggestionForm();
 
   const { t } = useTranslation(undefined, { i18n: appI18n });
-
-  const [toastActive, setToastActive] = useState(false);
-  const [toastMessage, setToastMessage] = useState("");
+  const { showSuccess, showError } = useAppToast();
 
   useEffect(() => {
     if (success) {
-      setToastMessage(t("toastSuccessMessage"));
-      setToastActive(true);
+      showSuccess(t("toastSuccessMessage"));
     } else if (error) {
-      setToastMessage(error);
-      setToastActive(true);
+      showError(error);
     }
-  }, [success, error, t]);
+  }, [error, showError, showSuccess, success, t]);
 
   return (
       <Page
@@ -244,14 +240,6 @@ const Suggestion = () => {
             </BlockStack>
           </Layout.Section>
         </Layout>
-
-        {toastActive && (
-          <Toast
-            content={toastMessage}
-            onDismiss={() => setToastActive(false)}
-            duration={4000}
-          />
-        )}
       </Page>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Badge,
   Banner,
@@ -11,7 +11,6 @@ import {
   Page,
   SkeletonBodyText,
   Text,
-  Toast,
   Divider,
 } from "@shopify/polaris";
 import { RefreshIcon, ArrowLeftIcon } from "@shopify/polaris-icons";
@@ -23,6 +22,7 @@ import {
   useStartProductSyncMutation,
   useSyncStatusHelpers,
 } from "../../../../hooks/useSyncStatusQuery";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import heroStyles from "../../../shared/styles/HeroSurface.module.css";
 
 const rows = [{ key: "products", api: "/api/sync/products" }];
@@ -30,22 +30,12 @@ const rows = [{ key: "products", api: "/api/sync/products" }];
 export default function DataSyncPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { showSuccess, showError } = useAppToast();
   const { dateTimeFormatter } = useLocaleFormatters();
   const { syncStatus: dataSources } = useSyncStatusHelpers();
   const startProductSync = useStartProductSyncMutation();
 
-  const [toast, setToast] = useState({
-    active: false,
-    message: "",
-    error: false,
-  });
   const wasSyncingRef = useRef(false);
-
-  const showToast = (message, error = false) =>
-    setToast({ active: true, message, error });
-
-  const hideToast = () =>
-    setToast((current) => ({ ...current, active: false }));
 
   const getRowLabel = useCallback(
     (key) => {
@@ -67,7 +57,7 @@ export default function DataSyncPage() {
     const isSyncing = Boolean(isAnySyncRunning);
 
     if (wasSyncingRef.current && !isSyncing && dataSources) {
-      showToast(t("syncCompletedSuccess"));
+      showSuccess(t("syncCompletedSuccess"));
     }
 
     wasSyncingRef.current = Boolean(isSyncing);
@@ -75,17 +65,17 @@ export default function DataSyncPage() {
 
   const handleRefresh = async (row) => {
     if (isAnySyncRunning || startProductSync.isPending) {
-      showToast(t("syncAlreadyRunning"), true);
+      showError(t("syncAlreadyRunning"));
       return;
     }
 
     try {
       await startProductSync.mutateAsync({ force: true });
-      showToast(
+      showSuccess(
         t("syncStarted", { item: getRowLabel(row.key) })
       );
     } catch (error) {
-      showToast(toSafeErrorMessage(t, error, "common.errors.generic"), true);
+      showError(toSafeErrorMessage(t, error, "common.errors.generic"));
     }
   };
 
@@ -289,13 +279,6 @@ export default function DataSyncPage() {
         </Layout.Section>
       </Layout>
 
-      {toast.active && (
-        <Toast
-          content={toast.message}
-          error={toast.error}
-          onDismiss={hideToast}
-        />
-      )}
     </Page>
   );
 }

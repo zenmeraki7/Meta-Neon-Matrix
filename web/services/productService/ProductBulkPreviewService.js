@@ -57,6 +57,109 @@ export class ProductBulkPreviewService {
     this.session = session;
   }
 
+  async getPreviewVariantDetails({
+    previewId,
+    productId,
+    page = 1,
+    limit = 50,
+    actorId = null,
+  }) {
+    const previewTrack = await prisma.filterTrack.findFirst({
+      where: {
+        id: String(previewId),
+        shop: this.session.shop,
+        type: "preview",
+        source: "manual_preview",
+      },
+      select: {
+        value: true,
+      },
+    });
+
+    const previewValue =
+      previewTrack && typeof previewTrack.value === "object" && previewTrack.value
+        ? previewTrack.value
+        : {};
+
+    if (!previewTrack || !previewValue?.field || !previewValue?.editType) {
+      const error = new Error("Preview context not found");
+      error.code = "PREVIEW_CONTEXT_NOT_FOUND";
+      throw error;
+    }
+
+    const field = normalizeField(previewValue.field);
+    const isVariant = isVariantLevelField(field);
+
+    const rawProduct = await prisma.product.findFirst({
+      where: {
+        shop: this.session.shop,
+        id: String(productId),
+        ...(previewValue?.mirrorBatchId ? { mirrorBatchId: previewValue.mirrorBatchId } : {}),
+      },
+      select: {
+        ...PREVIEW_PRODUCT_SELECT,
+        variants: {
+          where: previewValue?.mirrorBatchId
+            ? { mirrorBatchId: previewValue.mirrorBatchId }
+            : undefined,
+          select: PREVIEW_VARIANT_SELECT,
+        },
+      },
+    });
+
+    if (!rawProduct) {
+      return {
+        previewId: String(previewId),
+        productId: String(productId),
+        page,
+        limit,
+        total: 0,
+        totalPages: 1,
+        rows: [],
+        isVariant,
+      };
+    }
+
+    const [hydratedProduct] = await hydrateMissingVariantsForProducts(
+      [rawProduct],
+      this.session.shop,
+      previewValue?.mirrorBatchId || null,
+    );
+
+    const normalizedProduct = normalizeMirrorProductForPreview(hydratedProduct);
+
+    const result = getUpdatedProducts({
+      product: normalizedProduct,
+      field,
+      editType: previewValue.editType,
+      value: previewValue.editValue,
+      changes: [],
+      searchKey: previewValue.searchKey || null,
+      replaceText: previewValue.replaceText || null,
+      supportValue: previewValue.supportValue ?? null,
+      isTracking: true,
+    });
+
+    const allVariants = Array.isArray(result?.variants) ? result.variants : [];
+    const safeLimit = Math.max(1, Math.min(250, Number(limit) || 50));
+    const safePage = Math.max(1, Number(page) || 1);
+    const total = allVariants.length;
+    const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+    const start = (safePage - 1) * safeLimit;
+    const rows = allVariants.slice(start, start + safeLimit);
+
+    return {
+      previewId: String(previewId),
+      productId: String(productId),
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages,
+      rows,
+      isVariant,
+    };
+  }
+
   async trackEditProducts({
     field,
     editType,
@@ -137,6 +240,12 @@ export class ProductBulkPreviewService {
           value: {
             previewId,
             actorId: actorId ? String(actorId) : null,
+            field,
+            editType,
+            editValue,
+            searchKey: searchKey || null,
+            replaceText: replaceText || null,
+            supportValue: supportValue ?? null,
             normalizedAst: target.normalizedFilterAst,
             filterHash: target.filterHash,
             mirrorBatchId: target.mirrorBatchId,
@@ -163,6 +272,12 @@ export class ProductBulkPreviewService {
           value: {
             previewId,
             actorId: actorId ? String(actorId) : null,
+            field,
+            editType,
+            editValue,
+            searchKey: searchKey || null,
+            replaceText: replaceText || null,
+            supportValue: supportValue ?? null,
             normalizedAst: target.normalizedFilterAst,
             filterHash: target.filterHash,
             mirrorBatchId: target.mirrorBatchId,

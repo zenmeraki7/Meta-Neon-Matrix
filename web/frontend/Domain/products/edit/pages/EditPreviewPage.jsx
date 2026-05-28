@@ -1,9 +1,8 @@
 import React, {
   useState,
-  useEffect,
   useCallback,
   useMemo,
-  useRef,
+  useEffect,
 } from "react";
 import {
   Page,
@@ -39,11 +38,38 @@ import {
   selectSearch,
 } from "../../../../store/slices/productSlice";
 import useProductSyncStatus from "../../../../hooks/useProductSyncStatus";
-import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import MirrorFreshnessBadge from "../../../../components/MirrorFreshnessBadge";
 import useDebouncedValue from "../../../../hooks/useDebouncedValue";
+import { protectedApiPost } from "../../../../api/protectedApiClient";
+import {
+  useEditPreviewQuery,
+  usePreviewQueryInput,
+} from "../hooks/useEditPreviewQuery";
+
+function normalizeSignatureValue(value) {
+  if (value == null) return "";
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeSignatureValue(entry)).join(",");
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+    return entries
+      .map(([key, entryValue]) => `${key}:${normalizeSignatureValue(entryValue)}`)
+      .join("|");
+  }
+  return String(value);
+}
+
+function lightweightStableHash(input) {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
 
 export default function EditPreviewPage() {
   const filters = useSelector(selectFilters);
@@ -52,27 +78,23 @@ export default function EditPreviewPage() {
   const { i18n, t } = useTranslation();
   const { isSyncInProgress } = useProductSyncStatus();
   const { showSuccess, showError } = useAppToast();
-  const api = useApiClient();
   const { versions: filterRegistryVersions } = useFilterRegistry();
 
   const [selectedField, setSelectedField] = useState(getFieldDefinition("price"));
   const [editType, setEditType] = useState(null);
-  const [draftInputValue, setDraftInputValue] = useState("");
-  const [inputValue, setInputValue] = useState("");
+  const [draftInputValue, setDraftInputValue] = useState(null);
+  const [inputValue, setInputValue] = useState(null);
   const [draftSearchReplace, setDraftSearchReplace] = useState({
     search: "",
     replace: "",
   });
-  const [supportValue, setSupportValue] = useState("");
+  const [supportValue, setSupportValue] = useState(null);
   const [searchReplace, setSearchReplace] = useState({
     search: "",
     replace: "",
   });
   const [locationValue, setLocationValue] = useState("");
   const [limitWarning, setLimitWarning] = useState(null);
-  const [products, setProducts] = useState([]);
-  const [isVariant, setIsVariant] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [pagination, setPagination] = useState({
     page: 1,
@@ -83,24 +105,11 @@ export default function EditPreviewPage() {
     scheduleEdit: false,
     recurringEdit: false,
   });
-  const [previewTotal, setPreviewTotal] = useState(0);
-  const [previewFingerprint, setPreviewFingerprint] = useState(null);
-  const [requiresBroadConfirmation, setRequiresBroadConfirmation] = useState(false);
-  const [previewSignature, setPreviewSignature] = useState(null);
-  const [previewRegistryVersion, setPreviewRegistryVersion] = useState(null);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [pendingConfirmRun, setPendingConfirmRun] = useState(false);
   const debouncedInputValue = useDebouncedValue(draftInputValue, 600);
   const debouncedSearchReplace = useDebouncedValue(draftSearchReplace, 600);
-  const previewAbortRef = useRef(null);
-  const latestPreviewSignatureRef = useRef(null);
-
-  useEffect(() => {
-    return () => {
-      previewAbortRef.current?.abort();
-    };
-  }, []);
 
   useEffect(() => {
     setInputValue(debouncedInputValue);
@@ -111,9 +120,7 @@ export default function EditPreviewPage() {
   }, [debouncedSearchReplace]);
 
   useEffect(() => {
-    setPreviewFingerprint(null);
-    setPreviewSignature(null);
-    setPreviewRegistryVersion(null);
+    setPagination((current) => ({ ...current, page: 1 }));
   }, [
     selectedField?.value,
     editType?.value,
@@ -127,18 +134,31 @@ export default function EditPreviewPage() {
   useEffect(() => {
     if (!selectedField) return;
 
-    const actions = selectedField.actions;
-    if (actions?.length) {
-      setEditType(actions[0]);
-      setDraftInputValue("");
-      setInputValue("");
-      setSupportValue("");
+    setEditType(null);
+    setDraftInputValue(null);
+    setInputValue(null);
+    setSupportValue(null);
+    setDraftSearchReplace({ search: "", replace: "" });
+    setSearchReplace({ search: "", replace: "" });
+    setLocationValue("");
+    setPagination((current) => ({ ...current, page: 1 }));
+  }, [selectedField]);
+
+  const handleFieldChange = useCallback(
+    (nextField) => {
+      setSelectedField(nextField);
+      setEditType(null);
+      setDraftInputValue(null);
+      setInputValue(null);
+      setSupportValue(null);
       setDraftSearchReplace({ search: "", replace: "" });
       setSearchReplace({ search: "", replace: "" });
       setLocationValue("");
+      setLimitWarning(null);
       setPagination((current) => ({ ...current, page: 1 }));
-    }
-  }, [selectedField]);
+    },
+    [],
+  );
 
   const isPercentage = editType?.value?.toLowerCase().includes("percent");
   const isFixedValue =
@@ -171,113 +191,109 @@ export default function EditPreviewPage() {
   ];
 }, [filters, search]);
 
-  const buildCurrentPreviewSignature = useCallback(
-    () =>
-      JSON.stringify({
-        field: selectedField?.value || null,
-        editType: editType?.value || null,
-        editValue: inputValue,
-        searchKey: searchReplace.search,
-        replaceText: searchReplace.replace,
-        locationId: locationValue || null,
-        filterParams: effectiveFilters,
-        supportValue,
-        page: pagination.page,
-        limit: pagination.limit,
-      }),
-    [
-      selectedField?.value,
-      editType?.value,
-      inputValue,
-      searchReplace.search,
-      searchReplace.replace,
-      locationValue,
-      effectiveFilters,
-      supportValue,
-      pagination.page,
-      pagination.limit,
-    ],
-  );
+  const currentPreviewSignature = useMemo(() => {
+      const filterSegment = effectiveFilters
+        .map((filter) =>
+          [
+            normalizeSignatureValue(filter?.field),
+            normalizeSignatureValue(filter?.operator),
+            normalizeSignatureValue(filter?.value),
+          ].join("~"),
+        )
+        .sort()
+        .join("^");
 
-  const fetchPreview = useCallback(async () => {
-    if (!editType || !selectedField) return;
-    const validOps = selectedField.actions?.map((a) => a.value) || [];
-    if (!validOps.includes(editType.value)) return;
+      const payload = [
+        normalizeSignatureValue(selectedField?.value || null),
+        normalizeSignatureValue(editType?.value || null),
+        normalizeSignatureValue(inputValue),
+        normalizeSignatureValue(searchReplace.search),
+        normalizeSignatureValue(searchReplace.replace),
+        normalizeSignatureValue(locationValue || null),
+        filterSegment,
+        normalizeSignatureValue(supportValue),
+        normalizeSignatureValue(pagination.page),
+        normalizeSignatureValue(pagination.limit),
+      ].join("||");
 
-    if (
-    editType.inputType === InputType.SEARCH_REPLACE &&
-    !searchReplace.search &&
-    !searchReplace.replace
-  ) {
-    return;
-  }
+      return `sig_${lightweightStableHash(payload)}`;
+    }, [
+    selectedField?.value,
+    editType?.value,
+    inputValue,
+    searchReplace.search,
+    searchReplace.replace,
+    locationValue,
+    effectiveFilters,
+    supportValue,
+    pagination.page,
+    pagination.limit,
+  ]);
 
-    setLoading(true);
+  const validOps = selectedField?.actions?.map((action) => action.value) || [];
+  const previewQueryEnabled =
+    Boolean(selectedField?.value) &&
+    Boolean(editType?.value) &&
+    validOps.includes(editType?.value) &&
+    !(
+      editType?.inputType === InputType.SEARCH_REPLACE &&
+      !searchReplace.search &&
+      !searchReplace.replace
+    );
 
-    try {
-      const signature = buildCurrentPreviewSignature();
-      if (latestPreviewSignatureRef.current === signature) {
-        setLoading(false);
-        return;
-      }
-      latestPreviewSignatureRef.current = signature;
-      previewAbortRef.current?.abort();
-      const controller = new AbortController();
-      previewAbortRef.current = controller;
-      const json = await api.post(`/api/products/edit-preview?lang=${i18n.language}`, {
-          field: selectedField.value,
-          editType: editType.value,
-          editValue: inputValue,
-          searchKey: searchReplace.search,
-          replaceText: searchReplace.replace,
-          locationId: locationValue,
-          filterParams: effectiveFilters,
-          page: pagination.page,
-          limit: pagination.limit,
-          supportValue,
-        }, {
-          signal: controller.signal,
-        });
-
-      setProducts(json.data.preview);
-      setPagination(json.data.pagination);
-      setIsVariant(json.data.isVariant);
-      setPreviewTotal(json.data.pagination?.total || 0);
-      setPreviewFingerprint(json.data.previewFingerprint || null);
-      setPreviewSignature(json.data.previewSignature || signature);
-      setPreviewRegistryVersion({
-        fieldRegistryVersion: json.data.previewFingerprint?.fieldRegistryVersion || null,
-        operatorRegistryVersion: json.data.previewFingerprint?.operatorRegistryVersion || null,
-      });
-      setRequiresBroadConfirmation(json.data.requiresConfirmation === true);
-    } catch (err) {
-      if (err?.name === "AbortError") {
-        return;
-      }
-      showError(
-        toSafeErrorMessage(t, err, "common.errors.generic"),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    editType,
+  const previewQueryPayload = usePreviewQueryInput({
     selectedField,
+    editType,
     inputValue,
     searchReplace,
     locationValue,
     effectiveFilters,
-    pagination.page,
-    pagination.limit,
     supportValue,
-    i18n.language,
-    api,
-    buildCurrentPreviewSignature,
-  ]);
+  });
+
+  const previewQuery = useEditPreviewQuery({
+    enabled: previewQueryEnabled,
+    language: i18n.language,
+    page: pagination.page,
+    limit: pagination.limit,
+    queryKeyHash: currentPreviewSignature,
+    payload: previewQueryPayload,
+  });
 
   useEffect(() => {
-    fetchPreview();
-  }, [fetchPreview]);
+    if (previewQuery.error) {
+      showError(toSafeErrorMessage(t, previewQuery.error, "common.errors.generic"));
+    }
+  }, [previewQuery.error, showError, t]);
+
+  const previewData = previewQuery.data || null;
+  const products = previewData?.rows || [];
+  const isVariant = previewData?.isVariant === true;
+  const loading = previewQuery.isLoading || previewQuery.isFetching;
+  const previewTotal = previewData?.pagination?.total || 0;
+  const previewFingerprint = previewData?.previewFingerprint || null;
+  const previewSignature = previewData?.previewSignature || null;
+  const requiresBroadConfirmation = previewData?.requiresConfirmation === true;
+  const previewRegistryVersion = previewData?.previewFingerprint
+    ? {
+        fieldRegistryVersion:
+          previewData.previewFingerprint.fieldRegistryVersion || null,
+        operatorRegistryVersion:
+          previewData.previewFingerprint.operatorRegistryVersion || null,
+      }
+    : null;
+
+  useEffect(() => {
+    if (!previewData?.pagination) return;
+    setPagination((current) => {
+      const nextPage = Number(previewData.pagination.page || current.page || 1);
+      const nextLimit = Number(previewData.pagination.limit || current.limit || 10);
+      if (nextPage === current.page && nextLimit === current.limit) {
+        return current;
+      }
+      return { ...current, page: nextPage, limit: nextLimit };
+    });
+  }, [previewData?.pagination]);
 
   const canRunEdit = useMemo(() => {
     if (!editType || !selectedField) return false;
@@ -299,7 +315,7 @@ export default function EditPreviewPage() {
   const hasFreshPreview = Boolean(
     previewFingerprint?.previewId &&
       previewSignature &&
-      previewSignature === buildCurrentPreviewSignature(),
+      previewSignature === currentPreviewSignature,
   );
   const hasPreviewRegistryMismatch = Boolean(
     previewRegistryVersion &&
@@ -314,7 +330,9 @@ export default function EditPreviewPage() {
 
   const executeBulkEdit = useCallback(
     async (confirmBroadTarget) => {
-      const json = await api.post(`/api/products/update?lang=${i18n.language}`, {
+      const json = await protectedApiPost(
+        `/api/products/update?lang=${i18n.language}`,
+        {
         editedField: selectedField.value,
         editedType: editType.value,
         value: inputValue,
@@ -330,16 +348,15 @@ export default function EditPreviewPage() {
         previewSignature,
         confirmBroadTarget,
         supportValue,
-      }, {
-        idempotent: true,
-      });
+        },
+        { idempotent: true },
+      );
       showSuccess(
         t("bulkEditStartedToast", { defaultValue: "Bulk edit started" }),
       );
       navigate(`/editDetails/${json.id || json.operationId}`);
     },
     [
-      api,
       searchReplace.replace,
       searchReplace.search,
       inputValue,
@@ -531,10 +548,10 @@ const summaryText = useMemo(() => {
 
                 <FormLayout>
                   <FormLayout.Group condensed>
-                    <FieldSelector
-                      selectedField={selectedField}
-                      onFieldChange={setSelectedField}
-                    />
+                      <FieldSelector
+                        selectedField={selectedField}
+                        onFieldChange={handleFieldChange}
+                      />
 
                     {!shouldHideEditTypeSelector && (
                       <EditTypeSelector

@@ -33,6 +33,10 @@ export default class ProductBulkService {
     return this.previewService.previewBulkEdit(args);
   }
 
+  async getPreviewVariantDetails(args) {
+    return this.previewService.getPreviewVariantDetails(args);
+  }
+
   async freezeEditHistoryTargets(historyId, options = {}) {
     return this.targetFreezeService.freezeEditHistoryTargets(historyId, options);
   }

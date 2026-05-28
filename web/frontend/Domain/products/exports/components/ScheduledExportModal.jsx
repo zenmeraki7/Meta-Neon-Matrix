@@ -11,7 +11,7 @@ import {
 
 import { useTranslation } from "react-i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
-import { protectedApiPost } from "../../../../api/protectedApiClient";
+import { useApiClient } from "../../../../hooks/useApiClient";
 import { useShopTimezone } from "../../../../hooks/useShopTimezone";
 import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
@@ -26,6 +26,7 @@ function ScheduledExportModal({
   filters,
 }) {
   const { t } = useTranslation();
+  const api = useApiClient();
   const { shopTimezone } = useShopTimezone();
   const resolvedTimezone = shopTimezone || "UTC";
   const { showSuccess, showError } = useAppToast();
@@ -86,7 +87,7 @@ function ScheduledExportModal({
     };
 
     try {
-      await protectedApiPost("/api/products/create-scheduled-export", payload, {
+      await api.post("/api/products/create-scheduled-export", payload, {
         idempotent: true,
       });
     } catch (requestError) {
@@ -144,6 +145,7 @@ function ScheduledExportModal({
   startExportDate,
   startExportTime,
   resolvedTimezone,
+  api,
   t,
   showError,
   showSuccess,

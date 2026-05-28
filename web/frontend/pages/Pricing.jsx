@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Page,
   Card,
-  Toast,
   Text,
   BlockStack,
   InlineStack,
@@ -24,12 +23,14 @@ import { protectedApiPost } from "../api/protectedApiClient";
 import { subscriptionService } from "../Domain/Subscription/services/subscriptionService";
 import { useEmbeddedRedirect } from "../hooks/useEmbeddedRedirect";
 import { toSafeErrorMessage } from "../utils/frontendError";
+import { useToast as useAppToast } from "../components/providers/ToastProvider";
 import styles from "./Pricing.module.css";
 
 export default function PricingPage() {
   const navigate = useNavigate()
   const { t } = useTranslation();
   const { redirectRemote } = useEmbeddedRedirect();
+  const { showError } = useAppToast();
   const [openFaqIndex, setOpenFaqIndex] = useState(null);
   const [showFreeModal, setShowFreeModal] = useState(false);
   const [selectedFreePlan, setSelectedFreePlan] = useState(null);
@@ -37,12 +38,6 @@ export default function PricingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [subscribing, setSubscribing] = useState(null);
-  const [toastState, setToastState] = useState({
-    active: false,
-    message: "",
-    error: false,
-  });
-
   // ✅ Move fetchPlans outside of useEffect so we can reuse it
   const fetchPlans = useCallback(async () => {
     try {
@@ -73,12 +68,8 @@ export default function PricingPage() {
     if (!error) {
       return;
     }
-    setToastState({
-      active: true,
-      message: error,
-      error: true,
-    });
-  }, [error]);
+    showError(error);
+  }, [error, showError]);
 
   const faqs = [
     {
@@ -135,11 +126,7 @@ export default function PricingPage() {
       redirectRemote(data.confirmationUrl);
     } catch (err) {
       console.error("Subscription error:", err);
-      setToastState({
-        active: true,
-        message: toSafeErrorMessage(t, err, "common.errors.generic"),
-        error: true,
-      });
+      showError(toSafeErrorMessage(t, err, "common.errors.generic"));
       setSubscribing(null);
     }
   };
@@ -187,13 +174,6 @@ export default function PricingPage() {
             </Box>
           </Layout.Section>
         </Layout>
-        {toastState.active ? (
-          <Toast
-            content={toastState.message}
-            error={toastState.error}
-            onDismiss={() => setToastState({ active: false, message: "", error: false })}
-          />
-        ) : null}
       </Page>
     );
   }
@@ -437,13 +417,6 @@ export default function PricingPage() {
           </Text>
         </Modal.Section>
       </Modal>
-      {toastState.active ? (
-        <Toast
-          content={toastState.message}
-          error={toastState.error}
-          onDismiss={() => setToastState({ active: false, message: "", error: false })}
-        />
-      ) : null}
     </Page>
   );
 }

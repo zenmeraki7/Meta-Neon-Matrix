@@ -1,8 +1,7 @@
 import { BrowserRouter } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import createApp from "@shopify/app-bridge";
 import { AppLink, NavigationMenu } from "@shopify/app-bridge/actions";
-import { Frame } from "@shopify/polaris";
+import { Banner, BlockStack, Box, Button, Card, Frame, Page, Text } from "@shopify/polaris";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 
@@ -10,7 +9,9 @@ import Routes from "./Routes";
 import { QueryProvider, PolarisProvider } from "./components";
 import {
   AuthenticatedFetchProvider,
+  AppBridgeProvider,
   ToastProvider,
+  useAppBridge,
 } from "./components/providers";
 import ErrorBoundary from "./components/Error/ErrorBoundary";
 
@@ -22,60 +23,76 @@ const pages = import.meta.glob("./pages/**/!(*.test.[jt]sx)*.([jt]sx)");
 
 export default function App() {
   const { host } = getShopifyContext();
+  const hasApiKey = Boolean(import.meta.env.VITE_SHOPIFY_API_KEY);
 
   const [isSyncing, setIsSyncing] = useState(false);
   const { t } = useTranslation();
 
-  if (!host) {
-    return <MissingEmbeddedContext />;
+  if (!host || !hasApiKey) {
+    return (
+      <BrowserRouter>
+        <PolarisProvider>
+          <MissingEmbeddedContext missingApiKey={!hasApiKey} />
+        </PolarisProvider>
+      </BrowserRouter>
+    );
   }
 
   return (
     <BrowserRouter basename="/">
-      <PolarisProvider>
-        <AuthenticatedFetchProvider>
-          <ToastProvider>
-            <QueryProvider>
-              <EmbeddedNavMenu isSyncing={isSyncing} t={t} />
-              <Frame>
-                <ErrorBoundary context="App routes">
-                  <Routes pages={pages} data={{ setIsSyncing }} />
-                </ErrorBoundary>
-              </Frame>
-            </QueryProvider>
-          </ToastProvider>
-        </AuthenticatedFetchProvider>
-      </PolarisProvider>
+      <AppBridgeProvider host={host}>
+        <PolarisProvider>
+          <AuthenticatedFetchProvider>
+            <ToastProvider>
+              <QueryProvider>
+                <EmbeddedNavMenu isSyncing={isSyncing} t={t} />
+                <Frame>
+                  <ErrorBoundary context="App routes">
+                    <Routes pages={pages} data={{ setIsSyncing }} />
+                  </ErrorBoundary>
+                </Frame>
+              </QueryProvider>
+            </ToastProvider>
+          </AuthenticatedFetchProvider>
+        </PolarisProvider>
+      </AppBridgeProvider>
     </BrowserRouter>
   );
 }
 
-function MissingEmbeddedContext() {
+function MissingEmbeddedContext({ missingApiKey = false }) {
   return (
-    <div className="embedded-context-error">
-      <h1>Open MetaMatrix from Shopify Admin</h1>
-      <p>
-        Shopify embedded context was not available for this page. Open the app
-        from Shopify Admin Apps, then use the app navigation again.
-      </p>
-    </div>
+    <Page title="Open MetaMatrix from Shopify Admin">
+      <Card roundedAbove="sm">
+        <Box padding="500">
+          <BlockStack gap="300">
+            <Banner tone="warning">
+              <p>
+                {missingApiKey
+                  ? "Shopify API key is not configured for this frontend build."
+                  : "Shopify embedded context was not available for this page."}
+              </p>
+            </Banner>
+            <Text as="p" tone="subdued">
+              {missingApiKey
+                ? "Configure the frontend environment and reload from Shopify Admin."
+                : "Open this app from Shopify Admin Apps, then retry from the app navigation."}
+            </Text>
+            <Box>
+              <Button onClick={() => window.location.reload()} variant="primary">
+                Retry
+              </Button>
+            </Box>
+          </BlockStack>
+        </Box>
+      </Card>
+    </Page>
   );
 }
 
 function EmbeddedNavMenu({ isSyncing, t }) {
   const location = useLocation();
-  const { host } = getShopifyContext();
-  const appBridge = useMemo(() => {
-    if (!host || !import.meta.env.VITE_SHOPIFY_API_KEY) {
-      return null;
-    }
-
-    return createApp({
-      apiKey: import.meta.env.VITE_SHOPIFY_API_KEY,
-      host,
-      forceRedirect: true,
-    });
-  }, [host]);
+  const appBridge = useAppBridge();
 
   const items = useMemo(
     () => [

@@ -28,9 +28,10 @@ import {
 } from "@shopify/polaris-icons";
 import Papa from "papaparse";
 import { useTranslation } from "react-i18next";
+import { useQuery } from "@tanstack/react-query";
 import { buildOperationTimeline } from "../utils/operationTimeline";
 import { operationStatusBadge } from "../../../shared/components/StatusBadge";
-import { protectedApiGet } from "../../../../api/protectedApiClient";
+import { useApiClient } from "../../../../hooks/useApiClient";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import TableErrorBoundary from "../../../../components/Error/TableErrorBoundary";
@@ -133,6 +134,14 @@ function isActiveStatus(statusSummary) {
   return Boolean(statusSummary) && statusSummary.isTerminal !== true;
 }
 
+function isActiveEditSummary(summary) {
+  if (!summary) return false;
+
+  const primaryStatus = getPrimaryStatus(summary);
+  const undoStatus = getUndoStatus(summary);
+  return isActiveStatus(primaryStatus) || isActiveStatus(undoStatus);
+}
+
 function normalizeErrors(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value;
@@ -162,12 +171,12 @@ export default function EditDetails() {
   const navigate = useNavigate();
 const { t, i18n } = useTranslation();
   const { showError } = useAppToast();
+  const api = useApiClient();
   const [historyItem, setHistoryItem] = useState(null);
   const [changes, setChanges] = useState([]);
   const [changeField, setChangeField] = useState("");
   const [isVariantChange, setIsVariantChange] = useState(false);
 
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isLoadingChanges, setIsLoadingChanges] = useState(true);
 
   const [error, setError] = useState(null);
@@ -184,40 +193,27 @@ const { t, i18n } = useTranslation();
   }, [navigate]);
   
 
-  const fetchHistorySummary = useCallback(async () => {
-    if (!id) {
-      setError(
-        t("historyIdRequired", { defaultValue: "No history ID provided" }),
-      );
-      setIsLoadingHistory(false);
-      return;
-    }
-
-    try {
-      setIsLoadingHistory(true);
-      setError(null);
-
-      const json = await protectedApiGet(
+  const summaryQuery = useQuery({
+    queryKey: ["edit-history-summary", id || "", i18n.language || "en"],
+    enabled: Boolean(id),
+    queryFn: async ({ signal }) => {
+      const json = await api.get(
         `/api/history/get-edit-history-summary/${id}?lang=${i18n.language}`,
+        { signal },
       );
-      setHistoryItem((previous) => ({
-        ...(previous || {}),
-        ...(json?.data || {}),
-      }));
-    } catch (err) {
-      setError(
-        toSafeErrorMessage(t, err, "common.errors.generic"),
-      );
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  }, [id, i18n.language, t]);
+      return json?.data || null;
+    },
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    refetchInterval: (query) => (isActiveEditSummary(query.state.data) ? 3000 : false),
+    retry: false,
+  });
 
   const fetchHistoryDetail = useCallback(async () => {
     if (!id) return;
 
     try {
-      const json = await protectedApiGet(
+      const json = await api.get(
         `/api/history/get-edit-history-details/${id}?lang=${i18n.language}`,
       );
       setHistoryItem((previous) => ({
@@ -227,7 +223,7 @@ const { t, i18n } = useTranslation();
     } catch (_err) {
       // Keep summary-visible UI stable even if detail enrichment fails.
     }
-  }, [id, i18n.language]);
+  }, [api, id, i18n.language]);
 
   const fetchChanges = useCallback(
     async (page = 1) => {
@@ -237,7 +233,7 @@ const { t, i18n } = useTranslation();
         setChangesError(null);
         setIsLoadingChanges(true);
 
-        const json = await protectedApiGet(
+        const json = await api.get(
           `/api/history/get-edit-history/changes/${id}?page=${page}&limit=${itemsPerPage}&lang=${i18n.language}`,
         );
         const changeRows = Array.isArray(json?.data) ? json.data : [];
@@ -287,13 +283,27 @@ const { t, i18n } = useTranslation();
         setIsLoadingChanges(false);
       }
     },
-    [id, i18n.language, t],
+    [api, id, i18n.language, t],
   );
 
   useEffect(() => {
-    fetchHistorySummary();
     fetchHistoryDetail();
-  }, [fetchHistorySummary, fetchHistoryDetail]);
+  }, [fetchHistoryDetail]);
+
+  useEffect(() => {
+    if (summaryQuery.data) {
+      setHistoryItem((previous) => ({
+        ...(previous || {}),
+        ...summaryQuery.data,
+      }));
+      setError(null);
+    }
+  }, [summaryQuery.data]);
+
+  useEffect(() => {
+    if (!summaryQuery.error) return;
+    setError(toSafeErrorMessage(t, summaryQuery.error, "common.errors.generic"));
+  }, [summaryQuery.error, t]);
 
   useEffect(() => {
     fetchChanges(1);
@@ -305,47 +315,13 @@ const { t, i18n } = useTranslation();
   }, [error, showError]);
 
   useEffect(() => {
-    if (!historyItem?.id) return;
-
-    const primaryStatus = getPrimaryStatus(historyItem);
-    const undoStatus = getUndoStatus(historyItem);
-
-    
-    if (!isActiveStatus(primaryStatus) && !isActiveStatus(undoStatus)) return;
-
-    const interval = setInterval(async () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-        return;
-      }
-      try {
-        const json = await protectedApiGet(
-          `/api/history/get-edit-history-summary/${id}?lang=${i18n.language}`,
-        );
-        const updated = json?.data;
-        if (!updated) return;
-
-        setHistoryItem(updated);
-
-        const nextPrimaryStatus = getPrimaryStatus(updated);
-        const nextUndoStatus = getUndoStatus(updated);
-
-        if (
-          nextPrimaryStatus.key === "completed" ||
-          nextUndoStatus?.key === "undo_completed"
-        ) {
-          fetchChanges(currentPage);
-        }
-
-        if (!isActiveStatus(nextPrimaryStatus) && !isActiveStatus(nextUndoStatus)) {
-          clearInterval(interval);
-        }
-      } catch (pollErr) {
-        console.warn("Polling error:", pollErr);
-      }
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [historyItem, id, currentPage, fetchChanges]);
+    if (!summaryQuery.data) return;
+    const nextPrimaryStatus = getPrimaryStatus(summaryQuery.data);
+    const nextUndoStatus = getUndoStatus(summaryQuery.data);
+    if (nextPrimaryStatus.key === "completed" || nextUndoStatus?.key === "undo_completed") {
+      fetchChanges(currentPage);
+    }
+  }, [summaryQuery.data, currentPage, fetchChanges]);
 
   const flattenedRows = useMemo(() => {
     if (!Array.isArray(changes) || changes.length === 0) return [];
@@ -446,7 +422,7 @@ const { t, i18n } = useTranslation();
     URL.revokeObjectURL(url);
   }, [flattenedRows, historyItem]);
 
-  if (isLoadingHistory) {
+  if (summaryQuery.isLoading && !historyItem) {
     return (
       <Page
         fullWidth
@@ -491,7 +467,7 @@ const { t, i18n } = useTranslation();
                     <Button
                       variant="primary"
                       onClick={() => {
-                        fetchHistorySummary();
+                        summaryQuery.refetch();
                         fetchHistoryDetail();
                       }}
                     >
@@ -851,7 +827,7 @@ const undoBadge = undoStatus
                     ]}
                   >
                     {flattenedRows.map((item, index) => (
-                      <IndexTable.Row id={String(item.rowKey || index)} key={String(item.rowKey || index)} position={index}>
+                      <IndexTable.Row id={String(item.rowKey)} key={String(item.rowKey)} position={index}>
                         <IndexTable.Cell>
                           <CellErrorBoundary fallback="[render error]">
                             <InlineStack gap="300" wrap={false}>

@@ -12,6 +12,7 @@ import {
   buildPauseEditCommand,
   buildResumeEditCommand,
   buildRetryFailedOnlyCommand,
+  buildPreviewVariantDetailsCommand,
 } from "../normalizers/productBulkEditCommandNormalizer.js";
 
 import {
@@ -23,6 +24,7 @@ import {
   toOperationPauseResponseDto,
   toOperationResumeResponseDto,
   toOperationRetryResponseDto,
+  toPreviewVariantDetailsResponseDto,
 } from "../dtos/productBulkEditDto.js";
 
 import {
@@ -151,6 +153,33 @@ export const trackEditPreview = async (req, res) => {
       error,
       shop: session?.shop,
       source: "productBulkEditController.trackEditPreview",
+    });
+  }
+};
+
+export const getEditPreviewVariantDetails = async (req, res) => {
+  let session;
+
+  try {
+    setPrivateNoStore(res);
+
+    const built = buildCommand(
+      req,
+      res,
+      buildPreviewVariantDetailsCommand,
+      "MERCHANT_ADMIN",
+    );
+
+    session = built.session;
+    const result = await productBulkEditUseCases.previewVariantDetails(built.command);
+    return res.status(200).json(toPreviewVariantDetailsResponseDto(result));
+  } catch (error) {
+    return logAndSendError({
+      res,
+      req,
+      error,
+      shop: session?.shop,
+      source: "productBulkEditController.getEditPreviewVariantDetails",
     });
   }
 };

@@ -3,6 +3,7 @@ import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import react from "@vitejs/plugin-react";
 import dotenv from "dotenv";
+import { visualizer } from "rollup-plugin-visualizer";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(configDir, "../../.env") });
@@ -51,9 +52,46 @@ if (host === "localhost") {
 
 export default defineConfig({
   root: configDir,
-  plugins: [react()],
+  plugins: [
+    react(),
+    process.env.BUNDLE_ANALYZE === "true"
+      ? visualizer({
+          filename: resolve(configDir, "dist/stats.html"),
+          gzipSize: true,
+          brotliSize: true,
+          open: false,
+        })
+      : null,
+  ].filter(Boolean),
   resolve: {
     preserveSymlinks: true,
+  },
+  build: {
+    sourcemap: false,
+    chunkSizeWarningLimit: 500,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return null;
+          if (id.includes("@shopify/polaris") || id.includes("@shopify/polaris-icons")) {
+            return "vendor-polaris";
+          }
+          if (id.includes("@tanstack/react-query")) {
+            return "vendor-react-query";
+          }
+          if (id.includes("react-router-dom")) {
+            return "vendor-router";
+          }
+          if (id.includes("i18next")) {
+            return "vendor-i18n";
+          }
+          if (id.includes("react") || id.includes("scheduler")) {
+            return "vendor-react";
+          }
+          return "vendor";
+        },
+      },
+    },
   },
   server: {
     host: "localhost",

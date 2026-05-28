@@ -18,6 +18,7 @@ import {
   pauseEditOperation,
   retryFailedOnlyEditOperation,
   resumePausedEditOperation,
+  getEditPreviewVariantDetails,
   trackEditPreview,
   undoEdit,
 } from "../controllers/productBulkEditController.js";
@@ -116,6 +117,11 @@ router.get("/filter-values/:field", getProductFilterValues);
 router.get("/filter-registry", getFilterRegistry);
 router.get("/product-type-refresh", clearProductTypes);
 router.post("/edit-preview", subscriptionMiddleware, validateBody(bulkEditPreviewSchema), trackEditPreview);
+router.get(
+  "/edit-preview/:previewId/products/:productId/variants",
+  subscriptionMiddleware,
+  getEditPreviewVariantDetails,
+);
 router.get("/bulk-edit-status/:id", checkEditStatus);
 router.post(
   "/update",

@@ -8,6 +8,23 @@ export default function Routes({ pages, data }) {
   const routes = useRoutes(pages);
   const notFoundRoute = routes.find(({ path }) => path === "/notFound");
   const NotFound = notFoundRoute?.component || null;
+  const { i18n } = useTranslation();
+
+  useEffect(() => {
+    const warmNamespaces = ["products", "history"];
+    const preload = () => {
+      const missing = warmNamespaces.filter((ns) => !i18n.hasLoadedNamespace(ns));
+      if (missing.length > 0) {
+        void i18n.loadNamespaces(missing);
+      }
+    };
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(preload);
+      return () => window.cancelIdleCallback?.(idleId);
+    }
+    const timeoutId = setTimeout(preload, 0);
+    return () => clearTimeout(timeoutId);
+  }, [i18n]);
 
   return (
     <ReactRouterRoutes>

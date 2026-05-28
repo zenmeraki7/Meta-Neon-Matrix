@@ -377,6 +377,22 @@ export const productBulkEditUseCases = Object.freeze({
 
     return requireResult(result, "Scheduled edit creation failed");
   },
+
+  async previewVariantDetails(command) {
+    command = assertPlainCommand(command);
+    assertRequiredString(command.previewId, "previewId");
+    assertRequiredString(command.productId, "productId");
+
+    const service = createProductBulkService(command);
+    const result = await service.getPreviewVariantDetails({
+      previewId: command.previewId,
+      productId: command.productId,
+      page: command.page || 1,
+      limit: command.limit || 50,
+      actorId: command.actor?.actorId || command.actor?.userId || null,
+    });
+    return requireResult(result, "Variant preview details failed");
+  },
 });
 
 export const productBulkUndoUseCases = Object.freeze({

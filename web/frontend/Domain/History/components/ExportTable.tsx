@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Banner,
   BlockStack,
@@ -17,11 +17,11 @@ import {
 import { ArrowDownIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
 import { exportStatusBadge } from "../../shared/components/StatusBadge";
-import { protectedApiGet } from "../../../api/protectedApiClient";
 import { toSafeErrorMessage } from "../../../utils/frontendError";
 import { useLocaleFormatters } from "../../../hooks/useLocaleFormatters";
 import TableErrorBoundary from "../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../components/Error/CellErrorBoundary";
+import { useExportHistoryQuery } from "../hooks/useExportHistoryQuery";
 
 const DEFAULT_PAGE_INFO = {
   hasNextPage: false,
@@ -87,9 +87,6 @@ const ExportTable = ({
 }) => {
   const { t } = useTranslation();
   const { dateTimeFormatter, numberFormatter } = useLocaleFormatters();
-  const [histories, setHistories] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState(null);
   const [downloadingItems, setDownloadingItems] = useState(new Set());
   const [tabQueryState, setTabQueryState] = useState({
     manual: {
@@ -107,111 +104,24 @@ const ExportTable = ({
   const activeCursorState = tabQueryState[activeTabKey];
   const activeCursor =
     activeCursorState?.cursors?.[activeCursorState?.cursorIndex ?? 0] || null;
-  const activePageInfo =
-    tabQueryState[activeTabKey]?.pageInfo || DEFAULT_PAGE_INFO;
+  const exportQuery = useExportHistoryQuery({
+    selectedType,
+    cursor: activeCursor,
+  });
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchHistories = async ({ silent = false, nextCursor = null } = {}) => {
-      try {
-        if (!silent) {
-          setHistoryLoading(true);
-        }
-        setHistoryError(null);
-
-        const params = new URLSearchParams();
-        params.set("type", selectedType);
-        params.set("limit", "20");
-        if (nextCursor) params.set("cursor", nextCursor);
-        const data = await protectedApiGet(`/api/history/export/list-summary?${params.toString()}`);
-
-        if (isMounted) {
-          setHistories(data.items || data.data || []);
-          const info = data.pageInfo || data.meta?.pageInfo || {};
-          setTabQueryState((prev) => ({
-            ...prev,
-            [activeTabKey]: {
-              ...prev[activeTabKey],
-              pageInfo: {
-                hasNextPage: Boolean(info.hasNextPage),
-                hasPreviousPage: (prev[activeTabKey]?.cursorIndex || 0) > 0,
-                nextCursor: info.nextCursor || info.endCursor || null,
-              },
-            },
-          }));
-        }
-      } catch (error) {
-        if (isMounted) {
-          setHistoryError(toSafeErrorMessage(t, error, "common.errors.generic"));
-          setTabQueryState((prev) => ({
-            ...prev,
-            [activeTabKey]: {
-              ...prev[activeTabKey],
-              pageInfo: DEFAULT_PAGE_INFO,
-            },
-          }));
-        }
-      } finally {
-        if (isMounted && !silent) {
-          setHistoryLoading(false);
-        }
-      }
-    };
-
-    fetchHistories({ nextCursor: activeCursor });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [activeCursor, activeTabKey, selectedType, t]);
-
-  useEffect(() => {
-    const hasActiveHistory = histories.some(
-      (item) => item?.primaryStatus?.isTerminal !== true,
-    );
-
-    const shouldPoll =
-      String(selectedType).toLowerCase().includes("scheduled") ||
-      hasActiveHistory;
-
-    if (!shouldPoll) return undefined;
-
-    const interval = setInterval(async () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-        return;
-      }
-      try {
-        const params = new URLSearchParams();
-        params.set("type", selectedType);
-        params.set("limit", "20");
-        if (activeCursor) params.set("cursor", activeCursor);
-
-        const data = await protectedApiGet(
-          `/api/history/export/list-summary?${params.toString()}`,
-        );
-        if (data.success) {
-          setHistories(data.items || data.data || []);
-          const info = data.pageInfo || data.meta?.pageInfo || {};
-          setTabQueryState((prev) => ({
-            ...prev,
-            [activeTabKey]: {
-              ...prev[activeTabKey],
-              pageInfo: {
-                hasNextPage: Boolean(info.hasNextPage),
-                hasPreviousPage: (prev[activeTabKey]?.cursorIndex || 0) > 0,
-                nextCursor: info.nextCursor || info.endCursor || null,
-              },
-            },
-          }));
-        }
-      } catch {
-        // silent
-      }
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, [activeCursor, activeTabKey, histories, selectedType]);
+  const histories = exportQuery.data?.items || exportQuery.data?.data || [];
+  const info = exportQuery.data?.pageInfo || exportQuery.data?.meta?.pageInfo || {};
+  const activePageInfo = useMemo(
+    () => ({
+      hasNextPage: Boolean(info.hasNextPage),
+      hasPreviousPage: (activeCursorState?.cursorIndex || 0) > 0,
+      nextCursor: info.nextCursor || info.endCursor || null,
+    }),
+    [activeCursorState?.cursorIndex, info.endCursor, info.hasNextPage, info.nextCursor],
+  );
+  const historyError = exportQuery.error
+    ? toSafeErrorMessage(t, exportQuery.error, "common.errors.generic")
+    : null;
 
   const handleDownloadClick = async (id, fileUrl, filename) => {
     if (!fileUrl) {
@@ -281,7 +191,7 @@ const ExportTable = ({
     );
   };
 
-  if (historyLoading) {
+  if (exportQuery.isLoading) {
     return (
       <Card>
         <Box minHeight={EXPORT_TABLE_MIN_HEIGHT} padding="400">

@@ -79,7 +79,11 @@ test("bulk edit flow avoids native confirm and enforces modal/location/fresh-pre
   assert.equal(/window\.confirm\(/.test(editPreview), false, "window.confirm found in EditPreviewPage");
   assert.equal(editPreview.includes("confirmModalOpen"), true, "Broad target confirmation modal guard missing");
   assert.equal(editPreview.includes("hasRequiredLocation"), true, "Location-required guard missing");
-  assert.equal(editPreview.includes("buildCurrentPreviewSignature"), true, "Fresh preview signature guard missing");
+  assert.equal(
+    editPreview.includes("currentPreviewSignature") || editPreview.includes("hasFreshPreview"),
+    true,
+    "Fresh preview signature guard missing",
+  );
   assert.equal(
     editPreview.includes("hasPreviewRegistryMismatch"),
     true,

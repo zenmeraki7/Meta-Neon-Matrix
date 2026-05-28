@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Page,
   Card,
@@ -13,8 +13,10 @@ import { useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import HistoryComponent from "../components/HistoryComponent";
-import ExportComponent from "../components/ExportComponent";
+import PageLoader from "../../../components/PageLoader";
+
+const HistoryComponent = lazy(() => import("../components/HistoryComponent"));
+const ExportComponent = lazy(() => import("../components/ExportComponent"));
 
 export default function HistoryPage() {
   const location = useLocation();
@@ -37,10 +39,18 @@ export default function HistoryPage() {
     [t],
   );
 
-  const [selectedParentTab, setSelectedParentTab] = useState(() => {
-    const savedTab = localStorage.getItem("selectedHistoryTab");
-    return savedTab ? Number(savedTab) : 0;
-  });
+  const [selectedParentTab, setSelectedParentTab] = useState(0);
+
+  useEffect(() => {
+    try {
+      const savedTab = localStorage.getItem("selectedHistoryTab");
+      if (savedTab != null) {
+        setSelectedParentTab(Number(savedTab) || 0);
+      }
+    } catch {
+      // Ignore storage access failures.
+    }
+  }, []);
 
   const handleParentTabChange = useCallback((index) => {
     setSelectedParentTab(index);
@@ -99,7 +109,9 @@ export default function HistoryPage() {
         </Card>
 
         <Card padding="0">
-          {selectedParentTab === 0 ? <HistoryComponent /> : <ExportComponent />}
+          <Suspense fallback={<PageLoader />}>
+            {selectedParentTab === 0 ? <HistoryComponent /> : <ExportComponent />}
+          </Suspense>
         </Card>
       </BlockStack>
     </Page>

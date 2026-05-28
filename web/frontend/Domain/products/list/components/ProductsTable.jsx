@@ -20,6 +20,22 @@ const SKELETON_ROWS = 6;
 const FALLBACK_IMAGE = "/images/fallback-2.png";
 const TABLE_SHELL_MIN_HEIGHT = "420px";
 
+function getProductRowId(product, index) {
+  if (product?.id != null && String(product.id).trim() !== "") {
+    return String(product.id);
+  }
+
+  const handle = String(product?.handle || "").trim();
+  if (handle) {
+    return `handle:${handle}`;
+  }
+
+  const title = String(product?.title || "").trim();
+  const vendor = String(product?.vendor || "").trim();
+  const productType = String(product?.productType || "").trim();
+  return `derived:${title}|${vendor}|${productType}|${index}`;
+}
+
 function LoadingTable() {
   return (
     <Box minHeight={TABLE_SHELL_MIN_HEIGHT}>
@@ -104,9 +120,10 @@ const ProductsTable = ({ products = [], loading, pagination, onNext, onPrev }) =
               product.featuredImageUrl ||
               product.featuredMedia?.preview?.image?.url ||
               FALLBACK_IMAGE;
+            const rowId = getProductRowId(product, index);
 
             return (
-              <IndexTable.Row id={String(product.id || index)} key={product.id || index} position={index}>
+              <IndexTable.Row id={rowId} key={rowId} position={index}>
                 <IndexTable.Cell>
                   <CellErrorBoundary fallback="[render error]">
                     <ProductCell title={title} handle={handle} imageUrl={resolvedImage} />

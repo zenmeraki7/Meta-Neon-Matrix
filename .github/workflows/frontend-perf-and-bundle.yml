@@ -1,0 +1,52 @@
+name: Frontend Perf And Bundle Gates
+
+on:
+  pull_request:
+    paths:
+      - "web/frontend/**"
+      - ".github/workflows/frontend-perf-and-bundle.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "web/frontend/**"
+
+jobs:
+  frontend-gates:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        network_profile: [throttled-4g, slow-3g]
+        cpu_throttle: [4, 6]
+    env:
+      SHOPIFY_API_KEY: dummy-build-key
+      NETWORK_PROFILE: ${{ matrix.network_profile }}
+      CPU_THROTTLE: ${{ matrix.cpu_throttle }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate large-merchant perf matrix fixture
+        run: npm --workspace web/frontend run perf:matrix
+
+      - name: Build with bundle budgets
+        run: npm --workspace web/frontend run build:budget
+
+      - name: Build analyzer artifact
+        run: npm --workspace web/frontend run build:analyze
+
+      - name: Upload bundle analyzer report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-bundle-analyzer-${{ matrix.network_profile }}-cpu${{ matrix.cpu_throttle }}
+          path: web/frontend/dist/stats.html
+

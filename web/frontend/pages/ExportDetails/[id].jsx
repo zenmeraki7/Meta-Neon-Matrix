@@ -14,12 +14,13 @@ import {
   Button,
 } from "@shopify/polaris";
 import { ArrowLeftIcon } from "@shopify/polaris-icons";
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { protectedApiGet } from "../../api/protectedApiClient";
 import { useToast as useAppToast } from "../../components/providers/ToastProvider";
 import { toSafeErrorMessage } from "../../utils/frontendError";
+import { useQuery } from "@tanstack/react-query";
 
 export default function ExportHistoryDetailsPage() {
   const { t } = useTranslation();
@@ -28,7 +29,6 @@ export default function ExportHistoryDetailsPage() {
   const { showError } = useAppToast();
 
   const [exportJob, setExportJob] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const dateTimeFormatter = useMemo(
     () =>
@@ -39,15 +39,9 @@ export default function ExportHistoryDetailsPage() {
     [],
   );
 
-  const pollingRef = useRef(null);
-  const isMountedRef = useRef(true);
-
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-  }, []);
+  const [isVisible, setIsVisible] = useState(() =>
+    typeof document === "undefined" ? true : document.visibilityState === "visible",
+  );
 
   const normalizeStatusKey = useCallback((status) => {
     const normalized = String(status || "").trim().toLowerCase();
@@ -164,47 +158,49 @@ export default function ExportHistoryDetailsPage() {
     return dateTimeFormatter.format(new Date(date));
   }, [dateTimeFormatter]);
 
-  const fetchExportDetails = useCallback(async () => {
-    try {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-        return;
-      }
-      const data = await protectedApiGet(`/api/history/export/detail/${id}`);
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const onVisibilityChange = () => {
+      setIsVisible(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  const exportDetailQuery = useQuery({
+    queryKey: ["export-detail", id || ""],
+    enabled: Boolean(id) && isVisible,
+    queryFn: async ({ signal }) => {
+      const data = await protectedApiGet(`/api/history/export/detail/${id}`, { signal });
       if (!data.success) {
         throw new Error(toSafeErrorMessage(t, data, "common.errors.generic"));
       }
-
-      const job = data.data;
-
-      setExportJob(job);
-      setError(null);
-
-      const currentStatus = normalizeStatusKey(job?.status);
-
-      if (currentStatus !== "pending" && currentStatus !== "processing") {
-        stopPolling();
-      }
-    } catch (err) {
-      setError(toSafeErrorMessage(t, err, "common.errors.generic"));
-      stopPolling();
-    } finally {
-      setLoading(false);
-    }
-  }, [id, normalizeStatusKey, stopPolling, t]);
+      return data.data || null;
+    },
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    refetchInterval: (query) => {
+      if (!isVisible) return false;
+      const status = normalizeStatusKey(query.state.data?.status);
+      return status === "pending" || status === "processing" ? 5000 : false;
+    },
+    retry: false,
+  });
 
   useEffect(() => {
-    isMountedRef.current = true;
-    fetchExportDetails();
-    pollingRef.current = setInterval(() => {
-      if (!isMountedRef.current) return;
-      fetchExportDetails();
-    }, 5000);
+    if (exportDetailQuery.data) {
+      setExportJob(exportDetailQuery.data);
+      setError(null);
+    }
+  }, [exportDetailQuery.data]);
 
-    return () => {
-      isMountedRef.current = false;
-      stopPolling();
-    };
-  }, [fetchExportDetails, stopPolling]);
+  useEffect(() => {
+    if (exportDetailQuery.error) {
+      setError(toSafeErrorMessage(t, exportDetailQuery.error, "common.errors.generic"));
+    }
+  }, [exportDetailQuery.error, t]);
 
   useEffect(() => {
     if (!error) return;
@@ -215,7 +211,7 @@ export default function ExportHistoryDetailsPage() {
     return exportJob?.filename || t("exportDetails.title");
   }, [exportJob?.filename, t]);
 
-  if (loading) {
+  if (exportDetailQuery.isLoading && !exportJob) {
     return (
       <Page title={t("loadingExportDetails")}>
         <Box padding="600">
@@ -242,7 +238,7 @@ export default function ExportHistoryDetailsPage() {
                     {error}
                   </Text>
                   <InlineStack gap="200">
-                    <Button variant="primary" onClick={fetchExportDetails}>
+                    <Button variant="primary" onClick={() => exportDetailQuery.refetch()}>
                       {t("retry", { defaultValue: "Retry" })}
                     </Button>
                     <Button onClick={() => navigate(-1)}>

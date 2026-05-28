@@ -1,0 +1,7 @@
+{
+  "shopDomain": "fixture-large-merchant.myshopify.com",
+  "productCount": 50000,
+  "variantCount": 150000,
+  "notes": "Synthetic large-merchant baseline fixture metadata used for CI perf gating."
+}
+
