@@ -1,52 +1,60 @@
-import CategoryService from "../services/category/categoryService.js";
-import { logApiError } from "../utils/errorLogUtils.js";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+// web/controllers/categoryController.js
+import {
+  toCategoryListResponseDto,
+  toCategoryOptionResponseDto,
+} from "../dtos/categoryDto.js";
+import { requireShopifySession } from "../http/shopifySession.js";
+import { buildActorFromSession } from "../http/actorContext.js";
+import { validateCategoryQuery } from "../validators/categoryRequestValidator.js";
 
-const categoryService = new CategoryService();
+export const getAllCategories =
+  (categoryService) => async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
 
-export const getAllCategories = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-  try {
-    if (!session?.shop) {
-      return res.status(401).json({
-        success: false,
-        code: "UNAUTHENTICATED",
-        message: "Session expired",
+      const session = requireShopifySession(res, "Authentication required");
+      const query = validateCategoryQuery(req.query);
+
+      const command = Object.freeze({
+        shop: session.shop,
+        search: query.search,
+        limit: query.limit,
+        cursor: query.cursor,
+        actor: buildActorFromSession(session),
       });
+
+      const result = await categoryService.getAllCategories(command);
+
+      return res.status(200).json(
+        toCategoryListResponseDto(result, { search: query.search }),
+      );
+    } catch (error) {
+      return next(error);
     }
+  };
 
-    const isNameOnly = req.query.isNameOnly === "true";
-    const search =
-      typeof req.query.search === "string" && req.query.search.trim().length > 0
-        ? req.query.search.trim()
-        : "";
-    const limit = req.query.limit;
+export const getCategoryOptions =
+  (categoryService) => async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
 
-    const categories = await categoryService.getAllCategories({
-      session,
-      search,
-      isNameOnly,
-      limit,
-    });
+      const session = requireShopifySession(res, "Authentication required");
+      const query = validateCategoryQuery(req.query);
 
-    return res.status(200).json({
-      success: true,
-      search: search || null,
-      count: categories.length,
-      data: categories,
-    });
-  } catch (err) {
-    await logApiError({
-      shop: session?.shop,
-      err,
-      req,
-      source: "categoryController.getAllCategories",
-    });
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      err,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
-  }
-};
+      const command = Object.freeze({
+        shop: session.shop,
+        search: query.search,
+        limit: query.limit,
+        cursor: query.cursor,
+        actor: buildActorFromSession(session),
+      });
 
+      const result = await categoryService.getAllCategories(command);
+
+      return res.status(200).json(
+        toCategoryOptionResponseDto(result, { search: query.search }),
+      );
+    } catch (error) {
+      return next(error);
+    }
+  };

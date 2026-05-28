@@ -3,75 +3,14 @@ import {
   toCollectionRefreshAcceptedDto,
   toCollectionResponseDto,
 } from "../dtos/collectionDto.js";
-
-const COLLECTION_LIST_KEYS = new Set(["search", "limit", "cursor"]);
-const COLLECTION_OPTIONS_KEYS = new Set(["search", "limit", "cursor"]);
-const LIVE_COLLECTION_KEYS = new Set(["search", "limit", "cursor"]);
-
-function normalizeSearch(value) {
-  return String(value || "")
-    .normalize("NFKC")
-    .replace(/[\u0000-\u001F\u007F]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function validateCollectionQuery(rawQuery = {}, allowedKeys = COLLECTION_LIST_KEYS) {
-  const unknownKeys = Object.keys(rawQuery || {}).filter(
-    (key) => !allowedKeys.has(key),
-  );
-
-  if (unknownKeys.length > 0) {
-    const error = new Error(`Invalid query keys: ${unknownKeys.join(",")}`);
-    error.code = "VALIDATION_ERROR";
-    throw error;
-  }
-
-  const search = normalizeSearch(rawQuery.search);
-
-  const limitRaw = rawQuery.limit;
-  const limit =
-    limitRaw === undefined || limitRaw === null || limitRaw === ""
-      ? 20
-      : Number(limitRaw);
-
-  const cursor =
-    typeof rawQuery.cursor === "string" && rawQuery.cursor.trim()
-      ? rawQuery.cursor.trim()
-      : undefined;
-
-  if (search.length > 100) {
-    const error = new Error("Invalid query: search must be <= 100 chars");
-    error.code = "VALIDATION_ERROR";
-    throw error;
-  }
-
-  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
-    const error = new Error("Invalid query: limit must be an integer between 1 and 50");
-    error.code = "VALIDATION_ERROR";
-    throw error;
-  }
-
-  if (cursor && cursor.length > 500) {
-    const error = new Error("Invalid query: cursor must be <= 500 chars");
-    error.code = "VALIDATION_ERROR";
-    throw error;
-  }
-
-  return Object.freeze({ search, limit, cursor });
-}
-
-function requireShopifySession(res) {
-  const session = res.locals?.shopify?.session;
-
-  if (!session?.shop) {
-    const error = new Error("Unauthenticated Shopify session");
-    error.code = "UNAUTHENTICATED";
-    throw error;
-  }
-
-  return session;
-}
+import { requireShopifySession } from "../http/shopifySession.js";
+import { buildActorFromSession } from "../http/actorContext.js";
+import {
+  validateCollectionQuery,
+  COLLECTION_LIST_KEYS,
+  COLLECTION_OPTIONS_KEYS,
+  LIVE_COLLECTION_KEYS,
+} from "../validators/collectionRequestValidator.js";
 
 function requireIdempotencyKey(req) {
   const idempotencyKey = req.get("Idempotency-Key")?.trim();
@@ -83,16 +22,6 @@ function requireIdempotencyKey(req) {
   }
 
   return idempotencyKey;
-}
-
-function buildActorFromSession(session) {
-  const associatedUser = session?.onlineAccessInfo?.associated_user;
-
-  return Object.freeze({
-    type: associatedUser?.id ? "SHOPIFY_USER" : "SHOPIFY_SESSION",
-    userId: associatedUser?.id ? String(associatedUser.id) : null,
-    email: associatedUser?.email || null,
-  });
 }
 
 export const listCollections =
