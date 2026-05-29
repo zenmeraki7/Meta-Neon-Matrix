@@ -3,6 +3,11 @@ import { shopifyApp } from "@shopify/shopify-app-express";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import dotenv from "dotenv";
 import PrivacyWebhookHandlers from "./privacy.js";
+import afterAuth from "./hooks/afterAuth.js";
+import appUninstalled from "./webhooks/appUninstalled.js";
+import productsCreateWebhook from "./webhooks/productsCreate.js";
+import productsUpdateWebhook from "./webhooks/productsUpdate.js";
+import productsDeleteWebhook from "./webhooks/productsDelete.js";
 
 dotenv.config();
 
@@ -61,9 +66,29 @@ const shopify = shopifyApp({
     callbackPath: "/api/auth/callback",
     isOnline: false,
   },
+  hooks: { afterAuth },
   webhooks: {
     path: "/api/webhooks",
     ...PrivacyWebhookHandlers,
+    APP_UNINSTALLED: appUninstalled,
+    PRODUCTS_CREATE: {
+      deliveryMethod: "http",
+      callbackUrl: "/api/webhooks",
+      callback: async (topic, shop, body, webhookId) =>
+        productsCreateWebhook({ topic, shop, body, deliveryId: webhookId }),
+    },
+    PRODUCTS_UPDATE: {
+      deliveryMethod: "http",
+      callbackUrl: "/api/webhooks",
+      callback: async (topic, shop, body, webhookId) =>
+        productsUpdateWebhook({ topic, shop, body, deliveryId: webhookId }),
+    },
+    PRODUCTS_DELETE: {
+      deliveryMethod: "http",
+      callbackUrl: "/api/webhooks",
+      callback: async (topic, shop, body, webhookId) =>
+        productsDeleteWebhook({ topic, shop, body, deliveryId: webhookId }),
+    },
   },
   sessionStorage,
 });

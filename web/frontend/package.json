@@ -24,6 +24,7 @@
     "@formatjs/intl-locale": "^3.3.2",
     "@formatjs/intl-localematcher": "^0.4.0",
     "@formatjs/intl-pluralrules": "^5.2.4",
+    "@neondatabase/serverless": "^1.1.0",
     "@reduxjs/toolkit": "^2.6.1",
     "@shopify/app-bridge": "^3.7.7",
     "@shopify/app-bridge-react": "^4.2.1",

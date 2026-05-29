@@ -11,6 +11,9 @@ import cors from "cors";
 // Shopify
 import shopify from "./shopify.js";
 import PrivacyWebhookHandlers from "./privacy.js";
+import productsCreateWebhook from "./webhooks/productsCreate.js";
+import productsUpdateWebhook from "./webhooks/productsUpdate.js";
+import productsDeleteWebhook from "./webhooks/productsDelete.js";
 
 // Routes
 import productRoutes from "./routes/productRoutes.js";
@@ -105,6 +108,27 @@ function rejectMissingApiAuthorization(req, res, next) {
 
 export const buildApp = (_server, io) => {
   const app = express();
+  const webhookHandlers = {
+    ...PrivacyWebhookHandlers,
+    PRODUCTS_CREATE: {
+      deliveryMethod: "http",
+      callbackUrl: "/api/webhooks",
+      callback: async (topic, shop, body, webhookId) =>
+        productsCreateWebhook({ topic, shop, body, deliveryId: webhookId }),
+    },
+    PRODUCTS_UPDATE: {
+      deliveryMethod: "http",
+      callbackUrl: "/api/webhooks",
+      callback: async (topic, shop, body, webhookId) =>
+        productsUpdateWebhook({ topic, shop, body, deliveryId: webhookId }),
+    },
+    PRODUCTS_DELETE: {
+      deliveryMethod: "http",
+      callbackUrl: "/api/webhooks",
+      callback: async (topic, shop, body, webhookId) =>
+        productsDeleteWebhook({ topic, shop, body, deliveryId: webhookId }),
+    },
+  };
 
   // Security
   app.use(
@@ -141,7 +165,7 @@ export const buildApp = (_server, io) => {
   // Webhooks must be registered before express.json()
   app.post(
     shopify.config.webhooks.path,
-    shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers }),
+    shopify.processWebhooks({ webhookHandlers }),
   );
 
   // Normal API body parser after webhooks
