@@ -193,7 +193,6 @@ app.get("/*", shopify.ensureInstalledOnShop(), (_req, res) => {
 /* ------------------------------------------------------------------ */
 /*  Error Handler                                                      */
 /* ------------------------------------------------------------------ */
-
 app.use((err, req, res, _next) => {
   logger.error({
     err,
