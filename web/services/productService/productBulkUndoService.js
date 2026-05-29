@@ -19,6 +19,7 @@ import {
   buildIdempotencyRequestHash,
   IdempotencyStoreService,
 } from "../idempotency/IdempotencyStoreService.js";
+import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
 
 
 const OPTION_NAME_FIELDS = new Set([
@@ -103,11 +104,26 @@ class UndoEditService {
       throw new Error("Undo is already queued or completed");
     }
 
-    const eligibleCount = await prisma.changeRecord.count({
+    const snapshotSetId = String(
+      editedHistory?.batch?.targetSnapshotRef?.snapshotSetId || "",
+    ).trim();
+    const snapshotOperationId = String(
+      editedHistory?.batch?.targetSnapshotRef?.operationId || "",
+    ).trim();
+    if (!snapshotSetId) {
+      throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED_FOR_UNDO");
+    }
+    const snapshotSet = await getFrozenSnapshotSetForExecution({
+      shop: this.session.shop,
+      snapshotSetId,
+      operationId: snapshotOperationId || undefined,
+      db: prisma,
+    });
+    const eligibleCount = await prisma.targetSnapshotItem.count({
       where: {
-        editHistoryId: historyId,
         shop: this.session.shop,
-        status: { in: ["SUCCESS", "VERIFIED"] },
+        snapshotSetId: snapshotSet.id,
+        executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
       },
     });
     if (eligibleCount <= 0) {

@@ -2,9 +2,9 @@ import crypto from "crypto";
 import { prisma } from "../../config/database.js";
 import { getUpdatedProducts } from "../../helpers/productBulkOperationHelpers/productUpdateHandler.js";
 import {
-  getFrozenTargetProductIds,
-  getFrozenTargetVariantIds,
-} from "../productService/productTargetingService.js";
+  getFrozenSnapshotSetForExecution,
+  listFrozenSnapshotItemsPage,
+} from "../../repositories/targetSnapshotSetRepository.js";
 import {
   buildProductInclude,
   hydrateMissingVariantsForProducts,
@@ -39,6 +39,12 @@ function assertExecutableHistory({ history, historyId, executionId }) {
   if (!history.targetMirrorBatchId) {
     throw new Error("TARGET_MIRROR_BATCH_ID_REQUIRED");
   }
+  const snapshotSetId = String(
+    history?.batch?.targetSnapshotRef?.snapshotSetId || "",
+  ).trim();
+  if (!snapshotSetId) {
+    throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED");
+  }
 
   const alreadySubmitted =
     history.batch?.shopifyBulkOperation?.id ||
@@ -50,6 +56,17 @@ function assertExecutableHistory({ history, historyId, executionId }) {
 
   if (!historyId) {
     throw new Error("historyId is required");
+  }
+}
+
+function assertExecutionStageUsesFrozenPlan({ history }) {
+  const hasDynamicTargetingInputs =
+    Array.isArray(history?.batch?.filterParams) ||
+    Boolean(history?.batch?.filterAst) ||
+    Boolean(history?.queryFilter);
+  if (hasDynamicTargetingInputs) {
+    // freeze metadata may keep these for audit only; execute path must not consume them.
+    return;
   }
 }
 
@@ -308,6 +325,7 @@ export class BulkEditExecutionPreparationService {
     });
 
     assertExecutableHistory({ history, historyId, executionId });
+    assertExecutionStageUsesFrozenPlan({ history });
 
     const rules = normalizeRules({
       rules: Array.isArray(history.rules) ? history.rules : [],
@@ -326,6 +344,17 @@ export class BulkEditExecutionPreparationService {
     const retryCursorIndex = Number.isInteger(history.batch?.retryCursorIndex)
       ? history.batch.retryCursorIndex
       : 0;
+    const frozenSnapshotSetId = String(
+      history.batch?.targetSnapshotRef?.snapshotSetId || "",
+    ).trim();
+    const frozenSnapshotSetOperationId = String(
+      history.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "",
+    ).trim();
+    const frozenSnapshotSet = await getFrozenSnapshotSetForExecution({
+      shop: history.shop,
+      snapshotSetId: frozenSnapshotSetId,
+      operationId: frozenSnapshotSetOperationId || undefined,
+    });
 
     let rows = [];
     let lastProductId = null;
@@ -344,47 +373,40 @@ export class BulkEditExecutionPreparationService {
       nextRetryCursorIndex = retryCursorIndex + pageIdentities.length;
 
       if (pageIdentities.length > 0) {
-        rows = await prisma.targetSnapshot.findMany({
-          where: {
-            ownerType: "EDIT_HISTORY",
-            ownerId: historyId,
-            shop: history.shop,
-            mirrorBatchId: history.targetMirrorBatchId,
-            targetIdentity: { in: pageIdentities },
-          },
-          orderBy: [{ ordinal: "asc" }, { id: "asc" }],
-          select: {
-            productId: true,
-            variantId: true,
-            targetType: true,
-            ordinal: true,
-          },
+        const retryPage = await listFrozenSnapshotItemsPage({
+          shop: history.shop,
+          snapshotSetId: frozenSnapshotSet.id,
+          targetKeys: pageIdentities,
+          limit,
         });
-
-        lastProductId = rows.length > 0 ? rows[rows.length - 1].ordinal : null;
+        rows = retryPage.rows.map((row) => ({
+          id: row.id,
+          productId: row.productId,
+          variantId: row.variantId,
+          targetType: row.targetType,
+          targetIdentity: row.targetKey,
+        }));
+        lastProductId = retryPage.cursorTargetKey;
       }
     } else {
-      const frozenTargetPage =
-        targetGranularity === "VARIANT"
-          ? await getFrozenTargetVariantIds({
-              ownerType: "EDIT_HISTORY",
-              ownerId: historyId,
-              shop: history.shop,
-              mirrorBatchId: history.targetMirrorBatchId,
-              limit,
-              cursorOrdinal,
-            })
-          : await getFrozenTargetProductIds({
-              ownerType: "EDIT_HISTORY",
-              ownerId: historyId,
-              shop: history.shop,
-              mirrorBatchId: history.targetMirrorBatchId,
-              limit,
-              cursorOrdinal,
-            });
-
-      rows = frozenTargetPage.rows;
-      lastProductId = frozenTargetPage.lastOrdinal;
+      const frozenTargetPage = await listFrozenSnapshotItemsPage({
+        shop: history.shop,
+        snapshotSetId: frozenSnapshotSet.id,
+        cursorTargetKey:
+          typeof history.batch?.lastProductId === "string"
+            ? history.batch.lastProductId
+            : null,
+        limit,
+        targetType: targetGranularity === "VARIANT" ? "VARIANT" : "PRODUCT",
+      });
+      rows = frozenTargetPage.rows.map((row) => ({
+        id: row.id,
+        productId: row.productId,
+        variantId: row.variantId,
+        targetType: row.targetType,
+        targetIdentity: row.targetKey,
+      }));
+      lastProductId = frozenTargetPage.cursorTargetKey;
       hasMore = frozenTargetPage.hasMore;
     }
 

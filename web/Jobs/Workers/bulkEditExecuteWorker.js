@@ -29,6 +29,7 @@ import {
   heartbeatOperationLease,
   releaseOperationLease,
 } from "../../services/operationLeaseService.js";
+import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,10 +52,27 @@ const WORKER_CONCURRENCY = Number.parseInt(
 );
 
 function assertJobPayload(job) {
-  const { historyId, shop, executionId } = job.data || {};
+  const payload = job.data || {};
+  const { historyId, operationId, snapshotSetId, shop, executionId } = payload;
+  const forbiddenScopeKeys = [
+    "filterAst",
+    "filterParams",
+    "productIds",
+    "variantIds",
+    "collectionIds",
+    "targetIds",
+    "explicitProductIds",
+    "explicitVariantIds",
+  ];
+  for (const key of forbiddenScopeKeys) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) {
+      throw new Error(`EXECUTE_SCOPE_PAYLOAD_FORBIDDEN:${key}`);
+    }
+  }
 
-  if (!historyId) {
-    throw new Error("historyId is required");
+  const resolvedOperationId = String(operationId || historyId || "").trim();
+  if (!resolvedOperationId) {
+    throw new Error("operationId is required");
   }
 
   if (!shop) {
@@ -66,10 +84,12 @@ function assertJobPayload(job) {
   }
 
   return {
-    historyId,
+    historyId: resolvedOperationId,
+    operationId: resolvedOperationId,
+    snapshotSetId: String(snapshotSetId || "").trim() || null,
     shop,
     executionId,
-    source: job.data?.source || "bulk_edit_execute_worker",
+    source: payload?.source || "bulk_edit_execute_worker",
   };
 }
 
@@ -256,14 +276,13 @@ async function markCompletedEmpty({ historyId, shop, batchId }) {
   });
 }
 
-async function countRemainingFrozenTargets({ historyId, shop, cursorOrdinal }) {
-  return prisma.targetSnapshot.count({
+async function countRemainingFrozenTargets({ snapshotSetId, shop, cursorTargetKey }) {
+  return prisma.targetSnapshotItem.count({
     where: {
-      ownerType: "EDIT_HISTORY",
-      ownerId: historyId,
       shop,
-      ...(Number.isInteger(cursorOrdinal)
-        ? { ordinal: { gt: cursorOrdinal } }
+      snapshotSetId,
+      ...(typeof cursorTargetKey === "string" && cursorTargetKey.trim()
+        ? { targetKey: { gt: cursorTargetKey } }
         : {}),
     },
   });
@@ -275,11 +294,17 @@ async function resolveEmptyBatchCursorOrdinal({
   preparedBatch,
   history,
 }) {
-  if (Number.isInteger(preparedBatch?.lastProductId)) {
+  if (
+    typeof preparedBatch?.lastProductId === "string" &&
+    preparedBatch.lastProductId.trim()
+  ) {
     return preparedBatch.lastProductId;
   }
 
-  if (Number.isInteger(history?.batch?.lastProductId)) {
+  if (
+    typeof history?.batch?.lastProductId === "string" &&
+    history.batch.lastProductId.trim()
+  ) {
     return history.batch.lastProductId;
   }
 
@@ -288,31 +313,33 @@ async function resolveEmptyBatchCursorOrdinal({
     select: { batch: true },
   });
 
-  if (Number.isInteger(latest?.batch?.lastProductId)) {
+  if (
+    typeof latest?.batch?.lastProductId === "string" &&
+    latest.batch.lastProductId.trim()
+  ) {
     return latest.batch.lastProductId;
   }
 
   return null;
 }
 
-async function isFrozenCursorExhausted({ historyId, shop, cursorOrdinal }) {
-  const maxRow = await prisma.targetSnapshot.findFirst({
+async function isFrozenCursorExhausted({ snapshotSetId, shop, cursorOrdinal }) {
+  const maxRow = await prisma.targetSnapshotItem.findFirst({
     where: {
-      ownerType: "EDIT_HISTORY",
-      ownerId: historyId,
       shop,
+      snapshotSetId,
     },
-    orderBy: [{ ordinal: "desc" }, { id: "desc" }],
-    select: { ordinal: true },
+    orderBy: [{ targetKey: "desc" }],
+    select: { targetKey: true },
   });
-  const maxOrdinal = Number(maxRow?.ordinal);
-  if (!Number.isFinite(maxOrdinal)) {
+  const maxTargetKey = String(maxRow?.targetKey || "").trim();
+  if (!maxTargetKey) {
     return true;
   }
-  if (!Number.isInteger(cursorOrdinal)) {
+  if (typeof cursorOrdinal !== "string" || !cursorOrdinal.trim()) {
     return false;
   }
-  return cursorOrdinal >= maxOrdinal;
+  return cursorOrdinal >= maxTargetKey;
 }
 
 async function markWaitingForShopifySlot({
@@ -445,7 +472,7 @@ async function requeueForShopifySlot({
 
 async function processBulkEditExecuteJob(job) {
   const payload = assertJobPayload(job);
-  const { historyId, shop, executionId, source } = payload;
+  const { historyId, operationId, snapshotSetId, shop, executionId, source } = payload;
 
   let lock = null;
   let executeLeaseOwnerId = null;
@@ -459,6 +486,18 @@ async function processBulkEditExecuteJob(job) {
       historyId,
       shop,
       executionId,
+    });
+    const resolvedSnapshotSetId = String(
+      snapshotSetId || history?.batch?.targetSnapshotRef?.snapshotSetId || "",
+    ).trim();
+    if (!resolvedSnapshotSetId) {
+      throw new Error("SNAPSHOT_SET_ID_REQUIRED");
+    }
+    await getFrozenSnapshotSetForExecution({
+      shop,
+      snapshotSetId: resolvedSnapshotSetId,
+      operationId: operationId || history.executionIdentity || historyId,
+      db: prisma,
     });
     const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(shop);
     assertExecuteEntitlement({
@@ -585,12 +624,12 @@ async function processBulkEditExecuteJob(job) {
         history,
       });
       const remaining = await countRemainingFrozenTargets({
-        historyId,
+        snapshotSetId: resolvedSnapshotSetId,
         shop,
-        cursorOrdinal,
+        cursorTargetKey: cursorOrdinal,
       });
       const exhausted = await isFrozenCursorExhausted({
-        historyId,
+        snapshotSetId: resolvedSnapshotSetId,
         shop,
         cursorOrdinal,
       });

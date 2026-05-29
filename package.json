@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "main": "web/Index/server.js",
   "license": "UNLICENSED",
-"engines": {
-  "node": "22.x",
-  "npm": "10.x"
-},
+  "engines": {
+    "node": "22.x",
+    "npm": "10.x"
+  },
   "scripts": {
     "shopify": "shopify",
     "build": "npm install -g @shopify/cli @shopify/app && cd web && npm install && npm run build",
@@ -27,8 +27,7 @@
     "test:operation-lifecycle-timeline": "node --test web/frontend/operationLifecycleTimeline.test.js",
     "test:history-timeline-render": "node --test web/frontend/historyTimelineRender.contract.test.js",
     "test:perf-snapshots": "node --test web/frontend/perfProfilerSnapshot.contract.test.js",
-    "test:csv-preview-cursor": "node --test web/csvPreviewCursor.contract.test.js"
-    ,
+    "test:csv-preview-cursor": "node --test web/csvPreviewCursor.contract.test.js",
     "test:worker-manifest": "node --test web/workerManifest.contract.test.js",
     "ci:preflight-runtime-parity": "node web/scripts/ciPreflightRuntimeParity.js",
     "test:undo-determinism-recovery": "node --test web/undoDeterminismAndRecovery.contract.test.js",
@@ -54,6 +53,7 @@
     "lodash": "^4.17.21",
     "node-cache": "^5.1.2",
     "openai": "^6.8.1",
+    "pathe": "^1.1.2",
     "react-error-boundary": "^6.0.0",
     "react-redux": "^9.2.0",
     "redis": "^4.7.0",

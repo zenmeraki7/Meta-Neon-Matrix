@@ -5,6 +5,7 @@ import {
   freezeExplicitTargetSnapshot,
   markPreviewExecutionMismatch,
 } from "../productService/productTargetingService.js";
+import { upsertFrozenSnapshotSetFromLegacy } from "../../repositories/targetSnapshotSetRepository.js";
 
 export class BulkEditTargetFreezeService {
   constructor(session = null) {
@@ -23,6 +24,7 @@ export class BulkEditTargetFreezeService {
         queryFilter: true,
         targetMirrorBatchId: true,
         batch: true,
+        executionIdentity: true,
         scheduledAt: true,
         recurringRunId: true,
         undo: true,
@@ -57,7 +59,34 @@ export class BulkEditTargetFreezeService {
         db,
       });
 
-      return Number(stats?.finalSnapshotCount || 0);
+      const frozenCount = Number(stats?.finalSnapshotCount || 0);
+      const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
+        shop: history.shop,
+        historyId,
+        operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,
+        previewContractId: String(history.batch?.previewContractId || history.batch?.previewId || "").trim() || `EDIT_HISTORY:${historyId}`,
+        mirrorBatchId: history.targetMirrorBatchId,
+        targetingFingerprint: String(history.filterHash || "").trim() || null,
+        compilerVersion: String(history.batch?.targetingCompilerVersion || "legacy-v1"),
+        projectionVersion: "legacy-v1",
+        source: "MANUAL_SELECTION",
+        db,
+      });
+      await db.editHistory.update({
+        where: { id: historyId },
+        data: {
+          batch: {
+            ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
+            targetSnapshotRef: {
+              snapshotSetId: snapshotSet.id,
+              operationId: snapshotSet.operationId,
+              status: snapshotSet.status,
+              checksum: snapshotSet.checksum || null,
+            },
+          },
+        },
+      });
+      return frozenCount;
     }
 
     const explicitTargets = Array.isArray(
@@ -180,6 +209,34 @@ export class BulkEditTargetFreezeService {
         frozenCount,
       });
     }
+
+    const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
+      shop: history.shop,
+      historyId,
+      operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,
+      previewContractId: String(history.batch?.previewContractId || history.batch?.previewId || "").trim() || `EDIT_HISTORY:${historyId}`,
+      mirrorBatchId: history.targetMirrorBatchId,
+      targetingFingerprint: String(history.filterHash || "").trim() || null,
+      compilerVersion: String(history.batch?.targetingCompilerVersion || "legacy-v1"),
+      projectionVersion: "legacy-v1",
+      source: "BULK_EDIT",
+      db,
+    });
+
+    await db.editHistory.update({
+      where: { id: historyId },
+      data: {
+        batch: {
+          ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
+          targetSnapshotRef: {
+            snapshotSetId: snapshotSet.id,
+            operationId: snapshotSet.operationId,
+            status: snapshotSet.status,
+            checksum: snapshotSet.checksum || null,
+          },
+        },
+      },
+    });
 
     return frozenCount;
   }

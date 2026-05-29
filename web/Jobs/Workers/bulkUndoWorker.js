@@ -35,6 +35,7 @@ import {
   completeEditHistoryStage,
   failEditHistoryStage,
 } from "../../services/operationStageIdempotencyService.js";
+import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
 
 const QUEUE_NAME = process.env.UNDO_QUEUE || "bulk-undo";
 const WORKER_NAME = "bulkUndoWorker";
@@ -282,6 +283,7 @@ const bulkUndoWorker = new Worker(
           batch: true,
           rules: true,
           undo: true,
+          executionIdentity: true,
         },
       });
 
@@ -311,24 +313,36 @@ const bulkUndoWorker = new Worker(
       if (!products.length) {
         throw new Error("No original products found to undo changes");
       }
-      const snapshotRows = await prisma.targetSnapshot.findMany({
+      const snapshotSetId = String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
+      if (!snapshotSetId) {
+        throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED_FOR_UNDO");
+      }
+      const snapshotSet = await getFrozenSnapshotSetForExecution({
+        shop,
+        snapshotSetId,
+        operationId:
+          String(history?.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "").trim()
+          || undefined,
+        db: prisma,
+      });
+      const snapshotRows = await prisma.targetSnapshotItem.findMany({
         where: {
           shop,
-          ownerType: "EDIT_HISTORY",
-          ownerId: historyId,
-          targetIdentity: { in: products.map((record) => record.targetIdentity).filter(Boolean) },
+          snapshotSetId: snapshotSet.id,
+          targetKey: { in: products.map((record) => record.targetIdentity).filter(Boolean) },
+          executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
         },
-        select: { targetIdentity: true, beforeValues: true },
+        select: { targetKey: true, beforeValues: true },
       });
       const snapshotByIdentity = new Map(
-        snapshotRows.map((row) => [String(row.targetIdentity), row]),
+        snapshotRows.map((row) => [String(row.targetKey), row]),
       );
       const service = new UndoEditService(session);
       const undoReplayProducts = service.buildUndoReplayRecords(
         products,
         snapshotByIdentity,
       );
-      const snapshotIdentitySet = new Set(snapshotRows.map((row) => row.targetIdentity));
+      const snapshotIdentitySet = new Set(snapshotRows.map((row) => row.targetKey));
       const replayableProducts = undoReplayProducts.filter(
         (record) => record.targetIdentity && snapshotIdentitySet.has(record.targetIdentity),
       );

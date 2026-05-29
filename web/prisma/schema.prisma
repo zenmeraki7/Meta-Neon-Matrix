@@ -1355,6 +1355,114 @@ model TargetSnapshot {
   @@index([shop, ownerType, createdAt], map: "idx_targetsnapshot_owner_created")
 }
 
+model TargetSnapshotSet {
+  id                   String                  @id @default(cuid())
+  shop                 String
+  operationId          String
+  previewContractId    String
+  mirrorBatchId        String
+  targetingFingerprint String
+
+  targetCount          Int                     @default(0)
+  productCount         Int                     @default(0)
+  variantCount         Int                     @default(0)
+
+  pendingCount         Int                     @default(0)
+  submittedCount       Int                     @default(0)
+  succeededCount       Int                     @default(0)
+  failedCount          Int                     @default(0)
+  skippedCount         Int                     @default(0)
+  verifiedCount        Int                     @default(0)
+
+  undoPendingCount     Int                     @default(0)
+  undoSucceededCount   Int                     @default(0)
+  undoFailedCount      Int                     @default(0)
+
+  checksum             String?
+  compilerVersion      String
+  projectionVersion    String
+
+  status               TargetSnapshotSetStatus @default(FREEZING)
+
+  freezeErrorCode      String?
+  freezeErrorMessage   String?
+
+  createdAt            DateTime                @default(now())
+  frozenAt             DateTime?
+  failedAt             DateTime?
+  expiresAt            DateTime?
+
+  items                TargetSnapshotItem[]
+
+  @@unique([shop, operationId])
+  @@index([shop, previewContractId])
+  @@index([shop, mirrorBatchId, targetingFingerprint])
+  @@index([shop, status])
+  @@index([shop, operationId, status])
+  @@index([shop, createdAt])
+  @@index([shop, expiresAt])
+}
+
+model TargetSnapshotItem {
+  id                     String                            @id @default(cuid())
+
+  snapshotSetId          String
+  shop                   String
+  operationId            String
+  mirrorBatchId          String
+
+  productId              String
+  variantId              String?
+  targetKey              String
+  targetType             TargetSnapshotTargetType
+
+  mutationGroupKey       String?
+
+  beforeValues           Json
+  plannedMutation        Json
+
+  targetFingerprint      String
+  rowChecksum            String
+
+  executionStatus        TargetSnapshotItemExecutionStatus @default(PENDING)
+  executionAttemptCount  Int                                @default(0)
+  lastExecutionAttemptAt DateTime?
+
+  shopifyBulkLineNumber  Int?
+  shopifyResultId        String?
+  shopifyErrorCode       String?
+  shopifyErrorMessage    String?
+
+  undoStatus             TargetSnapshotItemUndoStatus       @default(NOT_REQUIRED)
+  undoAttemptCount       Int                                @default(0)
+  lastUndoAttemptAt      DateTime?
+  undoPayload            Json?
+  undoErrorCode          String?
+  undoErrorMessage       String?
+
+  createdAt              DateTime                           @default(now())
+  submittedAt            DateTime?
+  executedAt             DateTime?
+  verifiedAt             DateTime?
+  undoSubmittedAt        DateTime?
+  undoneAt               DateTime?
+
+  snapshotSet            TargetSnapshotSet @relation(fields: [snapshotSetId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotSetId, targetKey])
+  @@index([shop, snapshotSetId])
+  @@index([shop, operationId])
+  @@index([shop, operationId, executionStatus])
+  @@index([shop, operationId, undoStatus])
+  @@index([shop, snapshotSetId, executionStatus])
+  @@index([shop, snapshotSetId, undoStatus])
+  @@index([shop, snapshotSetId, mutationGroupKey])
+  @@index([shop, mirrorBatchId])
+  @@index([shop, productId])
+  @@index([shop, variantId])
+  @@index([snapshotSetId, targetType])
+}
+
 model ProductCollection {
   shop          String
   productId     String
@@ -1833,4 +1941,38 @@ enum ScheduledExportRunStatus {
 enum ExportJobTriggerType {
   MANUAL
   SCHEDULED
+}
+
+enum TargetSnapshotSetStatus {
+  FREEZING
+  FROZEN
+  FREEZE_FAILED
+  EXPIRED
+  CANCELLED
+  CORRUPTED
+}
+
+enum TargetSnapshotTargetType {
+  PRODUCT
+  VARIANT
+  INVENTORY_ITEM
+  METAFIELD
+}
+
+enum TargetSnapshotItemExecutionStatus {
+  PENDING
+  SUBMITTED
+  SUCCEEDED
+  FAILED
+  SKIPPED
+  VERIFIED
+}
+
+enum TargetSnapshotItemUndoStatus {
+  NOT_REQUIRED
+  PENDING
+  SUBMITTED
+  SUCCEEDED
+  FAILED
+  SKIPPED
 }
