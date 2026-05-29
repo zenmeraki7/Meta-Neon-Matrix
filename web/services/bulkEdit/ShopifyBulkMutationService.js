@@ -151,6 +151,77 @@ function countJsonlLines(payload) {
   return text.split("\n").filter((line) => String(line || "").trim().length > 0).length;
 }
 
+function clampBatchSize(value, min, max) {
+  const num = Number.parseInt(String(value || 0), 10);
+  if (!Number.isFinite(num)) return min;
+  return Math.min(max, Math.max(min, num));
+}
+
+function deriveAdaptiveBatchSize({
+  throttleStatus,
+  actualQueryCost,
+  batchTargetCount,
+  currentBatchSize,
+}) {
+  const minBatchSize = clampBatchSize(
+    process.env.BULK_EDIT_DYNAMIC_BATCH_SIZE_MIN || "25",
+    1,
+    500,
+  );
+  const maxBatchSize = clampBatchSize(
+    process.env.BULK_EDIT_DYNAMIC_BATCH_SIZE_MAX || "250",
+    minBatchSize,
+    1_000,
+  );
+
+  const availableBudget = Number(throttleStatus?.currentlyAvailable || 0);
+  const restoreRate = Number(throttleStatus?.restoreRate || 0);
+  const observedCost = Number(actualQueryCost || 0);
+  const observedItems = Number(batchTargetCount || 0);
+
+  if (!(availableBudget > 0) || !(observedCost > 0) || !(observedItems > 0)) {
+    return {
+      nextBatchSize: clampBatchSize(currentBatchSize || maxBatchSize, minBatchSize, maxBatchSize),
+      costPerItem: null,
+      minBatchSize,
+      maxBatchSize,
+      availableBudget,
+      restoreRate,
+      reason: "INSUFFICIENT_COST_SIGNAL",
+    };
+  }
+
+  const costPerItem = observedCost / observedItems;
+  if (!(costPerItem > 0)) {
+    return {
+      nextBatchSize: clampBatchSize(currentBatchSize || maxBatchSize, minBatchSize, maxBatchSize),
+      costPerItem: null,
+      minBatchSize,
+      maxBatchSize,
+      availableBudget,
+      restoreRate,
+      reason: "INVALID_COST_PER_ITEM",
+    };
+  }
+
+  const targetBudget = Math.max(1, availableBudget * 0.8);
+  const nextBatchSize = clampBatchSize(
+    Math.floor(targetBudget / costPerItem),
+    minBatchSize,
+    maxBatchSize,
+  );
+
+  return {
+    nextBatchSize,
+    costPerItem,
+    minBatchSize,
+    maxBatchSize,
+    availableBudget,
+    restoreRate,
+    reason: "ADAPTIVE_COST_FEEDBACK",
+  };
+}
+
 export class ShopifyBulkMutationService {
   constructor(session, client, deps = {}) {
     this.session = session;
@@ -709,6 +780,16 @@ export class ShopifyBulkMutationService {
 
     const result = bulkRes?.body?.data?.bulkOperationRunMutation;
     const bulkOperation = normalizeBulkOperationResponse(result);
+    const throttleStatus = bulkRes?.body?.extensions?.cost?.throttleStatus || null;
+    const actualQueryCost = Number(
+      bulkRes?.body?.extensions?.cost?.actualQueryCost || 0,
+    );
+    const adaptiveSizing = deriveAdaptiveBatchSize({
+      throttleStatus,
+      actualQueryCost,
+      batchTargetCount,
+      currentBatchSize: history.batch?.size,
+    });
 
     if (!bulkOperation.id) {
       throw new Error("Shopify did not return a bulk operation id.");
@@ -748,6 +829,7 @@ export class ShopifyBulkMutationService {
         shopifyBulkOperationId: bulkOperation.id,
         shopifyStatus: bulkOperation.status || null,
         shopifyType: bulkOperation.type || null,
+        adaptiveSizing,
       },
     });
 
@@ -809,6 +891,11 @@ export class ShopifyBulkMutationService {
             hasMore,
             nextRetryCursorIndex,
             lastSubmittedAt: submittedAt.toISOString(),
+            size: adaptiveSizing.nextBatchSize,
+            dynamicBatchSizing: {
+              ...adaptiveSizing,
+              updatedAt: submittedAt.toISOString(),
+            },
           }),
         },
       });
@@ -843,6 +930,7 @@ export class ShopifyBulkMutationService {
         bulkOperationId: bulkOperation.id,
         status: bulkOperation.status,
         batchId: batchId || null,
+        adaptiveSizing,
       },
       completed: true,
     });

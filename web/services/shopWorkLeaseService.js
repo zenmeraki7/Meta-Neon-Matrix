@@ -13,6 +13,7 @@ export const LOCK_NS = Object.freeze({
   DEFAULT: "DEFAULT",
   WRITE_CATALOG: "WRITE_CATALOG",
   PREPARE_OPERATION: "PREPARE_OPERATION",
+  BULK_EDIT_EXECUTE: "BULK_EDIT_EXECUTE",
 });
 
 export function buildShopWorkLockKey(shop, namespace = LOCK_NS.DEFAULT) {

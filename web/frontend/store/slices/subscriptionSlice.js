@@ -68,6 +68,16 @@ const subscriptionSlice = createSlice({
       state.activePlanError = null;
       state.subscriptionError = null;
     },
+    hydrateSubscriptionSnapshot: (state, action) => {
+      const snapshot = action.payload || {};
+      state.plans = Array.isArray(snapshot.plans) ? snapshot.plans : [];
+      state.activePlan = snapshot.currentPlanKey || "FREE";
+      state.isActivePlan = (snapshot.currentPlanKey || "FREE") !== "FREE";
+      state.plansStatus = "succeeded";
+      state.activePlanStatus = "succeeded";
+      state.plansError = null;
+      state.activePlanError = null;
+    },
   },
  extraReducers: (builder) => {
   builder
@@ -115,6 +125,7 @@ export const {
   clearConfirmationUrl,
   clearErrors,
   setActivePlan,
+  hydrateSubscriptionSnapshot,
 } = subscriptionSlice.actions;
 
 // Export selectors

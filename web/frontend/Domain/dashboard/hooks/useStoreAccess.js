@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
-import { useStoreDetailsQuery } from '../../../hooks/useStoreDetailsQuery';
+import { useMemo } from "react";
+import { useStoreDetailsQuery } from "../../../hooks/useStoreDetailsQuery";
 
-export function useStoreAccess() {
-  const storeDetailsQuery = useStoreDetailsQuery();
+export function useStoreAccess(options = {}) {
+  const storeDetailsQuery = useStoreDetailsQuery(options);
   const storeAccess = storeDetailsQuery.data || null;
   const computedAlert = useMemo(
     () => !storeAccess?.webhookenableStatus?.bulkOperation,
@@ -27,4 +27,3 @@ export function useStoreAccess() {
     ],
   );
 }
-

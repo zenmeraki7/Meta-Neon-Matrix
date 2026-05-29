@@ -212,6 +212,7 @@ function toExecuteInnerCommand(command) {
     filterAst: command.filterAst || null,
 
     previewId: command.previewId,
+    previewContractId: command.previewContractId || command.previewId,
     previewFilterHash: command.previewFilterHash,
     previewMirrorBatchId: command.previewMirrorBatchId || null,
     previewFieldRegistryVersion: command.previewFieldRegistryVersion,
@@ -348,9 +349,11 @@ export const productBulkEditUseCases = Object.freeze({
 
   async execute(command) {
     command = assertMutationCommand(command);
-    assertEditPayload(command);
-    assertPreviewFingerprint(command);
-    assertPreviewRegistryVersionMatches(command);
+    assertRequiredString(
+      command.previewContractId || command.previewId,
+      "previewContractId",
+      "PREVIEW_ID_REQUIRED",
+    );
 
     const service = createProductBulkService(command);
 

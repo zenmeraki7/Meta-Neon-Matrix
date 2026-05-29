@@ -63,6 +63,7 @@ function buildSetChecksum({
   targetingFingerprint,
   compilerVersion,
   projectionVersion,
+  plannerVersion,
   targetCount,
   productCount,
   variantCount,
@@ -77,6 +78,7 @@ function buildSetChecksum({
       targetingFingerprint,
       compilerVersion,
       projectionVersion,
+      plannerVersion: plannerVersion || null,
       targetCount,
       productCount,
       variantCount,
@@ -95,6 +97,7 @@ export async function upsertFrozenSnapshotSetFromLegacy({
   targetingFingerprint,
   compilerVersion = "legacy-v1",
   projectionVersion = "legacy-v1",
+  plannerVersion = null,
   source = "EDIT_HISTORY_FREEZE",
   db = prisma,
 }) {
@@ -114,6 +117,12 @@ export async function upsertFrozenSnapshotSetFromLegacy({
     ? await db.targetSnapshotSet.update({
       where: { id: existing.id },
       data: {
+        previewContractId: resolvedPreviewContractId,
+        mirrorBatchId: resolvedMirrorBatchId,
+        targetingFingerprint: String(targetingFingerprint || "").trim() || sha256(`${shop}:${historyId}:${resolvedMirrorBatchId}`),
+        compilerVersion,
+        projectionVersion,
+        plannerVersion: String(plannerVersion || "").trim() || null,
         status: "FREEZING",
         freezeErrorCode: null,
         freezeErrorMessage: null,
@@ -128,6 +137,7 @@ export async function upsertFrozenSnapshotSetFromLegacy({
         targetingFingerprint: String(targetingFingerprint || "").trim() || sha256(`${shop}:${historyId}:${resolvedMirrorBatchId}`),
         compilerVersion,
         projectionVersion,
+        plannerVersion: String(plannerVersion || "").trim() || null,
         status: "FREEZING",
       },
     });
@@ -200,7 +210,6 @@ export async function upsertFrozenSnapshotSetFromLegacy({
       // eslint-disable-next-line no-await-in-loop
       await db.targetSnapshotItem.createMany({
         data: rows.slice(i, i + CHUNK),
-        skipDuplicates: true,
       });
     }
 
@@ -214,14 +223,19 @@ export async function upsertFrozenSnapshotSetFromLegacy({
       targetingFingerprint: set.targetingFingerprint,
       compilerVersion,
       projectionVersion,
+      plannerVersion: set.plannerVersion || plannerVersion || null,
       targetCount,
       productCount,
       variantCount,
       sortedRowChecksums,
     });
 
-    const frozenSet = await db.targetSnapshotSet.update({
-      where: { id: set.id },
+    const freezeFinalizeResult = await db.targetSnapshotSet.updateMany({
+      where: {
+        id: set.id,
+        shop,
+        status: "FREEZING",
+      },
       data: {
         status: "FROZEN",
         checksum: setChecksum,
@@ -241,11 +255,26 @@ export async function upsertFrozenSnapshotSetFromLegacy({
         failedAt: null,
       },
     });
+    if (Number(freezeFinalizeResult?.count || 0) !== 1) {
+      const error = new Error("Snapshot finalization conflict");
+      error.code = "SNAPSHOT_FINALIZATION_CONFLICT";
+      throw error;
+    }
+    const frozenSet = await db.targetSnapshotSet.findUnique({
+      where: { id: set.id },
+    });
+    if (!frozenSet || frozenSet.status !== "FROZEN") {
+      throw new Error("TARGET_SNAPSHOT_SET_FREEZE_FINALIZE_MISSING");
+    }
 
     return frozenSet;
   } catch (error) {
-    await db.targetSnapshotSet.update({
-      where: { id: set.id },
+    await db.targetSnapshotSet.updateMany({
+      where: {
+        id: set.id,
+        shop,
+        status: "FREEZING",
+      },
       data: {
         status: "FREEZE_FAILED",
         failedAt: new Date(),
@@ -313,13 +342,15 @@ export async function listFrozenSnapshotItemsPage({
   shop,
   snapshotSetId,
   cursorTargetKey = null,
-  limit = 250,
+  lastTargetKey = null,
+  limit = 1000,
   targetType = null,
   targetKeys = null,
   executionStatus = null,
   undoStatus = null,
   db = prisma,
 }) {
+  const resolvedLastTargetKey = String(lastTargetKey || cursorTargetKey || "").trim() || null;
   const where = {
     shop,
     snapshotSetId,
@@ -327,7 +358,7 @@ export async function listFrozenSnapshotItemsPage({
     ...(Array.isArray(targetKeys) && targetKeys.length > 0 ? { targetKey: { in: targetKeys } } : {}),
     ...(executionStatus ? { executionStatus } : {}),
     ...(undoStatus ? { undoStatus } : {}),
-    ...(cursorTargetKey ? { targetKey: { gt: cursorTargetKey } } : {}),
+    ...(resolvedLastTargetKey ? { targetKey: { gt: resolvedLastTargetKey } } : {}),
   };
 
   const rows = await db.targetSnapshotItem.findMany({
@@ -342,6 +373,7 @@ export async function listFrozenSnapshotItemsPage({
       targetKey: true,
       beforeValues: true,
       plannedMutation: true,
+      rowChecksum: true,
       executionStatus: true,
       undoStatus: true,
     },

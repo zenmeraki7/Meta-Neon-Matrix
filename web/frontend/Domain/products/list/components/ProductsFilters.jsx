@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useState, useCallback, useEffect } from "react";
+import React, { memo, useMemo, useState, useCallback, useEffect, useDeferredValue } from "react";
 import {
   BlockStack,
   Text,
@@ -12,7 +12,6 @@ import {
 } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 import FilterPanel from "./FilterPanel";
-import useDebouncedValue from "../../../../hooks/useDebouncedValue";
 
 const ProductsFilters = memo(function ProductsFilters({
   appliedFilters,
@@ -27,11 +26,16 @@ const ProductsFilters = memo(function ProductsFilters({
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [activeFilterKey, setActiveFilterKey] = useState(null);
   const [searchDraft, setSearchDraft] = useState("");
-  const debouncedSearchDraft = useDebouncedValue(searchDraft, 400);
+  const deferredSearchDraft = useDeferredValue(searchDraft);
 
   useEffect(() => {
-    onCommitSearch(debouncedSearchDraft);
-  }, [debouncedSearchDraft, onCommitSearch]);
+    const timer = window.setTimeout(() => {
+      onCommitSearch(deferredSearchDraft);
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [deferredSearchDraft, onCommitSearch]);
 
   useEffect(() => {
     setSearchDraft("");

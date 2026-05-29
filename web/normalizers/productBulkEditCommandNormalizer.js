@@ -549,7 +549,10 @@ function normalizeEditPayload({ body = {}, query = {} }) {
     ),
     filterParams: normalizeFilterParams(safeBody.filterParams),
     filterAst: normalizeFilterAst(safeBody.filterAst),
-    previewId: normalizeOptionalId(safeBody.previewId, "previewId"),
+    previewId: normalizeOptionalId(
+      safeBody.previewId ?? safeBody.previewContractId,
+      "previewId",
+    ),
     previewFilterHash: normalizeText(
       safeBody.previewFilterHash ?? previewFingerprint.filterHash,
       "previewFilterHash",
@@ -592,23 +595,9 @@ function normalizeQueryObject(query) {
     : EMPTY_OBJECT;
 }
 
-function requirePreviewFingerprint(command) {
+function requirePreviewContract(command) {
   if (!command.previewId) {
     throw buildRequestError("PREVIEW_ID_REQUIRED", "VALIDATION_FAILED");
-  }
-
-  if (!command.previewFilterHash) {
-    throw buildRequestError("PREVIEW_FINGERPRINT_REQUIRED", "VALIDATION_FAILED");
-  }
-
-  if (
-    !command.previewFieldRegistryVersion ||
-    !command.previewOperatorRegistryVersion
-  ) {
-    throw buildRequestError(
-      "PREVIEW_REGISTRY_VERSION_REQUIRED",
-      "VALIDATION_FAILED",
-    );
   }
 }
 
@@ -649,11 +638,12 @@ export function buildBulkEditExecuteCommand({
   const safeContext = assertCommandContext(context);
   const payload = normalizeEditPayload({ body, query });
 
-  requirePreviewFingerprint(payload);
+  requirePreviewContract(payload);
 
   return Object.freeze({
     ...safeContext,
     ...payload,
+    previewContractId: payload.previewId,
     idempotencyKey: normalizeIdempotencyKey(headers),
   });
 }

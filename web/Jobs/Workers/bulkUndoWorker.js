@@ -36,6 +36,7 @@ import {
   failEditHistoryStage,
 } from "../../services/operationStageIdempotencyService.js";
 import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
+import { assertSnapshotItemsFullyIngested } from "../../services/targetSnapshotItemIntegrityService.js";
 
 const QUEUE_NAME = process.env.UNDO_QUEUE || "bulk-undo";
 const WORKER_NAME = "bulkUndoWorker";
@@ -331,9 +332,22 @@ const bulkUndoWorker = new Worker(
           snapshotSetId: snapshotSet.id,
           targetKey: { in: products.map((record) => record.targetIdentity).filter(Boolean) },
           executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
+          undoStatus: "PENDING",
         },
-        select: { targetKey: true, beforeValues: true },
+        select: {
+          id: true,
+          targetKey: true,
+          productId: true,
+          variantId: true,
+          targetType: true,
+          plannedMutation: true,
+          beforeValues: true,
+          undoPayload: true,
+          executionStatus: true,
+          shopifyResultId: true,
+        },
       });
+      assertSnapshotItemsFullyIngested(snapshotRows, "undo_worker");
       const snapshotByIdentity = new Map(
         snapshotRows.map((row) => [String(row.targetKey), row]),
       );

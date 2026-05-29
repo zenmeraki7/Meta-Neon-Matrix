@@ -118,12 +118,27 @@ async function loadExecutionHistory({ historyId, shop }) {
       status: true,
       executionState: true,
       executionIdentity: true,
+      snapshotSetId: true,
       cancelRequestedAt: true,
       targetSnapshotCount: true,
       processedCount: true,
       totalItems: true,
     },
   });
+}
+
+function assertSnapshotSetBoundToOperation({ history, snapshotSetId }) {
+  const lifecycleSnapshotSetId = String(history?.snapshotSetId || "").trim();
+  const batchSnapshotSetId = String(
+    history?.batch?.targetSnapshotRef?.snapshotSetId || "",
+  ).trim();
+  const expected = lifecycleSnapshotSetId || batchSnapshotSetId;
+  if (!expected) {
+    throw new Error("OPERATION_SNAPSHOT_SET_UNBOUND");
+  }
+  if (String(snapshotSetId || "").trim() !== expected) {
+    throw new Error("OPERATION_SNAPSHOT_SET_MISMATCH");
+  }
 }
 
 function assertHistoryRunnable({ history, historyId, shop, executionId }) {
@@ -472,7 +487,7 @@ async function requeueForShopifySlot({
 
 async function processBulkEditExecuteJob(job) {
   const payload = assertJobPayload(job);
-  const { historyId, operationId, snapshotSetId, shop, executionId, source } = payload;
+  const { historyId, snapshotSetId, shop, executionId, source } = payload;
 
   let lock = null;
   let executeLeaseOwnerId = null;
@@ -488,15 +503,24 @@ async function processBulkEditExecuteJob(job) {
       executionId,
     });
     const resolvedSnapshotSetId = String(
-      snapshotSetId || history?.batch?.targetSnapshotRef?.snapshotSetId || "",
+      snapshotSetId || history?.snapshotSetId || history?.batch?.targetSnapshotRef?.snapshotSetId || "",
     ).trim();
     if (!resolvedSnapshotSetId) {
       throw new Error("SNAPSHOT_SET_ID_REQUIRED");
     }
+    assertSnapshotSetBoundToOperation({
+      history,
+      snapshotSetId: resolvedSnapshotSetId,
+    });
+    const resolvedSnapshotSetOperationId = String(
+      history?.batch?.targetSnapshotRef?.operationId
+      || history?.executionIdentity
+      || "",
+    ).trim();
     await getFrozenSnapshotSetForExecution({
       shop,
       snapshotSetId: resolvedSnapshotSetId,
-      operationId: operationId || history.executionIdentity || historyId,
+      operationId: resolvedSnapshotSetOperationId || undefined,
       db: prisma,
     });
     const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(shop);
@@ -507,7 +531,8 @@ async function processBulkEditExecuteJob(job) {
 
     lock = await acquireExclusiveShopWork({
       shop,
-      namespace: LOCK_NS.WRITE_CATALOG,
+      // Serialize bulk execute jobs per shop while allowing cross-shop parallelism.
+      namespace: LOCK_NS.BULK_EDIT_EXECUTE,
       activity: "bulk_edit_execute",
       worker: WORKER_NAME,
       queue: OPERATION_QUEUE_NAMES.BULK_EDIT_EXECUTE,

@@ -5,6 +5,8 @@ const distAssetsDir = join(process.cwd(), "dist", "assets");
 const JS_BUDGET_KB = Number(process.env.BUNDLE_BUDGET_JS_KB || 350);
 const CSS_BUDGET_KB = Number(process.env.BUNDLE_BUDGET_CSS_KB || 120);
 const INITIAL_CHUNK_BUDGET_KB = Number(process.env.BUNDLE_BUDGET_INITIAL_CHUNK_KB || 220);
+const MAX_VENDOR_CHUNK_KB = Number(process.env.BUNDLE_BUDGET_VENDOR_CHUNK_KB || 180);
+const MAX_ROUTE_CHUNK_KB = Number(process.env.BUNDLE_BUDGET_ROUTE_CHUNK_KB || 140);
 
 function bytesToKb(bytes) {
   return Math.round((bytes / 1024) * 10) / 10;
@@ -50,9 +52,31 @@ function main() {
     );
   }
 
+  const oversizedVendorChunks = files
+    .filter((file) => file.name.endsWith(".js") && file.name.includes("vendor-"))
+    .map((file) => ({ ...file, sizeKb: bytesToKb(file.size) }))
+    .filter((file) => file.sizeKb > MAX_VENDOR_CHUNK_KB);
+
+  const oversizedRouteChunks = files
+    .filter((file) => file.name.endsWith(".js") && file.name.includes("route-"))
+    .map((file) => ({ ...file, sizeKb: bytesToKb(file.size) }))
+    .filter((file) => file.sizeKb > MAX_ROUTE_CHUNK_KB);
+
+  oversizedVendorChunks.forEach((file) => {
+    failures.push(
+      `Vendor chunk budget exceeded: ${file.sizeKb}KB > ${MAX_VENDOR_CHUNK_KB}KB (${file.name})`,
+    );
+  });
+
+  oversizedRouteChunks.forEach((file) => {
+    failures.push(
+      `Route chunk budget exceeded: ${file.sizeKb}KB > ${MAX_ROUTE_CHUNK_KB}KB (${file.name})`,
+    );
+  });
+
   const report = [
     `Bundle report: JS=${jsTotalKb}KB CSS=${cssTotalKb}KB initial=${initialChunkKb}KB`,
-    `Budgets: JS<=${JS_BUDGET_KB}KB CSS<=${CSS_BUDGET_KB}KB initial<=${INITIAL_CHUNK_BUDGET_KB}KB`,
+    `Budgets: JS<=${JS_BUDGET_KB}KB CSS<=${CSS_BUDGET_KB}KB initial<=${INITIAL_CHUNK_BUDGET_KB}KB vendor<=${MAX_VENDOR_CHUNK_KB}KB route<=${MAX_ROUTE_CHUNK_KB}KB`,
   ];
   report.forEach((line) => console.log(line));
 
@@ -63,4 +87,3 @@ function main() {
 }
 
 main();
-

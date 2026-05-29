@@ -164,11 +164,11 @@ export class BulkEditCommandService {
 
   async #buildManualHistoryData(body, subscription, operationContext = {}) {
     const locationId = body.locationId ?? body.location ?? null;
+    const previewContractId = body.previewContractId ?? body.previewId;
     const {
       editedField,
       filterParams,
       filterAst,
-      previewId,
       previewFilterHash,
       previewMirrorBatchId,
       confirmBroadTarget,
@@ -179,19 +179,13 @@ export class BulkEditCommandService {
       title: explicitTitle,
     } = body;
 
-    const rules = normalizeRules(body);
-
-    if (editedField === "inventory" && !locationId) {
-      throw new Error("Location ID is required for inventory edits");
-    }
-
-    if (!previewId) {
+    if (!previewContractId) {
       throw new Error("Preview is required before execute. Please run preview again.");
     }
 
     const previewRecord = await prisma.filterTrack.findFirst({
       where: {
-        id: String(previewId),
+        id: String(previewContractId),
         shop: this.session.shop,
         type: "preview",
       },
@@ -202,6 +196,30 @@ export class BulkEditCommandService {
     }
     if (previewRecord.expiresAt && previewRecord.expiresAt < new Date()) {
       throw new Error("PREVIEW_EXPIRED");
+    }
+
+    const fingerprint = previewRecord.value || {};
+    const resolvedEditedField = editedField ?? fingerprint.field;
+    const resolvedEditType = body.editType ?? fingerprint.editType;
+    const resolvedEditValue =
+      body.editValue !== undefined ? body.editValue : fingerprint.editValue;
+    const resolvedSearchKey = body.searchKey ?? fingerprint.searchKey ?? null;
+    const resolvedReplaceText = body.replaceText ?? fingerprint.replaceText ?? null;
+    const resolvedSupportValue =
+      body.supportValue !== undefined ? body.supportValue : fingerprint.supportValue;
+
+    const rules = normalizeRules({
+      ...body,
+      editedField: resolvedEditedField,
+      editType: resolvedEditType,
+      editValue: resolvedEditValue,
+      searchKey: resolvedSearchKey,
+      replaceText: resolvedReplaceText,
+      supportValue: resolvedSupportValue,
+    });
+
+    if (resolvedEditedField === "inventory" && !locationId) {
+      throw new Error("Location ID is required for inventory edits");
     }
 
     const previewActorId = String(
@@ -222,13 +240,12 @@ export class BulkEditCommandService {
       throw new Error("PREVIEW_ACTOR_MISMATCH");
     }
 
-    const fingerprint = previewRecord.value || {};
     const expectedHash = String(fingerprint.filterHash || "");
     const expectedBatch = String(fingerprint.mirrorBatchId || "");
 
     if (
-      String(previewFilterHash || "") !== expectedHash ||
-      String(previewMirrorBatchId || "") !== expectedBatch
+      (previewFilterHash && String(previewFilterHash || "") !== expectedHash)
+      || (previewMirrorBatchId && String(previewMirrorBatchId || "") !== expectedBatch)
     ) {
       throw new Error("Preview is stale. Please re-preview before executing.");
     }
@@ -298,7 +315,7 @@ export class BulkEditCommandService {
       destructiveNature: rules.some(
         (rule) => String(rule?.field || "") === "deleteProducts",
       ),
-      undoAvailability: editedField !== "deleteProducts",
+      undoAvailability: resolvedEditedField !== "deleteProducts",
       verificationMode: "SAMPLE_PLUS_FAILURES",
     });
 
@@ -345,8 +362,10 @@ export class BulkEditCommandService {
         // Execute must reuse preview snapshot targeting material only.
         filterParams: [],
         filterAst: previewFilterAst,
-        previewId,
+        previewId: previewContractId,
+        previewContractId,
         previewFingerprint: {
+          previewId: previewContractId,
           filterHash: expectedHash,
           mirrorBatchId: expectedBatch,
         },
@@ -364,14 +383,14 @@ export class BulkEditCommandService {
         locationId: locationId || null,
         blastRadiusAssessment,
       },
-      ...(editedField === "inventory" && { locationId }),
+      ...(resolvedEditedField === "inventory" && { locationId }),
       entitlementSnapshot: operationContext.entitlementSnapshot || null,
       actorType: operationContext.actor?.actorType || null,
       actorId: operationContext.actor?.actorId || null,
       actorEmail: operationContext.actor?.actorEmail || null,
       actorName: operationContext.actor?.actorName || null,
       undo: buildPlannedUndoState({
-        allowed: editedField !== "deleteProducts",
+        allowed: resolvedEditedField !== "deleteProducts",
       }),
     };
   }

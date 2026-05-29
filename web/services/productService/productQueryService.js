@@ -1,4 +1,5 @@
 import { getCache, setCache } from "../../utils/cacheUtils.js";
+import crypto from "crypto";
 import {
   findDistinctCollectionTitles,
   findDistinctProductFieldValues,
@@ -45,6 +46,62 @@ const FILTER_VALUE_FIELD_MAP = {
   weight_unit: { source: "variant", field: "weightUnit" },
 };
 
+const PRODUCT_LIST_CACHE_TTL_SECONDS = Number.parseInt(
+  process.env.PRODUCT_LIST_CACHE_TTL_SECONDS || "60",
+  10,
+);
+
+function sortObjectKeysDeep(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortObjectKeysDeep(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort((a, b) => a.localeCompare(b))
+      .reduce((acc, key) => {
+        acc[key] = sortObjectKeysDeep(value[key]);
+        return acc;
+      }, {});
+  }
+  return value;
+}
+
+function stableJson(value) {
+  return JSON.stringify(sortObjectKeysDeep(value));
+}
+
+function buildProductListCacheKey({
+  shop,
+  mirrorBatchId,
+  filterParams,
+  queryParams,
+}) {
+  const normalizedFilterHash = crypto
+    .createHash("sha256")
+    .update(stableJson(filterParams || []))
+    .digest("hex");
+
+  const normalizedQuery = {
+    sortKey: String(queryParams?.sortKey || "ID").toUpperCase(),
+    sortOrder: String(queryParams?.sortOrder || "asc").toLowerCase(),
+    limit: Number.parseInt(String(queryParams?.limit || "20"), 10) || 20,
+    cursor: queryParams?.cursor == null ? null : String(queryParams.cursor),
+  };
+
+  const queryHash = crypto
+    .createHash("sha256")
+    .update(stableJson(normalizedQuery))
+    .digest("hex");
+
+  return [
+    shop,
+    "product_list_v2",
+    String(mirrorBatchId || "none"),
+    normalizedFilterHash,
+    queryHash,
+  ].join(":");
+}
+
 function normalizeDistinctOptions(values = [], { splitValues = false } = {}) {
   const normalizedValues = values.flatMap((value) => {
     if (typeof value !== "string") {
@@ -77,8 +134,13 @@ export async function getProductsWithFilters({
   shop = null,
 }) {
   const { cursor = null, limit = 20, sortKey, sortOrder } = queryParams;
-
-  const cacheKey = `${shop}:ProductFetch:${JSON.stringify(queryParams)}:${JSON.stringify(filterParams)}`;
+  const mirrorBatchId = await getActiveMirrorBatchId(shop, { purpose: "PREVIEW" });
+  const cacheKey = buildProductListCacheKey({
+    shop,
+    mirrorBatchId,
+    filterParams,
+    queryParams: { cursor, limit, sortKey, sortOrder },
+  });
   const cachedData = await getCache(cacheKey);
 
   if (cachedData) return cachedData;
@@ -97,7 +159,7 @@ export async function getProductsWithFilters({
     mirrorBatchId: result.mirrorBatchId,
   };
 
-  await setCache(cacheKey, returnData, 300);
+  await setCache(cacheKey, returnData, PRODUCT_LIST_CACHE_TTL_SECONDS);
 
   return returnData;
 }

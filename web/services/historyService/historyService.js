@@ -3,6 +3,7 @@ import { EDIT_TYPES, FIELD_TRANSLATIONS } from "../../config/constants.js";
 import { getCache, setCache } from "../../utils/cacheUtils.js";
 import { prisma } from "../../config/database.js";
 import { projectEditHistoryStatus } from "../historyStatusProjectionService.js";
+import { assertSnapshotItemsFullyIngested } from "../targetSnapshotItemIntegrityService.js";
 
 const validTypes = ["Manual edit", "Scheduled edit", "Recurring edit", "Automatic rule"];
 
@@ -94,6 +95,51 @@ function normalizeShopifyBulkStatus(executionState, bulkOperationId) {
   if (state === "FAILED") return "FAILED";
   if (state === "CANCELLED") return "CANCELLED";
   return "UNKNOWN";
+}
+
+function buildSnapshotReference(record) {
+  const batch = record?.batch && typeof record.batch === "object" ? record.batch : {};
+  const batchRef = batch?.targetSnapshotRef && typeof batch.targetSnapshotRef === "object"
+    ? batch.targetSnapshotRef
+    : {};
+  const set = record?.snapshotSet && typeof record.snapshotSet === "object"
+    ? record.snapshotSet
+    : null;
+  const lifecycleSnapshotSetId = String(record?.snapshotSetId || "").trim() || null;
+  const batchSnapshotSetId = String(batchRef?.snapshotSetId || "").trim() || null;
+  const snapshotSetId = lifecycleSnapshotSetId || batchSnapshotSetId || set?.id || null;
+
+  return {
+    previewContractId:
+      String(set?.previewContractId || "").trim()
+      || String(batch?.previewContractId || "").trim()
+      || String(batch?.previewId || "").trim()
+      || null,
+    snapshotSetId,
+    mirrorBatchId:
+      String(set?.mirrorBatchId || "").trim()
+      || String(record?.targetMirrorBatchId || "").trim()
+      || String(batchRef?.mirrorBatchId || "").trim()
+      || null,
+    targetingFingerprint:
+      String(set?.targetingFingerprint || "").trim()
+      || String(batch?.previewFingerprint?.filterHash || "").trim()
+      || null,
+    targetCount: Number(set?.targetCount || record?.targetSnapshotCount || 0),
+    productCount: Number(set?.productCount || 0),
+    variantCount: Number(set?.variantCount || 0),
+    checksum: String(set?.checksum || "").trim() || String(batchRef?.checksum || "").trim() || null,
+    freezeStatus:
+      String(set?.status || "").trim()
+      || String(batchRef?.status || "").trim()
+      || null,
+    executionStatus: String(record?.executionStateNormalized || record?.executionState || "").trim() || null,
+    undoStatus: String(record?.undo?.state || "").trim() || null,
+    frozenAt: set?.frozenAt || null,
+    submittedAt: record?.batch?.shopifyBulkOperationSubmittedAt || null,
+    completedAt: record?.completedAt || null,
+    createdAt: record?.createdAt || null,
+  };
 }
 
 function buildExecutionTransparencyFields({
@@ -261,6 +307,21 @@ export class EditHistoryService {
           batch: true,
           error: true,
           createdAt: true,
+          snapshotSetId: true,
+          snapshotSet: {
+            select: {
+              id: true,
+              previewContractId: true,
+              mirrorBatchId: true,
+              targetingFingerprint: true,
+              targetCount: true,
+              productCount: true,
+              variantCount: true,
+              checksum: true,
+              status: true,
+              frozenAt: true,
+            },
+          },
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limitNumber + 1,
@@ -272,6 +333,7 @@ export class EditHistoryService {
       const formattedData = edges.map((record) =>
         projectEditHistoryStatus({
           ...record,
+          snapshotReference: buildSnapshotReference(record),
           title: getLocalizedJsonText(record.title, lang),
         }),
       );
@@ -343,6 +405,21 @@ export class EditHistoryService {
           type: true,
           shop: true,
           rules: true,
+          snapshotSetId: true,
+          snapshotSet: {
+            select: {
+              id: true,
+              previewContractId: true,
+              mirrorBatchId: true,
+              targetingFingerprint: true,
+              targetCount: true,
+              productCount: true,
+              variantCount: true,
+              checksum: true,
+              status: true,
+              frozenAt: true,
+            },
+          },
         },
       });
 
@@ -358,6 +435,7 @@ export class EditHistoryService {
 
       const returnData = projectEditHistoryStatus({
         ...history,
+        snapshotReference: buildSnapshotReference(history),
         title: getLocalizedJsonText(history.title, lang),
         field:
           FIELD_TRANSLATIONS?.[rule?.field]?.[lang] ??
@@ -461,6 +539,21 @@ export class EditHistoryService {
           updatedAt: true,
           createdAt: true,
           completedAt: true,
+          snapshotSetId: true,
+          snapshotSet: {
+            select: {
+              id: true,
+              previewContractId: true,
+              mirrorBatchId: true,
+              targetingFingerprint: true,
+              targetCount: true,
+              productCount: true,
+              variantCount: true,
+              checksum: true,
+              status: true,
+              frozenAt: true,
+            },
+          },
         },
       });
 
@@ -473,6 +566,7 @@ export class EditHistoryService {
 
       return projectEditHistoryStatus({
         ...history,
+        snapshotReference: buildSnapshotReference(history),
         title: getLocalizedJsonText(history.title, lang),
       });
     } catch (error) {
@@ -510,7 +604,12 @@ export class EditHistoryService {
           id,
           shop: this.session.shop,
         },
-        select: { id: true },
+        select: {
+          id: true,
+          snapshotSetId: true,
+          executionIdentity: true,
+          batch: true,
+        },
       });
 
       if (!history) {
@@ -518,6 +617,79 @@ export class EditHistoryService {
           `History record ${id} not found`,
           "History not found",
         );
+      }
+
+      const snapshotSetId =
+        String(history?.snapshotSetId || "").trim()
+        || String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
+
+      if (snapshotSetId) {
+        const totalCount = await prisma.targetSnapshotItem.count({
+          where: {
+            shop: this.session.shop,
+            snapshotSetId,
+            executionStatus: { in: ["SUCCEEDED", "VERIFIED", "FAILED", "SKIPPED"] },
+          },
+        });
+
+        let snapshotCursorWhere = {};
+        if (cursor) {
+          snapshotCursorWhere = {
+            targetKey: { lt: String(cursor) },
+          };
+        }
+
+        const rows = await prisma.targetSnapshotItem.findMany({
+          where: {
+            shop: this.session.shop,
+            snapshotSetId,
+            executionStatus: { in: ["SUCCEEDED", "VERIFIED", "FAILED", "SKIPPED"] },
+            ...snapshotCursorWhere,
+          },
+          select: {
+            id: true,
+            targetKey: true,
+            plannedMutation: true,
+            beforeValues: true,
+            executionStatus: true,
+            productId: true,
+            createdAt: true,
+          },
+          orderBy: { targetKey: "desc" },
+          take: limitNum + 1,
+        });
+
+        const hasNextPage = rows.length > limitNum;
+        const pageRows = hasNextPage ? rows.slice(0, limitNum) : rows;
+        assertSnapshotItemsFullyIngested(
+          pageRows.filter((row) => ["SUCCEEDED", "VERIFIED"].includes(String(row.executionStatus || ""))),
+          "history_changes",
+        );
+        const endCursor = pageRows.length ? pageRows[pageRows.length - 1].targetKey : null;
+
+        const changes = pageRows.map((row) => ({
+          id: row.targetKey,
+          title: row.targetKey,
+          productFieldChanges: row.plannedMutation?.productFieldChanges || [],
+          variantFieldChanges: row.plannedMutation?.variantFieldChanges || [],
+          status: row.executionStatus,
+          image: null,
+          productId: row.productId,
+          createdAt: row.createdAt,
+        }));
+
+        const result = {
+          changes,
+          pageInfo: {
+            hasNextPage,
+            endCursor,
+          },
+          totalCount,
+          message: "Fetched history changes successfully.",
+        };
+
+        await setCache(cacheKey, result, 300);
+        return result;
       }
 
       const totalCount = await prisma.changeRecord.count({

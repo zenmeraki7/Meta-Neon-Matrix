@@ -9,32 +9,21 @@ import {
   BlockStack,
   IndexTable,
 } from "@shopify/polaris";
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { useSelector } from "react-redux";
 import ProductCell from "./ProductCell";
 import StatusBadge from "./StatusBadge";
 import TableErrorBoundary from "../../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../../components/Error/CellErrorBoundary";
+import { makeSelectProductRowViewModel } from "../../../../store/slices/productSlice";
 
 const SKELETON_ROWS = 6;
-const FALLBACK_IMAGE = "/images/fallback-2.png";
 const TABLE_SHELL_MIN_HEIGHT = "420px";
-
-function getProductRowId(product, index) {
-  if (product?.id != null && String(product.id).trim() !== "") {
-    return String(product.id);
-  }
-
-  const handle = String(product?.handle || "").trim();
-  if (handle) {
-    return `handle:${handle}`;
-  }
-
-  const title = String(product?.title || "").trim();
-  const vendor = String(product?.vendor || "").trim();
-  const productType = String(product?.productType || "").trim();
-  return `derived:${title}|${vendor}|${productType}|${index}`;
-}
+const VIRTUALIZATION_ROW_HEIGHT = 56;
+const VIRTUALIZATION_VIEWPORT_HEIGHT = 520;
+const VIRTUALIZATION_OVERSCAN = 8;
+const VIRTUALIZATION_THRESHOLD = 30;
 
 function LoadingTable() {
   return (
@@ -60,11 +49,38 @@ function LoadingTable() {
   );
 }
 
-const ProductsTable = ({ products = [], loading, pagination, onNext, onPrev }) => {
+const ProductRow = memo(function ProductRow({ rowId, index }) {
+  const selectRowViewModel = useMemo(makeSelectProductRowViewModel, []);
+  const row = useSelector((state) => selectRowViewModel(state, rowId));
+  if (!row) {
+    return null;
+  }
+
+  return (
+    <IndexTable.Row id={rowId} key={rowId} position={index}>
+      <IndexTable.Cell>
+        <CellErrorBoundary fallback="[render error]">
+          <ProductCell title={row.title} handle={row.handle} imageUrl={row.featuredImageUrl} />
+        </CellErrorBoundary>
+      </IndexTable.Cell>
+      <IndexTable.Cell>
+        <CellErrorBoundary fallback="[render error]">
+          <StatusBadge status={row.status} />
+        </CellErrorBoundary>
+      </IndexTable.Cell>
+      <IndexTable.Cell>{row.totalInventory}</IndexTable.Cell>
+      <IndexTable.Cell>{row.productType}</IndexTable.Cell>
+      <IndexTable.Cell>{row.vendor}</IndexTable.Cell>
+    </IndexTable.Row>
+  );
+});
+
+const ProductsTable = ({ productIds = [], loading, pagination, onNext, onPrev }) => {
   const { t } = useTranslation(["products", "common"]);
+  const [scrollTop, setScrollTop] = useState(0);
   if (loading) return <LoadingTable />;
 
-  if (!products.length) {
+  if (!productIds.length) {
     return (
       <Box padding="1200" minHeight={TABLE_SHELL_MIN_HEIGHT}>
         <EmptyState heading={t("filteredProductsEmptyHeading")}>
@@ -84,6 +100,37 @@ const ProductsTable = ({ products = [], loading, pagination, onNext, onPrev }) =
     ],
     [t],
   );
+
+  const shouldVirtualize = productIds.length > VIRTUALIZATION_THRESHOLD;
+  const visibleWindow = useMemo(() => {
+    if (!shouldVirtualize) {
+      return {
+        startIndex: 0,
+        endIndex: productIds.length,
+      };
+    }
+    const firstVisible = Math.floor(scrollTop / VIRTUALIZATION_ROW_HEIGHT);
+    const visibleRows = Math.ceil(VIRTUALIZATION_VIEWPORT_HEIGHT / VIRTUALIZATION_ROW_HEIGHT);
+    const startIndex = Math.max(0, firstVisible - VIRTUALIZATION_OVERSCAN);
+    const endIndex = Math.min(
+      productIds.length,
+      firstVisible + visibleRows + VIRTUALIZATION_OVERSCAN,
+    );
+    return { startIndex, endIndex };
+  }, [productIds.length, scrollTop, shouldVirtualize]);
+
+  const visibleIds = useMemo(
+    () => productIds.slice(visibleWindow.startIndex, visibleWindow.endIndex),
+    [productIds, visibleWindow],
+  );
+
+  const topSpacerHeight = visibleWindow.startIndex * VIRTUALIZATION_ROW_HEIGHT;
+  const bottomSpacerHeight =
+    (productIds.length - visibleWindow.endIndex) * VIRTUALIZATION_ROW_HEIGHT;
+
+  const handleVirtualScroll = useCallback((event) => {
+    setScrollTop(event.currentTarget.scrollTop || 0);
+  }, []);
 
   return (
     <Box minHeight={TABLE_SHELL_MIN_HEIGHT}>
@@ -107,40 +154,41 @@ const ProductsTable = ({ products = [], loading, pagination, onNext, onPrev }) =
       </Box>
 
       <TableErrorBoundary>
-        <IndexTable
-          resourceName={{ singular: "product", plural: "products" }}
-          itemCount={products.length}
-          selectable={false}
-          headings={headings}
+        <Box
+          maxHeight={shouldVirtualize ? `${VIRTUALIZATION_VIEWPORT_HEIGHT}px` : undefined}
+          overflowY={shouldVirtualize ? "auto" : undefined}
+          onScroll={shouldVirtualize ? handleVirtualScroll : undefined}
         >
-          {products.map((product, index) => {
-            const title = product.title ?? "";
-            const handle = product.handle ?? "";
-            const resolvedImage =
-              product.featuredImageUrl ||
-              product.featuredMedia?.preview?.image?.url ||
-              FALLBACK_IMAGE;
-            const rowId = getProductRowId(product, index);
-
-            return (
-              <IndexTable.Row id={rowId} key={rowId} position={index}>
-                <IndexTable.Cell>
-                  <CellErrorBoundary fallback="[render error]">
-                    <ProductCell title={title} handle={handle} imageUrl={resolvedImage} />
-                  </CellErrorBoundary>
+          <IndexTable
+            resourceName={{ singular: "product", plural: "products" }}
+            itemCount={productIds.length}
+            selectable={false}
+            headings={headings}
+          >
+            {shouldVirtualize && topSpacerHeight > 0 ? (
+              <IndexTable.Row id="virtual-spacer-top" position={-1}>
+                <IndexTable.Cell colSpan={headings.length}>
+                  <div style={{ height: `${topSpacerHeight}px` }} />
                 </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <CellErrorBoundary fallback="[render error]">
-                    <StatusBadge status={product.status} />
-                  </CellErrorBoundary>
-                </IndexTable.Cell>
-                <IndexTable.Cell>{product.totalInventory ?? "-"}</IndexTable.Cell>
-                <IndexTable.Cell>{product.productType || "-"}</IndexTable.Cell>
-                <IndexTable.Cell>{product.vendor || "-"}</IndexTable.Cell>
               </IndexTable.Row>
-            );
-          })}
-        </IndexTable>
+            ) : null}
+
+            {visibleIds.map((rawRowId, index) => {
+              const rowId = String(rawRowId || "");
+              if (!rowId) return null;
+              const actualIndex = visibleWindow.startIndex + index;
+              return <ProductRow rowId={rowId} index={actualIndex} key={rowId} />;
+            })}
+
+            {shouldVirtualize && bottomSpacerHeight > 0 ? (
+              <IndexTable.Row id="virtual-spacer-bottom" position={productIds.length + 1}>
+                <IndexTable.Cell colSpan={headings.length}>
+                  <div style={{ height: `${bottomSpacerHeight}px` }} />
+                </IndexTable.Cell>
+              </IndexTable.Row>
+            ) : null}
+          </IndexTable>
+        </Box>
       </TableErrorBoundary>
 
       <Box padding="400" borderBlockStartWidth="1" borderColor="border">

@@ -15,6 +15,7 @@ import { useMemo, useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSelector, useDispatch } from "react-redux";
 import { useTranslation } from "react-i18next";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTranslatedOperatorLabel } from "../utils/filterUtils";
 import ProductsFilters from "../components/ProductsFilters";
 import ProductsTable from "../components/ProductsTable";
@@ -22,35 +23,65 @@ import useProducts from "../hooks/useProducts";
 import { useFilterRegistry } from "../hooks/useFilterRegistry";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import { useSyncStatusHelpers } from "../../../../hooks/useSyncStatusQuery";
+import { useApiClient } from "../../../../hooks/useApiClient";
 
 import {
+  setProducts,
   selectFilters,
-  setFilters,
-  clearFilters,
+  selectCursor,
+  selectFilterHash,
+  selectCursorFilterHash,
+  selectProductIds,
+  applyFilterHashAndResetCursor,
+  setCursorForFilterHash,
 } from "../../../../store/slices/productSlice";
+import { buildCanonicalFilterHash } from "../hooks/useProducts";
 const MIN_PRODUCT_SEARCH_LENGTH = 2;
 const STATUS_RAIL_MIN_HEIGHT = "84px";
 
 export default function ProductsPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const api = useApiClient();
+  const queryClient = useQueryClient();
 
   const filterState = useSelector(selectFilters);
+  const productIds = useSelector(selectProductIds);
+  const cursor = useSelector(selectCursor);
+  const filterHash = useSelector(selectFilterHash);
+  const cursorFilterHash = useSelector(selectCursorFilterHash);
 const { t } = useTranslation();
+
+  const bootstrapQuery = useQuery({
+    queryKey: ["bootstrap-products"],
+    queryFn: async ({ signal }) =>
+      api.get("/api/bootstrap/products?limit=20", { signal }),
+    staleTime: 10_000,
+    retry: 1,
+  });
+  const bootstrapData = bootstrapQuery.data || null;
+  const bootstrapSyncStatus = bootstrapData?.syncStatus || null;
+  const bootstrapFilterRegistry = bootstrapData?.filterRegistry || null;
+  const bootstrapProductList = bootstrapData?.productList || null;
+  const bootstrapStoreDetails = bootstrapData?.storeDetails || null;
+
 const {
   filters: availableFilters,
   getFilterByKey,
-} = useFilterRegistry();
+} = useFilterRegistry({
+  initialData: bootstrapFilterRegistry || undefined,
+});
 
 const [committedSearch, setCommittedSearch] = useState("");
 const [searchResetSignal, setSearchResetSignal] = useState(0);
-const [cursor, setCursor] = useState(null);
 
   const {
     syncStatus,
     syncStatusLoading,
     isSyncInProgress,
-  } = useSyncStatusHelpers();
+  } = useSyncStatusHelpers({
+    initialData: bootstrapSyncStatus || undefined,
+  });
   const { showSuccess, showError } = useAppToast();
 
   const effectiveFilters = useMemo(() => {
@@ -74,14 +105,63 @@ const [cursor, setCursor] = useState(null);
     ];
   }, [filterState, committedSearch]);
 
+  const bootstrapProductInitialData =
+    cursor == null &&
+    String(filterHash || "[]") === "[]" &&
+    bootstrapProductList
+      ? {
+          products: Array.isArray(bootstrapProductList.products)
+            ? bootstrapProductList.products
+            : [],
+          pagination: bootstrapProductList.pagination || null,
+          count: Number(bootstrapProductList.count || 0),
+        }
+      : undefined;
+
   const { products, totalCount, pagination, loading, error, hasFetched, refetch } =
-    useProducts({ cursor, filterParams: effectiveFilters });
+    useProducts({
+      cursor,
+      filterParams: effectiveFilters,
+      filterHash,
+      cursorFilterHash,
+      initialData: bootstrapProductInitialData,
+    });
+
+  useEffect(() => {
+    if (!bootstrapStoreDetails) return;
+    queryClient.setQueryData(["store-details"], bootstrapStoreDetails);
+  }, [bootstrapStoreDetails, queryClient]);
+
+  useEffect(() => {
+    dispatch(setProducts(products));
+  }, [dispatch, products]);
 
   const wasSyncingRef = useRef(false);
 
-useEffect(() => {
-  setCursor(null);
-}, [effectiveFilters]);
+  const applyAtomicFilterCursorReset = useCallback(
+    (nextFilters, nextSearch) => {
+      const baseFilters = nextFilters.filter((f) => f.field !== "search");
+      const normalizedSearch = String(nextSearch || "").trim();
+      const nextEffectiveFilters =
+        normalizedSearch && normalizedSearch.length >= MIN_PRODUCT_SEARCH_LENGTH
+          ? [
+              ...baseFilters,
+              {
+                field: "search",
+                operator: "contains",
+                value: normalizedSearch,
+              },
+            ]
+          : baseFilters;
+      dispatch(
+        applyFilterHashAndResetCursor({
+          filters: nextFilters,
+          filterHash: buildCanonicalFilterHash(nextEffectiveFilters),
+        }),
+      );
+    },
+    [dispatch],
+  );
 
   useEffect(() => {
   const isSyncing =
@@ -125,21 +205,29 @@ useEffect(() => {
     return [...filterState, { field, ...nextFilter }];
   })();
 
-  dispatch(setFilters(updated));
-}, [filterState, dispatch]);
+  applyAtomicFilterCursorReset(updated, committedSearch);
+}, [filterState, applyAtomicFilterCursorReset, committedSearch]);
+
+  const handleCommitSearch = useCallback(
+    (nextSearch) => {
+      setCommittedSearch(nextSearch);
+      applyAtomicFilterCursorReset(filterState, nextSearch);
+    },
+    [applyAtomicFilterCursorReset, filterState],
+  );
 
   const onClearAll = () => {
-    dispatch(clearFilters());
     setCommittedSearch("");
     setSearchResetSignal((current) => current + 1);
-    setCursor(null);
+    applyAtomicFilterCursorReset([], "");
   };
 
   const handleRemoveFilter = useCallback(
     (field) => {
-      dispatch(setFilters(filterState.filter((f) => f.field !== field)));
+      const updatedFilters = filterState.filter((f) => f.field !== field);
+      applyAtomicFilterCursorReset(updatedFilters, committedSearch);
     },
-    [dispatch, filterState],
+    [filterState, applyAtomicFilterCursorReset, committedSearch],
   );
 
 const appliedFilters = useMemo(
@@ -274,7 +362,7 @@ const appliedFilters = useMemo(
               <ProductsFilters
                 appliedFilters={appliedFilters}
                 onFilterChange={onFilterChange}
-                onCommitSearch={setCommittedSearch}
+                onCommitSearch={handleCommitSearch}
                 searchResetSignal={searchResetSignal}
                 onClearAll={onClearAll}
                 availableFilters={availableFilters}
@@ -286,11 +374,25 @@ const appliedFilters = useMemo(
         <Layout.Section>
           <Card padding="0">
             <ProductsTable
-              products={products}
+              productIds={productIds}
               loading={shouldShowLoadingState}
               pagination={pagination}
-              onNext={() => setCursor(pagination?.nextCursor || null)}
-              onPrev={() => setCursor(pagination?.prevCursor || null)}
+              onNext={() =>
+                dispatch(
+                  setCursorForFilterHash({
+                    cursor: pagination?.nextCursor || null,
+                    filterHash,
+                  }),
+                )
+              }
+              onPrev={() =>
+                dispatch(
+                  setCursorForFilterHash({
+                    cursor: pagination?.prevCursor || null,
+                    filterHash,
+                  }),
+                )
+              }
             />
           </Card>
         </Layout.Section>

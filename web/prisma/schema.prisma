@@ -430,6 +430,7 @@ model EditHistory {
   isRecurring               Boolean                @default(false)
   recurringEditId           String?
   recurringRunId            String?
+  snapshotSetId             String?
   automaticProductRuleId    String?
   automaticProductRuleRunId String?                @unique
   triggerType               EditHistoryTriggerType @default(MANUAL)
@@ -463,6 +464,7 @@ model EditHistory {
   ingestionCheckpoints      EditHistoryIngestionCheckpoint[]
   undoOperations            UndoOperation[]
   recoveryAudits            BulkEditRecoveryAudit[]
+  snapshotSet               TargetSnapshotSet?     @relation(fields: [snapshotSetId], references: [id])
 
   @@index([shop, status, type, updatedAt], map: "shop_status_type_recent")
   @@index([shop])
@@ -473,6 +475,7 @@ model EditHistory {
   @@index([isSpreadsheetEdit])
   @@index([recurringEditId])
   @@index([recurringRunId])
+  @@index([shop, snapshotSetId])
   @@index([automaticProductRuleId])
   @@index([automaticProductRuleRunId])
   @@index([shop, canonicalFilterKey])
@@ -1381,6 +1384,7 @@ model TargetSnapshotSet {
   checksum             String?
   compilerVersion      String
   projectionVersion    String
+  plannerVersion       String?
 
   status               TargetSnapshotSetStatus @default(FREEZING)
 
@@ -1393,6 +1397,7 @@ model TargetSnapshotSet {
   expiresAt            DateTime?
 
   items                TargetSnapshotItem[]
+  editHistories        EditHistory[]
 
   @@unique([shop, operationId])
   @@index([shop, previewContractId])

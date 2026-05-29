@@ -147,10 +147,27 @@ export function toBulkEditPreviewResponseDto(result) {
     pagination.totalPages,
     Math.max(1, Math.ceil(total / Math.max(limit, 1))),
   );
+  const compilerVersion = safeString(rawFingerprint.compilerVersion, "") || null;
+  const projectionVersion = safeString(rawFingerprint.projectionVersion, "") || null;
+  const mirrorBatchId = previewFingerprint.mirrorBatchId;
+  const targetingFingerprint = previewFingerprint.filterHash;
+  const previewContractId = previewFingerprint.previewId;
 
   return {
     success: true,
     data: {
+      previewContractId,
+      shop: safeString(result?.shop || data?.shop, "") || null,
+      mirrorBatchId,
+      targetingFingerprint,
+      previewCounts: {
+        targetCount: total,
+        productCount: safeNumber(data?.productCount, 0),
+        variantCount: safeNumber(data?.variantCount, 0),
+      },
+      sampleRows: rows,
+      compilerVersion,
+      projectionVersion,
       previewId: safeString(data?.previewFingerprint?.previewId, "") || null,
       targetSnapshotId: safeString(data?.previewFingerprint?.filterHash, "") || null,
       page,

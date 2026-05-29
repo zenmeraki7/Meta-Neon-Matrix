@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo } from "react";
 import { triggerGlobalReauth } from "../api/reauthHandler";
+import { useAppBridgeAuth } from "../components/providers/AppBridgeProvider";
 
 function createAuthFetchUnavailableError() {
   const error = new Error(
@@ -17,6 +18,7 @@ function createAuthFetchUnavailableError() {
  * and falls back to idToken-based Authorization header.
  */
 export function useAuthenticatedFetch() {
+  const { getSessionToken } = useAppBridgeAuth();
   const fetchFunction = useMemo(() => {
     if (typeof window === "undefined") {
       return null;
@@ -28,12 +30,7 @@ export function useAuthenticatedFetch() {
       return shopifyGlobal.fetch.bind(shopifyGlobal);
     }
 
-    const tokenProvider =
-      typeof shopifyGlobal?.idToken === "function"
-        ? shopifyGlobal.idToken.bind(shopifyGlobal)
-        : null;
-
-    if (!tokenProvider) {
+    if (typeof getSessionToken !== "function") {
       return null;
     }
 
@@ -41,7 +38,10 @@ export function useAuthenticatedFetch() {
       const headers = new Headers(options.headers || {});
 
       if (!headers.has("Authorization")) {
-        const token = await tokenProvider();
+        const token = await getSessionToken();
+        if (!token) {
+          throw createAuthFetchUnavailableError();
+        }
         headers.set("Authorization", `Bearer ${token}`);
       }
 
@@ -50,7 +50,7 @@ export function useAuthenticatedFetch() {
         headers,
       });
     };
-  }, []);
+  }, [getSessionToken]);
 
   return useCallback(
     async (uri, options = {}) => {

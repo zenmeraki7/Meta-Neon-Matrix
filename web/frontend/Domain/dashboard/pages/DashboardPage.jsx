@@ -17,6 +17,9 @@ import {
 } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
+import { useDispatch } from "react-redux";
+import { useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   EditIcon,
   ExportIcon,
@@ -24,6 +27,8 @@ import {
   PlusIcon,
 } from "@shopify/polaris-icons";
 import { useStoreAccess } from "../hooks/useStoreAccess";
+import { useApiClient } from "../../../../hooks/useApiClient";
+import { hydrateSubscriptionSnapshot } from "../../../../store/slices/subscriptionSlice";
 
 const PromotionalContent = React.lazy(() =>
   import("../components/PromotionalContent"),
@@ -127,9 +132,43 @@ function QuickActionCard({ title, description, buttonText, onAction }) {
 
 export default function DashboardPage() {
   const { i18n, t } = useTranslation();
-  const { storeAccess, loadingStoreData } = useStoreAccess();
+  const dispatch = useDispatch();
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  const bootstrapQuery = useQuery({
+    queryKey: ["bootstrap-dashboard"],
+    queryFn: ({ signal }) => api.get("/api/bootstrap/dashboard", { signal }),
+    staleTime: 10_000,
+    retry: 1,
+  });
+  const bootstrapData = bootstrapQuery.data || null;
+  const bootstrapStoreDetails = bootstrapData?.storeDetails || null;
+  const bootstrapSyncStatus = bootstrapData?.syncStatus || null;
+  const bootstrapPlanSnapshot = bootstrapData?.planSnapshot || null;
+
+  const { storeAccess, loadingStoreData } = useStoreAccess({
+    initialData: bootstrapStoreDetails || undefined,
+  });
   const navigate = useNavigate();
   const [showPromotionalContent, setShowPromotionalContent] = useState(false);
+
+  useEffect(() => {
+    if (bootstrapStoreDetails) {
+      queryClient.setQueryData(["store-details"], bootstrapStoreDetails);
+    }
+    if (bootstrapSyncStatus) {
+      queryClient.setQueryData(["sync-status"], bootstrapSyncStatus);
+    }
+    if (bootstrapPlanSnapshot) {
+      dispatch(hydrateSubscriptionSnapshot(bootstrapPlanSnapshot));
+    }
+  }, [
+    bootstrapStoreDetails,
+    bootstrapSyncStatus,
+    bootstrapPlanSnapshot,
+    queryClient,
+    dispatch,
+  ]);
 
   const handleLanguageChange = (value) => {
     i18n.changeLanguage(value);

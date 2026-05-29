@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { ALL_FILTERS } from "../constants";
 
-export function useFilterRegistry() {
+export function useFilterRegistry(options = {}) {
   const api = useApiClient();
+  const initialData = options?.initialData ?? undefined;
   const registryQuery = useQuery({
     queryKey: ["product-filter-registry"],
     queryFn: async ({ signal }) => {
@@ -19,6 +20,7 @@ export function useFilterRegistry() {
       };
     },
     staleTime: 10 * 60 * 1000,
+    initialData,
   });
 
   const registry = registryQuery.data || {
@@ -40,4 +42,3 @@ export function useFilterRegistry() {
     getFilterByKey: (key) => filterByKey.get(key) || null,
   };
 }
-

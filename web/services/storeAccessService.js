@@ -3,6 +3,7 @@ import { getCache, setCache } from "../utils/cacheUtils.js";
 import shopify from "../shopify.js";
 
 const STORE_ACCESS_CACHE_TTL_SECONDS = 300;
+const STORE_TIMEZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
 async function resolveShopTimezone(session) {
   try {
@@ -22,6 +23,17 @@ async function resolveShopTimezone(session) {
   } catch {
     return "UTC";
   }
+}
+
+async function resolveShopTimezoneCached({ shop, session }) {
+  const timezoneCacheKey = `${shop}:storeTimezone`;
+  const cachedTimezone = await getCache(timezoneCacheKey);
+  if (cachedTimezone) {
+    return String(cachedTimezone);
+  }
+  const timezone = await resolveShopTimezone(session);
+  await setCache(timezoneCacheKey, timezone, STORE_TIMEZONE_CACHE_TTL_SECONDS);
+  return timezone;
 }
 
 export async function getStoreAccessDto({ session }) {
@@ -68,7 +80,7 @@ export async function getStoreAccessDto({ session }) {
         status: "completed",
       },
     }),
-    resolveShopTimezone(session),
+    resolveShopTimezoneCached({ shop, session }),
   ]);
 
   const dto = {
@@ -84,4 +96,3 @@ export async function getStoreAccessDto({ session }) {
   await setCache(cacheKey, dto, STORE_ACCESS_CACHE_TTL_SECONDS);
   return dto;
 }
-

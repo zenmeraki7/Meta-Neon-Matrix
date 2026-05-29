@@ -6,6 +6,54 @@ import {
   markPreviewExecutionMismatch,
 } from "../productService/productTargetingService.js";
 import { upsertFrozenSnapshotSetFromLegacy } from "../../repositories/targetSnapshotSetRepository.js";
+import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
+
+async function attachFrozenSnapshotRefToFreezingHistory({
+  db,
+  historyId,
+  history,
+  snapshotSet,
+}) {
+  if (String(snapshotSet?.status || "").toUpperCase() !== "FROZEN") {
+    throw new Error("SNAPSHOT_SET_NOT_FROZEN");
+  }
+
+  const existingSnapshotSetId = String(
+    history?.batch?.targetSnapshotRef?.snapshotSetId || "",
+  ).trim();
+  const existingLifecycleSnapshotSetId = String(history?.snapshotSetId || "").trim();
+  if (existingSnapshotSetId || existingLifecycleSnapshotSetId) {
+    throw new Error("SNAPSHOT_SET_ALREADY_ATTACHED");
+  }
+
+  const updated = await guardedEditHistoryUpdate({
+    id: historyId,
+    shop: history.shop,
+    expectedExecutionStates: ["TARGET_FREEZING"],
+    extraWhere: {
+      snapshotSetId: null,
+    },
+    data: {
+      snapshotSetId: snapshotSet.id,
+      batch: {
+        ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
+        targetsFrozenAt: new Date().toISOString(),
+        targetSnapshotRef: {
+          snapshotSetId: snapshotSet.id,
+          operationId: snapshotSet.operationId,
+          status: snapshotSet.status,
+          checksum: snapshotSet.checksum || null,
+        },
+      },
+    },
+    db,
+  });
+  if (!updated) {
+    const error = new Error("Operation transition conflict");
+    error.code = "OPERATION_STAGE_CONFLICT";
+    throw error;
+  }
+}
 
 export class BulkEditTargetFreezeService {
   constructor(session = null) {
@@ -24,6 +72,8 @@ export class BulkEditTargetFreezeService {
         queryFilter: true,
         targetMirrorBatchId: true,
         batch: true,
+        snapshotSetId: true,
+        executionState: true,
         executionIdentity: true,
         scheduledAt: true,
         recurringRunId: true,
@@ -69,22 +119,15 @@ export class BulkEditTargetFreezeService {
         targetingFingerprint: String(history.filterHash || "").trim() || null,
         compilerVersion: String(history.batch?.targetingCompilerVersion || "legacy-v1"),
         projectionVersion: "legacy-v1",
+        plannerVersion: String(history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion || "").trim() || null,
         source: "MANUAL_SELECTION",
         db,
       });
-      await db.editHistory.update({
-        where: { id: historyId },
-        data: {
-          batch: {
-            ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
-            targetSnapshotRef: {
-              snapshotSetId: snapshotSet.id,
-              operationId: snapshotSet.operationId,
-              status: snapshotSet.status,
-              checksum: snapshotSet.checksum || null,
-            },
-          },
-        },
+      await attachFrozenSnapshotRefToFreezingHistory({
+        db,
+        historyId,
+        history,
+        snapshotSet,
       });
       return frozenCount;
     }
@@ -219,23 +262,16 @@ export class BulkEditTargetFreezeService {
       targetingFingerprint: String(history.filterHash || "").trim() || null,
       compilerVersion: String(history.batch?.targetingCompilerVersion || "legacy-v1"),
       projectionVersion: "legacy-v1",
+      plannerVersion: String(history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion || "").trim() || null,
       source: "BULK_EDIT",
       db,
     });
 
-    await db.editHistory.update({
-      where: { id: historyId },
-      data: {
-        batch: {
-          ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
-          targetSnapshotRef: {
-            snapshotSetId: snapshotSet.id,
-            operationId: snapshotSet.operationId,
-            status: snapshotSet.status,
-            checksum: snapshotSet.checksum || null,
-          },
-        },
-      },
+    await attachFrozenSnapshotRefToFreezingHistory({
+      db,
+      historyId,
+      history,
+      snapshotSet,
     });
 
     return frozenCount;

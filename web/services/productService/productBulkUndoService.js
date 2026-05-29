@@ -124,6 +124,7 @@ class UndoEditService {
         shop: this.session.shop,
         snapshotSetId: snapshotSet.id,
         executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
+        undoStatus: "PENDING",
       },
     });
     if (eligibleCount <= 0) {

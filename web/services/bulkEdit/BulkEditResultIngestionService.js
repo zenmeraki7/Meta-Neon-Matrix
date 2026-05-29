@@ -14,6 +14,8 @@ import {
 } from "../operationLeaseService.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
 import { transitionOperation } from "../operationTransitionService.js";
+import { applyMirrorFromSuccessfulChangeRecords } from "./BulkEditMirrorApplyService.js";
+import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
 
 function normalizeTargetIdentity(row) {
   return String(
@@ -471,6 +473,39 @@ export class BulkEditResultIngestionService {
         rowCount: 0,
       };
     }
+
+    const mirrorApplyResult = await applyMirrorFromSuccessfulChangeRecords({
+      shop,
+      historyId,
+    });
+
+    await prisma.editHistory.updateMany({
+      where: { id: historyId, shop },
+      data: {
+        batch: mergeBatch(history.batch, {
+          mirrorApply: {
+            status: "APPLIED_PENDING_RECONCILE",
+            attemptedRows: Number(mirrorApplyResult?.attemptedRows || 0),
+            appliedRows: Number(mirrorApplyResult?.appliedRows || 0),
+            unresolvedRows: Number(mirrorApplyResult?.unresolvedRows || 0),
+            appliedProductRows: Number(mirrorApplyResult?.appliedProductRows || 0),
+            appliedVariantRows: Number(mirrorApplyResult?.appliedVariantRows || 0),
+            mirrorBatchId: mirrorApplyResult?.mirrorBatchId || null,
+            appliedAt: new Date().toISOString(),
+          },
+        }),
+      },
+    });
+
+    await schedulePostMutationMirrorReconciliation({
+      shop,
+      ownerType: "EDIT_HISTORY",
+      ownerId: historyId,
+      mirrorBatchId: mirrorApplyResult?.mirrorBatchId || undefined,
+      source: "BULK_EDIT_EXECUTION_APPLY",
+      verificationStatus: failureCount > 0 ? "PARTIAL" : "SUCCESS",
+    });
+
     await transitionOperation({
       shop,
       operationId: historyId,

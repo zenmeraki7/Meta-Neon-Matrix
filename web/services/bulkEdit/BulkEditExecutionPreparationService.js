@@ -1,15 +1,9 @@
 import crypto from "crypto";
 import { prisma } from "../../config/database.js";
-import { getUpdatedProducts } from "../../helpers/productBulkOperationHelpers/productUpdateHandler.js";
 import {
   getFrozenSnapshotSetForExecution,
   listFrozenSnapshotItemsPage,
 } from "../../repositories/targetSnapshotSetRepository.js";
-import {
-  buildProductInclude,
-  hydrateMissingVariantsForProducts,
-  normalizeMirrorProductForPreview,
-} from "./bulkEditTargetUtils.js";
 import {
   normalizeRules,
   resolveTargetGranularityFromRules,
@@ -40,7 +34,7 @@ function assertExecutableHistory({ history, historyId, executionId }) {
     throw new Error("TARGET_MIRROR_BATCH_ID_REQUIRED");
   }
   const snapshotSetId = String(
-    history?.batch?.targetSnapshotRef?.snapshotSetId || "",
+    history?.snapshotSetId || history?.batch?.targetSnapshotRef?.snapshotSetId || "",
   ).trim();
   if (!snapshotSetId) {
     throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED");
@@ -128,180 +122,23 @@ function getCursorOrdinal(history) {
   return null;
 }
 
-function buildVariantIdsByProduct(rows = []) {
-  return rows.reduce((accumulator, row) => {
-    const targetType = String(row?.targetType || "").toUpperCase();
-
-    if (targetType !== "VARIANT" || !row.productId || !row.variantId) {
-      return accumulator;
-    }
-
-    const bucket = accumulator.get(row.productId) || new Set();
-    bucket.add(row.variantId);
-    accumulator.set(row.productId, bucket);
-
-    return accumulator;
-  }, new Map());
-}
-
-function filterVariantsForFrozenVariantTargets(product, variantIdsByProduct) {
-  if (!variantIdsByProduct.size) {
-    return product;
+function extractPlannedMutationJsonlRow(plannedMutation) {
+  if (!plannedMutation || typeof plannedMutation !== "object" || Array.isArray(plannedMutation)) {
+    return null;
   }
-
-  const allowed = variantIdsByProduct.get(product.id);
-
-  return {
-    ...product,
-    variants: Array.isArray(product.variants)
-      ? product.variants.filter((variant) => allowed?.has(variant.id))
-      : [],
-  };
-}
-
-/**
- * Existing getUpdatedProducts() appears to be rule-oriented.
- *
- * This adapter preserves your current mutation builder behavior while keeping
- * the new service boundary clean.
- *
- * Important:
- * - Long-term, replace this with buildProductMutationInputFromRules().
- * - That future function should apply all rules in memory and emit exactly
- *   one final JSONL row per target identity.
- */
-function mergeVariantRows(existing = [], incoming = []) {
-  const byId = new Map();
-  for (const row of existing) {
-    if (row?.id) byId.set(String(row.id), { ...row });
-  }
-  for (const row of incoming) {
-    if (!row?.id) continue;
-    const key = String(row.id);
-    const prev = byId.get(key) || { id: row.id };
-    byId.set(key, { ...prev, ...row });
-  }
-  return [...byId.values()];
-}
-
-function mergeProductSetMutation(base = {}, patch = {}) {
-  const merged = { ...base, ...patch };
-  if (Array.isArray(base.variants) || Array.isArray(patch.variants)) {
-    merged.variants = mergeVariantRows(base.variants || [], patch.variants || []);
-  }
-  return merged;
-}
-
-function mergeMutationRows(rows = []) {
-  let mergedRoot = null;
-  for (const row of rows) {
-    if (!row) continue;
-    let parsed = null;
+  const direct = typeof plannedMutation.jsonlRow === "string"
+    ? plannedMutation.jsonlRow.trim()
+    : "";
+  if (direct) return direct;
+  if (plannedMutation.productSet || plannedMutation.input || plannedMutation.id) {
     try {
-      parsed = JSON.parse(String(row));
+      return JSON.stringify(plannedMutation);
     } catch {
-      continue;
-    }
-    if (!mergedRoot) {
-      mergedRoot = parsed;
-      continue;
-    }
-    if (parsed.productSet || mergedRoot.productSet) {
-      mergedRoot = {
-        ...mergedRoot,
-        ...parsed,
-        productSet: mergeProductSetMutation(
-          mergedRoot.productSet || {},
-          parsed.productSet || {},
-        ),
-      };
-    } else {
-      mergedRoot = { ...mergedRoot, ...parsed };
+      return null;
     }
   }
-  return mergedRoot ? JSON.stringify(mergedRoot) : null;
+  return null;
 }
-
-function foldChangeEntries(entries = []) {
-  if (!entries.length) return null;
-  const base = entries[0];
-  const productFieldMap = new Map();
-  const variantFieldMap = new Map();
-
-  for (const entry of entries) {
-    const productChanges = Array.isArray(entry?.productFieldChanges)
-      ? entry.productFieldChanges
-      : [];
-    for (const change of productChanges) {
-      if (!change?.field) continue;
-      productFieldMap.set(String(change.field), change);
-    }
-
-    const variantChanges = Array.isArray(entry?.variantFieldChanges)
-      ? entry.variantFieldChanges
-      : [];
-    for (const change of variantChanges) {
-      if (!change?.field || !change?.variantId) continue;
-      const key = `${change.variantId}:${change.field}`;
-      variantFieldMap.set(key, change);
-    }
-  }
-
-  return {
-    ...base,
-    productFieldChanges: [...productFieldMap.values()],
-    variantFieldChanges: [...variantFieldMap.values()],
-  };
-}
-
-function buildProductMutationInputFromRules({
-  product,
-  rules,
-  changes,
-  historyId,
-  shop,
-  batchId,
-  mutationBuilder = getUpdatedProducts,
-}) {
-  const rows = [];
-  const localChangeEntries = [];
-  for (const rule of rules) {
-    const localRuleChanges = [];
-    const result = mutationBuilder({
-      product,
-      field: rule.field,
-      editType: rule.editOption,
-      value: rule.value,
-      searchKey: rule.searchKey,
-      replaceText: rule.replaceText,
-      supportValue: rule.supportValue,
-      changes: localRuleChanges,
-      historyId,
-      shop,
-      batchId,
-    });
-
-    if (result) {
-      rows.push(result);
-    }
-    if (localRuleChanges.length > 0) {
-      localChangeEntries.push(...localRuleChanges);
-    }
-  }
-
-  const merged = mergeMutationRows(rows);
-  const foldedChange = foldChangeEntries(localChangeEntries);
-  if (foldedChange) {
-    changes.push(foldedChange);
-  }
-  return merged;
-}
-
-export const __bulkEditExecutionPreparationTestables = {
-  mergeMutationRows,
-  foldChangeEntries,
-  buildProductMutationInputFromRules,
-};
 
 export class BulkEditExecutionPreparationService {
   constructor(session = null) {
@@ -314,6 +151,7 @@ export class BulkEditExecutionPreparationService {
       select: {
         id: true,
         shop: true,
+        snapshotSetId: true,
         isSpreadsheetEdit: true,
         batch: true,
         rules: true,
@@ -345,7 +183,7 @@ export class BulkEditExecutionPreparationService {
       ? history.batch.retryCursorIndex
       : 0;
     const frozenSnapshotSetId = String(
-      history.batch?.targetSnapshotRef?.snapshotSetId || "",
+      history.snapshotSetId || history.batch?.targetSnapshotRef?.snapshotSetId || "",
     ).trim();
     const frozenSnapshotSetOperationId = String(
       history.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "",
@@ -385,6 +223,7 @@ export class BulkEditExecutionPreparationService {
           variantId: row.variantId,
           targetType: row.targetType,
           targetIdentity: row.targetKey,
+          plannedMutation: row.plannedMutation,
         }));
         lastProductId = retryPage.cursorTargetKey;
       }
@@ -405,6 +244,7 @@ export class BulkEditExecutionPreparationService {
         variantId: row.variantId,
         targetType: row.targetType,
         targetIdentity: row.targetKey,
+        plannedMutation: row.plannedMutation,
       }));
       lastProductId = frozenTargetPage.cursorTargetKey;
       hasMore = frozenTargetPage.hasMore;
@@ -488,80 +328,18 @@ export class BulkEditExecutionPreparationService {
       }
     }
 
-    const include = buildProductInclude(fields);
-
-    const safeInclude =
-      include?.variants && history.targetMirrorBatchId
-        ? {
-            variants: {
-              where: {
-                mirrorBatchId: history.targetMirrorBatchId,
-              },
-            },
-          }
-        : include;
-
-    const orderedProductIds = [
-      ...new Set(rows.map((row) => row.productId).filter(Boolean)),
-    ];
-
-    const variantIdsByProduct = buildVariantIdsByProduct(rows);
-
-    let products = await prisma.product.findMany({
-      where: {
-        shop: history.shop,
-        id: { in: orderedProductIds },
-        mirrorBatchId: history.targetMirrorBatchId,
-      },
-      ...(safeInclude ? { include: safeInclude } : {}),
-    });
-
-    if (safeInclude?.variants) {
-      products = await hydrateMissingVariantsForProducts(
-        products,
-        history.shop,
-        history.targetMirrorBatchId,
-      );
-    }
-
-    const productsById = new Map(
-      products.map((product) => [product.id, product]),
-    );
-
     const formattedRows = [];
-    const changes = [];
-
-    for (const productId of orderedProductIds) {
-      const rawProduct = productsById.get(productId);
-
-      if (!rawProduct) {
-        continue;
+    for (const row of rows) {
+      const mutationRow = extractPlannedMutationJsonlRow(row.plannedMutation);
+      if (!mutationRow) {
+        throw new Error(`FROZEN_MUTATION_PLAN_MISSING:${row.id}`);
       }
-
-      const normalizedProduct = normalizeMirrorProductForPreview(rawProduct);
-
-      const scopedProduct = filterVariantsForFrozenVariantTargets(
-        normalizedProduct,
-        variantIdsByProduct,
-      );
-
-      const mutationRow = buildProductMutationInputFromRules({
-        product: scopedProduct,
-        rules,
-        changes,
-        historyId,
-        shop: history.shop,
-        batchId,
-      });
-
-      if (mutationRow) {
-        formattedRows.push(mutationRow);
-      }
+      formattedRows.push(mutationRow);
     }
 
     return {
       formattedProducts: formattedRows.join("\n"),
-      changes,
+      changes: [],
       batchId,
       batchTargetCount: rows.length,
       lastProductId,

@@ -51,9 +51,10 @@ function usePageVisibility() {
   return isVisible;
 }
 
-export function useSyncStatusQuery() {
+export function useSyncStatusQuery(options = {}) {
   const api = useApiClient();
   const isVisible = usePageVisibility();
+  const initialData = options?.initialData ?? undefined;
 
   return useQuery({
     queryKey: ["sync-status"],
@@ -62,6 +63,7 @@ export function useSyncStatusQuery() {
       return result?.syncStatus || null;
     },
     enabled: isVisible,
+    initialData,
     refetchInterval: (query) => {
       if (!isVisible || !isActiveSyncStatus(query.state.data)) {
         return false;
@@ -133,8 +135,8 @@ export function useProductTrackQuery() {
   });
 }
 
-export function useSyncStatusHelpers() {
-  const query = useSyncStatusQuery();
+export function useSyncStatusHelpers(options = {}) {
+  const query = useSyncStatusQuery(options);
   const startProductSync = useStartProductSyncMutation();
 
   const isSyncInProgress = isActiveSyncStatus(query.data);
