@@ -1,3 +1,4 @@
+//web/helpers/webhookHelpers/bulkOperations/bulkEdit.js
 import axios from "axios";
 import {
   getSession,

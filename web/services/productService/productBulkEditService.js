@@ -1,3 +1,4 @@
+//web/services/productService/productBulkEditService.js
 import crypto from "crypto";
 import shopify from "../../shopify.js";
 import { uploadToShopifyStagedTarget } from "../../utils/productBulkEditUtils.js";

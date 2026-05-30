@@ -1,3 +1,4 @@
+//web/helpers/productBulkOperationHelpers/mutationTemplates.js
 export const PRODUCT_SET_MODE = {
   PRODUCT_ONLY: "PRODUCT_ONLY",
   PRODUCT_DELETE: "PRODUCT_DELETE",

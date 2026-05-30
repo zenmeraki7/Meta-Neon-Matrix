@@ -128,8 +128,16 @@ export const useFormValidation = (
 };
 
 // Utility function for common validation rule sets
-export const getCommonValidationRules = (type: 'email' | 'url' | 'phone' | 'shopifyHandle' | 'price' | 'sku'): ValidationRule => {
-  const rules: Record<string, ValidationRule> = {
+export const getCommonValidationRules = (
+  type:
+    | 'email'
+    | 'url'
+    | 'phone'
+    | 'shopifyHandle'
+    | 'price'
+    | 'sku'
+    | 'customId'
+): ValidationRule => {  const rules: Record<string, ValidationRule> = {
     email: {
       required: true,
       email: true,
@@ -174,7 +182,23 @@ export const getCommonValidationRules = (type: 'email' | 'url' | 'phone' | 'shop
       minLength: 1,
       maxLength: 255,
       noWhitespace: true,
+    },
+    customId: {
+  minLength: 1,
+  maxLength: 255,
+  pattern: /^[A-Za-z0-9_-]+$/,
+  custom: (value: string) => {
+    if (value.includes(':')) {
+      return "Custom ID cannot contain ':'. Use letters, numbers, hyphens, or underscores only.";
     }
+
+    if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+      return 'Custom ID can only contain letters, numbers, hyphens, and underscores.';
+    }
+
+    return undefined;
+  },
+},
   };
   
   return rules[type] || {};

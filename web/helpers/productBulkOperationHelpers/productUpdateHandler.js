@@ -7,6 +7,21 @@ import {
   COLLECTION_OPERATIONS,
 } from "./constants.js";
 
+function validateShopifyCustomId(value) {
+  if (value === undefined || value === null || value === "") {
+    return;
+  }
+
+  const normalized = String(value);
+
+  if (normalized.includes(":")) {
+    throw new Error("Custom ID cannot contain ':'. Use letters, numbers, hyphens, or underscores only.");
+  }
+
+  if (!/^[A-Za-z0-9_-]+$/.test(normalized)) {
+    throw new Error("Custom ID can only contain letters, numbers, hyphens, and underscores.");
+  }
+}
 export const editProductField = ({
   product,
   field,
@@ -208,21 +223,21 @@ export const deleteProductField = ({
   shop,
   batchId,
 }) => {
+  const productId = product.id || product._id;
 
   if (isTracking) {
-
     return {
-      productId: product.id || product._id, // Support both
+      productId,
       title: product.title,
       img: getProductImage(product),
       oldValue: "Exists",
       newValue: "Deleted",
     };
   }
-  const productId = product.id || product._id;
+
   changes.push({
     editHistoryId: historyId,
-    productId: productId,
+    productId,
     shop,
     image: getProductImage(product),
     title: product.title,
@@ -499,14 +514,20 @@ function handleProductCustomField(
   batchId
 ) {
   if (isTracking) {
-    return {
-      productId: product.id || product._id,
-      title: product.title,
-      img: getProductImage(product),
-      oldValue: config.getValue(product),
-      newValue: getNewValue(config.fieldName, value, supportValue),
-    };
+  const previewValue = getNewValue(config.fieldName, value, supportValue);
+
+  if (config.fieldName === "customId") {
+    validateShopifyCustomId(previewValue);
   }
+
+  return {
+    productId: product.id || product._id,
+    title: product.title,
+    img: getProductImage(product),
+    oldValue: config.getValue(product),
+    newValue: previewValue,
+  };
+}
 
   const productId = product.id || product._id;
 
@@ -531,12 +552,22 @@ function handleProductCustomField(
     status: "pending",
   });
 
-  return JSON.stringify({
-    productSet: {
-      id: productId,
-      [config.fieldName]: value,
-    },
-  });
+ const payloadValue = getPayloadNewValue(
+  config.fieldName,
+  value,
+  supportValue
+);
+
+if (config.fieldName === "customId") {
+  validateShopifyCustomId(payloadValue);
+}
+
+return JSON.stringify({
+  productSet: {
+    id: productId,
+    [config.fieldName]: payloadValue,
+  },
+});
 }
 
 function handleVariantCustomField(
@@ -551,9 +582,17 @@ function handleVariantCustomField(
   batchId
 ) {
   const productId = product.id || product._id;
-  const variants = product.variants || [];
+  const variants = Array.isArray(product.variants) ? product.variants : [];
 
   if (!variants.length) return null;
+
+  const previewValue = getNewValue(config.fieldName, value, supportValue);
+  const payloadValue = getPayloadNewValue(config.fieldName, value, supportValue);
+
+  if (config.fieldName === "customId") {
+    validateShopifyCustomId(previewValue);
+    validateShopifyCustomId(payloadValue);
+  }
 
   // ===== TRACKING =====
   if (isTracking) {
@@ -563,13 +602,12 @@ function handleVariantCustomField(
       img: getProductImage(product),
       variants: variants.map((variant) => {
         const oldValue = getOldValue(config.getValue(variant));
-        const newValue = getNewValue(config.fieldName, value, supportValue);
 
         return {
           id: variant.id || variant._id,
           title: variant.title || "Default",
           oldValue,
-          newValue: newValue,
+          newValue: previewValue,
         };
       }),
     };
@@ -591,7 +629,6 @@ function handleVariantCustomField(
     })),
     variantFieldChanges: variants.map((variant) => {
       const oldValue = getOldValue(config.getValue(variant));
-      const newValue = getNewValue(config.fieldName, value, supportValue);
 
       return {
         variantId: variant.id,
@@ -604,7 +641,7 @@ function handleVariantCustomField(
           {
             field: config.fieldName,
             oldValue,
-            newValue,
+            newValue: previewValue,
             revertValue: config.getValue(variant),
           },
         ],
@@ -627,12 +664,11 @@ function handleVariantCustomField(
           optionName: op.name,
           name: op.value,
         })),
-        [config.fieldName]: getPayloadNewValue(config.fieldName, value, supportValue),
+        [config.fieldName]: payloadValue,
       })),
     },
   });
 }
-
 function handleTagField(
   product,
   config,
