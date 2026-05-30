@@ -4,9 +4,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "heroku-prebuild": "npm install --include=dev",
     "build": "vite build",
-    "heroku-postbuild": "npm run build",
     "dev": "vite",
     "coverage": "vitest run --coverage"
   },

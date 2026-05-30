@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "web/Index/server.js",
   "license": "UNLICENSED",
-   "engines": {
+  "engines": {
     "node": "22.x",
     "npm": "10.x"
   },
@@ -14,7 +14,9 @@
     "dev": "shopify app dev",
     "info": "shopify app info",
     "generate": "shopify app generate",
-    "deploy": "shopify app deploy"
+    "deploy": "shopify app deploy",
+    "@vitejs/plugin-react": "^4.7.0",
+    "vite": "^5.4.0"
   },
   "dependencies": {
     "@apollo/client": "^3.13.8",
@@ -23,6 +25,7 @@
     "@reduxjs/toolkit": "^2.6.1",
     "@shopify/polaris": "^13.9.5",
     "@tanstack/react-query": "^5.83.0",
+    "@vitejs/plugin-react": "^4.7.0",
     "async-retry": "^1.3.3",
     "concurrently": "^9.1.2",
     "dayjs": "^1.11.13",
@@ -59,7 +62,7 @@
     "picocolors": "^1.1.1",
     "rollup": "^4.28.0",
     "typescript": "^5.8.3",
-    "vite": "^6.3.5",
+    "vite": "^5.4.21",
     "vite-plugin-static-copy": "^3.0.0"
   }
 }
