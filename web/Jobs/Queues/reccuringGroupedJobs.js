@@ -1,5 +1,5 @@
 import { Queue, tryCatch } from "bullmq";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import logger from "../../utils/loggerUtils.js";
 
 const groupedQueue = new Queue(process.env.RECURRING_QUEUE, {

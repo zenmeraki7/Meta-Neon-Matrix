@@ -1,5 +1,5 @@
 // utils/uploadCsvToCloudinary.js
-import cloudinary from "../Config/cloudinary.js";
+import cloudinary from "../config/cloudinary.js";
 
 export const uploadCsvToCloudinary = async (
   filePath,

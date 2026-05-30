@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import { sendEmail } from "../../utils/emailHelper.js";
-import { uninstallFeedbackHTML } from "../../Config/templates/uninstallTemplate.js";
+import { uninstallFeedbackHTML } from "../../config/templates/uninstallTemplate.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { logWebhookError } from "../../utils/errorLogUtils.js";
 import { prisma } from "../../config/database.js";

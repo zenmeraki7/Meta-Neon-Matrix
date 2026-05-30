@@ -1,7 +1,7 @@
 import logger from "../../utils/loggerUtils.js";
 import dayjs from "dayjs";
 import { Worker } from "bullmq";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import CacheService from "../../utils/cacheService.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import {

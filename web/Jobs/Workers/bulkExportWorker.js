@@ -4,7 +4,7 @@ import path from "path";
 import { format } from "@fast-csv/format";
 import { Worker } from "bullmq";
 import logger from "../../utils/loggerUtils.js";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import { uploadCsvToCloudinary } from "../../utils/uploadCsvToCloudinary.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { prisma } from "../../config/database.js";

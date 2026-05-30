@@ -1,5 +1,5 @@
-import logger from "../utils/loggerUtils.js";
-import { scheduleDueRecurringEditRuns } from "../services/recurringEditExecutionService.js";
+import logger from "../../utils/loggerUtils.js";
+import { scheduleDueRecurringEditRuns } from "../../services/recurringEditExecutionService.js";
 
 const POLL_INTERVAL_MS = 60_000;
 

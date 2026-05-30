@@ -1,15 +1,15 @@
 import { Worker } from "bullmq";
-import { connection } from "../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import {
   RECURRING_EDIT_EXECUTION_QUEUE,
   executeRecurringEditRun,
-} from "../services/recurringEditExecutionService.js";
-import logger from "../utils/loggerUtils.js";
+} from "../../services/recurringEditExecutionService.js";
+import logger from "../../utils/loggerUtils.js";
 import {
   getJobAttempt,
   isRetryExhausted,
   recordRetryExhausted,
-} from "../utils/workerTelemetry.js";
+} from "../../utils/workerTelemetry.js";
 
 const recurringEditExecutionWorker = new Worker(
   RECURRING_EDIT_EXECUTION_QUEUE,

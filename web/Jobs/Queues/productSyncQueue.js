@@ -1,6 +1,6 @@
 // Jobs/Queues/productSyncQueue.js
 import { Queue } from "bullmq";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 
 export const productSyncQueue = new Queue("product-sync-queue", {
   connection: connection,

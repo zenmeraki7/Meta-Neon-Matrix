@@ -1,15 +1,15 @@
 import { Worker } from "bullmq";
-import { connection } from "../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import {
   executeScheduledExportRun,
   SCHEDULED_EXPORT_EXECUTION_QUEUE,
-} from "../services/scheduledExportExecutionService.js";
-import logger from "../utils/loggerUtils.js";
+} from "../../services/scheduledExportExecutionService.js";
+import logger from "../../utils/loggerUtils.js";
 import {
   getJobAttempt,
   isRetryExhausted,
   recordRetryExhausted,
-} from "../utils/workerTelemetry.js";
+} from "../../utils/workerTelemetry.js";
 
 const scheduledExportExecutionWorker = new Worker(
   SCHEDULED_EXPORT_EXECUTION_QUEUE,

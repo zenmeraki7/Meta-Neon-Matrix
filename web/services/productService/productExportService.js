@@ -3,7 +3,7 @@ import { Parser } from "json2csv";
 import { fieldMappings } from "../../utils/productExportUtils.js";
 import { graphqlProductsExportQuery  } from "../../graphql/product.js";
 import CacheService from "../../utils/cacheService.js";
-import { EXPORT_TYPES } from "../../Config/constants.js";
+import { EXPORT_TYPES } from "../../config/constants.js";
 import { getCache, setCache } from "../../utils/cacheUtils.js";
 import { prisma } from "../../config/database.js";
 

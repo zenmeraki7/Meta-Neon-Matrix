@@ -1,5 +1,5 @@
 // web/services/cacheService.js - PRODUCTION-GRADE
-import { redisClient, redisMetrics } from "../Config/redis.js";
+import { redisClient, redisMetrics } from "../config/redis.js";
 import crypto from "./loggerUtils.js";
 import { LRUCache } from "lru-cache";
 

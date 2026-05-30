@@ -1,9 +1,9 @@
 import { addAppInstallationJob } from "../Jobs/Queues/appInstallationJob.js";
-import { getReferralEmailContent } from "../Config/templates/referralTemplate.js";
+import { getReferralEmailContent } from "../config/templates/referralTemplate.js";
 import {
   adminInstallNotificationHTML,
   welcomeEmailHTML,
-} from "../Config/templates/welcomeTemplate.js";
+} from "../config/templates/welcomeTemplate.js";
 import { sendEmail } from "../utils/emailHelper.js";
 import { generateReferralCode } from "../utils/referralUtils.js";
 import { clearKeyCaches } from "../utils/cacheUtils.js";

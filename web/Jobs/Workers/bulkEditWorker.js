@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { connection } from "../../Config/redis.js";
+import { connection } from "../../config/redis.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 import ProductBulkService from "../../services/productService/productBulkEditService.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";

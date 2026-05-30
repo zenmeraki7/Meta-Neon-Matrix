@@ -1,5 +1,5 @@
 import { NotFoundError } from "../../utils/errorUtils.js";
-import { EDIT_TYPES, FIELD_TRANSLATIONS } from "../../Config/constants.js";
+import { EDIT_TYPES, FIELD_TRANSLATIONS } from "../../config/constants.js";
 import { getCache, setCache } from "../../utils/cacheUtils.js";
 import { prisma } from "../../config/database.js";
 import { projectEditHistoryStatus } from "../historyStatusProjectionService.js";
