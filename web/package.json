@@ -4,7 +4,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "cd frontend && npm install --legacy-peer-deps && npm run build && cd ..",
+    "build": "npx prisma generate --schema=./prisma/schema.prisma && cd frontend && npm install --legacy-peer-deps && npm run build && cd ..",
     "start": "node index.js",
     "debug": "node --inspect-brk index.js",
     "dev": "cross-env NODE_ENV=development nodemon index.js --ignore ./frontend",
