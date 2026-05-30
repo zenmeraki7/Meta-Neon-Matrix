@@ -1,3 +1,4 @@
+//web/shopify.js
 import {
   BillingInterval,
   LATEST_API_VERSION,
@@ -12,7 +13,7 @@ dotenv.config();
 
 // Set SSL environment variables that pg will pick up
 process.env.PGSSLMODE = 'require';
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+// process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {

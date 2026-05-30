@@ -1,27 +1,38 @@
-# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
-
 client_id = "0d2faed5eadc2b3043d4da7d9dc6e290"
 name = "MetaMatrix Bulk Product Editor"
 handle = "metamatrix"
-application_url = "https://metamatrix-a1cccaa914e8.herokuapp.com/"
+application_url = "https://metamatrix-a1cccaa914e8.herokuapp.com"
 embedded = true
 
 [webhooks]
 api_version = "2024-07"
 
-  [[webhooks.subscriptions]]
-  uri = "/api/webhooks"
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+[[webhooks.subscriptions]]
+topics = [
+  "bulk_operations/finish",
+  "app/uninstalled",
+  "products/create",
+  "products/update",
+  "products/delete"
+]
+uri = "/api/webhooks"
+
+[[webhooks.subscriptions]]
+compliance_topics = [
+  "customers/data_request",
+  "customers/redact",
+  "shop/redact"
+]
+uri = "/api/webhooks"
 
 [access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_inventory,read_locations,read_metaobjects,read_products,write_products"
-optional_scopes = [ ]
+optional_scopes = []
 use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://metamatrix-a1cccaa914e8.herokuapp.com//auth/callback",
-  "https://metamatrix-a1cccaa914e8.herokuapp.com//auth/shopify/callback",
-  "https://metamatrix-a1cccaa914e8.herokuapp.com//api/auth/callback"
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/callback",
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/shopify/callback",
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/api/auth/callback"
 ]
