@@ -8,6 +8,8 @@ import { finalizeRecurringRunFromHistory } from "../../services/recurringEditExe
 import { finalizeAutomaticProductRuleRunFromHistory } from "../../services/automaticProductRuleExecutionService.js";
 import { prisma } from "../../config/database.js";
 import { recordMirrorAnomaly } from "../../services/mirrorAnomalyService.js";
+import { addbulkOperatonMutationJob } from "../Queues/bulkOperationMutationJob.js";
+import { buildBullSafeJobId } from "../../utils/jobQueueUtils.js";
 import {
   acquireExclusiveShopWork,
   releaseExclusiveShopWork,
@@ -29,6 +31,7 @@ import {
 const QUEUE_NAME = process.env.EDIT_QUEUE || "bulk-edit";
 const WORKER_NAME = "bulkEditWorker";
 const STALE_DISPATCH_MS = 20 * 60 * 1000;
+const BULK_OPERATION_RECOVERY_DELAY_MS = 60_000;
 
 class RetryableBulkEditError extends Error {
   constructor(message, code = "retryable_bulk_edit") {
@@ -259,7 +262,7 @@ async function markHistoryFailure(historyId, shop, error, attempt, executionId, 
         }),
       ),
     },
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 async function processBulkEdit(job) {
@@ -425,21 +428,52 @@ async function processBulkEdit(job) {
     if (!updated.count) {
       throw new Error("Bulk edit dispatch state could not be persisted safely");
     }
-
-    logger.info("Bulk edit worker queued Shopify bulk mutation", {
-      worker: WORKER_NAME,
-      queue: QUEUE_NAME,
+   await addbulkOperatonMutationJob(
+  {
+    shop,
+    admin_graphql_api_id: result.bulkOperation.id,
+    id: result.bulkOperation.id,
+    type: "MUTATION",
+    source: "bulk_edit_delayed_recovery",
+    historyId,
+    executionId: executionId || history.executionIdentity || null,
+  },
+  {
+    delay: BULK_OPERATION_RECOVERY_DELAY_MS,
+    jobId: buildBullSafeJobId(
+      "bulk-operation-mutation-recovery",
       shop,
-      jobId: job.id,
-      historyId,
-      executionId: executionId || history.executionIdentity || null,
-      attempt,
-      source,
-      batchId,
-      targetCount: batchTargetCount,
-      changeCount: changes.length,
-      bulkOperationId: result.bulkOperation.id,
-    });
+      result.bulkOperation.id,
+    ),
+  },
+);
+
+logger.info("Bulk edit worker scheduled Shopify bulk mutation recovery", {
+  worker: WORKER_NAME,
+  queue: QUEUE_NAME,
+  shop,
+  jobId: job.id,
+  historyId,
+  executionId: executionId || history.executionIdentity || null,
+  bulkOperationId: result.bulkOperation.id,
+  recoveryDelayMs: BULK_OPERATION_RECOVERY_DELAY_MS,
+});
+
+logger.info("Bulk edit worker queued Shopify bulk mutation", {
+  worker: WORKER_NAME,
+  queue: QUEUE_NAME,
+  shop,
+  jobId: job.id,
+  historyId,
+  executionId: executionId || history.executionIdentity || null,
+  attempt,
+  source,
+  batchId,
+  targetCount: batchTargetCount,
+  changeCount: changes.length,
+  bulkOperationId: result.bulkOperation.id,
+});
+
 
     return {
       success: true,
@@ -455,7 +489,7 @@ async function processBulkEdit(job) {
         worker: WORKER_NAME,
         queue: QUEUE_NAME,
         jobId: job?.id || null,
-      }).catch(() => {});
+      }).catch(() => { });
     } else {
       await markHistoryFailure(historyId, shop, err, attempt, executionId, source);
 
@@ -463,13 +497,13 @@ async function processBulkEdit(job) {
         historyId,
         status: "FAILED",
         errorMessage: err.message,
-      }).catch(() => {});
+      }).catch(() => { });
 
       await finalizeAutomaticProductRuleRunFromHistory({
         historyId,
         status: "FAILED",
         errorMessage: err.message,
-      }).catch(() => {});
+      }).catch(() => { });
 
       await recordMirrorAnomaly({
         shop: shop || "unknown",
@@ -487,7 +521,7 @@ async function processBulkEdit(job) {
           source,
           executionId,
         },
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     await clearKeyCaches(`${shop}:fetchHistories`);
