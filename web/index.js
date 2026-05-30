@@ -136,8 +136,20 @@ app.get(
   shopify.redirectToShopifyOrAppRoot()
 );
 
+console.log("Registered webhook handlers:", Object.keys(PrivacyWebhookHandlers));
+
 app.post(
   shopify.config.webhooks.path,
+  (req, _res, next) => {
+    logger.info("Webhook HTTP request received", {
+      topic: req.get("x-shopify-topic") || null,
+      shop: req.get("x-shopify-shop-domain") || null,
+      webhookId: req.get("x-shopify-webhook-id") || null,
+      apiVersion: req.get("x-shopify-api-version") || null,
+    });
+
+    next();
+  },
   shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers })
 );
 
