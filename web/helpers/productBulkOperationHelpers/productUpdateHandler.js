@@ -471,27 +471,31 @@ function handleVariantField(
   });
 
   return JSON.stringify({
-    productSet: {
-      id: productId,
-      variants: variants.map((variant) => {
-        const newValue = getNewVariantValue(
-          variant,
-          config,
-          operation,
-          value
-        );
+  productSet: {
+    id: productId,
+    variants: variants.map((variant) => {
+      const newValue = getNewVariantValue(
+        variant,
+        config,
+        operation,
+        value
+      );
 
-        const formattedValue = config.isNumeric
-          ? Number(newValue).toFixed(2)
-          : newValue;
+      const formattedValue = config.isNumeric
+        ? Number(newValue).toFixed(2)
+        : newValue;
 
-        return {
-          id: variant.id,
-          [config.fieldName]: formattedValue,
-        };
-      }),
-    },
-  });
+      return {
+        id: variant.id,
+        optionValues: (variant.selectedOptions ?? []).map((op) => ({
+          optionName: op.name,
+          name: op.value,
+        })),
+        [config.fieldName]: formattedValue,
+      };
+    }),
+  },
+});
 }
 
 function handleProductCustomField(
