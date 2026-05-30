@@ -377,6 +377,61 @@ function handleProductField(
   });
 }
 
+function normalizeOptionValueName(value) {
+  if (typeof value === "string") return value;
+  if (value?.name) return value.name;
+  if (value?.value) return value.value;
+  return null;
+}
+
+function buildProductOptionsForProductSet(product, variants) {
+  const options = Array.isArray(product?.options) ? product.options : [];
+
+  if (options.length > 0) {
+    return options
+      .filter((option) => option?.name)
+      .map((option) => ({
+        ...(option.id ? { id: option.id } : {}),
+        name: option.name,
+        values: (option.values ?? [])
+          .map((value) => normalizeOptionValueName(value))
+          .filter(Boolean)
+          .map((name) => ({ name })),
+      }));
+  }
+
+  const optionMap = new Map();
+
+  for (const variant of variants) {
+    const selectedOptions = Array.isArray(variant?.selectedOptions)
+      ? variant.selectedOptions
+      : [];
+
+    for (const selectedOption of selectedOptions) {
+      if (!selectedOption?.name || !selectedOption?.value) continue;
+
+      if (!optionMap.has(selectedOption.name)) {
+        optionMap.set(selectedOption.name, new Set());
+      }
+
+      optionMap.get(selectedOption.name).add(selectedOption.value);
+    }
+  }
+
+  if (optionMap.size === 0) {
+    return [
+      {
+        name: "Title",
+        values: [{ name: "Default Title" }],
+      },
+    ];
+  }
+
+  return Array.from(optionMap.entries()).map(([name, values]) => ({
+    name,
+    values: Array.from(values).map((value) => ({ name: value })),
+  }));
+}
 function handleVariantField(
   product,
   config,
@@ -473,12 +528,15 @@ function handleVariantField(
   return JSON.stringify({
   productSet: {
     id: productId,
+
+    productOptions: buildProductOptionsForProductSet(product, variants),
+
     variants: variants.map((variant) => {
       const newValue = getNewVariantValue(
         variant,
         config,
         operation,
-        value
+        value,
       );
 
       const formattedValue = config.isNumeric
