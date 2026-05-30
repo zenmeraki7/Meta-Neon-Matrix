@@ -473,10 +473,6 @@ function handleVariantField(
   return JSON.stringify({
     productSet: {
       id: productId,
-      productOptions: product.options.map((op) => ({
-        name: op.name,
-        values: (op.values ?? []).map((val) => ({ name: val })),
-      })),
       variants: variants.map((variant) => {
         const newValue = getNewVariantValue(
           variant,
@@ -491,10 +487,6 @@ function handleVariantField(
 
         return {
           id: variant.id,
-          optionValues: (variant.selectedOptions ?? []).map((op) => ({
-            optionName: op.name,
-            name: op.value,
-          })),
           [config.fieldName]: formattedValue,
         };
       }),
@@ -570,122 +562,7 @@ return JSON.stringify({
 });
 }
 
-function handleVariantField(
-  product,
-  config,
-  operation,
-  value,
-  changes,
-  isTracking,
-  historyId,
-  shop,
-  batchId
-) {
-  const productId = product.id || product._id;
-  const variants = Array.isArray(product?.variants) ? product.variants : [];
-  const options = Array.isArray(product?.options) ? product.options : [];
 
-  if (isTracking) {
-    return {
-      productId,
-      title: product.title,
-      img: getProductImage(product),
-      variants: variants.map((variant) => {
-        const currentValue = config.getValue(variant);
-        const newValue = getNewVariantValue(
-          variant,
-          config,
-          operation,
-          value
-        );
-
-        const finalNewValue =
-          config.isNumeric && typeof newValue === "number"
-            ? Number(newValue).toFixed(2)
-            : newValue;
-
-        return {
-          id: variant.id || variant._id,
-          title: variant.title || "Default",
-          oldValue: currentValue,
-          newValue: finalNewValue,
-        };
-      }),
-    };
-  }
-
-  if (variants.length === 0) {
-    return null;
-  }
-
-  changes.push({
-    editHistoryId: historyId,
-    productId,
-    shop,
-    image: getProductImage(product),
-    title: product.title,
-    scope: "variant",
-    batchId,
-    options: options.map((op) => ({
-      id: op.id,
-      name: op.name,
-      values: op.values,
-    })),
-    variantFieldChanges: variants.map((variant) => {
-      const currentValue = config.getValue(variant);
-      const newValue = getNewVariantValue(
-        variant,
-        config,
-        operation,
-        value
-      );
-
-      const formattedValue = config.isNumeric
-        ? Number(newValue).toFixed(2)
-        : newValue;
-
-      return {
-        variantId: variant.id,
-        variantTitle: variant.title,
-        selectedOptions: (variant.selectedOptions ?? []).map((op) => ({
-          name: op.name,
-          value: op.value,
-        })),
-        changes: [
-          {
-            field: config.fieldName,
-            oldValue: currentValue,
-            newValue: formattedValue,
-          },
-        ],
-      };
-    }),
-    status: "pending",
-  });
-
-  return JSON.stringify({
-    productSet: {
-      id: productId,
-      variants: variants.map((variant) => {
-        const newValue = getNewVariantValue(
-          variant,
-          config,
-          operation,
-          value
-        );
-
-        const formattedValue = config.isNumeric
-          ? Number(newValue).toFixed(2)
-          : newValue;
-
-        return {
-          id: variant.id,
-          [config.fieldName]: formattedValue,
-        };
-      }),
-    },
-  });
-}
 function handleTagField(
   product,
   config,
