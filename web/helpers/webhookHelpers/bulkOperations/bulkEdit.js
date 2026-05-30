@@ -702,6 +702,24 @@ export async function handleProductEditOperation({ bulkOperationId, shop = null 
 
     const session = await getSession(history.shop);
     const bulkOperation = await fetchBulkOperationDetails(session, bulkOperationId);
+    if (["CREATED", "RUNNING"].includes(bulkOperation?.status)) {
+  await prisma.editHistory.updateMany({
+    where: {
+      id: history.id,
+      shop: history.shop,
+      executionState: BULK_EDIT_EXECUTION_STATES.FINALIZING,
+      bulkOperationId,
+    },
+    data: {
+      executionState: BULK_EDIT_EXECUTION_STATES.AWAITING_SHOPIFY,
+    },
+  });
+
+  const error = new Error(`Shopify bulk operation still ${bulkOperation.status}`);
+  error.code = "shopify_bulk_operation_not_ready";
+  error.retryable = true;
+  throw error;
+}
     const hasFailure =
       bulkOperation?.errorCode ||
       ["FAILED", "CANCELED", "CANCELING"].includes(bulkOperation?.status);
@@ -739,23 +757,95 @@ export async function handleProductEditOperation({ bulkOperationId, shop = null 
       await clearKeyCaches(`${history.shop}:historyDetails:${history.id}`);
       return { success: false, reason: "bulk_operation_failed" };
     }
+if (!bulkOperation?.url) {
+  await markProcessingBatchStatus(history.processingBatchId, "failed");
 
-    await applyBulkMirrorUpdates(history, bulkOperation);
+  await markHistoryFailure(
+    history,
+    bulkOperation,
+    "Shopify bulk operation completed without a result URL",
+    "shopify_bulk_mutation_missing_result_url",
+    claimKind,
+  );
 
-    if (claimKind === "edit") {
-      const result = await finalizeEditSuccess(history);
-      await clearKeyCaches(`${history.shop}:historyDetails:${history.id}`);
-      return { success: true, continued: result.continued, kind: "edit" };
-    }
+  await clearKeyCaches(`${history.shop}:historyDetails:${history.id}`);
+  await clearKeyCaches(`${history.shop}:historyChanges:${history.id}`);
 
-    const result = await finalizeUndoSuccess(history);
-    await clearKeyCaches(`${history.shop}:historyDetails:${history.id}`);
-    return { success: true, continued: result.continued, kind: "undo" };
+  return {
+    success: false,
+    reason: "shopify_bulk_mutation_missing_result_url",
+  };
+}
+  try {
+  await applyBulkMirrorUpdates(history, bulkOperation);
+} catch (error) {
+  await markProcessingBatchStatus(history.processingBatchId, "failed");
+
+  await markHistoryFailure(
+    history,
+    bulkOperation,
+    error.message,
+    error.code || "shopify_bulk_mutation_result_parse",
+    claimKind,
+  );
+
+  if (claimKind === "edit") {
+    await finalizeRecurringRunFromHistory({
+      historyId: history.id,
+      status: "FAILED",
+      errorMessage: error.message,
+    });
+
+    await finalizeAutomaticProductRuleRunFromHistory({
+      historyId: history.id,
+      status: "FAILED",
+      errorMessage: error.message,
+    });
+  }
+
+  await clearKeyCaches(`${history.shop}:historyDetails:${history.id}`);
+  await clearKeyCaches(`${history.shop}:historyChanges:${history.id}`);
+
+  return {
+    success: false,
+    reason: error.code || "shopify_bulk_mutation_result_parse",
+    message: error.message,
+  };
+}
+
+if (claimKind === "edit") {
+  const result = await finalizeEditSuccess(history);
+  await clearKeyCaches(`${history.shop}:historyDetails:${history.id}`);
+  await clearKeyCaches(`${history.shop}:historyChanges:${history.id}`);
+
+  return { success: true, continued: result.continued, kind: "edit" };
+}
+
+const result = await finalizeUndoSuccess(history);
+await clearKeyCaches(`${history.shop}:historyDetails:${history.id}`);
+await clearKeyCaches(`${history.shop}:historyChanges:${history.id}`);
+
+return { success: true, continued: result.continued, kind: "undo" };
   } finally {
     await releaseBulkOperationFinalizeLock(finalizeLockKey).catch(() => { });
   }
 }
 
+function extractProductSetUserErrors(parsed) {
+  const productSet = parsed?.data?.productSet;
+
+  const directErrors = Array.isArray(productSet?.userErrors)
+    ? productSet.userErrors
+    : [];
+
+  const operationErrors = Array.isArray(
+    productSet?.productSetOperation?.userErrors
+  )
+    ? productSet.productSetOperation.userErrors
+    : [];
+
+  return [...directErrors, ...operationErrors].filter(Boolean);
+}
 export async function fetchBulkOperationData(url, shop) {
   const response = await axios.get(url, {
     responseType: "text",
@@ -765,15 +855,31 @@ export async function fetchBulkOperationData(url, shop) {
   });
 
   const operations = [];
+  const rowErrors = [];
+  const malformedRows = [];
+
   const lines = response.data.split("\n").filter(Boolean);
 
   for (const line of lines) {
     try {
       const parsed = JSON.parse(line);
-      const product = parsed?.data?.productSet?.product;
-      if (!product?.id) continue;
 
-      // Extract nested variants from edges
+      const userErrors = extractProductSetUserErrors(parsed);
+      if (userErrors.length > 0) {
+        rowErrors.push({
+          userErrors,
+          row: parsed,
+        });
+        continue;
+      }
+
+      const product = parsed?.data?.productSet?.product;
+
+      if (!product?.id) {
+        malformedRows.push(parsed);
+        continue;
+      }
+
       const variants = asArray(product?.variants?.edges)
         .map((edge) => edge?.node)
         .filter((node) => node?.id)
@@ -783,19 +889,25 @@ export async function fetchBulkOperationData(url, shop) {
           sku: node.sku ?? null,
           barcode: node.barcode ?? null,
           price: node.price != null ? Number(node.price) : null,
-          compareAtPrice: node.compareAtPrice != null ? Number(node.compareAtPrice) : null,
-          inventoryQuantity: node.inventoryQuantity != null ? Number(node.inventoryQuantity) : null,
+          compareAtPrice:
+            node.compareAtPrice != null ? Number(node.compareAtPrice) : null,
+          inventoryQuantity:
+            node.inventoryQuantity != null ? Number(node.inventoryQuantity) : null,
           inventoryPolicy: node.inventoryPolicy ?? null,
           taxable: node.taxable ?? null,
           taxCode: node.taxCode ?? null,
           position: node.position != null ? Number(node.position) : null,
           selectedOptionsJson: node.selectedOptions ?? null,
-          cost: node.inventoryItem?.unitCost?.amount != null
-            ? Number(node.inventoryItem.unitCost.amount) : null,
+          cost:
+            node.inventoryItem?.unitCost?.amount != null
+              ? Number(node.inventoryItem.unitCost.amount)
+              : null,
           countryOfOrigin: node.inventoryItem?.countryCodeOfOrigin ?? null,
           hsTariffCode: node.inventoryItem?.harmonizedSystemCode ?? null,
-          weight: node.inventoryItem?.measurement?.weight?.value != null
-            ? Number(node.inventoryItem.measurement.weight.value) : null,
+          weight:
+            node.inventoryItem?.measurement?.weight?.value != null
+              ? Number(node.inventoryItem.measurement.weight.value)
+              : null,
           weightUnit: node.inventoryItem?.measurement?.weight?.unit ?? null,
           option1Value: node.selectedOptions?.[0]?.value ?? null,
           option2Value: node.selectedOptions?.[1]?.value ?? null,
@@ -817,7 +929,10 @@ export async function fetchBulkOperationData(url, shop) {
           templateSuffix: product.templateSuffix ?? null,
           descriptionHtml: product.descriptionHtml ?? null,
           descriptionText: product.descriptionHtml
-            ? product.descriptionHtml.replace(/<[^>]*>/g, " ").replace(/\s{2,}/g, " ").trim() || null
+            ? product.descriptionHtml
+                .replace(/<[^>]*>/g, " ")
+                .replace(/\s{2,}/g, " ")
+                .trim() || null
             : null,
           createdAt: product.createdAt ? new Date(product.createdAt) : null,
           updatedAt: product.updatedAt ? new Date(product.updatedAt) : null,
@@ -827,7 +942,8 @@ export async function fetchBulkOperationData(url, shop) {
           categoryName: product.category?.name ?? null,
           seoTitle: product.seo?.title ?? null,
           seoDescription: product.seo?.description ?? null,
-          totalInventory: product.totalInventory != null ? Number(product.totalInventory) : null,
+          totalInventory:
+            product.totalInventory != null ? Number(product.totalInventory) : null,
           featuredImageUrl: product.featuredImage?.url ?? null,
           featuredImageAltText: product.featuredImage?.altText ?? null,
           optionsJson: product.options ?? null,
@@ -843,9 +959,34 @@ export async function fetchBulkOperationData(url, shop) {
         },
         variants,
       });
-    } catch (_error) {
-      // skip malformed lines
+    } catch (error) {
+      malformedRows.push({
+        line,
+        message: error.message,
+      });
     }
+  }
+
+  if (rowErrors.length > 0) {
+    const error = new Error(
+      `Shopify bulk mutation row errors: ${JSON.stringify(
+        rowErrors.slice(0, 5),
+      )}`,
+    );
+    error.code = "shopify_bulk_mutation_user_errors";
+    error.rowErrors = rowErrors;
+    throw error;
+  }
+
+  if (operations.length === 0) {
+    const error = new Error(
+      `Shopify bulk mutation returned no successful product rows. Malformed rows: ${JSON.stringify(
+        malformedRows.slice(0, 5),
+      )}`,
+    );
+    error.code = "shopify_bulk_mutation_no_success_rows";
+    error.malformedRows = malformedRows;
+    throw error;
   }
 
   return operations;
