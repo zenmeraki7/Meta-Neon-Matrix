@@ -15,6 +15,7 @@ import {
 
 // ✅ Prisma
 import { prisma } from "../../config/database.js";
+import { buildBullSafeJobId } from "../../utils/jobQueueUtils.js";
 
 
 /**
@@ -134,7 +135,12 @@ export const updateProducts = async (historyId, isUndo, shopFromJob = null) => {
             { historyId: history.id, shop: history.shop },
             {
               delay: 60_000,
-              jobId: `scheduled-undo-retry:${history.shop}:${history.id}:${Date.now()}`,
+              jobId: buildBullSafeJobId(
+                "scheduled-undo-retry",
+                history.shop,
+                history.id,
+                Date.now(),
+              ),
             },
           );
 

@@ -1,3 +1,4 @@
+//web/utils/bulkOperationHelper.js
 import { adminGraphqlWithRetry } from "./shopifyAdminApi.js";
 
 export async function getCurrentBulkOperationStatus(

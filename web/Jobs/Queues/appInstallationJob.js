@@ -1,6 +1,7 @@
 import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
+  buildBullSafeJobId,
   buildDefaultJobOptions,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
@@ -21,7 +22,7 @@ export const appInstallationQueue = new Queue(QUEUE_NAME, {
 });
 
 export async function addAppInstallationJob(data, options = {}) {
-  const jobId = options.jobId || `app-install:${data?.shop}`;
+  const jobId = options.jobId || buildBullSafeJobId("app-install", data?.shop);
 
   return appInstallationQueue.add(
     "app-installation",

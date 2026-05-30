@@ -1,3 +1,4 @@
+//web/graphql/product.js
 export const graphqlProductsBulkSyncQuery = `{
   products {
     edges {

@@ -1,6 +1,7 @@
 import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
+  buildBullSafeJobId,
   buildDefaultJobOptions,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
@@ -21,7 +22,7 @@ export const appUninstallQueue = new Queue(QUEUE_NAME, {
 });
 
 export async function addAppUninstallJob(data, options = {}) {
-  const jobId = options.jobId || `app-uninstall:${data?.shop}`;
+  const jobId = options.jobId || buildBullSafeJobId("app-uninstall", data?.shop);
 
   return appUninstallQueue.add(
     "app-uninstall",

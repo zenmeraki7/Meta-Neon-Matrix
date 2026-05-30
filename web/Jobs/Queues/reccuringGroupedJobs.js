@@ -1,6 +1,7 @@
 import { Queue, tryCatch } from "bullmq";
 import { connection } from "../../config/redis.js";
 import logger from "../../utils/loggerUtils.js";
+import { buildBullSafeJobId } from "../../utils/jobQueueUtils.js";
 
 const groupedQueue = new Queue(process.env.RECURRING_QUEUE, {
   connection: connection,
@@ -30,7 +31,7 @@ try {
     for (const frequency of FREQUENCIES) {
       // Handle Hourly and Every 2 Hours frequencies
       if (["Hourly", "Every 2 Hours"].includes(frequency)) {
-        const jobId = `group-${frequency}-${timezone}`;
+        const jobId = buildBullSafeJobId("group", frequency, timezone);
         const cronExpression = getCronForFrequency(frequency);
 
 
@@ -54,7 +55,7 @@ try {
       // Handle Daily frequency
       if (frequency === "Daily") {
         for (const time of timeSlots) {
-          const jobId = `group-Daily-${time}-${timezone}`;
+          const jobId = buildBullSafeJobId("group", "Daily", time, timezone);
           const cronExpression = getCronFromTime("Daily", time);
 
 
@@ -79,7 +80,7 @@ try {
       if (frequency === "Weekly") {
         for (const day of WEEKDAYS) {
           for (const time of timeSlots) {
-            const jobId = `group-Weekly-${day}-${time}-${timezone}`;
+            const jobId = buildBullSafeJobId("group", "Weekly", day, time, timezone);
             const cronExpression = getCronForWeekly(time, day);
 
 
@@ -110,7 +111,7 @@ try {
       if (frequency === "Monthly") {
         for (const day of DAYS_IN_MONTH) {
           for (const time of timeSlots) {
-            const jobId = `group-Monthly-${day}-${time}-${timezone}`;
+            const jobId = buildBullSafeJobId("group", "Monthly", day, time, timezone);
             const cronExpression = getCronForMonthly(time, day);
 
            

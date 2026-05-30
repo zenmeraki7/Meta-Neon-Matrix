@@ -1,6 +1,7 @@
 import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
+  buildBullSafeJobId,
   buildDefaultJobOptions,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
@@ -27,7 +28,7 @@ export async function addbulkOperatonQueryJob(data, options = {}) {
 
   const jobId =
     options.jobId ||
-    `bulk-op-query-finish:${data?.shop}:${entityId}`;
+    buildBullSafeJobId("bulk-op-query-finish", data?.shop, entityId);
 
   return bulkOperationQueryQueue.add(
     "bulk-operation-query",

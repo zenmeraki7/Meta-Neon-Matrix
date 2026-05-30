@@ -1,6 +1,7 @@
 import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
+  buildBullSafeJobId,
   buildDefaultJobOptions,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
@@ -25,7 +26,7 @@ export async function addbulkImportEditJob(data, options = {}) {
     throw new Error("bulk import edit job requires historyId, shop, and filePath");
   }
 
-  const jobId = options.jobId || `import-edit:${data?.historyId}`;
+  const jobId = options.jobId || buildBullSafeJobId("bulk-import-edit", data?.historyId);
 
   return bulkImportEditQueue.add(
     "bulk-import-edit",

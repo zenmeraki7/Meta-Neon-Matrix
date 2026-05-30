@@ -21,13 +21,15 @@ export function buildDefaultJobOptions({
   removeOnFail = { age: 7 * 24 * 3600, count: 2_000 },
   backoffDelay = 5_000,
 } = {}) {
+  const normalizedDelay = normalizeDelay(delay);
+
   return {
     attempts,
     backoff: buildJobBackoff(backoffDelay),
     removeOnComplete,
     removeOnFail,
     ...(priority !== undefined ? { priority } : {}),
-    ...(normalizeDelay(delay) ? { delay: normalizeDelay(delay) } : {}),
+    ...(normalizedDelay ? { delay: normalizedDelay } : {}),
   };
 }
 
@@ -51,17 +53,31 @@ export function mergeJobOptions(baseOptions = {}, overrideOptions = {}) {
       : {}),
     ...(baseOptions.removeOnFail || overrideOptions.removeOnFail
       ? {
-          removeOnFail: overrideOptions.removeOnFail ?? baseOptions.removeOnFail,
+          removeOnFail:
+            overrideOptions.removeOnFail ?? baseOptions.removeOnFail,
         }
       : {}),
   };
 }
 
-export function buildWebhookJobId({ topic, webhookId, shop, entityId }) {
-  if (webhookId) {
-    return `webhook:${topic}:${shop}:${webhookId}`;
-  }
-
-  return `webhook:${topic}:${shop}:${entityId || "unknown"}`;
+export function buildBullSafeJobId(...parts) {
+  return parts
+    .filter((part) => part !== undefined && part !== null && part !== "")
+    .map((part) =>
+      String(part)
+        .trim()
+        .replace(/:/g, "__")
+        .replace(/[^A-Za-z0-9_.-]/g, "_")
+        .slice(0, 120),
+    )
+    .join("-");
 }
 
+export function buildWebhookJobId({ topic, webhookId, shop, entityId }) {
+  return buildBullSafeJobId(
+    "webhook",
+    topic,
+    shop,
+    webhookId || entityId || "unknown",
+  );
+}

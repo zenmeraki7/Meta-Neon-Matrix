@@ -6,6 +6,7 @@ import { productSyncQueue } from "../Queues/productSyncQueue.js";
 import { prisma } from "../../config/database.js";
 import shopify from "../../shopify.js";
 import dotenv from "dotenv";
+import { buildBullSafeJobId } from "../../utils/jobQueueUtils.js";
 dotenv.config();
 
 const service = new Services();
@@ -114,7 +115,7 @@ async function handleAutoSync() {
       { shopUrl: store.shopUrl },
       {
         delay: delayMs,
-        jobId: `sync-${store.shopUrl}-${Date.now()}`,
+        jobId: buildBullSafeJobId("sync", store.shopUrl, Date.now()),
       },
     );
   }
@@ -142,7 +143,7 @@ async function handlePrioritySync() {
       { shopUrl: store.shopUrl },
       {
         priority: 1,
-        jobId: `priority-sync-${store.shopUrl}-${Date.now()}`,
+       jobId: buildBullSafeJobId("priority-sync", store.shopUrl, Date.now()),
       },
     );
   }

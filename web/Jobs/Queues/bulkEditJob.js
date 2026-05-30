@@ -1,6 +1,7 @@
 import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
+  buildBullSafeJobId,
   buildDefaultJobOptions,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
@@ -30,7 +31,7 @@ export async function addbulkEditJob(data, options = {}) {
     data,
     mergeJobOptions(defaultJobOptions, {
       ...options,
-      jobId: options.jobId || `bulk-edit:${data.historyId}`,
+      jobId: options.jobId || buildBullSafeJobId("bulk-edit", data.historyId, data.executionId),
     }),
   );
 }

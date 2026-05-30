@@ -1,6 +1,7 @@
 import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
+  buildBullSafeJobId,
   buildDefaultJobOptions,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
@@ -25,7 +26,7 @@ export async function addbulkUndoJob(data, options = {}) {
     throw new Error("bulk undo job requires historyId, shop, and executionId");
   }
 
-  const jobId = options.jobId || `bulk-undo:${data?.historyId}`;
+  const jobId = options.jobId || buildBullSafeJobId("bulk-undo", data?.historyId);
 
   return bulkUndoQueue.add(
     "bulk-undo",

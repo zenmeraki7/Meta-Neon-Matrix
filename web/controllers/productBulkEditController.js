@@ -18,6 +18,7 @@ import {
   buildPlannedUndoState,
 } from "../services/bulkEditExecutionStateService.js";
 import { resolveCanonicalProductTarget } from "../services/productService/productTargetingService.js";
+import { buildBullSafeJobId } from "../utils/jobQueueUtils.js";
 
 const productService = new Services();
 
@@ -354,7 +355,10 @@ export const createScheduledEdit = async (req, res) => {
     await scheduledEditQueue.add(
       "scheduled-task",
       { historyId: history.id, shop: session.shop },
-      { delay, jobId: `scheduled-edit:${session.shop}:${history.id}` },
+      {
+  delay,
+  jobId: buildBullSafeJobId("scheduled-edit", session.shop, history.id),
+},
     );
 
     if (scheduledUndoAt && scheduledUndoAt.getTime() > Date.now() && undoAllowed) {
@@ -363,7 +367,7 @@ export const createScheduledEdit = async (req, res) => {
         await scheduledEditQueue.add(
           "undo-task",
           { historyId: history.id, shop: session.shop },
-          { delay: undoDelay, jobId: `scheduled-undo:${session.shop}:${history.id}` },
+          { delay: undoDelay, jobId: buildBullSafeJobId("scheduled-undo", session.shop, history.id) },
         );
       }
     }
