@@ -570,50 +570,54 @@ return JSON.stringify({
 });
 }
 
-function handleVariantCustomField(
+function handleVariantField(
   product,
   config,
+  operation,
   value,
   changes,
-  supportValue,
   isTracking,
   historyId,
   shop,
   batchId
 ) {
   const productId = product.id || product._id;
-  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const variants = Array.isArray(product?.variants) ? product.variants : [];
+  const options = Array.isArray(product?.options) ? product.options : [];
 
-  if (!variants.length) return null;
-
-  const previewValue = getNewValue(config.fieldName, value, supportValue);
-  const payloadValue = getPayloadNewValue(config.fieldName, value, supportValue);
-
-  if (config.fieldName === "customId") {
-    validateShopifyCustomId(previewValue);
-    validateShopifyCustomId(payloadValue);
-  }
-
-  // ===== TRACKING =====
   if (isTracking) {
     return {
       productId,
       title: product.title,
       img: getProductImage(product),
       variants: variants.map((variant) => {
-        const oldValue = getOldValue(config.getValue(variant));
+        const currentValue = config.getValue(variant);
+        const newValue = getNewVariantValue(
+          variant,
+          config,
+          operation,
+          value
+        );
+
+        const finalNewValue =
+          config.isNumeric && typeof newValue === "number"
+            ? Number(newValue).toFixed(2)
+            : newValue;
 
         return {
           id: variant.id || variant._id,
           title: variant.title || "Default",
-          oldValue,
-          newValue: previewValue,
+          oldValue: currentValue,
+          newValue: finalNewValue,
         };
       }),
     };
   }
 
-  // ===== HISTORY =====
+  if (variants.length === 0) {
+    return null;
+  }
+
   changes.push({
     editHistoryId: historyId,
     productId,
@@ -622,27 +626,36 @@ function handleVariantCustomField(
     title: product.title,
     scope: "variant",
     batchId,
-    options: product.options?.map((op) => ({
+    options: options.map((op) => ({
       id: op.id,
       name: op.name,
       values: op.values,
     })),
     variantFieldChanges: variants.map((variant) => {
-      const oldValue = getOldValue(config.getValue(variant));
+      const currentValue = config.getValue(variant);
+      const newValue = getNewVariantValue(
+        variant,
+        config,
+        operation,
+        value
+      );
+
+      const formattedValue = config.isNumeric
+        ? Number(newValue).toFixed(2)
+        : newValue;
 
       return {
         variantId: variant.id,
         variantTitle: variant.title,
-        selectedOptions: variant.selectedOptions?.map((op) => ({
+        selectedOptions: (variant.selectedOptions ?? []).map((op) => ({
           name: op.name,
           value: op.value,
         })),
         changes: [
           {
             field: config.fieldName,
-            oldValue,
-            newValue: previewValue,
-            revertValue: config.getValue(variant),
+            oldValue: currentValue,
+            newValue: formattedValue,
           },
         ],
       };
@@ -650,22 +663,26 @@ function handleVariantCustomField(
     status: "pending",
   });
 
-  // ===== SHOPIFY PAYLOAD =====
   return JSON.stringify({
     productSet: {
       id: productId,
-      productOptions: product.options?.map((op) => ({
-        name: op.name,
-        values: op.values?.map((v) => ({ name: v })),
-      })),
-      variants: variants.map((variant) => ({
-        id: variant.id,
-        optionValues: variant.selectedOptions?.map((op) => ({
-          optionName: op.name,
-          name: op.value,
-        })),
-        [config.fieldName]: payloadValue,
-      })),
+      variants: variants.map((variant) => {
+        const newValue = getNewVariantValue(
+          variant,
+          config,
+          operation,
+          value
+        );
+
+        const formattedValue = config.isNumeric
+          ? Number(newValue).toFixed(2)
+          : newValue;
+
+        return {
+          id: variant.id,
+          [config.fieldName]: formattedValue,
+        };
+      }),
     },
   });
 }
