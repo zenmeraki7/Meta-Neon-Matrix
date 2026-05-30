@@ -86,7 +86,7 @@ async function markWebhookQueued(deliveryId) {
       status: "QUEUED",
       updatedAt: new Date(),
     },
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 async function markWebhookProcessed(deliveryId) {
@@ -97,7 +97,7 @@ async function markWebhookProcessed(deliveryId) {
       processedAt: new Date(),
       updatedAt: new Date(),
     },
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 async function markWebhookFailed(deliveryId, error) {
@@ -108,7 +108,7 @@ async function markWebhookFailed(deliveryId, error) {
       lastError: error?.message || String(error),
       updatedAt: new Date(),
     },
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 async function upsertReconcileSignal({
@@ -517,6 +517,15 @@ export default {
       const payload = safeParseJson(body);
       const bulkOperationId = payload.admin_graphql_api_id || payload.id;
 
+      logger.info("BULK_OPERATIONS_FINISH webhook received", {
+        shop,
+        webhookId,
+        bulkOperationId,
+        type: payload?.type || null,
+        status: payload?.status || null,
+        errorCode: payload?.error_code || payload?.errorCode || null,
+      });
+
       const reservation = await reserveWebhookDelivery({
         topic: "BULK_OPERATIONS_FINISH",
         shop,
@@ -526,10 +535,26 @@ export default {
       });
 
       if (!reservation.accepted) {
+        logger.warn("Duplicate BULK_OPERATIONS_FINISH webhook ignored", {
+          shop,
+          webhookId,
+          bulkOperationId,
+          deliveryId: reservation.deliveryId,
+        });
+
         return { success: true, message: "Duplicate ignored" };
       }
 
       try {
+        logger.info("Queueing bulk operation finalizer", {
+          shop,
+          webhookId,
+          bulkOperationId,
+          deliveryId: reservation.deliveryId,
+          type: payload?.type || null,
+          status: payload?.status || null,
+        });
+
         const jobData = {
           ...payload,
           shop,
@@ -538,8 +563,22 @@ export default {
 
         if (String(payload.type || "").toLowerCase() === "mutation") {
           await addbulkOperatonMutationJob(jobData);
+
+          logger.info("Bulk operation mutation finalizer queued", {
+            shop,
+            webhookId,
+            bulkOperationId,
+            deliveryId: reservation.deliveryId,
+          });
         } else {
           await addbulkOperatonQueryJob(jobData);
+
+          logger.info("Bulk operation query finalizer queued", {
+            shop,
+            webhookId,
+            bulkOperationId,
+            deliveryId: reservation.deliveryId,
+          });
         }
 
         await markWebhookQueued(reservation.deliveryId);
@@ -550,6 +589,14 @@ export default {
           message: "Bulk operation job queued",
         };
       } catch (error) {
+        logger.error("BULK_OPERATIONS_FINISH webhook failed", {
+          shop,
+          webhookId,
+          bulkOperationId,
+          deliveryId: reservation.deliveryId,
+          message: error.message,
+        });
+
         await markWebhookFailed(reservation.deliveryId, error);
         throw error;
       }
