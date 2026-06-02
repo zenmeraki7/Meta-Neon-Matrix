@@ -1,0 +1,163 @@
+import { createRequire } from "node:module";
+import { prisma } from "../config/database.js";
+
+const require = createRequire(import.meta.url);
+const prismaGenerated = require("../generated/prisma/index.js");
+const { Prisma } = prismaGenerated;
+
+export async function findProductsForListing({ where, orderBy, skip, take }) {
+  return prisma.product.findMany({
+    where,
+    select: {
+      title: true,
+      id: true,
+      status: true,
+      productType: true,
+      vendor: true,
+      totalInventory: true,
+      featuredImageUrl: true,
+      categoryName: true,
+      handle: true,
+      templateSuffix: true,
+      variantCount: true,
+      visibleOnlineStore: true,
+    },
+    orderBy,
+    skip,
+    take,
+  });
+}
+
+export async function countProducts(where) {
+  return prisma.product.count({ where });
+}
+
+export async function findDistinctProductFieldValues({
+  shop,
+  field,
+  mirrorBatchId = null,
+  search = "",
+  take = 20,
+}) {
+  return prisma.product.findMany({
+    where: {
+      shop,
+      ...(mirrorBatchId ? { mirrorBatchId } : {}),
+      NOT: [{ [field]: null }, { [field]: "" }],
+      ...(search
+        ? {
+            [field]: {
+              contains: search,
+              mode: "insensitive",
+            },
+          }
+        : {}),
+    },
+    select: {
+      [field]: true,
+    },
+    distinct: [field],
+    orderBy: {
+      [field]: "asc",
+    },
+    take,
+  });
+}
+
+export async function findDistinctVariantFieldValues({
+  shop,
+  field,
+  mirrorBatchId = null,
+  search = "",
+  take = 20,
+}) {
+  return prisma.variant.findMany({
+    where: {
+      shop,
+      ...(mirrorBatchId ? { mirrorBatchId } : {}),
+      NOT: [{ [field]: null }, { [field]: "" }],
+      ...(search
+        ? {
+            [field]: {
+              contains: search,
+              mode: "insensitive",
+            },
+          }
+        : {}),
+    },
+    select: {
+      [field]: true,
+    },
+    distinct: [field],
+    orderBy: {
+      [field]: "asc",
+    },
+    take,
+  });
+}
+
+export async function findDistinctCollectionTitles({
+  shop,
+  mirrorBatchId = null,
+  search = "",
+  take = 20,
+}) {
+  return prisma.collection.findMany({
+    where: {
+      shop,
+      ...(mirrorBatchId ? { mirrorBatchId } : {}),
+      NOT: [{ title: null }, { title: "" }],
+      ...(search
+        ? {
+            title: {
+              contains: search,
+              mode: "insensitive",
+            },
+          }
+        : {}),
+    },
+    select: {
+      title: true,
+    },
+    distinct: ["title"],
+    orderBy: {
+      title: "asc",
+    },
+    take,
+  });
+}
+
+export async function findDistinctProductTagValues({
+  shop,
+  mirrorBatchId = null,
+  search = "",
+  take = 20,
+}) {
+  const searchClause =
+    search.trim().length > 0
+      ? Prisma.sql`AND tag ILIKE ${`%${search.trim()}%`}`
+      : Prisma.empty;
+  const batchClause = mirrorBatchId
+    ? Prisma.sql`AND "mirrorBatchId" = ${mirrorBatchId}`
+    : Prisma.empty;
+
+  return prisma.$queryRaw`
+    SELECT DISTINCT tag AS value
+    FROM "Product", UNNEST("tags") AS tag
+    WHERE "shop" = ${shop}
+      ${batchClause}
+      AND tag IS NOT NULL
+      AND BTRIM(tag) <> ''
+      ${searchClause}
+    ORDER BY tag ASC
+    LIMIT ${take}
+  `;
+}
+
+export async function findStoreActiveCollectionBatchId(shop) {
+  const row = await prisma.store.findUnique({
+    where: { shopUrl: shop },
+    select: { activeCollectionBatchId: true },
+  });
+  return row?.activeCollectionBatchId || null;
+}

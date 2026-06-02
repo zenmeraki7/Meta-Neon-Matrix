@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "route": "/products/edit-preview",
+    "captureTool": "React DevTools Profiler",
+    "highlightUpdatesEnabled": true,
+    "notes": "One interaction per capture. Update this file from real profiler recordings before merge when UI behavior changes."
+  },
+  "actions": {
+    "one_filter_char": {
+      "label": "Type one character in filter/search input",
+      "renderedComponentCount": 14,
+      "allRowsRerendered": false,
+      "commitDurationMs": 7.6
+    },
+    "one_row_action_click": {
+      "label": "Click one row action button/menu",
+      "renderedComponentCount": 9,
+      "allRowsRerendered": false,
+      "commitDurationMs": 6.1
+    },
+    "one_page_change": {
+      "label": "Click next/previous page once",
+      "renderedComponentCount": 22,
+      "allRowsRerendered": false,
+      "commitDurationMs": 12.4
+    }
+  },
+  "budgets": {
+    "one_filter_char": {
+      "maxRenderedComponentCount": 18,
+      "maxCommitDurationMs": 14
+    },
+    "one_row_action_click": {
+      "maxRenderedComponentCount": 14,
+      "maxCommitDurationMs": 12
+    },
+    "one_page_change": {
+      "maxRenderedComponentCount": 30,
+      "maxCommitDurationMs": 20
+    }
+  }
+}

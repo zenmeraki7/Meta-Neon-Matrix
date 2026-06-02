@@ -1,0 +1,47 @@
+import { getStoreCreditFlagsByShop } from "../repositories/storeRepository.js";
+import { findLatestSubscriptionByShop } from "../repositories/subscriptionRepository.js";
+
+const SCHEDULED_EXPORT_PLAN_KEYS = new Set([
+  "ADVANCED_MONTHLY",
+  "PRO_MONTHLY",
+]);
+
+export function hasScheduledExportAccess(subscription = {}) {
+  return (
+    subscription?.isCreditUser === true ||
+    (SCHEDULED_EXPORT_PLAN_KEYS.has(subscription?.planKey) &&
+      subscription?.status === "ACTIVE")
+  );
+}
+
+export async function assertScheduledExportAccess(subscription = {}) {
+  if (!hasScheduledExportAccess(subscription)) {
+    const error = new Error("SCHEDULED_EXPORT_PLAN_UPGRADE_REQUIRED");
+    error.code = "SCHEDULED_EXPORT_PLAN_UPGRADE_REQUIRED";
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+export async function getScheduledExportPlanContext(shop) {
+  const [store, subscription] = await Promise.all([
+    getStoreCreditFlagsByShop(shop),
+    findLatestSubscriptionByShop(shop),
+  ]);
+
+  if (store?.isCreditAvailable) {
+    return {
+      shop,
+      planKey: "PRO_MONTHLY",
+      status: "ACTIVE",
+      isCreditUser: true,
+    };
+  }
+
+  return {
+    shop,
+    planKey: subscription?.planKey || "FREE",
+    status: subscription?.status || "FREE",
+    isCreditUser: false,
+  };
+}
