@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "../../../../hooks/useApiClient";
 
 export function canonicalizeFilters(filters = []) {
@@ -143,7 +143,7 @@ export default function useProducts({
         mirrorHealth: json?.data?.mirrorHealth || null,
       };
     },
-    placeholderData: (previousData) => previousData,
+    placeholderData: keepPreviousData,
   });
 
   useEffect(() => {
@@ -220,6 +220,9 @@ export default function useProducts({
     unavailableReason: query.data?.unavailableReason || null,
     mirrorHealth: query.data?.mirrorHealth || null,
     loading: query.isLoading,
+    fetching: query.isFetching,
+    placeholderData: query.isPlaceholderData,
+    hasProductData: Boolean(query.data),
     error: query.error?.message || null,
     hasFetched: query.isFetched,
     refetch: query.refetch,

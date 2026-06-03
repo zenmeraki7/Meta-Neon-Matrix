@@ -79,9 +79,9 @@ export class ProductExportService {
 
     const where = { shop: this.session.shop };
     if (normalizedType.includes("scheduled")) {
-      where.type = "scheduled export";
+      where.type = { equals: "Scheduled export", mode: "insensitive" };
     } else if (normalizedType.includes("manual")) {
-      where.type = "manual export";
+      where.type = { equals: "Manual export", mode: "insensitive" };
     }
 
     let cursorFilter = {};
@@ -115,11 +115,15 @@ export class ProductExportService {
           completedAt: true,
           type: true,
           status: true,
-          processedCount: true,
+          statusNormalized: true,
+          executionState: true,
+          executionStateNormalized: true,
           targetSnapshotCount: true,
-          progressPercent: true,
+          totalItems: true,
           durationMs: true,
           error: true,
+          failureStage: true,
+          targetMirrorBatchId: true,
         },
       }),
       db.exportJob.count({ where }),
@@ -168,10 +172,14 @@ export class ProductExportService {
       filename: true,
       type: true,
       status: true,
+      statusNormalized: true,
+      executionState: true,
+      executionStateNormalized: true,
       totalItems: true,
-      processedCount: true,
       targetSnapshotCount: true,
       durationMs: true,
+      failureStage: true,
+      targetMirrorBatchId: true,
       startedAt: true,
       completedAt: true,
       fields: true,

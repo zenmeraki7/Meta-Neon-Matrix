@@ -76,6 +76,7 @@ export default function ProductsPage() {
 
   const [committedSearch, setCommittedSearch] = useState("");
   const [searchResetSignal, setSearchResetSignal] = useState(0);
+  const [paginationDirection, setPaginationDirection] = useState(null);
 
   const {
     syncStatus,
@@ -127,6 +128,9 @@ export default function ProductsPage() {
     unavailableReason,
     mirrorHealth,
     loading,
+    fetching,
+    placeholderData,
+    hasProductData,
     error,
     hasFetched,
     refetch,
@@ -245,6 +249,12 @@ export default function ProductsPage() {
   }, [bootstrapStoreDetails, queryClient]);
 
   useEffect(() => {
+    if (!fetching) {
+      setPaginationDirection(null);
+    }
+  }, [fetching]);
+
+  useEffect(() => {
     const safeProducts = Array.isArray(products) ? products : [];
 
     const nextSignature = safeProducts
@@ -354,6 +364,28 @@ export default function ProductsPage() {
     [filterState, applyAtomicFilterCursorReset, committedSearch],
   );
 
+  const handleNextPage = useCallback(() => {
+    if (!pagination?.hasNextPage || fetching) return;
+    setPaginationDirection("next");
+    dispatch(
+      setCursorForFilterHash({
+        cursor: pagination?.nextCursor || null,
+        filterHash,
+      }),
+    );
+  }, [dispatch, fetching, filterHash, pagination?.hasNextPage, pagination?.nextCursor]);
+
+  const handlePreviousPage = useCallback(() => {
+    if (!pagination?.hasPrevPage || fetching) return;
+    setPaginationDirection("previous");
+    dispatch(
+      setCursorForFilterHash({
+        cursor: pagination?.prevCursor || null,
+        filterHash,
+      }),
+    );
+  }, [dispatch, fetching, filterHash, pagination?.hasPrevPage, pagination?.prevCursor]);
+
   const appliedFilters = useMemo(
     () =>
       filterState
@@ -385,8 +417,9 @@ export default function ProductsPage() {
   );
 
   const shouldShowLoadingState =
-    loading ||
-    !hasFetched;
+    (loading || !hasFetched) &&
+    !hasProductData;
+  const isPaginating = fetching && placeholderData && hasProductData;
 
   const shouldShowEmptyState =
     !shouldShowLoadingState &&
@@ -529,23 +562,11 @@ export default function ProductsPage() {
             <ProductsTable
               productIds={productIds}
               loading={shouldShowLoadingState}
+              fetching={isPaginating}
+              fetchingDirection={isPaginating ? paginationDirection : null}
               pagination={pagination}
-              onNext={() =>
-                dispatch(
-                  setCursorForFilterHash({
-                    cursor: pagination?.nextCursor || null,
-                    filterHash,
-                  }),
-                )
-              }
-              onPrev={() =>
-                dispatch(
-                  setCursorForFilterHash({
-                    cursor: pagination?.prevCursor || null,
-                    filterHash,
-                  }),
-                )
-              }
+              onNext={handleNextPage}
+              onPrev={handlePreviousPage}
               emptyHeading={
                 isProductMirrorUnavailable
                   ? "Sync products to show rows"
