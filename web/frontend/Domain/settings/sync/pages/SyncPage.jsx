@@ -82,6 +82,7 @@ const isAnySyncRunning =
     return;
   }
 
+  
   try {
     await startProductSync.mutateAsync({ force: true });
 
