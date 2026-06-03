@@ -40,6 +40,49 @@ function toSyncStatusDetailDto(store, latestSync) {
   };
 }
 
+function buildMissingStoreSyncStatus() {
+  return {
+    mirrorHealthState: "UNSAFE",
+    staleReason: "STORE_NOT_INITIALIZED",
+    repairRequired: true,
+    mirrorUnsafeSince: null,
+    lastFullSyncAt: null,
+    lastIncrementalSyncAt: null,
+    lastWebhookProcessedAt: null,
+    lastReconcileAt: null,
+    lastInventoryReconcileAt: null,
+    lastCollectionReconcileAt: null,
+    lastSyncErrorSummary: "Store setup is incomplete. Reopen the app from Shopify Admin or start product sync.",
+    syncProgressStage: "IDLE",
+    isCollectionSyncing: false,
+    lastCollectionSyncAt: null,
+    isProductTypeSyncing: false,
+    lastProductTypeSyncAt: null,
+    isProductInitialySyning: false,
+    productInitialSyncProgress: 0,
+    shopifyBulkJobCompleted: false,
+    storeTotalProducts: 0,
+    isProductSyncing: false,
+    lastProductSyncAt: null,
+    activeMirrorBatchId: null,
+    latestSync: null,
+  };
+}
+
+function buildMissingStoreSyncSummary() {
+  const detail = buildMissingStoreSyncStatus();
+  return {
+    syncProgressStage: detail.syncProgressStage,
+    isProductInitialySyning: detail.isProductInitialySyning,
+    shopifyBulkJobCompleted: detail.shopifyBulkJobCompleted,
+    storeTotalProducts: detail.storeTotalProducts,
+    isProductSyncing: detail.isProductSyncing,
+    lastProductSyncAt: detail.lastProductSyncAt,
+    activeMirrorBatchId: detail.activeMirrorBatchId,
+    latestSync: null,
+  };
+}
+
 function toSyncStatusSummaryDto(store, latestSync) {
   return {
     syncProgressStage: store.syncProgressStage,
@@ -77,9 +120,11 @@ export async function getSyncStatusDetailForShop(shop) {
   const store = await getStoreSyncDetailsByShop(shop);
 
   if (!store) {
-    const error = new Error("NOT_FOUND");
-    error.code = "NOT_FOUND";
-    throw error;
+    return {
+      success: true,
+      shop,
+      syncStatus: buildMissingStoreSyncStatus(),
+    };
   }
 
   const latestSync = await getLatestProductSyncByShop(shop);
@@ -112,9 +157,11 @@ export async function getSyncStatusSummaryForShop(shop) {
   ]);
 
   if (!store) {
-    const error = new Error("NOT_FOUND");
-    error.code = "NOT_FOUND";
-    throw error;
+    return {
+      success: true,
+      shop,
+      syncStatus: buildMissingStoreSyncSummary(),
+    };
   }
 
   const syncSummary = toSyncStatusSummaryDto(store, latestSync);
@@ -132,9 +179,15 @@ export async function getTrackedProductSyncStatus({ session, shop }) {
   const storeDetails = await getStoreTrackedProductSyncByShop(shop);
 
   if (!storeDetails) {
-    const error = new Error("NOT_FOUND");
-    error.code = "NOT_FOUND";
-    throw error;
+    return {
+      success: true,
+      message: "Store setup is incomplete. Reopen the app from Shopify Admin or start product sync.",
+      status: "idle",
+      stage: "IDLE",
+      totalProducts: 0,
+      processedProducts: 0,
+      progress: 0,
+    };
   }
 
   const latestSync = await getLatestProductSyncByShop(shop);

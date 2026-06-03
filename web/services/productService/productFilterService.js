@@ -93,6 +93,7 @@ export class Services {
     session,
     syncBatchId,
     syncHistoryId = null,
+    skipStaging = false,
   }) {
     return formatAndSyncProductsToDB({
       dataStream,
@@ -100,6 +101,7 @@ export class Services {
       session,
       syncBatchId,
       syncHistoryId,
+      skipStaging,
     });
   }
 }

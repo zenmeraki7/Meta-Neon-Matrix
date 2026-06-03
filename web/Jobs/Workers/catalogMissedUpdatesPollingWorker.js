@@ -208,7 +208,7 @@ async function getPollingReadiness() {
   for (const table of REQUIRED_TABLES) {
     // eslint-disable-next-line no-await-in-loop
     const rows = await db.$queryRaw`
-      SELECT to_regclass(${`public.${table}`}) AS regclass
+      SELECT to_regclass(${`public.${table}`})::text AS regclass
     `;
     if (!rows?.[0]?.regclass) {
       missingTables.push(table);
@@ -246,7 +246,17 @@ catalogMissedUpdatesPollingWorker.on("failed", (job, error) => {
 });
 
 async function registerRepeatableTick() {
-  const readiness = await getPollingReadiness();
+  let readiness;
+  try {
+    readiness = await getPollingReadiness();
+  } catch (error) {
+    logger.error("Catalog missed-updates polling scheduler not registered: readiness check failed", {
+      worker: "catalogMissedUpdatesPollingWorker",
+      message: error?.message || String(error),
+    });
+    return;
+  }
+
   if (!readiness.ready) {
     logger.warn("Catalog missed-updates polling scheduler not registered: required tables missing", {
       worker: "catalogMissedUpdatesPollingWorker",

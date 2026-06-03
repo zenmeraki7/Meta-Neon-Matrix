@@ -8,6 +8,18 @@ const normalizeNullableString = (value) => {
   return normalized === "" ? null : normalized;
 };
 
+const stripHtml = (html) => {
+  if (!html) return null;
+  return String(html)
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\s{2,}/g, " ")
+    .trim() || null;
+};
 
 const normalizeNullableBoolean = (value) => {
   if (value === undefined || value === null || value === "") return undefined;
@@ -408,7 +420,8 @@ export const transformWebhookPayload = (payload, shop) => {
     vendor: payload.vendor || null,
     tags: payload.tags ? payload.tags.split(", ") : [],
     templateSuffix: payload.template_suffix || null,
-    description: payload.body_html || null,
+    descriptionHtml: payload.body_html || null,
+    descriptionText: stripHtml(payload.body_html),
     createdAt: payload.created_at ? new Date(payload.created_at) : null,
     updatedAt: payload.updated_at ? new Date(payload.updated_at) : new Date(),
     publishedAt: payload.published_at ? new Date(payload.published_at) : null,

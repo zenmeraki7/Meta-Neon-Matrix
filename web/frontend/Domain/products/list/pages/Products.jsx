@@ -148,6 +148,9 @@ export default function ProductsPage() {
   const isProductMirrorUnavailable =
     Boolean(productUnavailableReason) ||
     (!productMirrorHealth?.activeMirrorBatchId && totalCount === 0);
+  const shouldShowStatusRail =
+    (isProductMirrorUnavailable && (!isSyncInProgress || isSyncStale)) ||
+    (isSyncInProgress && !isSyncStale && !products.length);
 
   const productIdsCsv = useMemo(
     () =>
@@ -469,28 +472,30 @@ export default function ProductsPage() {
             </Box>
           </Card>
         </Layout.Section>
-        <Layout.Section>
-          <Box minHeight={STATUS_RAIL_MIN_HEIGHT}>
-            {isProductMirrorUnavailable && (!isSyncInProgress || isSyncStale) ? (
-              <Banner
-                tone="warning"
-                title={isSyncStale ? "Product sync is stuck" : "Product sync needed"}
-              >
-                <p>
-                  {productUnavailableReason ||
-                    "No product mirror is available yet. Start product sync to load product rows."}
-                </p>
-                <Button variant="plain" onClick={() => navigate("/refresh")}>
-                  {t("Syncyourproducts")}
-                </Button>
-              </Banner>
-            ) : isSyncInProgress && !isSyncStale && !products.length ? (
-              <Banner tone="info" title="Sync in progress">
-                <p>Products are still syncing. Counts and rows will fill in automatically as the mirror updates.</p>
-              </Banner>
-            ) : null}
-          </Box>
-        </Layout.Section>
+        {shouldShowStatusRail ? (
+          <Layout.Section>
+            <Box minHeight={STATUS_RAIL_MIN_HEIGHT}>
+              {isProductMirrorUnavailable && (!isSyncInProgress || isSyncStale) ? (
+                <Banner
+                  tone="warning"
+                  title={isSyncStale ? "Product sync is stuck" : "Product sync needed"}
+                >
+                  <p>
+                    {productUnavailableReason ||
+                      "No product mirror is available yet. Start product sync to load product rows."}
+                  </p>
+                  <Button variant="plain" onClick={() => navigate("/refresh")}>
+                    {t("Syncyourproducts")}
+                  </Button>
+                </Banner>
+              ) : (
+                <Banner tone="info" title="Sync in progress">
+                  <p>Products are still syncing. Counts and rows will fill in automatically as the mirror updates.</p>
+                </Banner>
+              )}
+            </Box>
+          </Layout.Section>
+        ) : null}
 
         <Layout.Section>
           <Card>

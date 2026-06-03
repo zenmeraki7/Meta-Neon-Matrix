@@ -5,7 +5,10 @@ import {
   getProductCountByShop,
   getLatestCompletedProductSyncByShop,
 } from "../../repositories/syncRepository.js";
-import { getStoreSyncStateByShop } from "../../repositories/storeRepository.js";
+import {
+  ensureStoreForSession,
+  getStoreSyncStateByShop,
+} from "../../repositories/storeRepository.js";
 
 const service = new Services();
 
@@ -19,6 +22,8 @@ export async function startProductSync(command = Object.freeze({})) {
     error.code = "UNAUTHENTICATED";
     throw error;
   }
+
+  await ensureStoreForSession(session);
 
   const currentBulkOperation = await getCurrentBulkOperationStatus(session, "QUERY");
   if (currentBulkOperation?.status === "RUNNING") {

@@ -110,6 +110,7 @@ export async function formatAndSyncProductsToDB({
   session,
   syncBatchId,
   syncHistoryId = null,
+  skipStaging = false,
 }) {
   if (!syncBatchId) {
     throw new Error("syncBatchId is required for staged product sync");
@@ -305,9 +306,11 @@ export async function formatAndSyncProductsToDB({
       crlfDelay: Infinity,
     });
 
-    console.log(`[sync:staging_start] shop=${shop} syncBatchId=${syncBatchId}`);
-    await stageProductMirrorBatch({ shop, syncBatchId, syncHistoryId });
-    console.log(`[sync:staging_done] shop=${shop}`);
+    if (!skipStaging) {
+      console.log(`[sync:staging_start] shop=${shop} syncBatchId=${syncBatchId}`);
+      await stageProductMirrorBatch({ shop, syncBatchId, syncHistoryId });
+      console.log(`[sync:staging_done] shop=${shop}`);
+    }
 
     const finalizeCurrentProduct = async () => {
       if (!currentProduct) return;

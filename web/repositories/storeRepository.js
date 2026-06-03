@@ -1,5 +1,6 @@
 import { prisma } from "../config/database.js";
 import { requireShopScope } from "../utils/shopScope.js";
+import { buildEncryptedTokenColumns } from "../utils/tokenCrypto.js";
 
 const PRODUCT_SYNC_STALE_MS = Number(process.env.PRODUCT_SYNC_STALE_MS || 2 * 60 * 60 * 1000);
 
@@ -26,6 +27,38 @@ function isStaleProductSyncStore(store, cutoff) {
   }
 
   return false;
+}
+
+export async function ensureStoreForSession(session) {
+  const shop = requireShopScope(session?.shop);
+  const tokenColumns = session?.accessToken
+    ? buildEncryptedTokenColumns(session.accessToken)
+    : {};
+
+  return prisma.store.upsert({
+    where: { shopUrl: shop },
+    create: {
+      shopUrl: shop,
+      ...tokenColumns,
+      shopEmail: "",
+      scope: session?.scope || "",
+      isUnInstalled: false,
+      unInstalledAt: null,
+      installedAt: new Date(),
+    },
+    update: {
+      ...tokenColumns,
+      scope: session?.scope || undefined,
+      isUnInstalled: false,
+      unInstalledAt: null,
+      installedAt: new Date(),
+    },
+    select: {
+      shopUrl: true,
+      isCreditAvailable: true,
+      isProductInitialySyning: true,
+    },
+  });
 }
 
 export async function recoverStaleProductSyncStateByShop(shop) {

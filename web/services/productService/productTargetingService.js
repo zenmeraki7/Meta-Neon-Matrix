@@ -55,6 +55,10 @@ function compileLegacyWhereViaEngine({
   filterParams = [],
   targetGranularity = "PRODUCT",
 }) {
+  if (!Array.isArray(filterParams) || filterParams.length === 0) {
+    return {};
+  }
+
   const filterAst = adaptLegacyFilterParamsToAst({
     filterParams: Array.isArray(filterParams) ? filterParams : [],
     targetGranularity,

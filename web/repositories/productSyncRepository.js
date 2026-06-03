@@ -161,6 +161,43 @@ export async function stageProductMirrorBatch({
   syncBatchId,
   syncHistoryId = null,
 }) {
+  await prisma.variant.deleteMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+    },
+  });
+  await prisma.inventoryLevelMirror.deleteMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+    },
+  });
+  await prisma.inventoryItemMirror.deleteMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+    },
+  });
+  await prisma.productCollection.deleteMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+    },
+  });
+  await prisma.metafieldMirror.deleteMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+    },
+  });
+  await prisma.product.deleteMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+    },
+  });
+
   await prisma.$transaction(async (tx) => {
     await tx.store.update({
       where: { shopUrl: shop },
@@ -191,44 +228,6 @@ export async function stageProductMirrorBatch({
       syncHistoryId,
       from: ["RUNNING", "STARTING_BULK_QUERY"],
       to: "INGESTING",
-    });
-
-    await tx.variant.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.inventoryLevelMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.inventoryItemMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.productCollection.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.metafieldMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-
-    await tx.product.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
     });
   });
 }
@@ -302,10 +301,11 @@ export async function markSyncHistoryFailed({
         where: {
           id: syncHistoryId,
           shop: syncHistory.shop,
-          status: { in: ["processing", "queued"] },
+          status: "processing",
           stage: {
             in: [
               "SHOPIFY_BULK_RUNNING",
+              "MIRROR_DOWNLOAD_STARTED",
               "MIRROR_STAGING",
               "INGESTING_TO_STAGING_BATCH",
               "VALIDATING_BATCH",
@@ -644,7 +644,7 @@ export async function activateProductMirrorBatch({
         where: {
           id: syncHistoryId,
           shop,
-          status: { in: ["processing", "queued"] },
+          status: "processing",
           stage: {
             in: ["MIRROR_STAGING", "INGESTING_TO_STAGING_BATCH", "VALIDATING_BATCH", "ACTIVATING_BATCH"],
           },
@@ -751,10 +751,13 @@ export async function activateProductMirrorBatch({
       where: { shop, status: "pending" },
       data: {
         status: "resolved",
-        resolvedAt: completedAt,
+        reconciledAt: completedAt,
         updatedAt: completedAt,
       },
     });
+  }, {
+    maxWait: Number(process.env.PRODUCT_SYNC_ACTIVATION_TX_MAX_WAIT_MS || 10_000),
+    timeout: Number(process.env.PRODUCT_SYNC_ACTIVATION_TX_TIMEOUT_MS || 60_000),
   });
   await clearProductSyncCache(shop);
 }
