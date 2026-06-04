@@ -30,15 +30,28 @@ function mapLegacyOperatorAlias(op) {
     EQUALS: "EQ",
     EQ: "EQ",
     NOT_EQUALS: "NEQ",
+    "DOES NOT EQUAL": "NEQ",
     NEQ: "NEQ",
+    IS: "IN",
+    IS_NOT: "NOT_IN",
+    "IS NOT": "NOT_IN",
     CONTAINS: "CONTAINS",
     NOT_CONTAINS: "NOT_CONTAINS",
+    "DOES NOT CONTAIN": "NOT_CONTAINS",
     STARTS_WITH: "STARTS_WITH",
+    "STARTS WITH": "STARTS_WITH",
     ENDS_WITH: "ENDS_WITH",
+    "ENDS WITH": "ENDS_WITH",
     IN: "IN",
     NOT_IN: "NOT_IN",
+    "<": "LT",
     LT: "LT",
     LESS_THAN: "LT",
+    ">": "GT",
+    "=": "EQ",
+    "!=": "NEQ",
+    "<=": "LTE",
+    ">=": "GTE",
     LTE: "LTE",
     LESS_THAN_OR_EQUAL: "LTE",
     GT: "GT",
@@ -47,7 +60,12 @@ function mapLegacyOperatorAlias(op) {
     GREATER_THAN_OR_EQUAL: "GTE",
     BETWEEN: "BETWEEN",
     IS_EMPTY: "IS_EMPTY",
+    "IS EMPTY": "IS_EMPTY",
+    "IS EMPTY/BLANK": "IS_EMPTY",
     IS_NOT_EMPTY: "IS_NOT_EMPTY",
+    "IS NOT EMPTY": "IS_NOT_EMPTY",
+    EXISTS: "EXISTS",
+    NOT_EXISTS: "NOT_EXISTS",
   };
   const mapped = map[upper] || upper;
   if (!operatorRegistry[mapped]) {
@@ -59,14 +77,28 @@ function mapLegacyOperatorAlias(op) {
   return mapped;
 }
 
-function normalizeLegacyRawValue(value) {
-  if (typeof value !== "string") return value;
+function normalizeLegacyRawValue(value, operator) {
+  if (typeof value !== "string") {
+    if (operator === "IN" || operator === "NOT_IN") {
+      if (value === null || value === undefined) return [];
+      return Array.isArray(value) ? value : [value];
+    }
+    return value;
+  }
   const trimmed = value.trim();
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
-  if (trimmed.toLowerCase() === "true") return true;
-  if (trimmed.toLowerCase() === "false") return false;
-  if (trimmed === "") return null;
-  return trimmed;
+  let normalized = trimmed;
+
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) normalized = Number(trimmed);
+  else if (trimmed.toLowerCase() === "true") normalized = true;
+  else if (trimmed.toLowerCase() === "false") normalized = false;
+  else if (trimmed === "") normalized = null;
+
+  if (operator === "IN" || operator === "NOT_IN") {
+    if (normalized === null || normalized === undefined) return [];
+    return Array.isArray(normalized) ? normalized : [normalized];
+  }
+
+  return normalized;
 }
 
 function extractLegacyMeta(filter) {
@@ -94,7 +126,7 @@ export function adaptLegacyFilterParamsToAst({
       nodeType: "predicate",
       field,
       operator,
-      value: normalizeLegacyRawValue(f?.value, f),
+      value: normalizeLegacyRawValue(f?.value, operator),
       meta: {
         ...extractLegacyMeta(f),
         legacyIndex: index,

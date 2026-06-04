@@ -10,6 +10,23 @@ const VALUE_OPTION_OPERATORS = new Set([
   "ends with",
   "is",
   "is not",
+  "<",
+  "<=",
+  ">",
+  ">=",
+  "=",
+  "!=",
+  "is before",
+  "is after",
+  "between",
+]);
+
+const VALUELESS_OPERATORS = new Set([
+  "is empty",
+  "is empty/blank",
+  "is not empty",
+  "exists",
+  "not_exists",
 ]);
 
 const OPERATOR_TRANSLATION_KEY_MAP = {
@@ -31,7 +48,9 @@ const OPERATOR_TRANSLATION_KEY_MAP = {
   "!=": "filtersOperators.notEqualTo",
 };
 export function operatorRequiresValue(operator) {
-  return VALUE_OPTION_OPERATORS.has(operator);
+  const normalized = String(operator || "").trim().toLowerCase();
+  if (VALUELESS_OPERATORS.has(normalized)) return false;
+  return VALUE_OPTION_OPERATORS.has(normalized);
 }
 
 export function getTranslatedOperatorLabel(t, operator) {
@@ -70,4 +89,47 @@ export function normalizeAutocompleteOption(item) {
     label: normalizedLabel,
     value: normalizedValue,
   };
+}
+
+export function normalizeFilterValueForSubmit(filter, value) {
+  const rawValue = value == null ? "" : String(value).trim();
+
+  if (filter?.key === "status") {
+    return rawValue.toUpperCase();
+  }
+
+  if (filter?.type === "number") {
+    return rawValue;
+  }
+
+  return rawValue;
+}
+
+export function isFilterDraftValid(filter, draft) {
+  const operator = String(draft?.operator || "").trim();
+  if (!filter?.key || !operator) return false;
+
+  if (!operatorRequiresValue(operator)) {
+    return true;
+  }
+
+  const normalizedValue = normalizeFilterValueForSubmit(filter, draft?.value);
+  if (!normalizedValue) return false;
+
+  if (filter?.type === "number") {
+    return Number.isFinite(Number(normalizedValue));
+  }
+
+  if (filter?.type === "date") {
+    const date = new Date(normalizedValue);
+    return Number.isFinite(date.getTime());
+  }
+
+  if (filter?.type === "enum" && Array.isArray(filter.values) && filter.values.length > 0) {
+    return filter.values
+      .map((entry) => String(entry).trim().toLowerCase())
+      .includes(String(normalizedValue).trim().toLowerCase());
+  }
+
+  return true;
 }

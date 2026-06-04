@@ -165,6 +165,12 @@ export async function getStoreSyncSummaryByShop(shop) {
   return prisma.store.findUnique({
     where: { shopUrl: resolvedShop },
     select: {
+      mirrorHealthState: true,
+      staleReason: true,
+      repairRequired: true,
+      mirrorUnsafeSince: true,
+      lastSyncErrorSummary: true,
+      lastFullSyncAt: true,
       syncProgressStage: true,
       isProductInitialySyning: true,
       shopifyBulkJobCompleted: true,

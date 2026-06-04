@@ -5,6 +5,34 @@ const require = createRequire(import.meta.url);
 const prismaGenerated = require("../generated/prisma/index.js");
 const { Prisma } = prismaGenerated;
 
+const NON_NULL_PRODUCT_FILTER_FIELDS = new Set(["title", "status"]);
+
+function buildDistinctStringFieldWhere({
+  shop,
+  field,
+  mirrorBatchId = null,
+  search = "",
+  isNullable = true,
+}) {
+  const trimmedSearch = String(search || "").trim();
+  return {
+    shop,
+    ...(mirrorBatchId ? { mirrorBatchId } : {}),
+    NOT: [
+      ...(isNullable ? [{ [field]: null }] : []),
+      { [field]: "" },
+    ],
+    ...(trimmedSearch
+      ? {
+          [field]: {
+            contains: trimmedSearch,
+            mode: "insensitive",
+          },
+        }
+      : {}),
+  };
+}
+
 export async function findProductsForListing({ where, orderBy, skip, take }) {
   return prisma.product.findMany({
     where,
@@ -40,19 +68,13 @@ export async function findDistinctProductFieldValues({
   take = 20,
 }) {
   return prisma.product.findMany({
-    where: {
+    where: buildDistinctStringFieldWhere({
       shop,
-      ...(mirrorBatchId ? { mirrorBatchId } : {}),
-      NOT: [{ [field]: null }, { [field]: "" }],
-      ...(search
-        ? {
-            [field]: {
-              contains: search,
-              mode: "insensitive",
-            },
-          }
-        : {}),
-    },
+      field,
+      mirrorBatchId,
+      search,
+      isNullable: !NON_NULL_PRODUCT_FILTER_FIELDS.has(field),
+    }),
     select: {
       [field]: true,
     },

@@ -154,6 +154,7 @@ export async function queueProductSyncStart({
 export async function clearProductSyncCache(shop) {
   await clearKeyCaches(`${shop}:sync_details`);
   await clearKeyCaches(`${shop}:sync_summary`);
+  await clearKeyCaches(`${shop}:sync_summary:v2`);
 }
 
 export async function stageProductMirrorBatch({

@@ -67,6 +67,8 @@ export async function startProductSync(command = Object.freeze({})) {
   });
 
   await clearKeyCaches(`${shop}:sync_details`);
+  await clearKeyCaches(`${shop}:sync_summary`);
+  await clearKeyCaches(`${shop}:sync_summary:v2`);
 
   return {
     skipped: false,

@@ -868,13 +868,36 @@ export async function getActiveMirrorBatchId(shop, { purpose = "EXECUTE" } = {})
 
   const executionUnsafe = store.mirrorHealthState !== "HEALTHY" || store.repairRequired;
   const previewUnsafe = ["UNSAFE", "REPAIR_REQUIRED"].includes(store.mirrorHealthState) || store.repairRequired;
+  const isPreviewPurpose = purpose === "PREVIEW" || purpose === "EXPORT";
 
   if (purpose === "EXECUTE" && executionUnsafe) {
     throw new Error(
       `Mirror is not safe for execution (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );
   }
-  if ((purpose === "PREVIEW" || purpose === "EXPORT") && previewUnsafe) {
+  if (isPreviewPurpose && previewUnsafe) {
+    const staleReason = String(store.staleReason || "").toUpperCase();
+    const syncRunning = store.isProductSyncing === true || store.isProductInitialySyning === true;
+    const activeProductRowCount = await db.product.count({
+      where: {
+        shop,
+        mirrorBatchId: store.activeMirrorBatchId,
+      },
+    });
+    const canUseExistingMirrorDuringBackgroundRefresh =
+      syncRunning &&
+      activeProductRowCount > 0;
+    const canUseExistingMirrorAfterFailedRefresh =
+      staleReason === "FULL_SYNC_FAILED" &&
+      !syncRunning &&
+      activeProductRowCount > 0;
+
+    // Preview/list pages should keep using the last active mirror while a
+    // refresh is running; navigation must not blank a valid product table.
+    if (canUseExistingMirrorDuringBackgroundRefresh || canUseExistingMirrorAfterFailedRefresh) {
+      return store.activeMirrorBatchId;
+    }
+
     throw new Error(
       `Mirror is not safe for ${purpose.toLowerCase()} (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );
@@ -966,7 +989,7 @@ export async function resolveCanonicalProductTarget({
 
   const fetchLimit = clampLimit(limit, sampleLimit, sampleLimit);
 
-  const [count, rows] = await db.$transaction([
+  const [count, rows] = await Promise.all([
     db.product.count({ where }),
     db.product.findMany({
       where,

@@ -1,5 +1,6 @@
 import { getBulkEditStatus } from "../utils/bulkOperationHelper.js";
 import { getCache, setCache } from "../utils/cacheUtils.js";
+import { db } from "../repositories/repositoryDb.js";
 import {
   getStoreSyncDetailsByShop,
   getStoreSyncSummaryByShop,
@@ -72,6 +73,12 @@ function buildMissingStoreSyncStatus() {
 function buildMissingStoreSyncSummary() {
   const detail = buildMissingStoreSyncStatus();
   return {
+    mirrorHealthState: detail.mirrorHealthState,
+    staleReason: detail.staleReason,
+    repairRequired: detail.repairRequired,
+    mirrorUnsafeSince: detail.mirrorUnsafeSince,
+    lastSyncErrorSummary: detail.lastSyncErrorSummary,
+    lastFullSyncAt: detail.lastFullSyncAt,
     syncProgressStage: detail.syncProgressStage,
     isProductInitialySyning: detail.isProductInitialySyning,
     shopifyBulkJobCompleted: detail.shopifyBulkJobCompleted,
@@ -79,12 +86,69 @@ function buildMissingStoreSyncSummary() {
     isProductSyncing: detail.isProductSyncing,
     lastProductSyncAt: detail.lastProductSyncAt,
     activeMirrorBatchId: detail.activeMirrorBatchId,
+    activeProductRowCount: 0,
+    hasActiveProductMirrorRows: false,
+    canPreviewProducts: false,
     latestSync: null,
   };
 }
 
-function toSyncStatusSummaryDto(store, latestSync) {
+function isSyncRunning(store) {
+  return (
+    store?.isProductSyncing === true ||
+    store?.isProductInitialySyning === true ||
+    store?.syncProgressStage === "SHOPIFY_BULK_RUNNING" ||
+    store?.syncProgressStage === "MIRROR_STAGING"
+  );
+}
+
+async function countActiveProductRows(shop, store) {
+  if (!store?.activeMirrorBatchId) return 0;
+
+  return db.product.count({
+    where: {
+      shop,
+      mirrorBatchId: store.activeMirrorBatchId,
+    },
+  });
+}
+
+function canPreviewProductsFromSummary(store, activeProductRowCount) {
+  if (!store?.activeMirrorBatchId) {
+    return false;
+  }
+
+  if (activeProductRowCount > 0 && isSyncRunning(store)) {
+    return true;
+  }
+
+  const state = String(store.mirrorHealthState || "").toUpperCase();
+  const staleReason = String(store.staleReason || "").toUpperCase();
+  const previewUnsafe =
+    ["UNSAFE", "REPAIR_REQUIRED"].includes(state) || store.repairRequired === true;
+
+  if (!previewUnsafe) {
+    return true;
+  }
+
+  return state === "UNSAFE" && staleReason === "FULL_SYNC_FAILED" && activeProductRowCount > 0;
+}
+
+function toSyncStatusSummaryDto(store, latestSync, activeProductRowCount = 0) {
+  const hasActiveProductMirrorRows =
+    Boolean(store.activeMirrorBatchId) && activeProductRowCount > 0;
+  const canPreviewProducts = canPreviewProductsFromSummary(store, activeProductRowCount);
+  const latestSyncStatus = String(latestSync?.status || "").toLowerCase();
+  const latestSyncRunning = ["processing", "running", "queued", "pending"].includes(latestSyncStatus);
+  const syncInProgress = isSyncRunning(store) && latestSyncRunning;
+
   return {
+    mirrorHealthState: store.mirrorHealthState,
+    staleReason: store.staleReason,
+    repairRequired: store.repairRequired,
+    mirrorUnsafeSince: store.mirrorUnsafeSince,
+    lastSyncErrorSummary: store.lastSyncErrorSummary,
+    lastFullSyncAt: store.lastFullSyncAt,
     syncProgressStage: store.syncProgressStage,
     isProductInitialySyning: store.isProductInitialySyning,
     shopifyBulkJobCompleted: store.shopifyBulkJobCompleted,
@@ -92,6 +156,14 @@ function toSyncStatusSummaryDto(store, latestSync) {
     isProductSyncing: store.isProductSyncing,
     lastProductSyncAt: store.lastProductSyncAt,
     activeMirrorBatchId: store.activeMirrorBatchId,
+    activeProductRowCount,
+    productCount: activeProductRowCount,
+    hasActiveProductMirrorRows,
+    mirrorReady: hasActiveProductMirrorRows && canPreviewProducts,
+    latestBatchId: store.activeMirrorBatchId,
+    stage: syncInProgress ? store.syncProgressStage : "READY",
+    syncInProgress,
+    canPreviewProducts,
     latestSync: latestSync
       ? {
           id: latestSync.id,
@@ -141,7 +213,7 @@ export async function getSyncStatusDetailForShop(shop) {
 
 export async function getSyncStatusSummaryForShop(shop) {
   const recovery = await recoverStaleProductSyncStateByShop(shop);
-  const cacheKey = `${shop}:sync_summary`;
+  const cacheKey = `${shop}:sync_summary:v2`;
   const cached = recovery.recovered ? null : await getCache(cacheKey);
   if (cached) {
     return {
@@ -164,7 +236,8 @@ export async function getSyncStatusSummaryForShop(shop) {
     };
   }
 
-  const syncSummary = toSyncStatusSummaryDto(store, latestSync);
+  const activeProductRowCount = await countActiveProductRows(shop, store);
+  const syncSummary = toSyncStatusSummaryDto(store, latestSync, activeProductRowCount);
   await setCache(cacheKey, syncSummary, 60);
 
   return {

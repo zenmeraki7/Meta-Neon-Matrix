@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../../../../hooks/useApiClient";
 
 export function canonicalizeFilters(filters = []) {
@@ -39,19 +39,6 @@ function markPerf(event, detail = {}) {
   }
 }
 
-function shouldSkipPrefetchForNetworkBudget() {
-  if (typeof navigator === "undefined") return false;
-  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-  if (!connection) return false;
-
-  if (connection.saveData === true) {
-    return true;
-  }
-
-  const effectiveType = String(connection.effectiveType || "").toLowerCase();
-  return effectiveType === "slow-2g" || effectiveType === "2g";
-}
-
 function toStableRowId(product, index) {
   const id = String(product?.id || "").trim();
   if (id) return id;
@@ -72,7 +59,6 @@ export default function useProducts({
   enabled = true,
 } = {}) {
   const api = useApiClient();
-  const queryClient = useQueryClient();
   const shop =
     typeof window !== "undefined"
       ? String(window?.shopify?.config?.shop || window?.Shopify?.shop || "unknown")
@@ -94,6 +80,7 @@ export default function useProducts({
     enabled,
     initialData,
     staleTime: 10_000,
+    refetchOnMount: "always",
     queryFn: async ({ signal }) => {
       if (isCursorHashMismatch) {
         markPerf("products_cursor_hash_mismatch", {
@@ -143,75 +130,7 @@ export default function useProducts({
         mirrorHealth: json?.data?.mirrorHealth || null,
       };
     },
-    placeholderData: keepPreviousData,
   });
-
-  useEffect(() => {
-    if (!enabled) return;
-    if (isCursorHashMismatch) return;
-    if (shouldSkipPrefetchForNetworkBudget()) {
-      markPerf("products_prefetch_skipped_network_budget", { shop });
-      return;
-    }
-
-    const pageInfo = query.data?.pagination || null;
-    const hasNextPage = Boolean(pageInfo?.hasNextPage);
-    const endCursor = String(pageInfo?.endCursor || "").trim();
-    if (!hasNextPage || !endCursor) return;
-
-    const nextQueryKey = ["products", shop, endCursor, limit, resolvedFilterHash];
-
-    // Warm the next sequential cursor page for near-zero-latency pagination clicks.
-    void queryClient.prefetchQuery({
-      queryKey: nextQueryKey,
-      staleTime: 10_000,
-      queryFn: async ({ signal }) => {
-        markPerf("products_prefetch_start", {
-          shop,
-          cursor: endCursor,
-          filterHash: resolvedFilterHash,
-        });
-
-        const params = new URLSearchParams();
-        params.set("limit", String(limit));
-        params.set("cursor", endCursor);
-        const json = await api.post(
-          `/api/products/get-all?${params.toString()}`,
-          { filterParams: normalizedFilters },
-          { signal },
-        );
-
-        const products = Array.isArray(json?.data?.products)
-          ? json.data.products.map((product, index) => ({
-              ...product,
-              __rowId: toStableRowId(product, index),
-            }))
-          : [];
-
-        markPerf("products_prefetch_end", {
-          shop,
-          cursor: endCursor,
-          filterHash: resolvedFilterHash,
-        });
-
-        return {
-          products,
-          pagination: json?.data?.pagination || null,
-          count: json?.data?.pagination?.total ?? products.length ?? 0,
-        };
-      },
-    });
-  }, [
-    api,
-    enabled,
-    isCursorHashMismatch,
-    limit,
-    normalizedFilters,
-    query.data?.pagination,
-    queryClient,
-    resolvedFilterHash,
-    shop,
-  ]);
 
   return {
     products: query.data?.products || [],

@@ -16,6 +16,7 @@ import {
 import { RefreshIcon, ArrowLeftIcon } from "@shopify/polaris-icons";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import { useLocaleFormatters } from "../../../../hooks/useLocaleFormatters";
 import {
@@ -30,6 +31,7 @@ const rows = [{ key: "products", api: "/api/sync/products" }];
 export default function DataSyncPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const { showSuccess, showError } = useAppToast();
   const { dateTimeFormatter } = useLocaleFormatters();
 const {
@@ -52,10 +54,10 @@ const {
     [t],
   );
 
-  const hasActiveProductMirror = Boolean(dataSources?.activeMirrorBatchId);
+  const canPreviewProducts = Boolean(dataSources?.canPreviewProducts);
   const productSyncNeedsAttention =
     Boolean(dataSources) &&
-    !hasActiveProductMirror &&
+    !canPreviewProducts &&
     !isSyncInProgress &&
     !startProductSync.isPending;
 const isAnySyncRunning =
@@ -103,12 +105,14 @@ const isAnySyncRunning =
       if (!dataSources) return null;
 
       const map = {
-        products: hasActiveProductMirror ? dataSources.lastProductSyncAt : null,
+        products: canPreviewProducts
+          ? dataSources.lastFullSyncAt || dataSources.lastProductSyncAt
+          : null,
       };
 
       return map[key] ? dateTimeFormatter.format(new Date(map[key])) : t("neverSynced");
     },
-    [dataSources, dateTimeFormatter, hasActiveProductMirror, t],
+    [canPreviewProducts, dataSources, dateTimeFormatter, t],
   );
 
   const isSyncingForKey = useCallback(

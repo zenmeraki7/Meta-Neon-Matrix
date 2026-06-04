@@ -127,6 +127,7 @@ model Product {
   @@index([shop, mirrorBatchId, vendor])
   @@index([shop, mirrorBatchId, status])
   @@index([shop, mirrorBatchId, statusNormalized])
+  @@index([shop, mirrorBatchId, totalInventory])
   @@index([shop, mirrorBatchId, title, id])
   @@index([shop, mirrorBatchId, handle, id])
   @@index([shop, mirrorBatchId, createdAt, id])
