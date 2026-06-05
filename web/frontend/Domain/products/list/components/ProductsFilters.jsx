@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useState, useCallback, useEffect, useDeferredValue, useRef } from "react";
+import React, { memo, useMemo, useState, useCallback, useEffect } from "react";
 import {
   BlockStack,
   Text,
@@ -44,8 +44,10 @@ const FILTER_UI_OVERRIDES = {
 
 const ProductsFilters = memo(function ProductsFilters({
   appliedFilters,
+  appliedSearch = "",
   onFilterChange,
   onCommitSearch,
+  searchLoading = false,
   searchResetSignal = 0,
   onClearAll,
   availableFilters = [],
@@ -55,39 +57,41 @@ const ProductsFilters = memo(function ProductsFilters({
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [activeFilterKey, setActiveFilterKey] = useState(null);
   const [searchDraft, setSearchDraft] = useState("");
-  const deferredSearchDraft = useDeferredValue(searchDraft);
-
-  const onCommitSearchRef = useRef(onCommitSearch);
-  const hasMountedRef = useRef(false);
-  const lastCommittedSearchRef = useRef("");
-  useEffect(() => {
-    onCommitSearchRef.current = onCommitSearch;
-  }, [onCommitSearch]);
-
-  useEffect(() => {
-    if (!hasMountedRef.current) {
-      hasMountedRef.current = true;
-      lastCommittedSearchRef.current = deferredSearchDraft;
-      return;
-    }
-
-    if (lastCommittedSearchRef.current === deferredSearchDraft) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      lastCommittedSearchRef.current = deferredSearchDraft;
-      onCommitSearchRef.current?.(deferredSearchDraft);
-    }, 300);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [deferredSearchDraft]);
+  const normalizedAppliedSearch = String(appliedSearch || "").trim();
 
   useEffect(() => {
     setSearchDraft("");
   }, [searchResetSignal]);
+
+  const handleSearchSubmit = useCallback(() => {
+    onCommitSearch?.(searchDraft.trim());
+  }, [onCommitSearch, searchDraft]);
+
+  const handleSearchDraftChange = useCallback(
+    (nextValue) => {
+      setSearchDraft(nextValue);
+      if (String(nextValue || "").trim() === "" && normalizedAppliedSearch) {
+        onCommitSearch?.("");
+      }
+    },
+    [normalizedAppliedSearch, onCommitSearch],
+  );
+
+  const handleSearchClear = useCallback(() => {
+    setSearchDraft("");
+    if (normalizedAppliedSearch) {
+      onCommitSearch?.("");
+    }
+  }, [normalizedAppliedSearch, onCommitSearch]);
+
+  const handleSearchKeyDown = useCallback(
+    (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      handleSearchSubmit();
+    },
+    [handleSearchSubmit],
+  );
 
   const translatedText = useMemo(
     () => ({
@@ -96,6 +100,7 @@ const ProductsFilters = memo(function ProductsFilters({
       searchPlaceholder: t("searchPlaceholder"),
       addFilter: t("addFilter"),
       clearAll: t("clearFilters", "Clear Filters"),
+      searchButton: t("searchButton", "Search"),
       cancel: t("cancel", "Cancel"),
     }),
     [t, i18n.language]
@@ -174,49 +179,63 @@ const ProductsFilters = memo(function ProductsFilters({
         description={translatedText.filtersDescription}
       />
 
-      <InlineStack gap="200" wrap blockAlign="center">
-        <Box minWidth="320px">
-          <TextField
-            labelHidden
-            value={searchDraft}
-            placeholder={translatedText.searchPlaceholder}
-            onChange={setSearchDraft}
-            clearButton
-            onClearButtonClick={() => setSearchDraft("")}
-            autoComplete="off"
-          />
-        </Box>
-
-        <Popover
-          active={isPopoverOpen}
-          activator={
-            <Button onClick={handleOpenPicker}>
-              {translatedText.addFilter}
-            </Button>
-          }
-          autofocusTarget="first-node"
-          onClose={handleClosePopover}
-          preferredAlignment="left"
-        >
-          {!activeFilter ? (
-            <ActionList items={actionItems} />
-          ) : (
-            <FilterPanel
-              filter={activeFilter}
-              initialFilter={appliedFilterMap[activeFilter.key]}
-              onApply={handleApplyFilter}
-              onCancel={handleBackToList}
-              t={t}
+      <BlockStack gap="300">
+        <InlineStack align="space-between" gap="400" wrap blockAlign="center">
+          <Box minWidth="320px" width="520px">
+            <TextField
+              labelHidden
+              value={searchDraft}
+              placeholder={translatedText.searchPlaceholder}
+              onChange={handleSearchDraftChange}
+              onKeyDown={handleSearchKeyDown}
+              clearButton
+              onClearButtonClick={handleSearchClear}
+              autoComplete="off"
             />
-          )}
-        </Popover>
+          </Box>
 
-        {appliedFilters.length > 0 && (
-          <Button variant="plain" onClick={onClearAll}>
-            {translatedText.clearAll}
+          <Button
+            variant="primary"
+            onClick={handleSearchSubmit}
+            loading={searchLoading}
+            disabled={searchLoading}
+          >
+            {translatedText.searchButton}
           </Button>
-        )}
-      </InlineStack>
+        </InlineStack>
+
+        <InlineStack gap="200" wrap blockAlign="center">
+          <Popover
+            active={isPopoverOpen}
+            activator={
+              <Button onClick={handleOpenPicker}>
+                {translatedText.addFilter}
+              </Button>
+            }
+            autofocusTarget="first-node"
+            onClose={handleClosePopover}
+            preferredAlignment="left"
+          >
+            {!activeFilter ? (
+              <ActionList items={actionItems} />
+            ) : (
+              <FilterPanel
+                filter={activeFilter}
+                initialFilter={appliedFilterMap[activeFilter.key]}
+                onApply={handleApplyFilter}
+                onCancel={handleBackToList}
+                t={t}
+              />
+            )}
+          </Popover>
+
+          {appliedFilters.length > 0 && (
+            <Button variant="plain" onClick={onClearAll}>
+              {translatedText.clearAll}
+            </Button>
+          )}
+        </InlineStack>
+      </BlockStack>
 
       {appliedFilters.length > 0 && (
         <InlineStack gap="200" wrap>

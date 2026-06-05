@@ -20,7 +20,7 @@ import {
 } from "@shopify/polaris";
 import { ChevronLeftIcon } from "@shopify/polaris-icons";
 import { useSelector } from "react-redux";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { getFieldDefinition, InputType } from "../constants";
@@ -37,6 +37,8 @@ import {
   selectFilters,
   selectSearch,
 } from "../../../../store/slices/productSlice";
+import useProducts, { buildCanonicalFilterHash } from "../../list/hooks/useProducts";
+import { parseEditTargetSearch } from "../../list/utils/editTargetQuery";
 import useProductSyncStatus from "../../../../hooks/useProductSyncStatus";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
@@ -75,6 +77,7 @@ export default function EditPreviewPage() {
   const filters = useSelector(selectFilters);
   const search = useSelector(selectSearch);
   const navigate = useNavigate();
+  const location = useLocation();
   const { i18n, t } = useTranslation();
   const { isSyncInProgress } = useProductSyncStatus();
   const { showSuccess, showError } = useAppToast();
@@ -174,7 +177,17 @@ export default function EditPreviewPage() {
   const shouldHideEditTypeSelector =
     selectedField?.value === "status" || selectedField?.actions?.length <= 1;
 
-    const effectiveFilters = useMemo(() => {
+  const editTarget = useMemo(
+    () => parseEditTargetSearch(location.search),
+    [location.search],
+  );
+  const targetParseError = editTarget.error;
+
+  const effectiveFilters = useMemo(() => {
+  if (editTarget.hasTarget) {
+    return editTarget.filterParams;
+  }
+
   const baseFilters = filters.filter((f) => f.field !== "search");
 
   if (!search?.trim()) {
@@ -189,7 +202,34 @@ export default function EditPreviewPage() {
       value: search.trim(),
     },
   ];
-}, [filters, search]);
+}, [editTarget.hasTarget, editTarget.filterParams, filters, search]);
+
+  const targetFilterHash = useMemo(
+    () => buildCanonicalFilterHash(effectiveFilters),
+    [effectiveFilters],
+  );
+
+  const targetProductsQuery = useProducts({
+    cursor: null,
+    filterParams: effectiveFilters,
+    filterHash: targetFilterHash,
+    enabled: !targetParseError,
+  });
+
+  const targetRows = useMemo(
+    () =>
+      targetProductsQuery.products.map((product) => ({
+        productId: product.id,
+        id: product.id,
+        handle: product.handle,
+        title: product.title,
+        imageUrl: product.featuredImageUrl,
+        oldValue: "-",
+        newValue: "-",
+        variantCount: product.variantCount || 0,
+      })),
+    [targetProductsQuery.products],
+  );
 
   const currentPreviewSignature = useMemo(() => {
       const filterSegment = effectiveFilters
@@ -232,6 +272,7 @@ export default function EditPreviewPage() {
 
   const validOps = selectedField?.actions?.map((action) => action.value) || [];
   const previewQueryEnabled =
+    !targetParseError &&
     Boolean(selectedField?.value) &&
     Boolean(editType?.value) &&
     validOps.includes(editType?.value) &&
@@ -266,11 +307,38 @@ export default function EditPreviewPage() {
     }
   }, [previewQuery.error, showError, t]);
 
+  useEffect(() => {
+    if (targetProductsQuery.error) {
+      showError(toSafeErrorMessage(t, targetProductsQuery.error, "common.errors.generic"));
+    }
+  }, [targetProductsQuery.error, showError, t]);
+
   const previewData = previewQuery.data || null;
-  const products = previewData?.rows || [];
+  const previewRows = previewData?.rows || [];
   const isVariant = previewData?.isVariant === true;
-  const loading = previewQuery.isLoading || previewQuery.isFetching;
-  const previewTotal = previewData?.pagination?.total || 0;
+  const loading =
+    previewQueryEnabled
+      ? previewQuery.isLoading || previewQuery.isFetching
+      : targetProductsQuery.loading || targetProductsQuery.fetching;
+  const targetTotal = targetProductsQuery.totalCount || 0;
+  const previewTotal =
+    previewQueryEnabled && previewData?.pagination
+      ? previewData.pagination.total || 0
+      : targetTotal;
+  const products =
+    previewQueryEnabled && previewData
+      ? previewRows
+      : targetRows;
+  const previewTablePagination =
+    previewQueryEnabled && previewData?.pagination
+      ? pagination
+      : {
+        page: 1,
+        limit: targetRows.length || 10,
+        total: targetTotal,
+        totalPages: 1,
+        resultVersion: targetFilterHash,
+      };
   const previewFingerprint = previewData?.previewFingerprint || null;
   const previewSignature = previewData?.previewSignature || null;
   const requiresBroadConfirmation = previewData?.requiresConfirmation === true;
@@ -481,6 +549,7 @@ const summaryText = useMemo(() => {
         onAction: handleRunEdit,
         loading: submitting,
         disabled:
+          Boolean(targetParseError) ||
           isSyncInProgress ||
           submitting ||
           Boolean(submitError) ||
@@ -493,12 +562,12 @@ const summaryText = useMemo(() => {
         {
           content: t("ScheduleEdit"),
           onAction: () => setModalState((current) => ({ ...current, scheduleEdit: true })),
-          disabled: isSyncInProgress,
+          disabled: isSyncInProgress || Boolean(targetParseError),
         },
         {
           content: t("RecurringEdit"),
           onAction: () => setModalState((current) => ({ ...current, recurringEdit: true })),
-          disabled: isSyncInProgress,
+          disabled: isSyncInProgress || Boolean(targetParseError),
         },
       ]}
     >
@@ -515,6 +584,24 @@ const summaryText = useMemo(() => {
             </Banner>
           </Layout.Section>
         )}
+
+        {targetParseError ? (
+          <Layout.Section>
+            <Banner
+              tone="critical"
+              title={t("bulkEditInvalidTargetTitle", {
+                defaultValue: "Invalid product target",
+              })}
+            >
+              <p>
+                {t("bulkEditInvalidTargetMessage", {
+                  defaultValue:
+                    "The filter context in the URL could not be loaded. Go back to Products and choose your filters again.",
+                })}
+              </p>
+            </Banner>
+          </Layout.Section>
+        ) : null}
 
         <Layout.Section>
           {limitWarning && (
@@ -598,7 +685,7 @@ const summaryText = useMemo(() => {
                   {summaryText}
                 </Text>
                 <MirrorFreshnessBadge isSyncInProgress={isSyncInProgress} />
-                {!hasFreshPreview && (
+                {previewQueryEnabled && !hasFreshPreview && (
                   <Banner
                     tone="warning"
                     title={t("bulkEditPreviewStaleTitle", { defaultValue: "Preview is stale" })}
@@ -652,9 +739,13 @@ const summaryText = useMemo(() => {
           <PreviewTable
             loading={loading}
             products={products}
-            pagination={pagination}
+            pagination={previewTablePagination}
             isVariant={isVariant}
-            onPageChange={(page) => setPagination((current) => ({ ...current, page }))}
+            onPageChange={
+              previewQueryEnabled
+                ? (page) => setPagination((current) => ({ ...current, page }))
+                : undefined
+            }
             field={selectedField.value}
           />
         </Layout.Section>

@@ -67,7 +67,7 @@ export default function useProducts({
   const limit = 20;
   const normalizedFilters = useMemo(() => canonicalizeFilters(filterParams), [filterParams]);
   const filtersKey = useMemo(() => buildCanonicalFilterHash(normalizedFilters), [normalizedFilters]);
-  const resolvedFilterHash = String(filterHash || filtersKey);
+  const resolvedFilterHash = filtersKey;
   const isCursorHashMismatch =
     Boolean(cursor) &&
     Boolean(cursorFilterHash) &&

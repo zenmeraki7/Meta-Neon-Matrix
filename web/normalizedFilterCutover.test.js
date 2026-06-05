@@ -6,6 +6,9 @@ import {
   buildNormalizedFilterPlan,
   mergeResolvedIdSets,
 } from "./services/productService/normalizedFilterPlan.js";
+import { adaptLegacyFilterParamsToAst } from "./services/targeting/adapters/legacyFilterParamsAdapter.js";
+import { normalizeFilterAst } from "./services/targeting/normalize/filterAstNormalizer.js";
+import { compileFilterAst } from "./services/targeting/compile/compileFilterAst.js";
 
 test("buildNormalizedFilterPlan captures collection and metafield filters", () => {
   const plan = buildNormalizedFilterPlan([
@@ -92,4 +95,33 @@ test("mergeResolvedIdSets intersects include filters and unions exclusions", () 
 
   assert.deepEqual(merged.includeIds.sort(), ["p2", "p3"]);
   assert.deepEqual(merged.excludeIds.sort(), ["p4", "p5"]);
+});
+
+test("legacy search filter compiles to product-field OR group", () => {
+  const ast = adaptLegacyFilterParamsToAst({
+    filterParams: [
+      { field: "vendor", operator: "equals", value: "Acme" },
+      { field: "search", operator: "contains", value: "shirt" },
+    ],
+    targetGranularity: "PRODUCT",
+    source: "MANUAL_PREVIEW",
+  });
+  const compiled = compileFilterAst(normalizeFilterAst(ast), {
+    dialect: "db",
+    context: {
+      targetGranularity: "PRODUCT",
+      source: "MANUAL_PREVIEW",
+    },
+  });
+
+  assert.deepEqual(compiled.where.AND[0], {
+    vendor: { equals: "Acme" },
+  });
+  assert.equal(compiled.where.AND[1].OR.length, 5);
+  assert.deepEqual(compiled.where.AND[1].OR[0], {
+    title: { contains: "shirt", mode: "insensitive" },
+  });
+  assert.deepEqual(compiled.where.AND[1].OR[2], {
+    productType: { contains: "shirt", mode: "insensitive" },
+  });
 });

@@ -46,7 +46,7 @@ export const fieldRegistry = Object.freeze({
     model: "Product",
     column: "productType",
     valueType: "string",
-    operators: ["EQ", "NEQ", "IN", "NOT_IN", "IS_EMPTY", "IS_NOT_EMPTY"],
+    operators: ["EQ", "NEQ", "CONTAINS", "NOT_CONTAINS", "IN", "NOT_IN", "IS_EMPTY", "IS_NOT_EMPTY"],
     granularities: ["PRODUCT", "PRODUCT_WITH_MATCHING_VARIANTS"],
     indexed: true,
   }),

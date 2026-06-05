@@ -4,6 +4,14 @@ import { TARGET_GRANULARITIES } from "../types.js";
 import { fieldRegistry } from "../registry/fieldRegistry.js";
 import { operatorRegistry } from "../registry/operatorRegistry.js";
 
+const LEGACY_SEARCH_FIELDS = Object.freeze([
+  "title",
+  "vendor",
+  "productType",
+  "handle",
+  "categoryName",
+]);
+
 function mapLegacyFieldAlias(field) {
   const raw = String(field || "").trim();
   const aliasMap = {
@@ -13,6 +21,8 @@ function mapLegacyFieldAlias(field) {
     stock: "inventoryQuantity",
     inventory: "inventoryQuantity",
   };
+
+  if (raw === "search") return raw;
 
   const mapped = aliasMap[raw] || raw;
   if (!fieldRegistry[mapped]) {
@@ -106,6 +116,25 @@ function extractLegacyMeta(filter) {
   return rest;
 }
 
+function buildLegacySearchGroup(filter, index) {
+  const value = String(filter?.value || "").trim();
+  return {
+    nodeType: "group",
+    logic: "OR",
+    children: LEGACY_SEARCH_FIELDS.map((field) => ({
+      nodeType: "predicate",
+      field,
+      operator: "CONTAINS",
+      value,
+      meta: {
+        ...extractLegacyMeta(filter),
+        legacyIndex: index,
+        legacySearchField: true,
+      },
+    })),
+  };
+}
+
 export function adaptLegacyFilterParamsToAst({
   filterParams,
   targetGranularity = "PRODUCT",
@@ -121,6 +150,9 @@ export function adaptLegacyFilterParamsToAst({
 
   const children = filterParams.map((f, index) => {
     const field = mapLegacyFieldAlias(f?.field);
+    if (field === "search") {
+      return buildLegacySearchGroup(f, index);
+    }
     const operator = mapLegacyOperatorAlias(f?.operator);
     return {
       nodeType: "predicate",

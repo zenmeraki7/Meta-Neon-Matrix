@@ -17,6 +17,7 @@ import { useSelector, useDispatch } from "react-redux";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTranslatedOperatorLabel } from "../utils/filterUtils";
+import { buildEditTargetSearch } from "../utils/editTargetQuery";
 import ProductsFilters from "../components/ProductsFilters";
 import ProductsTable from "../components/ProductsTable";
 import useProducts from "../hooks/useProducts";
@@ -38,7 +39,6 @@ import {
   setCursorForFilterHash,
 } from "../../../../store/slices/productSlice";
 import { buildCanonicalFilterHash } from "../hooks/useProducts";
-const MIN_PRODUCT_SEARCH_LENGTH = 2;
 const STATUS_RAIL_MIN_HEIGHT = "84px";
 
 function formatProductTargetingStatus({ isSyncInProgress, isSyncStale }) {
@@ -82,7 +82,7 @@ export default function ProductsPage() {
     initialData: bootstrapFilterRegistry || undefined,
   });
 
-  const [committedSearch, setCommittedSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [searchResetSignal, setSearchResetSignal] = useState(0);
   const [paginationDirection, setPaginationDirection] = useState(null);
 
@@ -97,12 +97,9 @@ export default function ProductsPage() {
 
   const effectiveFilters = useMemo(() => {
     const baseFilters = filterState.filter((f) => f.field !== "search");
-    const normalizedSearch = String(committedSearch || "").trim();
+    const normalizedSearch = String(appliedSearch || "").trim();
 
-    if (
-      !normalizedSearch ||
-      normalizedSearch.length < MIN_PRODUCT_SEARCH_LENGTH
-    ) {
+    if (!normalizedSearch) {
       return baseFilters;
     }
 
@@ -114,7 +111,7 @@ export default function ProductsPage() {
         value: normalizedSearch,
       },
     ];
-  }, [filterState, committedSearch]);
+  }, [filterState, appliedSearch]);
 
   const bootstrapProductInitialData =
     cursor == null &&
@@ -316,7 +313,7 @@ export default function ProductsPage() {
       const baseFilters = nextFilters.filter((f) => f.field !== "search");
       const normalizedSearch = String(nextSearch || "").trim();
       const nextEffectiveFilters =
-        normalizedSearch && normalizedSearch.length >= MIN_PRODUCT_SEARCH_LENGTH
+        normalizedSearch
           ? [
             ...baseFilters,
             {
@@ -384,19 +381,20 @@ export default function ProductsPage() {
       return [...filterState, { field, ...nextFilter }];
     })();
 
-    applyAtomicFilterCursorReset(updated, committedSearch);
-  }, [filterState, applyAtomicFilterCursorReset, committedSearch]);
+    applyAtomicFilterCursorReset(updated, appliedSearch);
+  }, [filterState, applyAtomicFilterCursorReset, appliedSearch]);
 
   const handleCommitSearch = useCallback(
     (nextSearch) => {
-      setCommittedSearch(nextSearch);
-      applyAtomicFilterCursorReset(filterState, nextSearch);
+      const normalizedSearch = String(nextSearch || "").trim();
+      setAppliedSearch(normalizedSearch);
+      applyAtomicFilterCursorReset(filterState, normalizedSearch);
     },
     [applyAtomicFilterCursorReset, filterState],
   );
 
   const onClearAll = () => {
-    setCommittedSearch("");
+    setAppliedSearch("");
     setSearchResetSignal((current) => current + 1);
     applyAtomicFilterCursorReset([], "");
   };
@@ -404,9 +402,9 @@ export default function ProductsPage() {
   const handleRemoveFilter = useCallback(
     (field) => {
       const updatedFilters = filterState.filter((f) => f.field !== field);
-      applyAtomicFilterCursorReset(updatedFilters, committedSearch);
+      applyAtomicFilterCursorReset(updatedFilters, appliedSearch);
     },
-    [filterState, applyAtomicFilterCursorReset, committedSearch],
+    [filterState, applyAtomicFilterCursorReset, appliedSearch],
   );
 
   const handleNextPage = useCallback(() => {
@@ -525,7 +523,7 @@ export default function ProductsPage() {
       fullWidth
       primaryAction={{
         content: t("edit"),
-        onAction: () => navigate("/edit"),
+        onAction: () => navigate(`/edit${buildEditTargetSearch(effectiveFilters)}`),
       }}
       secondaryActions={[
         {
@@ -587,8 +585,10 @@ export default function ProductsPage() {
             <Box padding="400">
               <ProductsFilters
                 appliedFilters={appliedFilters}
+                appliedSearch={appliedSearch}
                 onFilterChange={onFilterChange}
                 onCommitSearch={handleCommitSearch}
+                searchLoading={fetching}
                 searchResetSignal={searchResetSignal}
                 onClearAll={onClearAll}
                 availableFilters={availableFilters}
