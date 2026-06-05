@@ -274,22 +274,8 @@ export async function getStatusCounts(sessionId, shop) {
  * @param {string} sessionId
  * @returns {Promise<Array<{status:string,count:number}>>}
  */
-export async function getProgressCounts(sessionId) {
-  const resolvedSessionId = String(sessionId || "").trim();
-  if (!resolvedSessionId) {
-    throw new Error("getProgressCounts requires sessionId");
-  }
-
-  const rows = await prisma.$queryRaw`
-    SELECT status, COUNT(*)::int AS count
-    FROM bulk_edit_changes
-    WHERE session_id = ${resolvedSessionId}::uuid
-    GROUP BY status
-  `;
-  return rows.map((row) => ({
-    status: String(row.status || "").toUpperCase(),
-    count: Number(row.count || 0),
-  }));
+export async function getProgressCounts(sessionId, shop) {
+  return getStatusCounts(sessionId, shop);
 }
 
 /**
@@ -297,9 +283,12 @@ export async function getProgressCounts(sessionId) {
  * @param {string} changeId
  * @returns {Promise<number>}
  */
-export async function markRowWriting(changeId) {
+export async function markRowWriting(changeId, shop) {
   const resolvedId = String(changeId || "").trim();
-  if (!resolvedId) throw new Error("markRowWriting requires changeId");
+  const resolvedShop = String(shop || "").trim();
+  if (!resolvedId || !resolvedShop) {
+    throw new Error("markRowWriting requires changeId and shop");
+  }
   const rows = await prisma.$transaction(async (tx) => {
     const changed = await tx.$queryRaw`
       UPDATE bulk_edit_changes
@@ -307,6 +296,7 @@ export async function markRowWriting(changeId) {
         status = 'WRITING',
         attempt_count = COALESCE(attempt_count, 0) + 1
       WHERE id = ${resolvedId}::uuid
+        AND shop_id = ${resolvedShop}
       RETURNING shop_id, variant_id, namespace, key
     `;
     if (!changed.length) return [];
@@ -331,9 +321,12 @@ export async function markRowWriting(changeId) {
  * @param {string|null} digest
  * @returns {Promise<number>}
  */
-export async function markRowWritten(changeId, confirmedValue, digest) {
+export async function markRowWritten(changeId, shop, confirmedValue, digest) {
   const resolvedId = String(changeId || "").trim();
-  if (!resolvedId) throw new Error("markRowWritten requires changeId");
+  const resolvedShop = String(shop || "").trim();
+  if (!resolvedId || !resolvedShop) {
+    throw new Error("markRowWritten requires changeId and shop");
+  }
 
   const count = await prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw`
@@ -343,6 +336,7 @@ export async function markRowWritten(changeId, confirmedValue, digest) {
         applied_at = now(),
         shopify_error = NULL
       WHERE id = ${resolvedId}::uuid
+        AND shop_id = ${resolvedShop}
       RETURNING shop_id, variant_id, namespace, key, new_value
     `;
     if (!rows.length) return 0;
@@ -376,10 +370,13 @@ export async function markRowWritten(changeId, confirmedValue, digest) {
  * @param {boolean} retryable
  * @returns {Promise<number>}
  */
-export async function markRowError(changeId, errorCode, retryable) {
+export async function markRowError(changeId, shop, errorCode, retryable) {
   const resolvedId = String(changeId || "").trim();
+  const resolvedShop = String(shop || "").trim();
   const code = String(errorCode || "UNKNOWN_ERROR").trim();
-  if (!resolvedId) throw new Error("markRowError requires changeId");
+  if (!resolvedId || !resolvedShop) {
+    throw new Error("markRowError requires changeId and shop");
+  }
 
   const rows = await prisma.$transaction(async (tx) => {
     const updated = await tx.$queryRaw`
@@ -389,6 +386,7 @@ export async function markRowError(changeId, errorCode, retryable) {
         shopify_error = ${code},
         retryable = ${Boolean(retryable)}
       WHERE id = ${resolvedId}::uuid
+        AND shop_id = ${resolvedShop}
       RETURNING shop_id, variant_id, namespace, key
     `;
     if (!updated.length) return [];

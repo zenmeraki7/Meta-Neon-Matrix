@@ -34,9 +34,12 @@ export async function findExportJobByScheduledRun(shop, scheduledExportRunId, db
   });
 }
 
-export async function findExportJobForRunFinalize(exportJobId, db = prisma) {
-  return db.exportJob.findUnique({
-    where: { id: exportJobId },
+export async function findExportJobForRunFinalize(exportJobId, shop, db = prisma) {
+  if (!shop || !exportJobId) {
+    throw new Error("SCHEDULED_EXPORT_FINALIZE_REQUIRES_SHOP_AND_EXPORT_JOB_ID");
+  }
+  return db.exportJob.findFirst({
+    where: { id: exportJobId, shop },
     select: {
       scheduledExportId: true,
       scheduledExportRunId: true,
@@ -56,8 +59,11 @@ export async function createScheduledExportJob(data, db = prisma) {
   return db.exportJob.create({ data });
 }
 
-export async function findExportJobById(id, db = prisma) {
-  return db.exportJob.findUnique({ where: { id } });
+export async function findExportJobById(id, shop, db = prisma) {
+  if (!shop || !id) {
+    throw new Error("EXPORT_JOB_LOOKUP_REQUIRES_SHOP_AND_ID");
+  }
+  return db.exportJob.findFirst({ where: { id, shop } });
 }
 
 export async function markExportJobTargetFrozen({
@@ -103,8 +109,15 @@ export async function markExportJobQueued({
 }
 
 export async function findExportHistoryByScheduledTask(scheduledTaskId, db = prisma) {
+  throw new Error("findExportHistoryByScheduledTask requires shop; use findExportHistoryByScheduledTaskForShop");
+}
+
+export async function findExportHistoryByScheduledTaskForShop(scheduledTaskId, shop, db = prisma) {
+  if (!shop || !scheduledTaskId) {
+    throw new Error("EXPORT_HISTORY_LOOKUP_REQUIRES_SHOP_AND_SCHEDULED_TASK");
+  }
   return db.exportHistory.findFirst({
-    where: { scheduledTask: scheduledTaskId },
+    where: { scheduledTask: scheduledTaskId, shop },
     select: { id: true },
   });
 }

@@ -389,6 +389,8 @@ export function flattenProduct(product, shop, metaobjectLookup = new Map()) {
 
     createdAt: product.createdAt ? new Date(product.createdAt) : null,
     updatedAt: product.updatedAt ? new Date(product.updatedAt) : null,
+    lastSourceUpdatedAt: product.updatedAt ? new Date(product.updatedAt) : null,
+    lastSourceKind: "SHOPIFY_BULK_PRODUCT_SYNC",
     publishedAt: product.publishedAt ? new Date(product.publishedAt) : null,
 
     seoTitle: normalizeNullableString(product.seo?.title),

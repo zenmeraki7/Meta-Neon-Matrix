@@ -124,100 +124,140 @@ function getOutboxDispatcherSchedulerQueue(queueName) {
   return outboxDispatcherSchedulerQueueByName.get(key);
 }
 
-export async function enqueueAutomaticProductRuleSchedulerTick(repeatEveryMs) {
+export async function enqueueAutomaticProductRuleSchedulerTick({ shop, repeatEveryMs }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("automatic product rule scheduler tick requires shop");
+  }
   return automaticProductRuleSchedulerQueue.add(
     "automatic-product-rule-scheduler-tick",
-    {},
-    { jobId: "automatic-product-rule-scheduler-tick", repeat: { every: repeatEveryMs } },
+    { shop: scopedShop },
+    {
+      jobId: `automatic-product-rule-scheduler-tick:${scopedShop}`,
+      repeat: { every: repeatEveryMs },
+    },
   );
 }
 
-export async function enqueueRecurringEditSchedulerTick(repeatEveryMs) {
+export async function enqueueRecurringEditSchedulerTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("recurring edit scheduler tick requires shop");
+  }
   return recurringEditSchedulerQueue.add(
     "recurring-edit-scheduler-tick",
-    {},
-    { jobId: "recurring-edit-scheduler-tick", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `recurring-edit-scheduler-tick:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueScheduledExportSchedulerTick(repeatEveryMs) {
+export async function enqueueScheduledExportSchedulerTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("scheduled export scheduler tick requires shop");
+  }
   return scheduledExportSchedulerQueue.add(
     "scheduled-export-scheduler-tick",
-    {},
-    { jobId: "scheduled-export-scheduler-tick", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `scheduled-export-scheduler-tick:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueOperationEnqueueIntentRecoveryTick(repeatEveryMs) {
+export async function enqueueOperationEnqueueIntentRecoveryTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("operation enqueue intent recovery tick requires shop");
+  }
   return operationEnqueueIntentRecoveryQueue.add(
     "operation-enqueue-intent-recovery-tick",
-    {},
-    { jobId: "operation-enqueue-intent-recovery-tick", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `operation-enqueue-intent-recovery-tick:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueMissedBulkOperationPollingTick(repeatEveryMs) {
+export async function enqueueMissedBulkOperationPollingTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("missed bulk operation polling tick requires shop");
+  }
   return missedBulkOperationPollingQueue.add(
     "poll-missed-bulk-operations",
-    {},
-    { jobId: "poll-missed-bulk-operations", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `poll-missed-bulk-operations:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueMissedBulkOperationPollingJob() {
+export async function enqueueMissedBulkOperationPollingJob({ shop }) {
+  if (!shop) {
+    throw new Error("missed bulk operation polling job requires shop");
+  }
   return missedBulkOperationPollingQueue.add(
     "poll-missed-bulk-operations",
-    {},
-    { jobId: "poll-missed-bulk-operations" },
+    { shop },
+    { jobId: `poll-missed-bulk-operations:${shop}` },
   );
 }
 
-export async function enqueueCatalogMissedUpdatesPollingTick({ queueName, repeatEveryMs }) {
+export async function enqueueCatalogMissedUpdatesPollingTick({ queueName, shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("catalog missed updates polling tick requires shop");
+  }
   const queue = getCatalogMissedUpdatesPollingQueue(queueName);
   return queue.add(
     "poll-catalog-missed-updates",
-    {},
-    { jobId: "poll-catalog-missed-updates", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `poll-catalog-missed-updates:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueScheduledEditRecoveryTick(repeatEveryMs) {
+export async function enqueueScheduledEditRecoveryTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("scheduled edit recovery tick requires shop");
+  }
   return scheduledEditRecoveryQueue.add(
     "scheduled-edit-recovery-tick",
-    {},
-    { jobId: "scheduled-edit-recovery-tick", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `scheduled-edit-recovery-tick:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueUnresolvedBulkOperationRecoveryTick(repeatEveryMs) {
+export async function enqueueUnresolvedBulkOperationRecoveryTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("unresolved bulk operation recovery tick requires shop");
+  }
   return unresolvedBulkOperationRecoveryQueue.add(
     "unresolved-bulk-operation-recovery-tick",
-    {},
-    { jobId: "unresolved-bulk-operation-recovery-tick", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `unresolved-bulk-operation-recovery-tick:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueStuckBulkMutationRecoveryTick(repeatEveryMs) {
+export async function enqueueStuckBulkMutationRecoveryTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("stuck bulk mutation recovery tick requires shop");
+  }
   return stuckBulkMutationRecoveryQueue.add(
     "recover-stuck-bulk-mutations",
-    {},
-    { jobId: "recover-stuck-bulk-mutations", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `recover-stuck-bulk-mutations:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 
-export async function enqueueStuckBulkMutationRecoveryJob() {
+export async function enqueueStuckBulkMutationRecoveryJob({ shop }) {
+  if (!shop) {
+    throw new Error("stuck bulk mutation recovery job requires shop");
+  }
   return stuckBulkMutationRecoveryQueue.add(
     "recover-stuck-bulk-mutations",
-    {},
-    { jobId: "recover-stuck-bulk-mutations" },
+    { shop },
+    { jobId: `recover-stuck-bulk-mutations:${shop}` },
   );
 }
 
-export async function enqueueOutboxDispatcherSchedulerTick({ queueName, repeatEveryMs }) {
+export async function enqueueOutboxDispatcherSchedulerTick({ queueName, shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("outbox dispatcher scheduler tick requires shop");
+  }
   const queue = getOutboxDispatcherSchedulerQueue(queueName);
   return queue.add(
     "outbox-dispatcher-scheduler-tick",
-    {},
-    { jobId: "outbox-dispatcher-scheduler-tick", repeat: { every: repeatEveryMs } },
+    { shop },
+    { jobId: `outbox-dispatcher-scheduler-tick:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }

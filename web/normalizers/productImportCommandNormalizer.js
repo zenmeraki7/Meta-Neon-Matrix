@@ -200,11 +200,11 @@ function parseColumnMappings(raw) {
   return deepFreeze(cloned);
 }
 
-function assertCommandContext(context) {
-  const safe = assertPlainObject(context, "command context");
-  const shop = normalizeRequiredText(safe.shop, "shop", 255);
+function assertCommandContext({ shop, actor, subscription }) {
+  const safe = { shop, actor, subscription };
+  const safeShop = normalizeRequiredText(safe.shop, "shop", 255);
   return Object.freeze({
-    shop,
+    shop: safeShop,
     actor: (() => {
       if (!safe.actor) return null;
       assertPlainObject(safe.actor, "actor");
@@ -220,9 +220,11 @@ export function buildCreateProductImportCommand({
   file,
   body = {},
   idempotencyKey,
-  context,
+  shop,
+  actor = null,
+  subscription = null,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription });
   const safeBody =
     body === undefined || body === null
       ? EMPTY_OBJECT
@@ -237,9 +239,11 @@ export function buildCreateProductImportCommand({
 
 export function buildPreviewCsvPageCommand({
   query = {},
-  context,
+  shop,
+  actor = null,
+  subscription = null,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription });
   const safeQuery =
     query === undefined || query === null
       ? EMPTY_OBJECT
@@ -261,9 +265,11 @@ export function buildCreateCsvPreviewCommand({
   file,
   query = {},
   idempotencyKey,
-  context,
+  shop,
+  actor = null,
+  subscription = null,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription });
   const safeQuery =
     query === undefined || query === null
       ? EMPTY_OBJECT

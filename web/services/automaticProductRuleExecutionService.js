@@ -28,7 +28,7 @@ import { getSession } from "../utils/sessionHandler.js";
 import { logWorkerError } from "../utils/errorLogUtils.js";
 import { getCurrentBulkOperationStatus } from "../utils/bulkOperationHelper.js";
 import logger from "../utils/loggerUtils.js";
-import ProductBulkService from "./productService/productBulkEditService.js";
+import { BulkEditCommandService } from "./bulkEdit/BulkEditCommandService.js";
 import { addBulkEditExecuteJob } from "../Jobs/Queues/bulkEditExecuteJob.js";
 import {
   AUTOMATIC_PRODUCT_RULE_EXECUTION_QUEUE,
@@ -258,12 +258,12 @@ async function resolveExistingHistoryForRun(runId) {
     });
   }
 
-async function reserveScheduledRun(ruleId, now) {
+async function reserveScheduledRun(ruleId, shop, now) {
   return withAutomaticRuleExecutionTransaction(async (tx) => {
     const locked = await tryAdvisoryLockTx(tx, `automatic-product-rule:${ruleId}`);
     if (!locked) return null;
 
-    const rule = await automaticProductRuleRepository.findByIdUnsafeInternal(ruleId, tx);
+    const rule = await automaticProductRuleRepository.findByIdForShop(ruleId, shop, tx);
     if (
       !rule ||
       rule.isDeleted ||
@@ -571,8 +571,11 @@ export async function reserveAutomaticProductRuleRunFromSignal({
   };
 }
 
-export async function scheduleDueAutomaticProductRuleRuns({ limit = 100 } = {}) {
-  const schedulerLockKey = "automatic-product-rule-scheduler";
+export async function scheduleDueAutomaticProductRuleRuns({ shop, limit = 100 } = {}) {
+  if (!shop) {
+    throw new Error("AUTOMATIC_RULE_SCHEDULER_REQUIRES_SHOP");
+  }
+  const schedulerLockKey = `automatic-product-rule-scheduler:${shop}`;
   const hasSchedulerLock = await tryAdvisoryLockSession(schedulerLockKey);
 
   if (!hasSchedulerLock) {
@@ -586,14 +589,14 @@ export async function scheduleDueAutomaticProductRuleRuns({ limit = 100 } = {}) 
 
   try {
     const now = new Date();
-    const dueIds = await automaticProductRuleRepository.findDueRuleIds(now, limit);
+    const dueIds = await automaticProductRuleRepository.findDueRuleIdsForShop(shop, now, limit);
     let scheduled = 0;
     let skipped = 0;
     const recovered = await recoverPendingRuns();
 
     for (const { id } of dueIds) {
       try {
-        const reservation = await reserveScheduledRun(id, now);
+        const reservation = await reserveScheduledRun(id, shop, now);
         if (!reservation?.runId) {
           skipped += 1;
           continue;
@@ -688,7 +691,10 @@ async function failHistoryAndRun({ rule, run, historyId, error, processingToken 
 }
 
 export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) {
-  let run = await automaticProductRuleRunRepository.findByIdWithRuleUnsafeInternal(runId);
+  if (!shopFromJob || !runId) {
+    throw new Error("AUTOMATIC_RULE_EXECUTION_REQUIRES_SHOP_AND_RUN_ID");
+  }
+  let run = await automaticProductRuleRunRepository.findByIdWithRuleForShop(runId, shopFromJob);
   let executionLockKey = null;
   if (!run) {
     return { skipped: true, reason: "run_not_found" };
@@ -699,9 +705,6 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
   }
 
   const initialRule = run.automaticProductRule;
-  if (shopFromJob && initialRule?.shop && initialRule.shop !== shopFromJob) {
-    throw new Error("Cross-shop automatic rule execution blocked");
-  }
   if (!initialRule) {
     return { skipped: true, reason: "rule_not_found" };
   }
@@ -788,13 +791,14 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
 
     if (run.editHistoryId) {
       const history = await findEditHistoryUnique({
-        where: { id: run.editHistoryId },
+        where: { id: run.editHistoryId, shop: rule.shop },
         select: { id: true, statusNormalized: true, completedAt: true, executionIdentity: true },
       });
 
       if (history?.statusNormalized === normalizeEditHistoryStatus("completed")) {
         await finalizeAutomaticProductRuleRunFromHistory({
           historyId: history.id,
+          shop: rule.shop,
           status: "SUCCESS",
           processingToken: run.processingToken || null,
         });
@@ -804,6 +808,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
       if (history?.statusNormalized === normalizeEditHistoryStatus("failed")) {
         await finalizeAutomaticProductRuleRunFromHistory({
           historyId: history.id,
+          shop: rule.shop,
           status: "FAILED",
           errorMessage: "Edit history already failed",
           processingToken: run.processingToken || null,
@@ -846,6 +851,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
       if (existingHistory.statusNormalized === normalizeEditHistoryStatus("completed")) {
         await finalizeAutomaticProductRuleRunFromHistory({
           historyId: existingHistory.id,
+          shop: rule.shop,
           status: "SUCCESS",
           processingToken,
         });
@@ -855,6 +861,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
       if (existingHistory.statusNormalized === normalizeEditHistoryStatus("failed")) {
         await finalizeAutomaticProductRuleRunFromHistory({
           historyId: existingHistory.id,
+          shop: rule.shop,
           status: "FAILED",
           errorMessage: "Recovered failed edit history",
           processingToken,
@@ -991,12 +998,12 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
       rule: executionRule,
       targets: gatedTargets,
     });
-    const bulkService = new ProductBulkService(session);
+    const bulkCommandService = new BulkEditCommandService(session);
     let editHistoryId = null;
     let editHistoryExecutionIdentity = null;
 
     try {
-      const baseHistory = await bulkService._bulkOperationEdit(
+      const baseHistory = await bulkCommandService.buildSystemEditHistoryData(
         {
           filterParams: executionRule.conditions,
           productIds,
@@ -1312,12 +1319,16 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
 
 export async function finalizeAutomaticProductRuleRunFromHistory({
   historyId,
+  shop,
   status,
   errorMessage = null,
   processingToken = null,
 }) {
+  if (!shop || !historyId) {
+    throw new Error("AUTOMATIC_RULE_FINALIZE_REQUIRES_SHOP_AND_HISTORY_ID");
+  }
   const history = await findEditHistoryUnique({
-    where: { id: historyId },
+    where: { id: historyId, shop },
     select: {
       shop: true,
       automaticProductRuleId: true,
@@ -1408,5 +1419,3 @@ export async function finalizeAutomaticProductRuleRunFromHistory({
 
   return normalizedStatus;
 }
-
-

@@ -1,4 +1,4 @@
-import { db } from "../../repositories/repositoryDb.js";
+import { db as defaultDb } from "../../repositories/repositoryDb.js";
 import crypto from "crypto";
 import { adaptLegacyFilterParamsToAst } from "./adapters/legacyFilterParamsAdapter.js";
 import { normalizeFilterAst } from "./normalize/filterAstNormalizer.js";
@@ -21,6 +21,8 @@ import {
   TARGETING_MODES,
   TARGET_TYPES,
 } from "./constants.js";
+
+const db = defaultDb;
 import {
   getTargetingFeatureFlags,
   isEngineV2EnabledForFlow,
@@ -548,7 +550,7 @@ async function persistTargetingMetadata({
   freezeKey = null,
   freezeStats = null,
   mutationIntent = null,
-  db = db,
+  db = defaultDb,
 }) {
   const modelName = OWNER_MODEL_MAP[ownerType];
   if (!modelName || !db[modelName]) return;
@@ -636,7 +638,7 @@ async function resolveAndMaybeFreeze({
   mutationIntent = null,
   requireBroadTargetConfirmation = false,
   confirmBroadTarget = false,
-  db = db,
+  db = defaultDb,
 }) {
   const flags = getTargetingFeatureFlags();
   await assertMirrorSafeForTargeting(shop, { purpose: flow });
@@ -1472,4 +1474,3 @@ export const TargetingEngineService = {
     });
   },
 };
-

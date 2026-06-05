@@ -1,38 +1,23 @@
-import { getForGrid, hasStaleVariantSync } from "../../db/variantMetafields.js";
+import { toVariantGridDto } from "../../dtos/variantGridDto.js";
 
-export async function getVariantGrid(command) {
-  const { shop, query } = command;
-  const variants = await getForGrid(shop, query);
-  const isStale = await hasStaleVariantSync(shop, 30);
-  const grouped = new Map();
+async function defaultFetchRows(shop, query) {
+  const { fetchVariantGridRows } = await import("../../repositories/variantGridRepository.js");
+  return fetchVariantGridRows(shop, query);
+}
 
-  for (const row of variants.rows || []) {
-    const variantId = String(row?.variant_id || "").trim();
-    if (!variantId) continue;
-    if (!grouped.has(variantId)) {
-      grouped.set(variantId, {
-        id: variantId,
-        variantId,
-        productId: row?.product_id == null ? null : String(row.product_id),
-        syncedAt: row?.synced_at || null,
-        freshness: String(row?.freshness || "FRESH"),
-        metafields: {},
-      });
-    }
-    const composite = `${row.namespace}.${row.key}`;
-    grouped.get(variantId).metafields[composite] = {
-      value: row.value ?? null,
-      pendingValue: row.pending_value ?? null,
-      editStatus: row.edit_status ?? "SYNCED",
-      compareDigest: row.compare_digest ?? null,
-      syncedAt: row.synced_at ?? null,
-      freshness: row.freshness ?? "FRESH",
-    };
+export class VariantGridQueryService {
+  constructor({ fetchRows = defaultFetchRows } = {}) {
+    this.fetchRows = fetchRows;
   }
 
-  return {
-    rows: Array.from(grouped.values()),
-    nextCursor: variants.nextCursor,
-    isStale,
-  };
+  async getVariantGrid(command = {}) {
+    const result = await this.fetchRows(command.shop, command.query || {});
+    return toVariantGridDto(result);
+  }
+}
+
+const defaultService = new VariantGridQueryService();
+
+export async function getVariantGrid(command = {}) {
+  return defaultService.getVariantGrid(command);
 }

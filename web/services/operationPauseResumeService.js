@@ -104,6 +104,7 @@ export async function requestPauseEditOperation({
   const response = { id: historyId, paused: immediate, mode: immediate ? "PAUSED" : "PAUSE_AFTER_CURRENT_BATCH" };
   await idempotencyStore.complete({
     recordId: begin.recordId,
+    shop,
     response,
   });
   return response;
@@ -178,6 +179,7 @@ export async function resumeEditOperation({
   const response = { id: historyId, resumed: true };
   await idempotencyStore.complete({
     recordId: begin.recordId,
+    shop,
     response,
   });
   return response;
@@ -260,6 +262,7 @@ export async function requestPauseExportOperation({
   const response = { id: exportJobId, paused: immediate, mode: immediate ? "PAUSED" : "PAUSE_AFTER_CURRENT_BATCH" };
   await idempotencyStore.complete({
     recordId: begin.recordId,
+    shop,
     response,
   });
   return response;
@@ -337,6 +340,7 @@ export async function resumeExportOperation({
   const response = { id: exportJobId, resumed: true };
   await idempotencyStore.complete({
     recordId: begin.recordId,
+    shop,
     response,
   });
   return response;
@@ -349,4 +353,3 @@ export async function resumeExportOperation({
     });
   }
 }
-

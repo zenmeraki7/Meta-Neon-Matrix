@@ -86,15 +86,15 @@ async function notifyMerchantTerminalFailure(shop, row, errorCode) {
     key: row?.key,
     errorCode,
   });
-  await markDeadLetterNotified(String(row?.id || ""));
+  await markDeadLetterNotified(String(row?.id || ""), shop);
 }
 
 async function markRowErrorWithDeadLetter(row, errorCode, retryable) {
-  await markRowError(row.id, errorCode, retryable);
+  await markRowError(row.id, row.shop, errorCode, retryable);
   const nextAttempt = Number(row.attemptCount || 0) + 1;
   const terminal = !retryable || nextAttempt >= 3;
   if (!terminal) return;
-  await moveToDeadLetter(row.id, errorCode);
+  await moveToDeadLetter(row.id, row.shop, errorCode);
   await notifyMerchantTerminalFailure(row.shop, row, errorCode);
 }
 
@@ -274,7 +274,7 @@ export async function runMetafieldBulkWrite({ sessionId, shop }) {
   for (const batch of chunk(rows, METAFIELDS_SET_BATCH_SIZE)) {
     for (const row of batch) {
       // eslint-disable-next-line no-await-in-loop
-      await markRowWriting(row.id);
+      await markRowWriting(row.id, row.shop);
     }
 
     let payload;
@@ -325,7 +325,7 @@ export async function runMetafieldBulkWrite({ sessionId, shop }) {
       }
 
       // eslint-disable-next-line no-await-in-loop
-      await markRowWritten(row.id, success.value, success.compareDigest);
+      await markRowWritten(row.id, row.shop, success.value, success.compareDigest);
       written += 1;
       processed += 1;
     }

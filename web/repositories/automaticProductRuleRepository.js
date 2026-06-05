@@ -150,8 +150,7 @@ export const automaticProductRuleRepository = {
   },
 
   async findByIdUnsafeInternal(id, db = prisma) {
-    assertId(id);
-    return getClient(db).automaticProductRule.findUnique({ where: { id } });
+    throw new Error("findByIdUnsafeInternal is forbidden; use findByIdForShop");
   },
 
   async findByIdForShop(id, shop, db = prisma) {
@@ -218,8 +217,14 @@ export const automaticProductRuleRepository = {
   },
 
   async findDueRuleIds(now, limit = 100, db = prisma) {
+    throw new Error("findDueRuleIds is forbidden; use findDueRuleIdsForShop");
+  },
+
+  async findDueRuleIdsForShop(shop, now, limit = 100, db = prisma) {
+    assertShop(shop);
     return getClient(db).automaticProductRule.findMany({
       where: {
+        shop,
         isDeleted: false,
         status: AutomaticProductRuleStatus.ACTIVE,
         triggerType: {

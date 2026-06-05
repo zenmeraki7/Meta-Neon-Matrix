@@ -1,7 +1,12 @@
 // web/controllers/productBulkEditController.js
 
-import { logApiError } from "../utils/errorLogUtils.js";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import {
+  buildAuthenticatedActor,
+  getIdempotencyKey,
+  handleLoggedControllerError,
+  requireShopifySession,
+} from "./controllerUtils.js";
+import { setPrivateNoStore } from "../http/cacheHeaders.js";
 
 import {
   buildBulkEditPreviewCommand,
@@ -33,100 +38,6 @@ import {
   productOperationLifecycleUseCases,
 } from "../useCases/productBulkEditUseCases.js";
 
-function buildControllerError(message, code = "VALIDATION_FAILED") {
-  const error = new Error(message);
-  error.code = code;
-  return error;
-}
-
-function requireShopifySession(res) {
-  const session = res.locals?.shopify?.session;
-
-  if (!session?.shop) {
-    throw buildControllerError("Authentication required", "UNAUTHENTICATED");
-  }
-
-  return session;
-}
-
-function buildSafeRequestLogContext(req) {
-  return Object.freeze({
-    method: req.method,
-    originalUrl: req.originalUrl,
-    path: req.path,
-    requestId: req.id || req.get?.("X-Request-Id") || null,
-  });
-}
-
-function buildActorFromSession(session, fallbackType = "MERCHANT_ADMIN") {
-  const associatedUser = session?.onlineAccessInfo?.associated_user;
-
-  return Object.freeze({
-    type: associatedUser?.id ? "SHOPIFY_USER" : fallbackType,
-    actorId: associatedUser?.id ? String(associatedUser.id) : null,
-    userId: associatedUser?.id ? String(associatedUser.id) : null,
-    email: associatedUser?.email || null,
-  });
-}
-
-function buildBaseCommandContext({ req, session, fallbackActorType }) {
-  return Object.freeze({
-    shop: session.shop,
-    actor: buildActorFromSession(session, fallbackActorType),
-    subscription: req.subscription || null,
-    entitlement: req.entitlement || null,
-    activePlan: req.activePlan || {},
-  });
-}
-
-function setPrivateNoStore(res) {
-  res.set("Cache-Control", "no-store");
-}
-
-async function logAndSendError({ res, req, error, shop, source }) {
-  await logApiError({
-    shop,
-    err: error,
-    req: buildSafeRequestLogContext(req),
-    source,
-  });
-
-  const fallbackCode =
-    error?.code === "UNAUTHENTICATED"
-      ? "UNAUTHENTICATED"
-      : error?.code || "VALIDATION_FAILED";
-
-  const { statusCode, body } = buildPublicApiErrorResponse(error, fallbackCode);
-  return res.status(statusCode).json(body);
-}
-
-function buildHeaderSnapshot(req) {
-  return Object.freeze({
-    idempotencyKey: req.get?.("Idempotency-Key") || null,
-  });
-}
-
-function buildCommand(req, res, normalizer, fallbackActorType = "MERCHANT_ADMIN") {
-  const session = requireShopifySession(res);
-
-  const command = normalizer({
-    params: req.params || {},
-    query: req.query || {},
-    body: req.body || {},
-    headers: buildHeaderSnapshot(req),
-    context: buildBaseCommandContext({
-      req,
-      session,
-      fallbackActorType,
-    }),
-  });
-
-  return Object.freeze({
-    session,
-    command: Object.freeze(command),
-  });
-}
-
 // Preview
 export const trackEditPreview = async (req, res) => {
   let session;
@@ -134,25 +45,27 @@ export const trackEditPreview = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildBulkEditPreviewCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productBulkEditUseCases.preview(built.command);
+    session = requireShopifySession(res);
+    const command = buildBulkEditPreviewCommand({
+      body: req.body || {},
+      query: req.query || {},
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productBulkEditUseCases.preview(command);
 
     return res.status(200).json(toBulkEditPreviewResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.trackEditPreview",
+      fallbackCode: "BULK_EDIT_PREVIEW_FAILED",
     });
   }
 };
@@ -163,23 +76,26 @@ export const getEditPreviewVariantDetails = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildPreviewVariantDetailsCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-    const result = await productBulkEditUseCases.previewVariantDetails(built.command);
+    session = requireShopifySession(res);
+    const command = buildPreviewVariantDetailsCommand({
+      params: req.params || {},
+      query: req.query || {},
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productBulkEditUseCases.previewVariantDetails(command);
     return res.status(200).json(toPreviewVariantDetailsResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.getEditPreviewVariantDetails",
+      fallbackCode: "BULK_EDIT_PREVIEW_VARIANTS_FAILED",
     });
   }
 };
@@ -191,25 +107,28 @@ export const handleBulkEditProduct = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildBulkEditExecuteCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productBulkEditUseCases.execute(built.command);
+    session = requireShopifySession(res);
+    const command = buildBulkEditExecuteCommand({
+      body: req.body || {},
+      query: req.query || {},
+      idempotencyKey: getIdempotencyKey(req),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productBulkEditUseCases.execute(command);
 
     return res.status(202).json(toBulkEditExecuteResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.handleBulkEditProduct",
+      fallbackCode: "BULK_EDIT_EXECUTE_FAILED",
     });
   }
 };
@@ -221,25 +140,27 @@ export const undoEdit = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildUndoEditCommand,
-      "MERCHANT_ADMIN",
-    );
+    session = requireShopifySession(res);
+    const command = buildUndoEditCommand({
+      params: req.params || {},
+      idempotencyKey: getIdempotencyKey(req),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productBulkUndoUseCases.undo(command);
 
-    session = built.session;
-
-    const result = await productBulkUndoUseCases.undo(built.command);
-
-    return res.status(202).json(toUndoEditResponseDto(result, built.command));
+    return res.status(202).json(toUndoEditResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.undoEdit",
+      fallbackCode: "BULK_EDIT_UNDO_FAILED",
     });
   }
 };
@@ -251,25 +172,28 @@ export const createScheduledEdit = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildScheduledEditCommand,
-      "SCHEDULE",
-    );
-
-    session = built.session;
-
-    const result = await productBulkEditUseCases.schedule(built.command);
+    session = requireShopifySession(res);
+    const command = buildScheduledEditCommand({
+      body: req.body || {},
+      query: req.query || {},
+      idempotencyKey: getIdempotencyKey(req),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productBulkEditUseCases.schedule(command);
 
     return res.status(202).json(toScheduledEditResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.createScheduledEdit",
+      fallbackCode: "SCHEDULED_EDIT_CREATE_FAILED",
     });
   }
 };
@@ -281,25 +205,28 @@ export const cancelEditOperation = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildCancelEditCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.cancel(built.command);
+    session = requireShopifySession(res);
+    const command = buildCancelEditCommand({
+      params: req.params || {},
+      body: req.body || {},
+      idempotencyKey: getIdempotencyKey(req),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productOperationLifecycleUseCases.cancel(command);
 
     return res.status(200).json(toOperationCancellationResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.cancelEditOperation",
+      fallbackCode: "BULK_EDIT_CANCEL_FAILED",
     });
   }
 };
@@ -310,25 +237,27 @@ export const pauseEditOperation = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildPauseEditCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.pause(built.command);
+    session = requireShopifySession(res);
+    const command = buildPauseEditCommand({
+      params: req.params || {},
+      idempotencyKey: getIdempotencyKey(req),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productOperationLifecycleUseCases.pause(command);
 
     return res.status(200).json(toOperationPauseResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.pauseEditOperation",
+      fallbackCode: "BULK_EDIT_PAUSE_FAILED",
     });
   }
 };
@@ -339,25 +268,27 @@ export const resumePausedEditOperation = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildResumeEditCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.resume(built.command);
+    session = requireShopifySession(res);
+    const command = buildResumeEditCommand({
+      params: req.params || {},
+      idempotencyKey: getIdempotencyKey(req),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productOperationLifecycleUseCases.resume(command);
 
     return res.status(200).json(toOperationResumeResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.resumePausedEditOperation",
+      fallbackCode: "BULK_EDIT_RESUME_FAILED",
     });
   }
 };
@@ -368,27 +299,27 @@ export const retryFailedOnlyEditOperation = async (req, res) => {
   try {
     setPrivateNoStore(res);
 
-    const built = buildCommand(
-      req,
-      res,
-      buildRetryFailedOnlyCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.retryFailedOnly(
-      built.command,
-    );
+    session = requireShopifySession(res);
+    const command = buildRetryFailedOnlyCommand({
+      params: req.params || {},
+      idempotencyKey: getIdempotencyKey(req),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
+    });
+    const result = await productOperationLifecycleUseCases.retryFailedOnly(command);
 
     return res.status(202).json(toOperationRetryResponseDto(result));
   } catch (error) {
-    return logAndSendError({
+    return handleLoggedControllerError({
       res,
       req,
+      session,
       error,
-      shop: session?.shop,
       source: "productBulkEditController.retryFailedOnlyEditOperation",
+      fallbackCode: "BULK_EDIT_RETRY_FAILED",
     });
   }
 };

@@ -30,19 +30,6 @@ function requireShopifyAuth(req, res, next) {
   return next();
 }
 
-function requireShopContext(req, res, next) {
-  const shop = res.locals.shopify?.session?.shop;
-  if (!shop) {
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      { code: "UNAUTHENTICATED" },
-      "UNAUTHENTICATED",
-    );
-    return res.status(statusCode).json(body);
-  }
-  res.locals.shop = shop;
-  return next();
-}
-
 const loadSubscriptionContext = subscriptionMiddleware;
 
 function requireEntitlement(feature) {
@@ -84,7 +71,6 @@ function requireIdempotencyKeyIfExecutionTrigger(req, res, next) {
 }
 
 router.use(requireShopifyAuth);
-router.use(requireShopContext);
 router.use(loadSubscriptionContext);
 
 router.get("/", listAutomaticProductRulesController);

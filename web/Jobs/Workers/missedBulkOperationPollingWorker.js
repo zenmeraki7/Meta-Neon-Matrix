@@ -70,11 +70,16 @@ function isTerminalStatus(status) {
   );
 }
 
-async function pollMissedBulkOperations() {
+async function pollMissedBulkOperations({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("missed bulk operation polling requires shop");
+  }
   const cutoff = new Date(Date.now() - 2 * 60 * 1000);
 
   const candidates = await db.editHistory.findMany({
     where: {
+      shop: scopedShop,
       OR: [
         {
           executionState: {
@@ -186,7 +191,7 @@ async function pollMissedBulkOperations() {
 
 export const missedBulkOperationPollingWorker = new Worker(
   QUEUE_NAME,
-  async () => pollMissedBulkOperations(),
+  async (job) => pollMissedBulkOperations({ shop: job?.data?.shop }),
   {
     connection,
     concurrency: 1,
@@ -209,9 +214,9 @@ missedBulkOperationPollingWorker.on("failed", (job, error) => {
   });
 });
 
-async function enqueuePollingJob() {
+async function enqueuePollingJob({ shop }) {
   try {
-    await enqueueMissedBulkOperationPollingJob();
+    await enqueueMissedBulkOperationPollingJob({ shop });
   } catch (error) {
     logger.error("Failed to enqueue missed bulk operation polling job", {
       worker: "missedBulkOperationPollingWorker",
@@ -220,16 +225,23 @@ async function enqueuePollingJob() {
   }
 }
 
-async function registerRepeatableTick() {
+export async function registerMissedBulkOperationPollingTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("missed bulk operation polling registration requires shop");
+  }
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
 
   try {
-    await enqueueMissedBulkOperationPollingTick(POLL_INTERVAL_MS);
+    await enqueueMissedBulkOperationPollingTick({
+      shop: scopedShop,
+      repeatEveryMs: POLL_INTERVAL_MS,
+    });
   } finally {
     await releaseRedisLock({
       connection,
@@ -238,6 +250,3 @@ async function registerRepeatableTick() {
     }).catch(() => {});
   }
 }
-
-await registerRepeatableTick();
-

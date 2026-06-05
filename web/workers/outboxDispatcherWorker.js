@@ -8,9 +8,13 @@ const OUTBOX_STATUS = Object.freeze({
   FAILED: "FAILED",
 });
 
-export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
+export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("dispatchPendingOutboxEvents requires shop");
+  }
   const pending = await db.outboxEvent.findMany({
-    where: { status: OUTBOX_STATUS.PENDING },
+    where: { shop: scopedShop, status: OUTBOX_STATUS.PENDING },
     orderBy: { createdAt: "asc" },
     take: Math.max(1, Number(limit) || 50),
   });
@@ -19,6 +23,7 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
     const claimed = await db.outboxEvent.updateMany({
       where: {
         id: event.id,
+        shop: scopedShop,
         status: OUTBOX_STATUS.PENDING,
       },
       data: {
@@ -38,8 +43,8 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
         });
       }
 
-      await db.outboxEvent.update({
-        where: { id: event.id },
+      await db.outboxEvent.updateMany({
+        where: { id: event.id, shop: scopedShop },
         data: {
           status: OUTBOX_STATUS.DISPATCHED,
           dispatchedAt: new Date(),
@@ -47,8 +52,8 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
         },
       });
     } catch (error) {
-      await db.outboxEvent.update({
-        where: { id: event.id },
+      await db.outboxEvent.updateMany({
+        where: { id: event.id, shop: scopedShop },
         data: {
           status: OUTBOX_STATUS.PENDING,
           updatedAt: new Date(),
@@ -77,4 +82,3 @@ async function logDispatchError(event, error) {
 export default {
   dispatchPendingOutboxEvents,
 };
-

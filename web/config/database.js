@@ -8,6 +8,7 @@ import {
   normalizeExportJobStatus,
   normalizeWebhookDeliveryStatus,
 } from "../utils/normalizedStateUtils.js";
+import { assertTenantScopedPrismaArgs as enforceTenantScopedPrismaArgs } from "./tenantScopeGuard.js";
 
 // Ensure a single instance of PrismaClient is used across the application.
 const globalForPrisma = globalThis;
@@ -199,7 +200,8 @@ function createPrismaClient() {
     name: "normalized-state-compat",
     query: {
       $allModels: {
-        async $allOperations({ model, args, query }) {
+        async $allOperations({ model, operation, args, query }) {
+          enforceTenantScopedPrismaArgs(model, operation, args);
           const normalizedArgs = normalizePrismaArgsForModel(model, args);
           return query(normalizedArgs);
         },

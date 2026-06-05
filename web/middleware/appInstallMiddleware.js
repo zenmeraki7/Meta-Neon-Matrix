@@ -126,21 +126,8 @@ export const confirmShopInstallation = async ({
 /* ------------------------------------------------------------------ */
 
 export const shopPreInstallation = async (req, res, next) => {
-  const { shop, ref } = req.query;
   try {
-    if (!shop || !ref) return next();
-
-    const affiliateUserExist = await db.affiliateUser.findUnique({
-      where: { referralCode: ref },
-    });
-
-    if (affiliateUserExist) {
-      await db.referralCode.create({
-        data: { shop, referralCode: ref },
-      });
-    }
-
-    next();
+    return next();
   } catch (error) {
     throw error;
   }
@@ -220,4 +207,3 @@ export const appInstallMiddleware = async (req, res, next) => {
     res.status(500).send("Installation failed");
   }
 };
-

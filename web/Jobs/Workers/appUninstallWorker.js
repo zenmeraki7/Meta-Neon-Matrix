@@ -267,6 +267,7 @@ const appUninstallWorker = new Worker(
         await tx.webhookDelivery.deleteMany({ where: { shop } });
         await tx.billingEvent.deleteMany({ where: { shop } });
         await tx.filterTrack.deleteMany({ where: { shop } });
+        await tx.idempotencyRecord.deleteMany({ where: { shop } });
         await tx.syncHistory.deleteMany({ where: { shop } });
         await tx.editHistory.deleteMany({ where: { shop } });
         await tx.exportJob.deleteMany({ where: { shop } });
@@ -338,4 +339,3 @@ appUninstallWorker.on("failed", (job, error) => {
 });
 
 export default appUninstallWorker;
-

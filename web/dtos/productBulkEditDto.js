@@ -205,13 +205,10 @@ export function toScheduledEditResponseDto(result) {
   };
 }
 
-export function toUndoEditResponseDto(result, command) {
+export function toUndoEditResponseDto(result) {
   return {
     success: true,
     data: result || {},
-    meta: {
-      operationId: command?.operationId || null,
-    },
   };
 }
 

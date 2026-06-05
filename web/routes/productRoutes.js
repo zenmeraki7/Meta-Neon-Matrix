@@ -10,8 +10,10 @@ import {
   handleDownloadExportProductsData,
 } from "../controllers/productExportController.js";
 import {
-  clearProductTypes,
+  createClearProductTypesController,
 } from "../controllers/productSyncController.js";
+import { ProductSyncCommandService } from "../services/productSync/ProductSyncCommandService.js";
+import { ProductImportCommandService } from "../services/productImport/ProductImportCommandService.js";
 import {
   cancelEditOperation,
   handleBulkEditProduct,
@@ -32,7 +34,7 @@ import {
 } from "../controllers/productQueryController.js";
 import {
   createCsvPreviewController,
-  importCsvController,
+  createImportCsvController,
   previewCsvController,
 } from "../controllers/productImportController.js";
 import {
@@ -55,6 +57,7 @@ import {
 } from "../controllers/scheduledExportController.js";
 
 import { subscriptionMiddleware, requirePaidPlanMiddleware } from "../middleware/subscriptionMiddleware.js";
+import { requireShopifySession } from "../middleware/requireShopifySession.js";
 import productQuerySchema from "../validations/productQuerySchema.js";
 import { validateBody, validateQuery } from "../middleware/validateQuery.js";
 // import {
@@ -73,6 +76,10 @@ import {
 } from "../validations/controllerRequestSchemas.js";
 
 const router = express.Router();
+const productSyncCommandService = new ProductSyncCommandService();
+const clearProductTypes = createClearProductTypesController(productSyncCommandService);
+const productImportCommandService = new ProductImportCommandService();
+const importCsvController = createImportCsvController(productImportCommandService);
 
 router
   .route("/get-all")
@@ -86,22 +93,30 @@ router.post(
 );
 router.post(
   "/create-scheduled-export",
+  requireShopifySession,
   subscriptionMiddleware,
   createScheduledExportController
 );
-router.get("/get-scheduled-exports", listScheduledExportsController);
-router.get("/get-scheduled-export/:id", getScheduledExportByIdController);
+router.get("/get-scheduled-exports", requireShopifySession, listScheduledExportsController);
+router.get("/get-scheduled-export/:id", requireShopifySession, getScheduledExportByIdController);
 router.put(
   "/update-scheduled-export/:id",
+  requireShopifySession,
   subscriptionMiddleware,
   updateScheduledExportController
 );
 router.put(
   "/update-scheduled-export/:id/toggle",
+  requireShopifySession,
   subscriptionMiddleware,
   toggleScheduledExportStatusController
 );
-router.delete("/delete-scheduled-export/:id", subscriptionMiddleware, deleteScheduledExportController);
+router.delete(
+  "/delete-scheduled-export/:id",
+  requireShopifySession,
+  subscriptionMiddleware,
+  deleteScheduledExportController,
+);
 router.get(
   "/download-export/:id",
   // restrictSubscribeUserWork,

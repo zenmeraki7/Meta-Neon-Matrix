@@ -1,19 +1,18 @@
 import {
   buildAuthenticatedActor,
   getIdempotencyKey,
-  handleControllerError,
+  handleLoggedControllerError,
   requireShopifySession,
 } from "./controllerUtils.js";
 
-import { ProductSyncCommandService } from "../services/productSync/ProductSyncCommandService.js";
 import { buildClearProductTypesCommand } from "../normalizers/productSyncCommandNormalizer.js";
 import { toProductSyncCommandAcceptedDto } from "../dtos/productSyncDto.js";
 
-const productSyncCommandService = new ProductSyncCommandService();
+export const createClearProductTypesController = (productSyncCommandService) => async (req, res) => {
+  let session;
 
-export const clearProductTypes = async (req, res) => {
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
 
     const command = buildClearProductTypesCommand({
       shop: session.shop,
@@ -27,6 +26,13 @@ export const clearProductTypes = async (req, res) => {
 
     return res.status(202).json(toProductSyncCommandAcceptedDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "CLEAR_PRODUCT_TYPES_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productSyncController.clearProductTypes",
+      fallbackCode: "CLEAR_PRODUCT_TYPES_FAILED",
+    });
   }
 };

@@ -1,9 +1,11 @@
 import { Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
 import {
-  RECURRING_EDIT_EXECUTION_QUEUE,
   executeRecurringEditRun,
 } from "../../services/recurringEditExecutionService.js";
+import {
+  RECURRING_EDIT_EXECUTION_QUEUE,
+} from "../../queues/adapters/recurringEditQueueAdapter.js";
 import logger from "../../utils/loggerUtils.js";
 import {
   getJobAttempt,

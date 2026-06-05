@@ -1,7 +1,7 @@
 import logger from "../../utils/loggerUtils.js";
-import promClient from "prom-client";
 import { getCache, setCache, clearKeyCaches } from "../../utils/cacheUtils.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
+import { getProductSyncCacheKeys } from "../../utils/cacheKeyRegistry.js";
 
 import { db } from "../../repositories/repositoryDb.js";
 import { createMirrorBatchId } from "../mirrorHealthService.js";
@@ -15,81 +15,13 @@ import {
   releaseExclusiveShopWork,
   LOCK_NS,
 } from "../shopWorkLeaseService.js";
+import { requireShopScope } from "../../utils/shopScope.js";
+import {
+  GetCollections,
+  StartCollectionBulkQuery,
+} from "../../graphql/collection.js";
 
-export const metrics = {
-  collectionFetchLatency: new promClient.Histogram({
-    name: "collection_fetch_latency_seconds",
-    help: "Time to fetch collections by source",
-    buckets: [0.1, 0.3, 0.5, 1, 2, 5],
-    labelNames: ["source"],
-  }),
-  cacheHits: new promClient.Counter({
-    name: "collection_cache_hit_total",
-    help: "Cache hits by source",
-    labelNames: ["source"],
-  }),
-  cacheMisses: new promClient.Counter({
-    name: "collection_cache_miss_total",
-    help: "Cache misses total",
-    labelNames: ["level"],
-  }),
-  syncJobs: new promClient.Counter({
-    name: "collection_sync_jobs_total",
-    help: "Total sync jobs by status",
-    labelNames: ["status"],
-  }),
-};
-
-const BULK_OPERATION_MUTATION = `mutation {
-  bulkOperationRunQuery(
-    query: """
-      {
-        collections {
-          edges {
-            node {
-              id
-              title
-              handle
-            }
-          }
-        }
-      }
-    """
-  ) {
-    bulkOperation {
-      id
-      status
-    }
-    userErrors {
-      field
-      message
-    }
-  }
-}`;
-
-const GET_COLLECTIONS_QUERY = `#graphql
-  query GetCollections($first: Int!, $query: String) {
-    collections(first: $first, query: $query) {
-      edges {
-        node {
-          id
-          title
-          handle
-        }
-      }
-    }
-  }
-`;
-
-function assertShop(command) {
-  const shop = command?.shop;
-  if (!shop || typeof shop !== "string") {
-    const error = new Error("Shop isolation violation");
-    error.code = "FORBIDDEN";
-    throw error;
-  }
-  return shop;
-}
+const BLOCKING_BULK_OPERATION_STATUSES = new Set(["CREATED", "RUNNING", "CANCELING"]);
 
 export class CollectionService {
   constructor(shopifyClient) {
@@ -109,28 +41,33 @@ export class CollectionService {
   }
 
   async fetchCollections(command) {
-    const shop = assertShop(command);
+    const shop = requireShopScope(command?.shop);
     const search = String(command?.search || "").trim();
     const limit = Math.min(Math.max(Number(command?.limit) || 20, 1), 50);
-
-    const cacheKey = `${shop}:fetchCollections:${search}:${limit}`;
-    const cacheCollections = await getCache(cacheKey);
-
-    if (cacheCollections) {
-      return { source: "CACHE", collections: cacheCollections };
-    }
 
     const store = await db.store.findUnique({
       where: { shopUrl: shop },
       select: { activeCollectionBatchId: true },
     });
+    const activeCollectionBatchId = store?.activeCollectionBatchId || null;
+    if (!activeCollectionBatchId) {
+      return {
+        source: "MIRROR_EMPTY",
+        collections: [],
+        reason: "ACTIVE_COLLECTION_MIRROR_BATCH_NOT_FOUND",
+      };
+    }
+
+    const cacheKey = `${shop}:fetchCollections:v2:${activeCollectionBatchId}:${search}:${limit}`;
+    const cacheCollections = await getCache(cacheKey);
+    if (cacheCollections) {
+      return { source: "CACHE", collections: cacheCollections };
+    }
 
     const dbCollections = await db.collection.findMany({
       where: {
         shop,
-        ...(store?.activeCollectionBatchId
-          ? { mirrorBatchId: store.activeCollectionBatchId }
-          : {}),
+        mirrorBatchId: activeCollectionBatchId,
         ...(search
           ? {
               title: {
@@ -154,7 +91,7 @@ export class CollectionService {
   }
 
   async fetchFromShopify(command) {
-    const shop = assertShop(command);
+    const shop = requireShopScope(command?.shop);
     const session = await this.#loadOfflineSession(shop);
     await assertFeatureEntitlement({
       shop,
@@ -173,7 +110,7 @@ export class CollectionService {
       response = await Promise.race([
         client.query({
           data: {
-            query: GET_COLLECTIONS_QUERY,
+            query: GetCollections,
             variables: {
               first,
               query: queryString,
@@ -183,7 +120,7 @@ export class CollectionService {
         new Promise((_, reject) => {
           setTimeout(() => {
             const timeoutError = new Error("Shopify collection lookup timed out");
-            timeoutError.code = "RATE_LIMITED";
+            timeoutError.code = "TIMEOUT";
             reject(timeoutError);
           }, 8000);
         }),
@@ -213,13 +150,32 @@ export class CollectionService {
     };
   }
 
-  async clearCollections(session) {
+  async startCollectionSync(session) {
+    const shop = requireShopScope(session?.shop, "session.shop");
+    if (session.shop !== shop) {
+      throw new Error("COLLECTION_SYNC_SESSION_SHOP_INVALID");
+    }
+    const syncBatchId = createMirrorBatchId("collection_sync");
+    const executionId = createMirrorBatchId("collection_execution");
+    const syncHistory = await db.syncHistory.create({
+      data: {
+        shop,
+        status: "processing",
+        syncBatchId,
+        stage: "SHOPIFY_BULK_SUBMITTING",
+        operationType: "Collection",
+        duration: 0,
+        recordCount: 0,
+        executionState: "submitting",
+        executionIdentity: executionId,
+      },
+    });
+
     try {
-      const shop = session.shop;
       const client = new this.shopify.api.clients.Graphql({ session });
       const bulkResponse = await client.query({
         data: {
-          query: BULK_OPERATION_MUTATION,
+          query: StartCollectionBulkQuery,
         },
       });
       if (bulkResponse.body.errors) {
@@ -227,38 +183,56 @@ export class CollectionService {
         error.code = "INTERNAL_ERROR";
         throw error;
       }
+      const userErrors = bulkResponse?.body?.data?.bulkOperationRunQuery?.userErrors || [];
+      if (userErrors.length) {
+        const error = new Error(`SHOPIFY_USER_ERRORS:${JSON.stringify(userErrors)}`);
+        error.code = "SHOPIFY_USER_ERRORS";
+        throw error;
+      }
       const bulkOperationId =
-        bulkResponse.body.data.bulkOperationRunQuery.bulkOperation.id;
-      const syncBatchId = createMirrorBatchId("collection_sync");
+        bulkResponse.body.data.bulkOperationRunQuery.bulkOperation?.id;
+      if (!bulkOperationId) {
+        throw new Error("COLLECTION_BULK_OPERATION_ID_MISSING");
+      }
 
-      await db.store.update({
-        where: { shopUrl: shop },
-        data: {
-          isCollectionSyncing: true,
-          lastCollectionSyncAt: new Date(),
-        },
-      });
-
-      await db.syncHistory.create({
-        data: {
-          shop,
-          status: "processing",
-          bulkOperationId,
-          syncBatchId,
-          stage: "SHOPIFY_BULK_RUNNING",
-          operationType: "Collection",
-          duration: 0,
-          recordCount: 0,
-        },
-      });
+      await db.$transaction([
+        db.store.update({
+          where: { shopUrl: shop },
+          data: {
+            isCollectionSyncing: true,
+            lastCollectionSyncAt: new Date(),
+          },
+        }),
+        db.syncHistory.updateMany({
+          where: { id: syncHistory.id, shop },
+          data: {
+            bulkOperationId,
+            stage: "SHOPIFY_BULK_RUNNING",
+            executionState: "running",
+          },
+        }),
+      ]);
 
       return {
+        syncHistoryId: syncHistory.id,
         operationId: bulkOperationId,
+        bulkOperationId,
+        syncBatchId,
+        executionId,
         status: "ACCEPTED",
       };
     } catch (err) {
-      logger.error("Failed to clear collections", {
-        shop: session.shop,
+      await db.syncHistory.updateMany({
+        where: { id: syncHistory.id, shop },
+        data: {
+          status: "failed",
+          stage: "SHOPIFY_BULK_SUBMIT_FAILED",
+          executionState: "failed",
+          errorMessage: String(err?.message || err).slice(0, 2000),
+        },
+      }).catch(() => {});
+      logger.error("Failed to start collection sync", {
+        shop,
         error: err.message,
       });
       throw err;
@@ -266,7 +240,7 @@ export class CollectionService {
   }
 
   async performCollectionRefresh(command) {
-    const shop = assertShop(command);
+    const shop = requireShopScope(command?.shop);
     const session = await this.#loadOfflineSession(shop);
     await assertFeatureEntitlement({
       shop,
@@ -313,31 +287,24 @@ export class CollectionService {
       lockKey = lock.lockKey;
 
       const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
-      if (status === "RUNNING") {
+      if (BLOCKING_BULK_OPERATION_STATUSES.has(String(status || "").toUpperCase())) {
         const error = new Error("CONFLICT");
         error.code = "CONFLICT";
         throw error;
       }
 
-      const result = await this.clearCollections(session);
-      await clearKeyCaches(`${shop}:sync_details`);
+      const result = await this.startCollectionSync(session);
+      await Promise.all(getProductSyncCacheKeys(shop).map((key) => clearKeyCaches(key)));
       await this.idempotencyStore.complete({
         recordId: begin.recordId,
+        shop,
         response: result,
       });
       return result;
     } catch (error) {
-      if (begin?.recordId) {
-        await db.filterTrack.delete({ where: { id: begin.recordId } }).catch(() => {});
-      }
       throw error;
     } finally {
       await releaseExclusiveShopWork(lockKey);
     }
   }
-
-  async requestCollectionRefresh(command) {
-    return this.performCollectionRefresh(command);
-  }
 }
-

@@ -165,7 +165,10 @@ export async function getMetafieldsForVariants(shop, variantIds) {
   const resolvedShop = String(shop || "").trim();
   if (!resolvedShop) throw new Error("getMetafieldsForVariants requires shop");
   if (!Array.isArray(variantIds) || variantIds.length === 0) return [];
-  const ids = variantIds.map((id) => BigInt(id).toString());
+  const ids = variantIds
+    .map((id) => String(id ?? "").trim())
+    .filter((id) => /^\d+$/.test(id));
+  if (!ids.length) return [];
   return prisma.$queryRaw`
     SELECT
       variant_id,
@@ -184,10 +187,11 @@ export async function getMetafieldsForVariants(shop, variantIds) {
 }
 
 /**
- * Grid datasource for variant metafields (Neon mirror only).
+ * Grid datasource for variants and their metafields (Neon mirror only).
+ * Pagination is variant-boundary based: limit applies to variants, not metafield rows.
  * @param {string} shop
  * @param {{ productIds?: string|string[]|number[]|bigint[], cursor?: string|number, limit?: string|number }} filters
- * @returns {Promise<{rows:Array<object>,nextCursor:string|null}>}
+ * @returns {Promise<{rows:Array<object>,nextCursor:string|null,total:number}>}
  */
 export async function getForGrid(shop, filters = {}) {
   const resolvedShop = String(shop || "").trim();
@@ -196,7 +200,7 @@ export async function getForGrid(shop, filters = {}) {
   const rawLimit = Number.parseInt(String(filters?.limit ?? 50), 10);
   const limit = Math.max(1, Math.min(200, Number.isFinite(rawLimit) ? rawLimit : 50));
   const cursor = filters?.cursor == null ? null : String(filters.cursor).trim();
-  const cursorId = cursor ? BigInt(cursor).toString() : null;
+  const cursorId = cursor && /^\d+$/.test(cursor) ? cursor : null;
 
   const rawProductIds = Array.isArray(filters?.productIds)
     ? filters.productIds
@@ -206,12 +210,47 @@ export async function getForGrid(shop, filters = {}) {
         .split(",")
         .map((id) => id.trim())
         .filter(Boolean);
-  const productIds = rawProductIds.map((id) => BigInt(id).toString());
+  const productIds = rawProductIds
+    .map((id) => String(id ?? "").trim())
+    .filter((id) => /^\d+$/.test(id));
+
+  const totalRows = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS count
+    FROM variants v
+    WHERE v.shop_id = ${resolvedShop}
+      AND v.is_deleted = false
+      AND (${productIds}::bigint[] = '{}'::bigint[] OR v.product_id = ANY(${productIds}::bigint[]))
+  `;
+
+  const variantPage = await prisma.$queryRaw`
+    SELECT v.id
+    FROM variants v
+    WHERE v.shop_id = ${resolvedShop}
+      AND v.is_deleted = false
+      AND (${cursorId}::bigint IS NULL OR v.id > ${cursorId}::bigint)
+      AND (${productIds}::bigint[] = '{}'::bigint[] OR v.product_id = ANY(${productIds}::bigint[]))
+    ORDER BY v.id ASC
+    LIMIT ${limit + 1}
+  `;
+
+  const hasMore = variantPage.length > limit;
+  const pageVariants = hasMore ? variantPage.slice(0, limit) : variantPage;
+  const variantIds = pageVariants
+    .map((row) => String(row?.id ?? "").trim())
+    .filter((id) => /^\d+$/.test(id));
+
+  if (!variantIds.length) {
+    return {
+      rows: [],
+      nextCursor: null,
+      total: Number(totalRows?.[0]?.count || 0),
+    };
+  }
 
   const rows = await prisma.$queryRaw`
     SELECT
       vm.id,
-      vm.variant_id,
+      v.id AS variant_id,
       v.product_id,
       vm.namespace,
       vm.key,
@@ -226,22 +265,22 @@ export async function getForGrid(shop, filters = {}) {
         WHEN COALESCE(vm.last_synced_at, v.synced_at) < now() - interval '1 hour' THEN 'STALE'
         ELSE 'FRESH'
       END AS freshness
-    FROM variant_metafields vm
-    JOIN variants v
-      ON v.shop_id = vm.shop_id
-     AND v.id = vm.variant_id
-    WHERE vm.shop_id = ${resolvedShop}
-      AND (${cursorId}::bigint IS NULL OR vm.id > ${cursorId}::bigint)
-      AND (${productIds}::bigint[] = '{}'::bigint[] OR v.product_id = ANY(${productIds}::bigint[]))
-    ORDER BY vm.id ASC
-    LIMIT ${limit + 1}
+    FROM variants v
+    LEFT JOIN variant_metafields vm
+      ON vm.shop_id = v.shop_id
+     AND vm.variant_id = v.id
+    WHERE v.shop_id = ${resolvedShop}
+      AND v.id = ANY(${variantIds}::bigint[])
+    ORDER BY v.id ASC, vm.namespace ASC NULLS LAST, vm.key ASC NULLS LAST, vm.id ASC NULLS LAST
   `;
 
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
-  const nextCursor = hasMore ? String(page[page.length - 1]?.id || "") : null;
+  const nextCursor = hasMore ? String(pageVariants[pageVariants.length - 1]?.id || "") : null;
 
-  return { rows: page, nextCursor };
+  return {
+    rows,
+    nextCursor,
+    total: Number(totalRows?.[0]?.count || 0),
+  };
 }
 
 /**
@@ -278,12 +317,16 @@ export async function hasStaleVariantSync(shop, thresholdMinutes = 30) {
  */
 export async function updateConfirmedValueGuarded({
   id,
+  shop,
   value,
   compareDigest = null,
   shopifyMetafieldId = null,
 }) {
   const resolvedId = String(id || "").trim();
-  if (!resolvedId) throw new Error("updateConfirmedValueGuarded requires id");
+  const resolvedShop = String(shop || "").trim();
+  if (!resolvedId || !resolvedShop) {
+    throw new Error("updateConfirmedValueGuarded requires id and shop");
+  }
 
   const rows = await prisma.$queryRaw`
     UPDATE variant_metafields
@@ -296,6 +339,7 @@ export async function updateConfirmedValueGuarded({
       last_synced_at = now(),
       updated_at = now()
     WHERE id = ${resolvedId}::uuid
+      AND shop_id = ${resolvedShop}
       AND edit_status = ANY(${SYNC_SAFE_STATUSES}::text[])
     RETURNING id
   `;

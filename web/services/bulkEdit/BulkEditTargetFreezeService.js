@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { db } from "../../repositories/repositoryDb.js";
+import { db as defaultDb } from "../../repositories/repositoryDb.js";
 import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
 import {
   freezeExplicitTargetSnapshot,
@@ -7,6 +7,112 @@ import {
 } from "../productService/productTargetingService.js";
 import { upsertFrozenSnapshotSetFromLegacy } from "../../repositories/targetSnapshotSetRepository.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
+
+const TARGET_SNAPSHOT_PROJECTION_VERSION = "target-freeze-v2";
+const FALLBACK_TARGETING_COMPILER_VERSION = "legacy-v1";
+const LEGACY_FILTER_PARAMS_ALLOWED_FOR_RECURRING_ONLY = true;
+
+function normalizeOptionalString(value) {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function sha256Json(value) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(value))
+    .digest("hex");
+}
+
+function requireExecutionIdentity(history) {
+  const executionIdentity = normalizeOptionalString(history?.executionIdentity);
+  if (!executionIdentity) {
+    const error = new Error("TARGET_FREEZE_REQUIRES_EXECUTION_IDENTITY");
+    error.code = "TARGET_FREEZE_REQUIRES_EXECUTION_IDENTITY";
+    throw error;
+  }
+  return executionIdentity;
+}
+
+function resolveSnapshotSetArgs({
+  history,
+  historyId,
+  source,
+}) {
+  return {
+    shop: history.shop,
+    historyId,
+    operationId: requireExecutionIdentity(history),
+    previewContractId:
+      normalizeOptionalString(history.batch?.previewContractId || history.batch?.previewId)
+      || `EDIT_HISTORY:${historyId}`,
+    mirrorBatchId: history.targetMirrorBatchId,
+    targetingFingerprint: normalizeOptionalString(history.filterHash),
+    compilerVersion:
+      normalizeOptionalString(history.batch?.targetingCompilerVersion)
+      || FALLBACK_TARGETING_COMPILER_VERSION,
+    projectionVersion: TARGET_SNAPSHOT_PROJECTION_VERSION,
+    plannerVersion:
+      normalizeOptionalString(
+        history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion,
+      ),
+    source,
+  };
+}
+
+function resolveOperationIntentName(history) {
+  return normalizeOptionalString(
+    history.batch?.operationKey
+      || history.batch?.executionPlan?.operationKey
+      || history.batch?.executionPlan?.mutationType
+      || history.batch?.executionPlan?.graphqlMutationName,
+  ) || "BULK_EDIT";
+}
+
+function resolveFreezeResolver({
+  targetingEngine,
+  isRecurringRun,
+  useScheduledCreateFreeze,
+}) {
+  const resolverName = isRecurringRun
+    ? "resolveAndFreezeRecurringRunTargets"
+    : useScheduledCreateFreeze
+      ? "resolveAndFreezeScheduledTargets"
+      : "resolveAndFreezeExecutionTargets";
+  const resolver = targetingEngine?.[resolverName];
+  if (typeof resolver !== "function") {
+    const error = new Error(`TARGET_FREEZE_RESOLVER_MISSING:${resolverName}`);
+    error.code = "TARGET_FREEZE_RESOLVER_MISSING";
+    throw error;
+  }
+  return { resolverName, resolver: resolver.bind(targetingEngine) };
+}
+
+async function assertPreviewCountMatches({
+  history,
+  historyId,
+  frozenCount,
+  markMismatch,
+}) {
+  const previewCount = history.batch?.previewCount ?? null;
+  if (previewCount === null || Number(previewCount) === Number(frozenCount)) return;
+
+  await markMismatch({
+    shop: history.shop,
+    ownerType: "EDIT_HISTORY",
+    ownerId: historyId,
+    previewCount: Number(previewCount),
+    frozenCount: Number(frozenCount),
+  });
+
+  const error = new Error("PREVIEW_EXECUTION_TARGET_COUNT_MISMATCH");
+  error.code = "PREVIEW_EXECUTION_TARGET_COUNT_MISMATCH";
+  error.meta = {
+    previewCount: Number(previewCount),
+    frozenCount: Number(frozenCount),
+  };
+  throw error;
+}
 
 async function attachFrozenSnapshotRefToFreezingHistory({
   db,
@@ -56,15 +162,29 @@ async function attachFrozenSnapshotRefToFreezingHistory({
 }
 
 export class BulkEditTargetFreezeService {
-  constructor(session = null) {
+  constructor(session = null, dependencies = {}) {
     this.session = session;
+    this.db = dependencies.db || defaultDb;
+    this.targetingEngine = dependencies.targetingEngine || TargetingEngineService;
+    this.freezeExplicitTargetSnapshot =
+      dependencies.freezeExplicitTargetSnapshot || freezeExplicitTargetSnapshot;
+    this.markPreviewExecutionMismatch =
+      dependencies.markPreviewExecutionMismatch || markPreviewExecutionMismatch;
+    this.upsertFrozenSnapshotSetFromLegacy =
+      dependencies.upsertFrozenSnapshotSetFromLegacy || upsertFrozenSnapshotSetFromLegacy;
+    this.attachFrozenSnapshotRefToFreezingHistory =
+      dependencies.attachFrozenSnapshotRefToFreezingHistory || attachFrozenSnapshotRefToFreezingHistory;
   }
 
   async freezeEditHistoryTargets(historyId, options = {}) {
-    const db = options?.tx || db;
+    const shop = String(options?.shop || this.session?.shop || "").trim();
+    if (!shop || !historyId) {
+      throw new Error("TARGET_FREEZE_REQUIRES_SHOP_AND_HISTORY_ID");
+    }
 
-    const history = await db.editHistory.findUnique({
-      where: { id: historyId },
+    return this.db.$transaction(async (db) => {
+    const history = await db.editHistory.findFirst({
+      where: { id: historyId, shop },
       select: {
         shop: true,
         rules: true,
@@ -84,22 +204,22 @@ export class BulkEditTargetFreezeService {
     if (!history) {
       throw new Error("Edit history not found");
     }
+    requireExecutionIdentity(history);
 
     const explicitProductIds = Array.isArray(history.batch?.explicitProductIds)
       ? history.batch.explicitProductIds.filter(Boolean)
       : [];
+    let freezeStats = null;
+    let snapshotSource = "BULK_EDIT";
 
     if (explicitProductIds.length > 0) {
-      const stats = await freezeExplicitTargetSnapshot({
+      freezeStats = await this.freezeExplicitTargetSnapshot({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,
         source: "MANUAL_SELECTION",
         mirrorBatchId: history.targetMirrorBatchId,
-        filterHash: crypto
-          .createHash("sha256")
-          .update(JSON.stringify(explicitProductIds))
-          .digest("hex"),
+        filterHash: sha256Json(explicitProductIds),
         targetGranularity: "PRODUCT",
         targets: explicitProductIds.map((productId) => ({
           productId,
@@ -108,31 +228,9 @@ export class BulkEditTargetFreezeService {
         returnStats: true,
         db,
       });
-
-      const frozenCount = Number(stats?.finalSnapshotCount || 0);
-      const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
-        shop: history.shop,
-        historyId,
-        operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,
-        previewContractId: String(history.batch?.previewContractId || history.batch?.previewId || "").trim() || `EDIT_HISTORY:${historyId}`,
-        mirrorBatchId: history.targetMirrorBatchId,
-        targetingFingerprint: String(history.filterHash || "").trim() || null,
-        compilerVersion: String(history.batch?.targetingCompilerVersion || "legacy-v1"),
-        projectionVersion: "legacy-v1",
-        plannerVersion: String(history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion || "").trim() || null,
-        source: "MANUAL_SELECTION",
-        db,
-      });
-      await attachFrozenSnapshotRefToFreezingHistory({
-        db,
-        historyId,
-        history,
-        snapshotSet,
-      });
-      return frozenCount;
-    }
-
-    const explicitTargets = Array.isArray(
+      snapshotSource = "MANUAL_SELECTION";
+    } else {
+      const explicitTargets = Array.isArray(
       history.batch?.automaticRuleAffectedTargets,
     )
       ? history.batch.automaticRuleAffectedTargets
@@ -162,14 +260,11 @@ export class BulkEditTargetFreezeService {
 
     const mutationIntent = {
       operationType: "BULK_EDIT",
-      mutationType: "PRODUCT_SET",
-      operationKey:
-        history.batch?.operationKey ||
-        history.batch?.executionPlan?.operationKey ||
-        null,
+      mutationType: resolveOperationIntentName(history),
+      operationKey: resolveOperationIntentName(history),
       confirmDestructive: history.batch?.confirmDestructive === true,
       criticalConfirmationText:
-        String(history.batch?.criticalConfirmationText || "").trim() || null,
+        normalizeOptionalString(history.batch?.criticalConfirmationText),
       undoAvailability: history.undo?.allowed !== false,
       verificationMode: "SAMPLE_PLUS_FAILURES",
       allowNonActiveProducts: history.batch?.allowNonActiveProducts === true,
@@ -186,28 +281,25 @@ export class BulkEditTargetFreezeService {
           : false,
       },
       targetGranularity,
-      filterHash: history.filterHash || null,
-      mirrorBatchId: history.targetMirrorBatchId || null,
+      filterHash: normalizeOptionalString(history.filterHash),
+      mirrorBatchId: normalizeOptionalString(history.targetMirrorBatchId),
       previewCount: Number(history.batch?.previewCount || 0),
     };
 
-    const freezeResolver = isRecurringRun
-      ? TargetingEngineService.resolveAndFreezeRecurringRunTargets
-      : useScheduledCreateFreeze
-        ? TargetingEngineService.resolveAndFreezeScheduledTargets
-        : TargetingEngineService.resolveAndFreezeExecutionTargets;
+    const { resolver: freezeResolver } = resolveFreezeResolver({
+      targetingEngine: this.targetingEngine,
+      isRecurringRun,
+      useScheduledCreateFreeze,
+    });
 
-    const freezeStats = explicitTargets.length
-      ? await freezeExplicitTargetSnapshot({
+      freezeStats = explicitTargets.length
+      ? await this.freezeExplicitTargetSnapshot({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,
         source: "AUTOMATIC_RULE_RUN",
         mirrorBatchId: history.targetMirrorBatchId,
-        filterHash: crypto
-          .createHash("sha256")
-          .update(JSON.stringify(explicitTargets))
-          .digest("hex"),
+        filterHash: sha256Json(explicitTargets),
         targetGranularity,
         targets: explicitTargets,
         returnStats: true,
@@ -224,7 +316,12 @@ export class BulkEditTargetFreezeService {
           targetType: targetGranularity,
           targetGranularity,
           filterAst: history.batch?.filterAst ?? null,
-          legacyFilterParams: Array.isArray(history.batch?.filterParams)
+          legacyFilterParams: (
+            LEGACY_FILTER_PARAMS_ALLOWED_FOR_RECURRING_ONLY
+            && isRecurringRun
+            && !history.batch?.filterAst
+            && Array.isArray(history.batch?.filterParams)
+          )
             ? history.batch.filterParams
             : [],
           ownerType: "EDIT_HISTORY",
@@ -239,35 +336,28 @@ export class BulkEditTargetFreezeService {
           db,
         })
       ).freezeStats;
-
-    const frozenCount = Number(freezeStats?.finalSnapshotCount || 0);
-    const previewCount = history.batch?.previewCount ?? null;
-
-    if (previewCount !== null && Number(previewCount) !== frozenCount) {
-      await markPreviewExecutionMismatch({
-        shop: history.shop,
-        ownerType: "EDIT_HISTORY",
-        ownerId: historyId,
-        previewCount: Number(previewCount),
-        frozenCount,
-      });
+      snapshotSource = explicitTargets.length ? "AUTOMATIC_RULE_RUN" : "BULK_EDIT";
     }
 
-    const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
-      shop: history.shop,
+    const frozenCount = Number(freezeStats?.finalSnapshotCount || 0);
+
+    await assertPreviewCountMatches({
+      history,
       historyId,
-      operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,
-      previewContractId: String(history.batch?.previewContractId || history.batch?.previewId || "").trim() || `EDIT_HISTORY:${historyId}`,
-      mirrorBatchId: history.targetMirrorBatchId,
-      targetingFingerprint: String(history.filterHash || "").trim() || null,
-      compilerVersion: String(history.batch?.targetingCompilerVersion || "legacy-v1"),
-      projectionVersion: "legacy-v1",
-      plannerVersion: String(history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion || "").trim() || null,
-      source: "BULK_EDIT",
+      frozenCount,
+      markMismatch: this.markPreviewExecutionMismatch,
+    });
+
+    const snapshotSet = await this.upsertFrozenSnapshotSetFromLegacy({
+      ...resolveSnapshotSetArgs({
+        history,
+        historyId,
+        source: snapshotSource,
+      }),
       db,
     });
 
-    await attachFrozenSnapshotRefToFreezingHistory({
+    await this.attachFrozenSnapshotRefToFreezingHistory({
       db,
       historyId,
       history,
@@ -275,6 +365,6 @@ export class BulkEditTargetFreezeService {
     });
 
     return frozenCount;
+    });
   }
 }
-

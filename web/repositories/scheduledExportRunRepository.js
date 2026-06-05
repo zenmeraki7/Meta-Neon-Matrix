@@ -9,48 +9,50 @@ export const scheduledExportRunRepository = {
     return getClient(db).scheduledExportRun.create({ data });
   },
 
-  async findById(id, db = prisma) {
-    return getClient(db).scheduledExportRun.findUnique({
-      where: { id },
+  async findById(id, shop, db = prisma) {
+    return getClient(db).scheduledExportRun.findFirst({
+      where: { id, shop },
     });
   },
 
-  async findByExecutionKey(executionKey, db = prisma) {
-    return getClient(db).scheduledExportRun.findUnique({
-      where: { executionKey },
+  async findByExecutionKey(executionKey, shop, db = prisma) {
+    return getClient(db).scheduledExportRun.findFirst({
+      where: { executionKey, shop },
     });
   },
 
-  async findByIdWithScheduledExport(id, db = prisma) {
-    return getClient(db).scheduledExportRun.findUnique({
-      where: { id },
+  async findByIdWithScheduledExport(id, shop, db = prisma) {
+    return getClient(db).scheduledExportRun.findFirst({
+      where: { id, shop },
       include: {
         scheduledExport: true,
       },
     });
   },
 
-  async updateById(id, data, db = prisma) {
-    return getClient(db).scheduledExportRun.update({
-      where: { id },
+  async updateById(id, shop, data, db = prisma) {
+    return getClient(db).scheduledExportRun.updateMany({
+      where: { id, shop },
       data,
     });
   },
 
-  async updateByIdForStatuses(id, statuses = [], data = {}, db = prisma) {
+  async updateByIdForStatuses(id, shop, statuses = [], data = {}, db = prisma) {
     return getClient(db).scheduledExportRun.updateMany({
       where: {
         id,
+        shop,
         ...(statuses.length ? { status: { in: statuses } } : {}),
       },
       data,
     });
   },
 
-  async updateProcessingState(id, db = prisma) {
+  async updateProcessingState(id, shop, db = prisma) {
     return getClient(db).scheduledExportRun.updateMany({
       where: {
         id,
+        shop,
         status: "PENDING",
       },
       data: {
@@ -60,10 +62,11 @@ export const scheduledExportRunRepository = {
     });
   },
 
-  async markPendingSkipped(id, data = {}, db = prisma) {
+  async markPendingSkipped(id, shop, data = {}, db = prisma) {
     return getClient(db).scheduledExportRun.updateMany({
       where: {
         id,
+        shop,
         status: "PENDING",
       },
       data: {
@@ -74,10 +77,11 @@ export const scheduledExportRunRepository = {
     });
   },
 
-  async markProcessingFinished(id, status, data = {}, db = prisma) {
+  async markProcessingFinished(id, shop, status, data = {}, db = prisma) {
     return getClient(db).scheduledExportRun.updateMany({
       where: {
         id,
+        shop,
         status: "PROCESSING",
       },
       data: {
@@ -88,7 +92,7 @@ export const scheduledExportRunRepository = {
     });
   },
 
-  async groupStatusCounts(scheduledExportIds = [], db = prisma) {
+  async groupStatusCounts(shop, scheduledExportIds = [], db = prisma) {
     if (!scheduledExportIds.length) {
       return [];
     }
@@ -96,6 +100,7 @@ export const scheduledExportRunRepository = {
     return getClient(db).scheduledExportRun.groupBy({
       by: ["scheduledExportId", "status"],
       where: {
+        shop,
         scheduledExportId: {
           in: scheduledExportIds,
         },
@@ -106,13 +111,14 @@ export const scheduledExportRunRepository = {
     });
   },
 
-  async findLatestRuns(scheduledExportIds = [], db = prisma) {
+  async findLatestRuns(shop, scheduledExportIds = [], db = prisma) {
     if (!scheduledExportIds.length) {
       return [];
     }
 
     return getClient(db).scheduledExportRun.findMany({
       where: {
+        shop,
         scheduledExportId: {
           in: scheduledExportIds,
         },

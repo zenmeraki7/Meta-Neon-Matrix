@@ -28,21 +28,27 @@ function firstNonEmpty(...values) {
 export function buildActorContext({ req = null, session = null, fallbackType = "SYSTEM" } = {}) {
   const user = req?.user || req?.authUser || null;
   const bodyActor = req?.body?.actor || null;
+  const associatedUser = session?.onlineAccessInfo?.associated_user || null;
 
   const actorId = firstNonEmpty(
     user?.id,
     user?._id,
+    associatedUser?.id ? String(associatedUser.id) : null,
     bodyActor?.id,
     req?.headers?.["x-actor-id"],
   );
   const actorEmail = firstNonEmpty(
     user?.email,
+    associatedUser?.email,
     bodyActor?.email,
     req?.headers?.["x-actor-email"],
   );
   const actorName = firstNonEmpty(
     user?.name,
     user?.fullName,
+    associatedUser?.first_name && associatedUser?.last_name
+      ? `${associatedUser.first_name} ${associatedUser.last_name}`
+      : associatedUser?.first_name || associatedUser?.last_name,
     bodyActor?.name,
     req?.headers?.["x-actor-name"],
   );
@@ -50,6 +56,7 @@ export function buildActorContext({ req = null, session = null, fallbackType = "
   const actorType =
     firstNonEmpty(
       user?.type,
+      associatedUser?.id ? "SHOPIFY_USER" : null,
       bodyActor?.type,
       req?.headers?.["x-actor-type"],
     ) ||

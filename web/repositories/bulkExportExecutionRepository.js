@@ -24,9 +24,10 @@ export async function claimExportJobExecution({ exportJobId, shop, executionId, 
       return { state: "shop_busy", exportJob: null };
     }
 
-    const currentJob = await tx.exportJob.findUnique({ where: { id: exportJobId } });
+    const currentJob = await tx.exportJob.findFirst({
+      where: { id: exportJobId, shop },
+    });
     if (!currentJob) throw new Error("Export job not found");
-    if (currentJob.shop !== shop) throw new Error("Cross-shop export execution blocked");
     if (executionId && executionId !== currentJob.id) throw new Error("Export execution identity mismatch");
 
     const executionState = String(currentJob.executionStateNormalized || "").toLowerCase();
@@ -92,9 +93,12 @@ export async function claimExportJobExecution({ exportJobId, shop, executionId, 
       return { state: "not_claimed", exportJob: currentJob };
     }
 
-    const claimedJob = await tx.exportJob.update({
-      where: { id: exportJobId },
+    await tx.exportJob.updateMany({
+      where: { id: exportJobId, shop },
       data: { error: null, startedAt: currentJob.startedAt || new Date() },
+    });
+    const claimedJob = await tx.exportJob.findFirst({
+      where: { id: exportJobId, shop },
     });
 
     return {

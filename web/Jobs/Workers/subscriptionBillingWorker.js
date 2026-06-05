@@ -42,8 +42,8 @@ const subscriptionBillingWorker = new Worker(
         await billingService.cancelSubscription(existingSub.subscriptionId);
       }
       if (existingSub) {
-        await db.subscription.update({
-          where: { id: existingSub.id },
+        await db.subscription.updateMany({
+          where: { id: existingSub.id, shop },
           data: {
             status: "FREE",
             planKey: "FREE",
@@ -66,8 +66,8 @@ const subscriptionBillingWorker = new Worker(
           },
         });
       }
-      await db.filterTrack.update({
-        where: { id: commandRow.id },
+      await db.filterTrack.updateMany({
+        where: { id: commandRow.id, shop, type: COMMAND_TYPE },
         data: { value: { ...commandValue, status: "COMPLETED", confirmationUrl: null } },
       });
       return { success: true, commandId, status: "COMPLETED", confirmationUrl: null };
@@ -88,8 +88,8 @@ const subscriptionBillingWorker = new Worker(
       orderBy: { createdAt: "desc" },
     });
     if (existingSub) {
-      await db.subscription.update({
-        where: { id: existingSub.id },
+      await db.subscription.updateMany({
+        where: { id: existingSub.id, shop },
         data: {
           pendingSubscriptionId: payload.appSubscription.id,
           pendingPlanKey: planKey,
@@ -108,8 +108,8 @@ const subscriptionBillingWorker = new Worker(
       });
     }
 
-    await db.filterTrack.update({
-      where: { id: commandRow.id },
+    await db.filterTrack.updateMany({
+      where: { id: commandRow.id, shop, type: COMMAND_TYPE },
       data: {
         value: {
           ...commandValue,
@@ -131,4 +131,3 @@ const subscriptionBillingWorker = new Worker(
 );
 
 export default subscriptionBillingWorker;
-

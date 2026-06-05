@@ -1,6 +1,9 @@
 import { getSessionProgress } from "../useCases/sessionQueryUseCases.js";
-
-const TERMINAL_STATUSES = new Set(["DONE", "PARTIAL", "FAILED"]);
+import { isTerminalSessionStatus } from "../constants/sessionStatus.js";
+import { toSessionProgressEventDto } from "../dtos/sessionProgressDto.js";
+import { normalizeSessionStatusStreamCommand } from "../normalizers/sessionStatusStreamCommandNormalizer.js";
+import { logApiError } from "../utils/errorLogUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 function sendEvent(res, event, data) {
   res.write(`event: ${event}\n`);
@@ -8,29 +11,34 @@ function sendEvent(res, event, data) {
 }
 
 function writeProgressEvent(res, session) {
-  sendEvent(res, "progress", {
-    status: session.status,
-    changeCount: Number(session.change_count || 0),
-    writtenCount: Number(session.written_count || 0),
-    errorCount: Number(session.error_count || 0),
-  });
+  sendEvent(res, "progress", toSessionProgressEventDto(session));
+}
+
+function writePublicErrorEvent(res, error, fallbackCode = "INTERNAL_ERROR") {
+  const { body } = buildPublicApiErrorResponse(error, fallbackCode);
+  sendEvent(res, "error", body);
 }
 
 export async function sessionStatusStreamController(req, res) {
-  const shopId = String(res.locals.shop || "").trim();
-  const sessionId = String(req.params.id || "").trim();
+  let command;
+  try {
+    command = normalizeSessionStatusStreamCommand(req.params, res.locals);
+  } catch (error) {
+    await logApiError({
+      shop: res.locals?.shopify?.session?.shop,
+      err: error,
+      req,
+      source: "sessionStatusController.sessionStatusStreamController.normalize",
+    });
+    const { statusCode, body } = buildPublicApiErrorResponse(error, "VALIDATION_FAILED");
+    return res.status(statusCode).json(body);
+  }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
-
-  if (!shopId || !sessionId) {
-    sendEvent(res, "error", { error: "Session not found" });
-    res.end();
-    return;
-  }
 
   let pollTimer = null;
   let heartbeatTimer = null;
@@ -46,7 +54,10 @@ export async function sessionStatusStreamController(req, res) {
   req.on("close", cleanup);
 
   try {
-    const initial = await getSessionProgress({ shop: shopId, sessionId });
+    const initial = await getSessionProgress({
+      shop: command.shop,
+      sessionId: command.sessionId,
+    });
     if (!initial) {
       sendEvent(res, "error", { error: "Session not found" });
       cleanup();
@@ -56,7 +67,7 @@ export async function sessionStatusStreamController(req, res) {
 
     writeProgressEvent(res, initial);
 
-    if (TERMINAL_STATUSES.has(String(initial.status || ""))) {
+    if (isTerminalSessionStatus(initial.status)) {
       sendEvent(res, "done", {});
       cleanup();
       res.end();
@@ -66,7 +77,10 @@ export async function sessionStatusStreamController(req, res) {
     pollTimer = setInterval(async () => {
       if (closed) return;
       try {
-        const session = await getSessionProgress({ shop: shopId, sessionId });
+        const session = await getSessionProgress({
+          shop: command.shop,
+          sessionId: command.sessionId,
+        });
         if (!session) {
           sendEvent(res, "error", { error: "Session not found" });
           cleanup();
@@ -75,13 +89,19 @@ export async function sessionStatusStreamController(req, res) {
         }
 
         writeProgressEvent(res, session);
-        if (TERMINAL_STATUSES.has(String(session.status || ""))) {
+        if (isTerminalSessionStatus(session.status)) {
           sendEvent(res, "done", {});
           cleanup();
           res.end();
         }
       } catch (error) {
-        sendEvent(res, "error", { error: error?.message || "Failed to stream status" });
+        await logApiError({
+          shop: command.shop,
+          err: error,
+          req,
+          source: "sessionStatusController.sessionStatusStreamController.poll",
+        });
+        writePublicErrorEvent(res, error);
         cleanup();
         res.end();
       }
@@ -91,7 +111,13 @@ export async function sessionStatusStreamController(req, res) {
       if (!closed) res.write(": heartbeat\n\n");
     }, 15000);
   } catch (error) {
-    sendEvent(res, "error", { error: error?.message || "Failed to stream status" });
+    await logApiError({
+      shop: command.shop,
+      err: error,
+      req,
+      source: "sessionStatusController.sessionStatusStreamController",
+    });
+    writePublicErrorEvent(res, error);
     cleanup();
     res.end();
   }

@@ -36,7 +36,7 @@ function normalizeProductIds(raw) {
 
 export function normalizeVariantGridQuery(params = {}, query = {}, locals = {}) {
   void params;
-  const shop = String(locals.shop || "").trim();
+  const shop = String(locals.shopify?.session?.shop || "").trim();
   if (!shop) {
     throw buildError("Unauthenticated session", 401, "UNAUTHENTICATED");
   }

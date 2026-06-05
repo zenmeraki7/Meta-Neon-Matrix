@@ -1,4 +1,4 @@
-import { db } from "../../repositories/repositoryDb.js";
+import { db as defaultDb } from "../../repositories/repositoryDb.js";
 import { Prisma } from "../../repositories/prismaTypes.js";
 import crypto from "crypto";
 import { buildNormalizedFilterPlan, mergeResolvedIdSets } from "./normalizedFilterPlan.js";
@@ -14,6 +14,7 @@ import {
   TARGET_TYPES,
 } from "../targeting/constants.js";
 
+const db = defaultDb;
 const MAX_ID_SET_SIZE = 50_000;
 const MIRROR_ANOMALY_SEVERITY = Object.freeze({
   CRITICAL: "CRITICAL",
@@ -55,6 +56,10 @@ function compileLegacyWhereViaEngine({
   filterParams = [],
   targetGranularity = "PRODUCT",
 }) {
+  if (!Array.isArray(filterParams) || filterParams.length === 0) {
+    return {};
+  }
+
   const filterAst = adaptLegacyFilterParamsToAst({
     filterParams: Array.isArray(filterParams) ? filterParams : [],
     targetGranularity,
@@ -147,7 +152,7 @@ export async function computeTargetSnapshotChecksum({
   ownerId,
   shop,
   mirrorBatchId,
-  db = db,
+  db = defaultDb,
 }) {
   const hash = crypto.createHash("sha256");
   const PAGE_SIZE = 2000;
@@ -864,13 +869,36 @@ export async function getActiveMirrorBatchId(shop, { purpose = "EXECUTE" } = {})
 
   const executionUnsafe = store.mirrorHealthState !== "HEALTHY" || store.repairRequired;
   const previewUnsafe = ["UNSAFE", "REPAIR_REQUIRED"].includes(store.mirrorHealthState) || store.repairRequired;
+  const isPreviewPurpose = purpose === "PREVIEW" || purpose === "EXPORT";
 
   if (purpose === "EXECUTE" && executionUnsafe) {
     throw new Error(
       `Mirror is not safe for execution (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );
   }
-  if ((purpose === "PREVIEW" || purpose === "EXPORT") && previewUnsafe) {
+  if (isPreviewPurpose && previewUnsafe) {
+    const staleReason = String(store.staleReason || "").toUpperCase();
+    const syncRunning = store.isProductSyncing === true || store.isProductInitialySyning === true;
+    const activeProductRowCount = await db.product.count({
+      where: {
+        shop,
+        mirrorBatchId: store.activeMirrorBatchId,
+      },
+    });
+    const canUseExistingMirrorDuringBackgroundRefresh =
+      syncRunning &&
+      activeProductRowCount > 0;
+    const canUseExistingMirrorAfterFailedRefresh =
+      staleReason === "FULL_SYNC_FAILED" &&
+      !syncRunning &&
+      activeProductRowCount > 0;
+
+    // Preview/list pages should keep using the last active mirror while a
+    // refresh is running; navigation must not blank a valid product table.
+    if (canUseExistingMirrorDuringBackgroundRefresh || canUseExistingMirrorAfterFailedRefresh) {
+      return store.activeMirrorBatchId;
+    }
+
     throw new Error(
       `Mirror is not safe for ${purpose.toLowerCase()} (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );
@@ -962,7 +990,7 @@ export async function resolveCanonicalProductTarget({
 
   const fetchLimit = clampLimit(limit, sampleLimit, sampleLimit);
 
-  const [count, rows] = await db.$transaction([
+  const [count, rows] = await Promise.all([
     db.product.count({ where }),
     db.product.findMany({
       where,
@@ -1300,7 +1328,7 @@ export async function freezeProductTargetSnapshot({
   filterHash,
   targetGranularity = TARGET_GRANULARITIES.PRODUCT,
   source = null,
-  db = db,
+  db = defaultDb,
 }) {
   if (!filterHash) {
     throw new Error("FILTER_HASH_REQUIRED");
@@ -1379,7 +1407,7 @@ export async function freezeVariantTargetSnapshot({
   targetGranularity = TARGET_GRANULARITIES.VARIANT,
   explicitVariantIds = [],
   source = null,
-  db = db,
+  db = defaultDb,
 }) {
   if (!filterHash) {
     throw new Error("FILTER_HASH_REQUIRED");
@@ -1496,7 +1524,7 @@ export async function freezeTargetSnapshot({
   explicitVariantIds = [],
   returnStats = false,
   source = null,
-  db = db,
+  db = defaultDb,
 }) {
   if (!ownerType || !ownerId || !shop || !mirrorBatchId) {
     throw new Error("ownerType, ownerId, shop, and mirrorBatchId are required for snapshot freeze");
@@ -1595,7 +1623,7 @@ export async function freezeExplicitTargetSnapshot({
   targets = [],
   returnStats = false,
   source = null,
-  db = db,
+  db = defaultDb,
 }) {
   if (!ownerType || !ownerId || !shop || !mirrorBatchId) {
     throw new Error("ownerType, ownerId, shop, and mirrorBatchId are required for explicit snapshot freeze");
@@ -1767,4 +1795,3 @@ export async function markPreviewExecutionMismatch({
     },
   });
 }
-

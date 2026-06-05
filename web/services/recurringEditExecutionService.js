@@ -12,7 +12,7 @@ import { computeRecurringEditNextRunAt } from "./recurringEditScheduleService.js
 import { getSession } from "../utils/sessionHandler.js";
 import { logWorkerError } from "../utils/errorLogUtils.js";
 import logger from "../utils/loggerUtils.js";
-import ProductBulkService from "./productService/productBulkEditService.js";
+import { BulkEditCommandService } from "./bulkEdit/BulkEditCommandService.js";
 import { createMultiLanguage } from "../utils/googleTranslator.js";
 import { getCurrentBulkOperationStatus } from "../utils/bulkOperationHelper.js";
 import {
@@ -144,6 +144,7 @@ function resolveRecurringCompilerVersions(recurringEdit) {
 async function markRunFailed(run, recurringEdit, errorMessage) {
   const transition = await recurringEditRunRepository.markProcessingFinished(
     run.id,
+    recurringEdit.shop,
     "FAILED",
     { errorMessage },
   );
@@ -165,9 +166,11 @@ async function markRunFailed(run, recurringEdit, errorMessage) {
 }
 
 async function markRunSkipped(run, recurringEdit, reason) {
-  const transition = await recurringEditRunRepository.markPendingSkipped(run.id, {
-    errorMessage: reason,
-  });
+  const transition = await recurringEditRunRepository.markPendingSkipped(
+    run.id,
+    recurringEdit.shop,
+    { errorMessage: reason },
+  );
 
   if (!transition.count) return null;
 
@@ -197,7 +200,10 @@ export async function enqueueRecurringEditExecutionJob({
   });
 }
 
-export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
+export async function scheduleDueRecurringEditRuns({ shop, limit = 100 } = {}) {
+  if (!shop) {
+    throw new Error("RECURRING_EDIT_SCHEDULER_REQUIRES_SHOP");
+  }
   // ✅ Redis lock instead of pg_advisory_lock
   const schedulerLock = await acquireSchedulerLock();
   if (!schedulerLock?.acquired) {
@@ -206,7 +212,7 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
 
   try {
     const now = new Date();
-    const dueIds = await recurringEditRepository.findDueRecurringEditIds(now, limit);
+    const dueIds = await recurringEditRepository.findDueRecurringEditIdsForShop(shop, now, limit);
     let scheduled = 0;
     let skipped = 0;
 
@@ -216,7 +222,7 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
           const locked = await tryTransactionAdvisoryLock(tx, `recurring-edit:${id}`);
           if (!locked) return null;
 
-          const recurringEdit = await recurringEditRepository.findById(id, tx);
+          const recurringEdit = await recurringEditRepository.findByIdForShop(id, shop, tx);
           if (
             !isRunnableRecurringEdit(recurringEdit) ||
             !recurringEdit.nextRunAt ||
@@ -229,6 +235,7 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
           const executionKey = buildExecutionKey(id, scheduledFor);
           const existingRun = await recurringEditRunRepository.findByExecutionKey(
             executionKey,
+            shop,
             tx,
           );
 
@@ -296,7 +303,7 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
         }
 
         await logWorkerError({
-          shop: "unknown",
+          shop,
           err: error,
           source: "RecurringEditExecutionService.scheduleDueRecurringEditRuns",
         });
@@ -311,7 +318,10 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
 }
 
 export async function executeRecurringEditRun(runId, shopFromJob = null) {
-  let run = await recurringEditRunRepository.findByIdWithRecurringEdit(runId);
+  if (!shopFromJob || !runId) {
+    throw new Error("RECURRING_EDIT_RUN_REQUIRES_SHOP_AND_RUN_ID");
+  }
+  let run = await recurringEditRunRepository.findByIdWithRecurringEdit(runId, shopFromJob);
   if (!run) return { skipped: true, reason: "run_not_found" };
 
   if (isTerminalRunStatus(run.status)) {
@@ -319,11 +329,11 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
   }
 
   const recurringEdit = run.recurringEdit;
-  if (shopFromJob && recurringEdit?.shop && recurringEdit.shop !== shopFromJob) {
+  if (recurringEdit?.shop && recurringEdit.shop !== shopFromJob) {
     throw new Error("Cross-shop recurring edit execution blocked");
   }
   if (!isRunnableRecurringEdit(recurringEdit)) {
-    await markRunSkipped(run, recurringEdit || { id: run.recurringEditId }, "Recurring edit is not active");
+    await markRunSkipped(run, recurringEdit || { id: run.recurringEditId, shop: shopFromJob }, "Recurring edit is not active");
     return { skipped: true, reason: "recurring_edit_inactive" };
   }
 
@@ -336,7 +346,7 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
   let exclusiveShopLockKey = null;
 
   try {
-    run = await recurringEditRunRepository.findByIdWithRecurringEdit(runId);
+    run = await recurringEditRunRepository.findByIdWithRecurringEdit(runId, shopFromJob);
     if (!run || isTerminalRunStatus(run.status)) {
       return { skipped: true, reason: "run_not_actionable" };
     }
@@ -402,7 +412,10 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
       };
     }
 
-    const claimed = await recurringEditRunRepository.updatePendingToProcessing(run.id);
+    const claimed = await recurringEditRunRepository.updatePendingToProcessing(
+      run.id,
+      currentRecurringEdit.shop,
+    );
     if (!claimed.count && run.status !== "PROCESSING") {
       return { skipped: true, reason: "run_not_claimed" };
     }
@@ -417,9 +430,9 @@ export async function executeRecurringEditRun(runId, shopFromJob = null) {
       return buildDeferredResult("shopify_bulk_busy", run.id, currentRecurringEdit.id);
     }
 
-    const service = new ProductBulkService(session);
+    const commandService = new BulkEditCommandService(session);
     const body = buildRecurringEditHistoryBody(currentRecurringEdit);
-    const baseHistory = await service._bulkOperationEdit(body, {
+    const baseHistory = await commandService.buildSystemEditHistoryData(body, {
       planName: "Pro Monthly",
       isUnlimited: true,
       limit: Number.MAX_SAFE_INTEGER,
@@ -512,16 +525,15 @@ export async function finalizeRecurringRunFromHistory({
   status,
   errorMessage = null,
 }) {
-  const history = await findHistoryForRecurringFinalize(historyId);
+  if (!shop || !historyId) {
+    throw new Error("RECURRING_FINALIZE_REQUIRES_SHOP_AND_HISTORY_ID");
+  }
+  const history = await findHistoryForRecurringFinalize(historyId, shop);
 
   if (!history?.recurringRunId || !history?.recurringEditId) {
     return null;
   }
-  if (shop && history?.shop && history.shop !== shop) {
-    throw new Error("CROSS_SHOP_RECURRING_FINALIZE_BLOCKED");
-  }
-
-  const run = await recurringEditRunRepository.findById(history.recurringRunId);
+  const run = await recurringEditRunRepository.findById(history.recurringRunId, history.shop);
   if (!run || isTerminalRunStatus(run.status)) {
     return run;
   }
@@ -532,6 +544,7 @@ export async function finalizeRecurringRunFromHistory({
 
   const transition = await recurringEditRunRepository.markProcessingFinished(
     history.recurringRunId,
+    history.shop,
     normalizedStatus,
     {
       completedAt,
@@ -563,4 +576,3 @@ export async function finalizeRecurringRunFromHistory({
 
   return normalizedStatus;
 }
-

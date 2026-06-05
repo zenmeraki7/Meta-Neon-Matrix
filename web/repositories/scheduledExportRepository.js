@@ -10,9 +10,7 @@ export const scheduledExportRepository = {
   },
 
   async findById(id, db = prisma) {
-    return getClient(db).scheduledExport.findUnique({
-      where: { id },
-    });
+    throw new Error("scheduledExportRepository.findById requires shop; use findByIdForShop");
   },
 
   async findByIdForShop(id, shop, db = prisma) {
@@ -44,8 +42,16 @@ export const scheduledExportRepository = {
   },
 
   async findDueScheduledExportIds(now, limit = 100, db = prisma) {
+    throw new Error("findDueScheduledExportIds requires shop; use findDueScheduledExportIdsForShop");
+  },
+
+  async findDueScheduledExportIdsForShop(shop, now, limit = 100, db = prisma) {
+    if (!shop) {
+      throw new Error("findDueScheduledExportIdsForShop requires shop");
+    }
     return getClient(db).scheduledExport.findMany({
       where: {
+        shop,
         isDeleted: false,
         status: "ACTIVE",
         nextRunAt: {

@@ -1,4 +1,4 @@
-import ProductBulkService from "../services/productService/productBulkEditService.js";
+import ProductBulkService from "../services/bulkEdit/ProductBulkService.js";
 import UndoEditService from "../services/productService/productBulkUndoService.js";
 import { clearAllCachesForShop } from "../utils/cacheUtils.js";
 import { getTargetingVersionBundle } from "../services/targeting/versioning.js";

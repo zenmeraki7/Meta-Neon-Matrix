@@ -10,7 +10,7 @@ import {
 
 export function normalizeProductGridQuery(params = {}, query = {}, locals = {}) {
   void params;
-  const shopId = String(locals.shop || "").trim();
+  const shopId = String(locals.shopify?.session?.shop || "").trim();
   if (!shopId) {
     throw buildError("Unauthenticated session", 401, "UNAUTHENTICATED");
   }
@@ -30,7 +30,7 @@ export function normalizeProductGridQuery(params = {}, query = {}, locals = {}) 
   const status = normalizeEnum(query.status, ["ACTIVE", "ARCHIVED", "DRAFT"], "status");
 
   return deepFreeze({
-    shopId,
+    shop: shopId,
     filters: {
       limit,
       cursor,

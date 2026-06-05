@@ -104,8 +104,8 @@ export class ProductImportCommandService {
       },
     });
 
-    await db.editHistory.update({
-      where: { id: newHistory.id },
+    await db.editHistory.updateMany({
+      where: { id: newHistory.id, shop },
       data: {
         batch: {
           ...(newHistory.batch && typeof newHistory.batch === "object" ? newHistory.batch : {}),
@@ -149,6 +149,7 @@ export class ProductImportCommandService {
     };
     await this.idempotencyStore.complete({
       recordId: begin.recordId,
+      shop,
       response,
     });
     return response;
@@ -156,4 +157,3 @@ export class ProductImportCommandService {
 }
 
 export default ProductImportCommandService;
-

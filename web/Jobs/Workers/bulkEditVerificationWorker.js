@@ -17,8 +17,8 @@ async function processBulkEditVerification(job) {
     throw new Error("bulk edit verification job requires historyId and shop");
   }
 
-  const history = await db.editHistory.findUnique({
-    where: { id: historyId },
+  const history = await db.editHistory.findFirst({
+    where: { id: historyId, shop },
     select: {
       id: true,
       shop: true,
@@ -31,7 +31,6 @@ async function processBulkEditVerification(job) {
   });
 
   if (!history) throw new Error("Edit history not found");
-  if (history.shop !== shop) throw new Error("SHOP_MISMATCH");
   if (executionId && history.executionIdentity && executionId !== history.executionIdentity) {
     return { skipped: true, reason: "stale_execution_identity", historyId, shop };
   }
@@ -92,4 +91,3 @@ const bulkEditVerificationWorker = new Worker(
 );
 
 export default bulkEditVerificationWorker;
-

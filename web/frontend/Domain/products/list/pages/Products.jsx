@@ -41,6 +41,13 @@ import { buildCanonicalFilterHash } from "../hooks/useProducts";
 const MIN_PRODUCT_SEARCH_LENGTH = 2;
 const STATUS_RAIL_MIN_HEIGHT = "84px";
 
+function formatProductTargetingStatus({ isSyncInProgress, isSyncStale }) {
+  if (isSyncInProgress && !isSyncStale) {
+    return "Syncing in background";
+  }
+  return null;
+}
+
 export default function ProductsPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -59,6 +66,7 @@ export default function ProductsPage() {
     queryFn: async ({ signal }) =>
       api.get("/api/bootstrap/products?limit=20", { signal }),
     staleTime: 10_000,
+    refetchOnMount: "always",
     retry: 1,
   });
   const bootstrapData = bootstrapQuery.data || null;
@@ -76,6 +84,7 @@ export default function ProductsPage() {
 
   const [committedSearch, setCommittedSearch] = useState("");
   const [searchResetSignal, setSearchResetSignal] = useState(0);
+  const [paginationDirection, setPaginationDirection] = useState(null);
 
   const {
     syncStatus,
@@ -127,6 +136,9 @@ export default function ProductsPage() {
     unavailableReason,
     mirrorHealth,
     loading,
+    fetching,
+    placeholderData,
+    hasProductData,
     error,
     hasFetched,
     refetch,
@@ -145,9 +157,42 @@ export default function ProductsPage() {
     bootstrapProductList?.unavailableReason ||
     bootstrapProductList?.error?.message ||
     null;
+  const backendProductCount = Number(
+    syncStatus?.productCount ??
+    syncStatus?.activeProductRowCount ??
+    bootstrapSyncStatus?.productCount ??
+    bootstrapSyncStatus?.activeProductRowCount ??
+    0,
+  );
+  const hasRowsAvailable = products.length > 0 || totalCount > 0 || backendProductCount > 0;
+  const syncCanPreviewProducts =
+    syncStatus?.canPreviewProducts === true ||
+    syncStatus?.mirrorReady === true;
+  const hasActiveMirrorBatch = Boolean(
+    productMirrorHealth?.activeMirrorBatchId || syncStatus?.activeMirrorBatchId,
+  );
+  const mirrorReady = syncCanPreviewProducts || (hasActiveMirrorBatch && hasRowsAvailable);
+  const activeSyncInProgress = isSyncInProgress && !isSyncStale;
+  const syncExplicitlyBlocksPreview =
+    Boolean(syncStatus) &&
+    syncStatus?.canPreviewProducts === false &&
+    syncStatus?.mirrorReady !== true &&
+    !isSyncInProgress &&
+    !isSyncStale;
   const isProductMirrorUnavailable =
-    Boolean(productUnavailableReason) ||
-    (!productMirrorHealth?.activeMirrorBatchId && totalCount === 0);
+    !hasRowsAvailable &&
+    !mirrorReady &&
+    (
+      Boolean(productUnavailableReason) ||
+      !hasActiveMirrorBatch ||
+      syncExplicitlyBlocksPreview
+    );
+  // A background refresh must never hide the last valid mirror. Only block the
+  // table when there are genuinely no rows to show yet.
+  const shouldShowSyncWaitingState = activeSyncInProgress && !hasRowsAvailable;
+  const shouldShowStatusRail =
+    isProductMirrorUnavailable ||
+    shouldShowSyncWaitingState;
 
   const productIdsCsv = useMemo(
     () =>
@@ -242,6 +287,12 @@ export default function ProductsPage() {
   }, [bootstrapStoreDetails, queryClient]);
 
   useEffect(() => {
+    if (!fetching) {
+      setPaginationDirection(null);
+    }
+  }, [fetching]);
+
+  useEffect(() => {
     const safeProducts = Array.isArray(products) ? products : [];
 
     const nextSignature = safeProducts
@@ -275,6 +326,7 @@ export default function ProductsPage() {
             },
           ]
           : baseFilters;
+      void queryClient.cancelQueries({ queryKey: ["products"] });
       dispatch(
         applyFilterHashAndResetCursor({
           filters: nextFilters,
@@ -282,7 +334,7 @@ export default function ProductsPage() {
         }),
       );
     },
-    [dispatch],
+    [dispatch, queryClient],
   );
 
   useEffect(() => {
@@ -296,6 +348,11 @@ export default function ProductsPage() {
 
     if (justCompleted) {
       showSuccess(t("productsSyncSuccess"));
+      void queryClient.invalidateQueries({ queryKey: ["sync-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["product-sync-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["bootstrap-products"] });
+      void queryClient.invalidateQueries({ queryKey: ["products"] });
+      void queryClient.invalidateQueries({ queryKey: ["variants-grid"] });
       void refetch();
     }
 
@@ -305,6 +362,7 @@ export default function ProductsPage() {
     isSyncStale,
     syncStatus?.shopifyBulkJobCompleted,
     syncStatus?.activeMirrorBatchId,
+    queryClient,
     refetch,
     showSuccess,
     t,
@@ -351,6 +409,28 @@ export default function ProductsPage() {
     [filterState, applyAtomicFilterCursorReset, committedSearch],
   );
 
+  const handleNextPage = useCallback(() => {
+    if (!pagination?.hasNextPage || fetching) return;
+    setPaginationDirection("next");
+    dispatch(
+      setCursorForFilterHash({
+        cursor: pagination?.nextCursor || null,
+        filterHash,
+      }),
+    );
+  }, [dispatch, fetching, filterHash, pagination?.hasNextPage, pagination?.nextCursor]);
+
+  const handlePreviousPage = useCallback(() => {
+    if (!pagination?.hasPrevPage || fetching) return;
+    setPaginationDirection("previous");
+    dispatch(
+      setCursorForFilterHash({
+        cursor: pagination?.prevCursor || null,
+        filterHash,
+      }),
+    );
+  }, [dispatch, fetching, filterHash, pagination?.hasPrevPage, pagination?.prevCursor]);
+
   const appliedFilters = useMemo(
     () =>
       filterState
@@ -382,15 +462,22 @@ export default function ProductsPage() {
   );
 
   const shouldShowLoadingState =
-    loading ||
-    !hasFetched;
+    (loading || !hasFetched) &&
+    !hasProductData;
+  const isPaginating = fetching && placeholderData && hasProductData;
 
   const shouldShowEmptyState =
     !shouldShowLoadingState &&
     !error &&
     hasFetched &&
-    !isSyncInProgress &&
+    !shouldShowSyncWaitingState &&
     totalCount === 0;
+  const tableProductIds = useMemo(() => {
+    if (productIds.length > 0) return productIds;
+    return products
+      .map((product) => String(product?.__rowId || product?.id || "").trim())
+      .filter(Boolean);
+  }, [productIds, products]);
 
   const resultSummary = useMemo(() => {
     if (shouldShowLoadingState) {
@@ -416,19 +503,20 @@ export default function ProductsPage() {
       );
     }
 
-   if (isSyncInProgress && !isSyncStale) {
+   if (activeSyncInProgress) {
+      const statusLabel = formatProductTargetingStatus({
+        isSyncInProgress,
+        isSyncStale,
+      });
       return (
         <Text variant="bodySm" tone="subdued">
-          {t("productsSyncingInBackground")}
+          {t("productsSyncingInBackground", statusLabel)}
         </Text>
-        // <Text variant="bodySm" tone="subdued">
-        //   Products are syncing in the background.
-        // </Text>
       );
     }
 
     return null;
-  }, [isSyncInProgress, shouldShowEmptyState, shouldShowLoadingState, totalCount, t]);
+  }, [activeSyncInProgress, isSyncInProgress, isSyncStale, shouldShowEmptyState, shouldShowLoadingState, totalCount, t]);
 
   return (
     <Page
@@ -469,28 +557,30 @@ export default function ProductsPage() {
             </Box>
           </Card>
         </Layout.Section>
-        <Layout.Section>
-          <Box minHeight={STATUS_RAIL_MIN_HEIGHT}>
-            {isProductMirrorUnavailable && (!isSyncInProgress || isSyncStale) ? (
-              <Banner
-                tone="warning"
-                title={isSyncStale ? "Product sync is stuck" : "Product sync needed"}
-              >
-                <p>
-                  {productUnavailableReason ||
-                    "No product mirror is available yet. Start product sync to load product rows."}
-                </p>
-                <Button variant="plain" onClick={() => navigate("/refresh")}>
-                  {t("Syncyourproducts")}
-                </Button>
-              </Banner>
-            ) : isSyncInProgress && !isSyncStale && !products.length ? (
-              <Banner tone="info" title="Sync in progress">
-                <p>Products are still syncing. Counts and rows will fill in automatically as the mirror updates.</p>
-              </Banner>
-            ) : null}
-          </Box>
-        </Layout.Section>
+        {shouldShowStatusRail ? (
+          <Layout.Section>
+            <Box minHeight={STATUS_RAIL_MIN_HEIGHT}>
+              {isProductMirrorUnavailable ? (
+                <Banner
+                  tone="warning"
+                  title={isSyncStale ? "Product sync is stuck" : "Product sync needed"}
+                >
+                  <p>
+                    {productUnavailableReason ||
+                      "No product mirror is available yet. Start product sync to load product rows."}
+                  </p>
+                  <Button variant="plain" onClick={() => navigate("/refresh")}>
+                    {t("Syncyourproducts")}
+                  </Button>
+                </Banner>
+              ) : (
+                <Banner tone="info" title="Sync in progress">
+                  <p>Products are still syncing. Counts and rows will fill in automatically as the mirror updates.</p>
+                </Banner>
+              )}
+            </Box>
+          </Layout.Section>
+        ) : null}
 
         <Layout.Section>
           <Card>
@@ -522,33 +612,25 @@ export default function ProductsPage() {
               </Box>
             ) : null}
             <ProductsTable
-              productIds={productIds}
+              productIds={tableProductIds}
               loading={shouldShowLoadingState}
+              fetching={isPaginating}
+              fetchingDirection={isPaginating ? paginationDirection : null}
               pagination={pagination}
-              onNext={() =>
-                dispatch(
-                  setCursorForFilterHash({
-                    cursor: pagination?.nextCursor || null,
-                    filterHash,
-                  }),
-                )
-              }
-              onPrev={() =>
-                dispatch(
-                  setCursorForFilterHash({
-                    cursor: pagination?.prevCursor || null,
-                    filterHash,
-                  }),
-                )
-              }
+              onNext={handleNextPage}
+              onPrev={handlePreviousPage}
               emptyHeading={
                 isProductMirrorUnavailable
                   ? "Sync products to show rows"
+                  : shouldShowSyncWaitingState
+                    ? "Sync in progress"
                   : undefined
               }
               emptyText={
                 isProductMirrorUnavailable
                   ? "The product mirror does not have an active batch yet. Run product sync, then this table will fill automatically."
+                  : shouldShowSyncWaitingState
+                    ? "Products are still syncing. Counts and rows will fill in automatically as the mirror updates."
                   : undefined
               }
             />

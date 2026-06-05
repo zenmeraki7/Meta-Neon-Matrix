@@ -1,9 +1,9 @@
 import { db } from "../../repositories/repositoryDb.js";
 
-export async function getBulkEditStatus({ shop, id }) {
+export async function getBulkEditStatus({ shop, historyId }) {
   const history = await db.editHistory.findFirst({
     where: {
-      id,
+      id: historyId,
       shop,
     },
     select: {
@@ -26,5 +26,4 @@ export async function getBulkEditStatus({ shop, id }) {
     duration: history.durationMs,
   };
 }
-
 

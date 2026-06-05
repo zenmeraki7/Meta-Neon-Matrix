@@ -109,7 +109,7 @@ export const requestCollectionRefresh =
         subscription: req.subscription || null,
       });
 
-      const result = await collectionService.requestCollectionRefresh(command);
+      const result = await collectionService.performCollectionRefresh(command);
 
       return res.status(202).json({
         success: true,

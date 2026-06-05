@@ -3,7 +3,6 @@ import crypto from "crypto";
 import {
   findDistinctCollectionTitles,
   findDistinctProductFieldValues,
-  findStoreActiveCollectionBatchId,
   findDistinctProductTagValues,
   findDistinctVariantFieldValues,
 } from "../../repositories/productQueryRepository.js";
@@ -13,10 +12,17 @@ import {
 } from "./productTargetingService.js";
 
 const FILTER_VALUE_FIELD_MAP = {
+  title: { source: "product", field: "title" },
   vendor: { source: "product", field: "vendor" },
+  handle: { source: "product", field: "handle" },
+  status: { source: "product", field: "status" },
   tag: { source: "product_tags", field: "value" },
+  tags: { source: "product_tags", field: "value" },
   product_type: { source: "product", field: "productType" },
+  productType: { source: "product", field: "productType" },
   category: { source: "product", field: "categoryName" },
+  categoryName: { source: "product", field: "categoryName" },
+  collections: { source: "collection", field: "title" },
   option_name_1: { source: "product", field: "option1Name" },
   option_name_2: { source: "product", field: "option2Name" },
   option_name_3: { source: "product", field: "option3Name" },
@@ -172,14 +178,16 @@ export async function getDistinctProductFilterValues({
 }) {
   const fieldConfig = FILTER_VALUE_FIELD_MAP[field];
   if (!fieldConfig) {
-    throw new Error("Unsupported filter field");
+    const error = new Error(`Unsupported filter field: ${field}`);
+    error.code = "INVALID_FILTER_FIELD";
+    throw error;
   }
 
   const cacheKey = `${shop}:ProductFilterValues:${field}:${search.toLowerCase()}:${take}`;
   const cachedData = await getCache(cacheKey);
   if (cachedData) return cachedData;
 
-  const mirrorBatchId = await getActiveMirrorBatchId(shop);
+  const mirrorBatchId = await getActiveMirrorBatchId(shop, { purpose: "PREVIEW" });
   let rows = [];
 
   if (fieldConfig.source === "product") {
@@ -199,10 +207,8 @@ export async function getDistinctProductFilterValues({
       take,
     });
   } else if (fieldConfig.source === "collection") {
-    const activeCollectionBatchId = await findStoreActiveCollectionBatchId(shop);
     rows = await findDistinctCollectionTitles({
       shop,
-      mirrorBatchId: activeCollectionBatchId,
       search,
       take,
     });

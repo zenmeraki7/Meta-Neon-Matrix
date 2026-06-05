@@ -8,204 +8,166 @@ import {
 } from "../services/scheduledExportService.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import {
+  normalizeCreateScheduledExportCommand,
+  normalizeDeleteScheduledExportCommand,
+  normalizeGetScheduledExportCommand,
+  normalizeListScheduledExportsCommand,
+  normalizeToggleScheduledExportStatusCommand,
+  normalizeUpdateScheduledExportCommand,
+} from "../normalizers/scheduledExportCommandNormalizer.js";
+import { toSuccessResponse } from "../dtos/apiResponseDto.js";
+import { toScheduledExportDto } from "../dtos/scheduledExportDto.js";
 
-function getSessionOrThrow(res) {
-  const session = res.locals.shopify?.session;
-  if (!session?.shop) {
-    const error = new Error("UNAUTHENTICATED");
-    error.code = "UNAUTHENTICATED";
-    throw error;
-  }
+async function handleScheduledExportControllerError({ req, res, error, source }) {
+  await logApiError({
+    shop: res.locals?.shopify?.session?.shop,
+    err: error,
+    req,
+    source,
+  });
 
-  return session;
+  const { statusCode, body } = buildPublicApiErrorResponse(
+    error,
+    "INTERNAL_ERROR",
+  );
+  return res.status(statusCode).json(body);
+}
+
+function sendScheduledExportResponse(res, statusCode, data) {
+  return res.status(statusCode).json(
+    toSuccessResponse(toScheduledExportDto(data)),
+  );
 }
 
 export async function createScheduledExportController(req, res) {
-  let session;
-  
   try {
-    session = getSessionOrThrow(res);
-    const data = await createScheduledExport({
-      shop: session.shop,
-      body: req.body,
-      subscription: req.subscription,
-    });
+    const session = res.locals.shopify.session;
+    const locals = { ...res.locals, shopify: { ...res.locals.shopify, session } };
+    const command = normalizeCreateScheduledExportCommand(
+      req.params,
+      req.body,
+      locals,
+    );
+    const data = await createScheduledExport(command);
 
-    return res.status(201).json({
-      success: true,
-      data,
-      message: "Scheduled export created successfully",
-    });
+    return sendScheduledExportResponse(res, 201, data);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleScheduledExportControllerError({
       req,
+      res,
+      error,
       source: "scheduledExportController.create",
     });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
   }
 }
 
 export async function listScheduledExportsController(req, res) {
-  let session;
-
   try {
-    session = getSessionOrThrow(res);
-    const data = await listScheduledExports({
-      shop: session.shop,
-    });
+    const session = res.locals.shopify.session;
+    const locals = { ...res.locals, shopify: { ...res.locals.shopify, session } };
+    const command = normalizeListScheduledExportsCommand(
+      req.params,
+      req.body,
+      locals,
+    );
+    const data = await listScheduledExports(command);
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Scheduled exports fetched successfully",
-    });
+    return sendScheduledExportResponse(res, 200, data);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleScheduledExportControllerError({
       req,
+      res,
+      error,
       source: "scheduledExportController.list",
     });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "INTERNAL_ERROR",
-    );
-    return res.status(statusCode).json(body);
   }
 }
 
 export async function getScheduledExportByIdController(req, res) {
-  let session;
-
   try {
-    session = getSessionOrThrow(res);
-    const data = await getScheduledExportById({
-      shop: session.shop,
-      scheduledExportId: req.params.id,
-    });
+    const session = res.locals.shopify.session;
+    const locals = { ...res.locals, shopify: { ...res.locals.shopify, session } };
+    const command = normalizeGetScheduledExportCommand(
+      req.params,
+      req.body,
+      locals,
+    );
+    const data = await getScheduledExportById(command);
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Scheduled export fetched successfully",
-    });
+    return sendScheduledExportResponse(res, 200, data);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleScheduledExportControllerError({
       req,
+      res,
+      error,
       source: "scheduledExportController.getById",
     });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "NOT_FOUND",
-    );
-    return res.status(statusCode).json(body);
   }
 }
 
 export async function updateScheduledExportController(req, res) {
-  let session;
-
   try {
-    session = getSessionOrThrow(res);
-    const data = await updateScheduledExport({
-      shop: session.shop,
-      scheduledExportId: req.params.id,
-      body: req.body,
-      subscription: req.subscription,
-    });
+    const session = res.locals.shopify.session;
+    const locals = { ...res.locals, shopify: { ...res.locals.shopify, session } };
+    const command = normalizeUpdateScheduledExportCommand(
+      req.params,
+      req.body,
+      locals,
+    );
+    const data = await updateScheduledExport(command);
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Scheduled export updated successfully",
-    });
+    return sendScheduledExportResponse(res, 200, data);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleScheduledExportControllerError({
       req,
+      res,
+      error,
       source: "scheduledExportController.update",
     });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
   }
 }
 
 export async function toggleScheduledExportStatusController(req, res) {
-  let session;
-
   try {
-    session = getSessionOrThrow(res);
-    const data = await toggleScheduledExportStatus({
-      shop: session.shop,
-      scheduledExportId: req.params.id,
-      status: req.body?.status,
-      subscription: req.subscription,
-    });
+    const session = res.locals.shopify.session;
+    const locals = { ...res.locals, shopify: { ...res.locals.shopify, session } };
+    const command = normalizeToggleScheduledExportStatusCommand(
+      req.params,
+      req.body,
+      locals,
+    );
+    const data = await toggleScheduledExportStatus(command);
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Scheduled export status updated successfully",
-    });
+    return sendScheduledExportResponse(res, 200, data);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleScheduledExportControllerError({
       req,
+      res,
+      error,
       source: "scheduledExportController.toggleStatus",
     });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
   }
 }
 
 export async function deleteScheduledExportController(req, res) {
-  let session;
-
   try {
-    session = getSessionOrThrow(res);
-    const data = await deleteScheduledExport({
-      shop: session.shop,
-      scheduledExportId: req.params.id,
-    });
+    const session = res.locals.shopify.session;
+    const locals = { ...res.locals, shopify: { ...res.locals.shopify, session } };
+    const command = normalizeDeleteScheduledExportCommand(
+      req.params,
+      req.body,
+      locals,
+    );
+    const data = await deleteScheduledExport(command);
 
-    return res.status(200).json({
-      success: true,
-      data,
-      message: "Scheduled export deleted successfully",
-    });
+    return sendScheduledExportResponse(res, 200, data);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleScheduledExportControllerError({
       req,
+      res,
+      error,
       source: "scheduledExportController.delete",
     });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
-      error,
-      "VALIDATION_FAILED",
-    );
-    return res.status(statusCode).json(body);
   }
 }

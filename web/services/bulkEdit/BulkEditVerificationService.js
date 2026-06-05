@@ -18,6 +18,26 @@ const VERIFY_MODES = Object.freeze({
   FULL: "FULL",
 });
 
+const VERIFY_PAGE_SIZE = Number.parseInt(process.env.BULK_EDIT_VERIFY_PAGE_SIZE || "500", 10);
+const MAX_VERIFICATION_ROWS_PER_RUN = Number.parseInt(
+  process.env.BULK_EDIT_MAX_VERIFICATION_ROWS_PER_RUN || "1000",
+  10,
+);
+const SAMPLE_RATIO = Number.parseFloat(process.env.BULK_EDIT_VERIFY_SAMPLE_RATIO || "0.1");
+const SAMPLE_LIMIT_CAP = Number.parseInt(process.env.BULK_EDIT_VERIFY_SAMPLE_LIMIT_CAP || "1000", 10);
+const PROGRESS_PAGE_INTERVAL = Number.parseInt(
+  process.env.BULK_EDIT_VERIFY_PROGRESS_PAGE_INTERVAL || "10",
+  10,
+);
+const MAX_INVENTORY_VARIANTS_PER_RUN = Number.parseInt(
+  process.env.BULK_EDIT_VERIFY_MAX_INVENTORY_VARIANTS || "100",
+  10,
+);
+const MAX_METAFIELD_REQUESTS_PER_RUN = Number.parseInt(
+  process.env.BULK_EDIT_VERIFY_MAX_METAFIELD_REQUESTS || "100",
+  10,
+);
+
 function includesAnyToken(value, tokens = []) {
   const normalized = String(value || "").toLowerCase();
   return tokens.some((token) => normalized.includes(String(token || "").toLowerCase()));
@@ -30,14 +50,10 @@ function requiresFullVerification(history) {
   return rules.some((rule) => includesAnyToken(rule?.field, ["inventory", "metafield", "variant"]));
 }
 
-function isDeterministicHighRiskVerification(history) {
-  return requiresFullVerification(history);
-}
-
 function pickVerificationMode(history) {
-  if (requiresFullVerification(history)) return VERIFY_MODES.FULL;
   const configured = String(history?.batch?.verificationMode || "").toUpperCase();
   if (Object.values(VERIFY_MODES).includes(configured)) return configured;
+  if (requiresFullVerification(history)) return VERIFY_MODES.FULL;
 
   const count = Number(history?.batch?.currentBatchTargetCount || history?.targetSnapshotCount || 0);
   const destructive = Array.isArray(history?.rules)
@@ -47,6 +63,13 @@ function pickVerificationMode(history) {
   if (destructive || risk === "CRITICAL") return VERIFY_MODES.FULL;
   if (count > 0 && count <= 100) return VERIFY_MODES.FULL_FOR_SMALL_BATCH;
   return VERIFY_MODES.SAMPLE_PLUS_FAILURES;
+}
+
+function resolveSampleLimit(history) {
+  const targetCount = Number(history?.targetSnapshotCount || history?.batch?.currentBatchTargetCount || 0);
+  const ratio = Number.isFinite(SAMPLE_RATIO) && SAMPLE_RATIO > 0 ? SAMPLE_RATIO : 0.1;
+  const cap = Number.isFinite(SAMPLE_LIMIT_CAP) && SAMPLE_LIMIT_CAP > 0 ? SAMPLE_LIMIT_CAP : 1000;
+  return Math.max(1, Math.min(cap, Math.ceil(targetCount * ratio)));
 }
 
 function stableScore(seed, value) {
@@ -72,11 +95,38 @@ function deterministicSample(rows, limit, seed) {
     .map((item) => item.row);
 }
 
+function pushDeterministicSample(sampleRows, row, limit, seed) {
+  if (limit <= 0) return sampleRows;
+  const scored = {
+    row,
+    score: stableScore(seed, row.targetIdentity || row.id),
+  };
+  sampleRows.push(scored);
+  sampleRows.sort((a, b) => a.score - b.score);
+  if (sampleRows.length > limit) sampleRows.length = limit;
+  return sampleRows;
+}
+
 function toNodeId(raw) {
   if (!raw) return null;
   const value = String(raw).trim();
   if (!value) return null;
   return value.startsWith("gid://") ? value : null;
+}
+
+function valuesEquivalent(current, wanted) {
+  if (current === null || current === undefined || wanted === null || wanted === undefined) {
+    return current === wanted;
+  }
+  if (typeof current === "boolean" || typeof wanted === "boolean") {
+    return current === wanted;
+  }
+  const currentNumber = Number(current);
+  const wantedNumber = Number(wanted);
+  if (Number.isFinite(currentNumber) && Number.isFinite(wantedNumber)) {
+    return currentNumber === wantedNumber;
+  }
+  return String(current) === String(wanted);
 }
 
 const VERIFY_NODES_QUERY = `#graphql
@@ -263,6 +313,34 @@ async function fetchMetafieldsByTupleFromShopify({
   return map;
 }
 
+async function markVerificationFailures({ shop, failedRows = [], chunkSize = 500 }) {
+  for (let i = 0; i < failedRows.length; i += chunkSize) {
+    const batch = failedRows.slice(i, i + chunkSize);
+    const ids = batch.map((item) => String(item.id));
+    const caseClauses = batch
+      .map((item, index) => `WHEN id = $${index + 2}::uuid THEN $${index + 2 + batch.length}`)
+      .join(" ");
+    const params = [
+      shop,
+      ...ids,
+      ...batch.map((item) => String(item.message || "")),
+    ];
+    // eslint-disable-next-line no-await-in-loop
+    await db.$executeRawUnsafe(
+      `
+      UPDATE "ChangeRecord"
+      SET
+        "status" = 'VERIFICATION_FAILED',
+        "failureCode" = 'VERIFICATION_MISMATCH',
+        "failureMessage" = CASE ${caseClauses} ELSE "failureMessage" END
+      WHERE "shop" = $1
+        AND "id" IN (${ids.map((_, index) => `$${index + 2}::uuid`).join(", ")})
+      `,
+      ...params,
+    );
+  }
+}
+
 function readExpectedFromAfterValues(afterValues = {}) {
   const productFieldChanges = Array.isArray(afterValues?.productFieldChanges)
     ? afterValues.productFieldChanges
@@ -322,7 +400,7 @@ function compareSimpleExpected({
     if (!field) continue;
     const current = product?.[field] ?? null;
     const wanted = item?.newValue ?? null;
-    if (String(current) !== String(wanted)) {
+    if (!valuesEquivalent(current, wanted)) {
       mismatches.push({ target: "product", field, expected: wanted, actual: current });
     }
   }
@@ -344,7 +422,7 @@ function compareSimpleExpected({
     const variant = variantsById.get(variantId) || variantsById.get(String(variantId));
     const current = variant?.[field] ?? null;
     const wanted = item?.newValue ?? null;
-    if (String(current) !== String(wanted)) {
+    if (!valuesEquivalent(current, wanted)) {
       mismatches.push({ target: "variant", variantId, field, expected: wanted, actual: current });
     }
   }
@@ -374,7 +452,7 @@ function compareSimpleExpected({
     const wantedAvailable = item?.available;
     if (wantedAvailable !== undefined && wantedAvailable !== null) {
       const currentAvailable = current?.available ?? null;
-      if (String(currentAvailable) !== String(wantedAvailable)) {
+      if (!valuesEquivalent(currentAvailable, wantedAvailable)) {
         mismatches.push({
           target: "inventory",
           field: "available",
@@ -415,8 +493,12 @@ function compareSimpleExpected({
 
 export class BulkEditVerificationService {
   async verifyBatch({ shop, historyId, executionId = null }) {
-    const history = await db.editHistory.findUnique({
-      where: { id: historyId },
+    if (!shop || !historyId) {
+      throw new Error("VERIFICATION_REQUIRES_SHOP_AND_HISTORY_ID");
+    }
+
+    const history = await db.editHistory.findFirst({
+      where: { id: historyId, shop },
       select: {
         id: true,
         shop: true,
@@ -428,13 +510,11 @@ export class BulkEditVerificationService {
     });
 
     if (!history) throw new Error("Edit history not found");
-    if (history.shop !== shop) throw new Error("SHOP_MISMATCH");
     if (executionId && history.executionIdentity && executionId !== history.executionIdentity) {
       throw new Error("STALE_EXECUTION_JOB");
     }
 
     const mode = pickVerificationMode(history);
-    const deterministicFullRequired = isDeterministicHighRiskVerification(history);
     await upsertOperationStageProgress({
       shop,
       operationType: "BULK_EDIT",
@@ -454,45 +534,79 @@ export class BulkEditVerificationService {
       || history.batch?.shopifyBulkOperation?.batchId
       || history.batch?.currentBatchId
       || null;
-
-    const rows = await db.changeRecord.findMany({
-      where: {
-        editHistoryId: historyId,
-        shop,
-        ...(batchId ? { batchId } : {}),
-      },
-      select: {
-        id: true,
-        productId: true,
-        variantId: true,
-        afterValues: true,
-        status: true,
-      },
-    });
-
-    const successes = rows.filter((row) => String(row.status || "").toUpperCase() === "SUCCESS");
-    const failures = rows.filter((row) => String(row.status || "").toUpperCase() === "FAILED");
-
-    let verifyRows = [];
-    const seed = `${historyId}:${batchId || "none"}`;
-    if (deterministicFullRequired || mode === VERIFY_MODES.FULL || mode === VERIFY_MODES.FULL_FOR_SMALL_BATCH) {
-      verifyRows = [...successes];
-    } else if (mode === VERIFY_MODES.SAMPLE_ONLY) {
-      verifyRows = deterministicSample(
-        successes,
-        Math.max(1, Math.min(20, Math.ceil(successes.length * 0.1))),
-        seed,
-      );
-    } else {
-      verifyRows = [
-        ...deterministicSample(
-          successes,
-          Math.max(1, Math.min(20, Math.ceil(successes.length * 0.1))),
-          seed,
-        ),
-        ...failures,
-      ];
+    if (!batchId) {
+      const error = new Error("VERIFICATION_REQUIRES_BATCH_ID");
+      error.code = "VERIFICATION_REQUIRES_BATCH_ID";
+      throw error;
     }
+
+    const highRiskVerification = requiresFullVerification(history);
+    const seed = `${historyId}:${batchId}`;
+    const sampleLimit = mode === VERIFY_MODES.FULL || mode === VERIFY_MODES.FULL_FOR_SMALL_BATCH
+      ? Math.max(1, MAX_VERIFICATION_ROWS_PER_RUN)
+      : resolveSampleLimit(history);
+    const sampleRows = [];
+    const failures = [];
+    let successesLength = 0;
+    let cursorId = null;
+    let pageCount = 0;
+
+    while (true) {
+      const page = await db.changeRecord.findMany({
+        where: {
+          editHistoryId: historyId,
+          shop,
+          batchId,
+          ...(cursorId ? { id: { gt: cursorId } } : {}),
+        },
+        orderBy: { id: "asc" },
+        take: VERIFY_PAGE_SIZE,
+        select: {
+          id: true,
+          targetIdentity: true,
+          productId: true,
+          variantId: true,
+          afterValues: true,
+          status: true,
+        },
+      });
+      if (!page.length) break;
+      pageCount += 1;
+
+      for (const row of page) {
+        const status = String(row.status || "").toUpperCase();
+        if (status === "SUCCESS") {
+          successesLength += 1;
+          pushDeterministicSample(sampleRows, row, sampleLimit, seed);
+        } else if (status === "FAILED") {
+          pushDeterministicSample(failures, row, sampleLimit, `${seed}:failed`);
+        }
+      }
+
+      cursorId = page[page.length - 1].id;
+      if (pageCount % Math.max(1, PROGRESS_PAGE_INTERVAL) === 0 || page.length < VERIFY_PAGE_SIZE) {
+        // eslint-disable-next-line no-await-in-loop
+        await upsertOperationStageProgress({
+          shop,
+          operationType: "BULK_EDIT",
+          operationId: historyId,
+          executionId: executionId || history.executionIdentity || null,
+          stageKey: "VERIFICATION",
+          stageStatus: "SCANNING_CHANGE_RECORDS",
+          counterA: successesLength,
+          counterB: failures.length,
+          detail: { mode, batchId, cursorId, pageCount },
+        });
+      }
+      if (page.length < VERIFY_PAGE_SIZE) break;
+    }
+
+    const verifyRows = mode === VERIFY_MODES.SAMPLE_PLUS_FAILURES
+      ? [
+          ...sampleRows.map((item) => item.row),
+          ...failures.map((item) => item.row),
+        ]
+      : sampleRows.map((item) => item.row);
 
     const productIds = [...new Set(verifyRows.map((row) => row.productId).filter(Boolean))];
     const variantIds = [...new Set(verifyRows.map((row) => row.variantId).filter(Boolean))];
@@ -509,19 +623,52 @@ export class BulkEditVerificationService {
     }
 
     const inventoryRequests = new Map();
-    const metafieldRequests = [];
+    const metafieldRequestMap = new Map();
+    const budgetSkippedRowIds = new Set();
     for (const row of verifyRows) {
       const expected = readExpectedFromAfterValues(row.afterValues || {});
+      const rowInventoryRequests = new Map();
+      const rowMetafieldRequests = new Map();
+
       for (const change of expected.inventoryLevelChanges) {
         const { variantId, locationId } = normalizeInventoryTuple(change, row);
         if (!variantId || !locationId) continue;
-        if (!inventoryRequests.has(variantId)) inventoryRequests.set(variantId, new Set());
-        inventoryRequests.get(variantId).add(locationId);
+        if (!rowInventoryRequests.has(variantId)) rowInventoryRequests.set(variantId, new Set());
+        rowInventoryRequests.get(variantId).add(locationId);
       }
       for (const change of expected.metafieldChanges) {
         const { ownerId, namespace, key, type } = normalizeMetafieldTuple(change, row);
         if (!ownerId || !namespace || !key || !type) continue;
-        metafieldRequests.push({ ownerId, namespace, key, type });
+        rowMetafieldRequests.set(`${ownerId}::${namespace}::${key}::${type}`, {
+          ownerId,
+          namespace,
+          key,
+          type,
+        });
+      }
+
+      const newInventoryVariantCount = [...rowInventoryRequests.keys()]
+        .filter((variantId) => !inventoryRequests.has(variantId))
+        .length;
+      const newMetafieldRequestCount = [...rowMetafieldRequests.keys()]
+        .filter((requestKey) => !metafieldRequestMap.has(requestKey))
+        .length;
+      if (
+        inventoryRequests.size + newInventoryVariantCount > Math.max(0, MAX_INVENTORY_VARIANTS_PER_RUN)
+        || metafieldRequestMap.size + newMetafieldRequestCount > Math.max(0, MAX_METAFIELD_REQUESTS_PER_RUN)
+      ) {
+        budgetSkippedRowIds.add(row.id);
+        continue;
+      }
+
+      for (const [variantId, locationIds] of rowInventoryRequests.entries()) {
+        if (!inventoryRequests.has(variantId)) inventoryRequests.set(variantId, new Set());
+        for (const locationId of locationIds) {
+          inventoryRequests.get(variantId).add(locationId);
+        }
+      }
+      for (const [requestKey, request] of rowMetafieldRequests.entries()) {
+        metafieldRequestMap.set(requestKey, request);
       }
     }
 
@@ -532,15 +679,18 @@ export class BulkEditVerificationService {
 
     const metafieldsByTuple = await fetchMetafieldsByTupleFromShopify({
       shop,
-      metafieldRequests,
+      metafieldRequests: [...metafieldRequestMap.values()],
     });
 
-    const verificationTargetCount = successes.length;
+    const verificationTargetCount = successesLength;
     let verified = 0;
     let failed = 0;
     const verifiedIds = [];
     const failedRows = [];
     for (const row of verifyRows) {
+      if (budgetSkippedRowIds.has(row.id)) {
+        continue;
+      }
       const product = productsById.get(row.productId);
       const expected = readExpectedFromAfterValues(row.afterValues || {});
       const mismatches = compareSimpleExpected({
@@ -580,52 +730,13 @@ export class BulkEditVerificationService {
         },
       });
     }
-    for (let i = 0; i < failedRows.length; i += chunkSize) {
-      const batch = failedRows.slice(i, i + chunkSize);
-      // eslint-disable-next-line no-await-in-loop
-      await db.$transaction(
-        batch.map((item) => db.changeRecord.updateMany({
-          where: { id: item.id, shop },
-          data: {
-            status: "VERIFICATION_FAILED",
-            failureCode: "VERIFICATION_MISMATCH",
-            failureMessage: item.message,
-          },
-        })),
-      );
-    }
+    await markVerificationFailures({ shop, failedRows, chunkSize });
 
-    const fullCoverageAchieved = verifyRows.length === verificationTargetCount;
-    const completionBlockedByCoverage = deterministicFullRequired && !fullCoverageAchieved;
-    const movedToMirrorUpdating = await guardedEditHistoryUpdate({
-      id: historyId,
-      shop,
-      expectedExecutionStates: [
-        OPERATION_LIFECYCLE_STATES.VERIFYING,
-        OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
-        OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-      ],
-      data: {
-        executionState: OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
-        ),
-      },
-    });
-    if (!movedToMirrorUpdating) {
-      throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_MIRROR_UPDATING");
-    }
+    const evaluatedCount = verified + failed;
+    const fullCoverageAchieved = evaluatedCount === verificationTargetCount;
+    const completionBlockedByCoverage = highRiskVerification && !fullCoverageAchieved;
 
     const verificationStatus = failed > 0 ? "FAILED" : "SUCCESS";
-    await schedulePostMutationMirrorReconciliation({
-      shop,
-      ownerType: "EDIT_HISTORY",
-      ownerId: historyId,
-      mirrorBatchId: history.batch?.previewFingerprint?.mirrorBatchId || null,
-      source: "BULK_EDIT_VERIFICATION",
-      verificationStatus,
-    });
-
     const finalState = failed > 0 || completionBlockedByCoverage
       ? OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED
       : OPERATION_LIFECYCLE_STATES.COMPLETED;
@@ -635,6 +746,8 @@ export class BulkEditVerificationService {
       id: historyId,
       shop,
       expectedExecutionStates: [
+        OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+        OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
         OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
         OPERATION_LIFECYCLE_STATES.VERIFYING,
       ],
@@ -654,12 +767,14 @@ export class BulkEditVerificationService {
           ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
           verification: {
             mode,
-            deterministicFullRequired,
+            highRiskVerification,
             fullCoverageAchieved,
             verifiedAt: new Date().toISOString(),
             verifiedCount: verified,
             verificationFailedCount: failed,
             sampledCount: verifyRows.length,
+            evaluatedCount,
+            budgetSkippedCount: budgetSkippedRowIds.size,
             verificationTargetCount,
             completionBlockedByCoverage,
           },
@@ -669,6 +784,16 @@ export class BulkEditVerificationService {
     if (!historyUpdate) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFICATION_RESULT");
     }
+
+    await schedulePostMutationMirrorReconciliation({
+      shop,
+      ownerType: "EDIT_HISTORY",
+      ownerId: historyId,
+      mirrorBatchId: history.batch?.previewFingerprint?.mirrorBatchId || null,
+      source: "BULK_EDIT_VERIFICATION",
+      verificationStatus,
+    });
+
     await upsertOperationStageProgress({
       shop,
       operationType: "BULK_EDIT",
@@ -681,8 +806,12 @@ export class BulkEditVerificationService {
       counterC: verifyRows.length,
       detail: {
         mode,
-        deterministicFullRequired,
+        highRiskVerification,
         fullCoverageAchieved,
+        evaluatedCount,
+        budgetSkippedCount: budgetSkippedRowIds.size,
+        inventoryRequestCount: inventoryRequests.size,
+        metafieldRequestCount: metafieldRequestMap.size,
         verificationTargetCount,
         completionBlockedByCoverage,
       },
@@ -693,12 +822,13 @@ export class BulkEditVerificationService {
       historyId,
       shop,
       mode,
-      deterministicFullRequired,
+      highRiskVerification,
       fullCoverageAchieved,
       verified,
       verificationFailed: failed,
       sampledCount: verifyRows.length,
+      evaluatedCount,
+      budgetSkippedCount: budgetSkippedRowIds.size,
     };
   }
 }
-

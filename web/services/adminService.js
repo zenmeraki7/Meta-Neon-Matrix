@@ -38,10 +38,22 @@ class AdminService {
     return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   }
 
-  async getCompletedEditHistorySummary() {
+  requireShop(shop) {
+    const resolvedShop = String(shop || "").trim();
+    if (!resolvedShop) {
+      const error = new Error("UNAUTHENTICATED");
+      error.code = "UNAUTHENTICATED";
+      throw error;
+    }
+    return resolvedShop;
+  }
+
+  async getCompletedEditHistorySummary(shop) {
+    const resolvedShop = this.requireShop(shop);
     const groups = await db.editHistory.groupBy({
       by: ["shop"],
       where: {
+        shop: resolvedShop,
         status: "completed",
       },
       _count: {
@@ -55,7 +67,7 @@ class AdminService {
     const shops = groups.map((g) => g.shop).filter(Boolean);
     const stores = shops.length
       ? await db.store.findMany({
-          where: { shopUrl: { in: shops } },
+          where: { shopUrl: resolvedShop },
           select: {
             shopUrl: true,
             isUnInstalled: true,
@@ -108,6 +120,7 @@ class AdminService {
 
   async recoverStuckBulkEditOperation({
     historyId,
+    shop,
     mode = "auto",
     reason,
     idempotencyKey,
@@ -115,6 +128,7 @@ class AdminService {
     actorEmail = null,
   }) {
     const normalizedHistoryId = String(historyId || "").trim();
+    const resolvedShop = this.requireShop(shop);
     const normalizedMode = String(mode || "auto").toLowerCase();
     const normalizedReason = String(reason || "").trim();
     const normalizedIdempotencyKey = String(idempotencyKey || "").trim();
@@ -133,13 +147,12 @@ class AdminService {
       throw error;
     }
 
-    const history = await db.editHistory.findUnique({
-      where: { id: normalizedHistoryId },
+    const history = await db.editHistory.findFirst({
+      where: { id: normalizedHistoryId, shop: resolvedShop },
       select: { shop: true },
     });
 
-    const shop = String(history?.shop || "").trim();
-    if (!shop) {
+    if (!history) {
       const error = new Error("NOT_FOUND");
       error.code = "NOT_FOUND";
       throw error;
@@ -148,14 +161,14 @@ class AdminService {
     const idempotencyStore = new IdempotencyStoreService(db);
     const requestHash = buildIdempotencyRequestHash({
       historyId: normalizedHistoryId,
-      shop,
+      shop: resolvedShop,
       mode: normalizedMode,
       reason: normalizedReason,
       actorId: normalizedActorId || "",
       actorEmail: normalizedActorEmail || "",
     });
     const begin = await idempotencyStore.begin({
-      shop,
+      shop: resolvedShop,
       scope: "BULK_EDIT_RECOVERY_API",
       key: normalizedIdempotencyKey,
       requestHash,
@@ -168,7 +181,7 @@ class AdminService {
     const recoveryService = this.createBulkEditRecoveryService();
     const result = await recoveryService.recoverStuckState({
       historyId: normalizedHistoryId,
-      shop,
+      shop: resolvedShop,
       mode: normalizedMode,
       reason: normalizedReason,
       actor: {
@@ -181,6 +194,7 @@ class AdminService {
     const response = { success: true, data: result };
     await idempotencyStore.complete({
       recordId: begin.recordId,
+      shop: resolvedShop,
       response,
     });
 
@@ -188,15 +202,16 @@ class AdminService {
   }
   // ==================== STORE ANALYTICS ====================
 
-  async getStoreStats() {
+  async getStoreStats(shop) {
+    const resolvedShop = this.requireShop(shop);
     const [totalStores, installedStores, uninstalledStores] =
       await Promise.all([
-        db.store.count(),
+        db.store.count({ where: { shopUrl: resolvedShop } }),
         db.store.count({
-          where: { isUnInstalled: false },
+          where: { shopUrl: resolvedShop, isUnInstalled: false },
         }),
         db.store.count({
-          where: { isUnInstalled: true },
+          where: { shopUrl: resolvedShop, isUnInstalled: true },
         }),
       ]);
 
@@ -211,10 +226,11 @@ class AdminService {
     };
   }
 
-  async getAllStores({ cursor = null, limit = 20, status = "all", search = "" }) {
+  async getAllStores({ shop, cursor = null, limit = 20, status = "all", search = "" }) {
+    const resolvedShop = this.requireShop(shop);
     const limitNum = Math.max(1, Number(limit) || 20);
 
-    const where = {};
+    const where = { shopUrl: resolvedShop };
 
     // Filter by installation status
     if (status === "installed") {
@@ -224,21 +240,16 @@ class AdminService {
     }
 
     // Search by shop URL or email
-    if (search && search.trim()) {
-      where.OR = [
-        {
-          shopUrl: {
-            contains: search,
-            mode: "insensitive",
-          },
+    if (search && search.trim() && !resolvedShop.includes(String(search).trim().toLowerCase())) {
+      return {
+        stores: [],
+        pagination: {
+          hasNextPage: false,
+          nextCursor: null,
+          totalItems: 0,
+          itemsPerPage: limitNum,
         },
-        {
-          shopEmail: {
-            contains: search,
-            mode: "insensitive",
-          },
-        },
-      ];
+      };
     }
 
     const cursorPayload = this.decodeCursor(cursor);
@@ -253,9 +264,7 @@ class AdminService {
 
     const [rows, total] = await Promise.all([
       db.store.findMany({
-        where: {
-          AND: [where, ...(cursorFilter ? [cursorFilter] : [])],
-        },
+        where: cursorFilter ? { ...where, AND: [cursorFilter] } : where,
         orderBy: { createdAt: "desc" },
         take: limitNum + 1,
       }),
@@ -280,16 +289,17 @@ class AdminService {
     };
   }
 
-  async getStoreDetails(shopUrl) {
+  async getStoreDetails(shop) {
+    const resolvedShop = this.requireShop(shop);
     const store = await db.store.findUnique({
-      where: { shopUrl },
+      where: { shopUrl: resolvedShop },
     });
 
     if (!store) {
       throw new Error("Store not found");
     }
 
-    const whereShop = { shop: shopUrl };
+    const whereShop = { shop: resolvedShop };
 
     const [editHistoryCount, syncHistoryCount, lastEdit, lastSync] =
       await Promise.all([
@@ -318,8 +328,9 @@ class AdminService {
 
   // ==================== EDIT HISTORY ANALYTICS ====================
 
-  async getEditHistoryStats(shopUrl = null) {
-    const where = shopUrl ? { shop: shopUrl } : {};
+  async getEditHistoryStats(shop) {
+    const resolvedShop = this.requireShop(shop);
+    const where = { shop: resolvedShop };
 
     const [statusGroups, typeGroups, totalRecords] = await Promise.all([
       db.editHistory.groupBy({
@@ -386,14 +397,14 @@ class AdminService {
     limit = 20,
     status = "all",
     type = "all",
-    shopUrl = null,
+    shop,
     sortBy = "editTime",
     sortOrder = "desc",
   }) {
+    const resolvedShop = this.requireShop(shop);
     const limitNum = Math.max(1, Number(limit) || 20);
 
-    const where = {};
-    if (shopUrl) where.shop = shopUrl;
+    const where = { shop: resolvedShop };
     if (status !== "all") {
       where.statusNormalized = String(status).toUpperCase().replace(/\s+/g, "_");
     }
@@ -420,9 +431,7 @@ class AdminService {
 
     const [rows, total] = await Promise.all([
       db.editHistory.findMany({
-        where: {
-          AND: [where, ...(cursorFilter ? [cursorFilter] : [])],
-        },
+        where: cursorFilter ? { ...where, AND: [cursorFilter] } : where,
         orderBy: [{ [sortField]: direction }, { id: direction }],
         take: limitNum + 1,
       }),
@@ -450,11 +459,11 @@ class AdminService {
     };
   }
 
-  async getFailedEdits({ cursor = null, limit = 20, shopUrl = null }) {
+  async getFailedEdits({ shop, cursor = null, limit = 20 }) {
+    const resolvedShop = this.requireShop(shop);
     const limitNum = Math.max(1, Number(limit) || 20);
 
-    const where = { statusNormalized: "FAILED" };
-    if (shopUrl) where.shop = shopUrl;
+    const where = { shop: resolvedShop, statusNormalized: "FAILED" };
 
     const cursorPayload = this.decodeCursor(cursor);
     const cursorFilter = cursorPayload?.editTime && cursorPayload?.id
@@ -468,9 +477,7 @@ class AdminService {
 
     const [rows, total] = await Promise.all([
       db.editHistory.findMany({
-        where: {
-          AND: [where, ...(cursorFilter ? [cursorFilter] : [])],
-        },
+        where: cursorFilter ? { ...where, AND: [cursorFilter] } : where,
         orderBy: [{ editTime: "desc" }, { id: "desc" }],
         take: limitNum + 1,
       }),
@@ -538,8 +545,9 @@ class AdminService {
 
   // ==================== SYNC HISTORY ANALYTICS ====================
 
-  async getSyncHistoryStats(shopUrl = null) {
-    const where = shopUrl ? { shop: shopUrl } : {};
+  async getSyncHistoryStats(shop) {
+    const resolvedShop = this.requireShop(shop);
+    const where = { shop: resolvedShop };
 
     const [statusGroups, operationGroups, totalRecords, avgAgg] =
       await Promise.all([
@@ -609,12 +617,12 @@ class AdminService {
     limit = 20,
     status = "all",
     operationType = "all",
-    shopUrl = null,
+    shop,
   }) {
+    const resolvedShop = this.requireShop(shop);
     const limitNum = Math.max(1, Number(limit) || 20);
 
-    const where = {};
-    if (shopUrl) where.shop = shopUrl;
+    const where = { shop: resolvedShop };
     if (status !== "all") where.status = status;
 
     if (operationType !== "all") {
@@ -635,9 +643,7 @@ class AdminService {
 
     const [rows, total] = await Promise.all([
       db.syncHistory.findMany({
-        where: {
-          AND: [where, ...(cursorFilter ? [cursorFilter] : [])],
-        },
+        where: cursorFilter ? { ...where, AND: [cursorFilter] } : where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limitNum + 1,
       }),
@@ -663,13 +669,14 @@ class AdminService {
 
   // ==================== DASHBOARD OVERVIEW ====================
 
-  async getDashboardOverview() {
+  async getDashboardOverview(shop) {
+    const resolvedShop = this.requireShop(shop);
     const [storeStats, editStats, syncStats, recentActivity] =
       await Promise.all([
-        this.getStoreStats(),
-        this.getEditHistoryStats(),
-        this.getSyncHistoryStats(),
-        this.getRecentActivity(),
+        this.getStoreStats(resolvedShop),
+        this.getEditHistoryStats(resolvedShop),
+        this.getSyncHistoryStats(resolvedShop),
+        this.getRecentActivity(resolvedShop),
       ]);
 
     return {
@@ -680,12 +687,14 @@ class AdminService {
     };
   }
 
-  async getRecentActivity(limit = 10) {
+  async getRecentActivity(shop, limit = 10) {
+    const resolvedShop = this.requireShop(shop);
     const limitNum = Math.max(1, Number(limit) || 10);
 
     const [recentEdits, recentSyncs, recentInstalls, recentUninstalls] =
       await Promise.all([
         db.editHistory.findMany({
+          where: { shop: resolvedShop },
           orderBy: { editTime: "desc" },
           take: limitNum,
           select: {
@@ -698,6 +707,7 @@ class AdminService {
           },
         }),
         db.syncHistory.findMany({
+          where: { shop: resolvedShop },
           orderBy: { createdAt: "desc" },
           take: limitNum,
           select: {
@@ -708,7 +718,7 @@ class AdminService {
           },
         }),
         db.store.findMany({
-          where: { isUnInstalled: false },
+          where: { shopUrl: resolvedShop, isUnInstalled: false },
           orderBy: { installedAt: "desc" },
           take: limitNum,
           select: {
@@ -717,7 +727,7 @@ class AdminService {
           },
         }),
         db.store.findMany({
-          where: { isUnInstalled: true },
+          where: { shopUrl: resolvedShop, isUnInstalled: true },
           orderBy: { unInstalledAt: "desc" },
           take: limitNum,
           select: {
@@ -737,4 +747,3 @@ class AdminService {
 }
 
 export default new AdminService();
-

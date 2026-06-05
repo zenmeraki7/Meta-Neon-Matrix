@@ -9,27 +9,29 @@ export const recurringEditRunRepository = {
     return getClient(db).recurringEditRun.create({ data });
   },
 
-  async updateById(id, data, db = prisma) {
-    return getClient(db).recurringEditRun.update({
-      where: { id },
+  async updateById(id, shop, data, db = prisma) {
+    return getClient(db).recurringEditRun.updateMany({
+      where: { id, shop },
       data,
     });
   },
 
-  async updateByIdForStatuses(id, statuses = [], data = {}, db = prisma) {
+  async updateByIdForStatuses(id, shop, statuses = [], data = {}, db = prisma) {
     return getClient(db).recurringEditRun.updateMany({
       where: {
         id,
+        shop,
         ...(statuses.length ? { status: { in: statuses } } : {}),
       },
       data,
     });
   },
 
-  async updatePendingToProcessing(id, db = prisma) {
+  async updatePendingToProcessing(id, shop, db = prisma) {
     return getClient(db).recurringEditRun.updateMany({
       where: {
         id,
+        shop,
         status: "PENDING",
       },
       data: {
@@ -39,10 +41,11 @@ export const recurringEditRunRepository = {
     });
   },
 
-  async markProcessingFinished(id, status, data = {}, db = prisma) {
+  async markProcessingFinished(id, shop, status, data = {}, db = prisma) {
     return getClient(db).recurringEditRun.updateMany({
       where: {
         id,
+        shop,
         status: "PROCESSING",
       },
       data: {
@@ -53,10 +56,11 @@ export const recurringEditRunRepository = {
     });
   },
 
-  async markPendingSkipped(id, data = {}, db = prisma) {
+  async markPendingSkipped(id, shop, data = {}, db = prisma) {
     return getClient(db).recurringEditRun.updateMany({
       where: {
         id,
+        shop,
         status: "PENDING",
       },
       data: {
@@ -67,44 +71,48 @@ export const recurringEditRunRepository = {
     });
   },
 
-  async findById(id, db = prisma) {
-    return getClient(db).recurringEditRun.findUnique({
-      where: { id },
-    });
-  },
-
-  async findByExecutionKey(executionKey, db = prisma) {
-    return getClient(db).recurringEditRun.findUnique({
-      where: { executionKey },
-    });
-  },
-
-  async findByIdWithRecurringEdit(id, db = prisma) {
-    return getClient(db).recurringEditRun.findUnique({
-      where: { id },
-      include: {
-        recurringEdit: true,
-      },
-    });
-  },
-
-  async findByEditHistoryId(editHistoryId, db = prisma) {
+  async findById(id, shop, db = prisma) {
     return getClient(db).recurringEditRun.findFirst({
-      where: { editHistoryId },
+      where: { id, shop },
+    });
+  },
+
+  async findByExecutionKey(executionKey, shop, db = prisma) {
+    return getClient(db).recurringEditRun.findFirst({
+      where: { executionKey, shop },
+    });
+  },
+
+  async findByIdWithRecurringEdit(id, shop, db = prisma) {
+    return getClient(db).recurringEditRun.findFirst({
+      where: { id, shop },
       include: {
         recurringEdit: true,
       },
     });
   },
 
-  async groupStatusCounts(recurringEditIds = [], db = prisma) {
+  async findByEditHistoryId(editHistoryId, shop, db = prisma) {
+    return getClient(db).recurringEditRun.findFirst({
+      where: { editHistoryId, shop },
+      include: {
+        recurringEdit: true,
+      },
+    });
+  },
+
+  async groupStatusCounts(recurringEditIds = [], shop, db = prisma) {
     if (!recurringEditIds.length) {
       return [];
+    }
+    if (!shop) {
+      throw new Error("recurringEditRunRepository.groupStatusCounts requires shop");
     }
 
     return getClient(db).recurringEditRun.groupBy({
       by: ["recurringEditId", "status"],
       where: {
+        shop,
         recurringEditId: {
           in: recurringEditIds,
         },
@@ -115,13 +123,17 @@ export const recurringEditRunRepository = {
     });
   },
 
-  async findLatestRuns(recurringEditIds = [], db = prisma) {
+  async findLatestRuns(recurringEditIds = [], shop, db = prisma) {
     if (!recurringEditIds.length) {
       return [];
+    }
+    if (!shop) {
+      throw new Error("recurringEditRunRepository.findLatestRuns requires shop");
     }
 
     return getClient(db).recurringEditRun.findMany({
       where: {
+        shop,
         recurringEditId: {
           in: recurringEditIds,
         },

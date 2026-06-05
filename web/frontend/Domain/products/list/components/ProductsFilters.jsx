@@ -13,6 +13,35 @@ import {
 import { useTranslation } from "react-i18next";
 import FilterPanel from "./FilterPanel";
 
+const FILTER_UI_OVERRIDES = {
+  vendor: {
+    api: "/api/products/filter-values/vendor",
+  },
+  productType: {
+    api: "/api/products/filter-values/productType",
+  },
+  title: {
+    api: "/api/products/filter-values/title",
+  },
+  handle: {
+    api: "/api/products/filter-values/handle",
+  },
+  status: {
+    type: "enum",
+    isSearchable: false,
+    values: ["ACTIVE", "DRAFT", "ARCHIVED"],
+  },
+  tags: {
+    api: "/api/products/filter-values/tags",
+  },
+  collections: {
+    api: "/api/products/filter-values/collections",
+  },
+  categoryName: {
+    api: "/api/products/filter-values/categoryName",
+  },
+};
+
 const ProductsFilters = memo(function ProductsFilters({
   appliedFilters,
   onFilterChange,
@@ -74,10 +103,16 @@ const ProductsFilters = memo(function ProductsFilters({
 
   const translatedFilters = useMemo(
     () =>
-      availableFilters.map((filter) => ({
-        ...filter,
-        translatedLabel: t(`fieldLabels.${filter.key}`, filter.label),
-      })),
+      availableFilters.map((filter) => {
+        const override = FILTER_UI_OVERRIDES[filter.key] || {};
+
+        return {
+          ...filter,
+          ...override,
+          values: override.values || filter.values || [],
+          translatedLabel: t(`fieldLabels.${filter.key}`, filter.label),
+        };
+      }),
     [availableFilters, t, i18n.language]
   );
 
@@ -161,6 +196,7 @@ const ProductsFilters = memo(function ProductsFilters({
           }
           autofocusTarget="first-node"
           onClose={handleClosePopover}
+          preferredAlignment="left"
         >
           {!activeFilter ? (
             <ActionList items={actionItems} />

@@ -280,6 +280,37 @@ function normalizePreviewRows(rows) {
   return safeArray(rows, MAX_PREVIEW_ROWS).map(normalizePreviewRow);
 }
 
+function normalizeCsvItems(rows) {
+  return safeArray(rows, MAX_PREVIEW_ROWS).map((row) => {
+    const safeRow = safePlainObject(row);
+    const output = {};
+
+    for (const [key, value] of Object.entries(safeRow).slice(0, MAX_COLUMNS)) {
+      const safeKey = safeString(key, null, MAX_SHORT_STRING_LENGTH);
+      if (safeKey) output[safeKey] = normalizeScalarPreviewValue(value);
+    }
+
+    return output;
+  });
+}
+
+function normalizeHeaders(headers) {
+  return safeArray(headers, MAX_COLUMNS)
+    .map((header) => safeString(header, null, 500))
+    .filter(Boolean);
+}
+
+function normalizePageInfo(pageInfo) {
+  const safePageInfo = safePlainObject(pageInfo);
+
+  return {
+    hasNextPage: safeBoolean(safePageInfo.hasNextPage),
+    hasPreviousPage: safeBoolean(safePageInfo.hasPreviousPage),
+    nextCursor: safeString(safePageInfo.nextCursor, null, 1_000),
+    previousCursor: safeString(safePageInfo.previousCursor, null, 1_000),
+  };
+}
+
 function normalizeColumn(column, fallbackIndex) {
   if (typeof column === "string") {
     return {
@@ -348,10 +379,15 @@ function resolvePreviewId(result) {
 
 function buildCsvPreviewData(result) {
   const previewId = resolvePreviewId(result);
+  const items = normalizeCsvItems(result?.items || result?.rows || result?.previewRows);
 
   return {
     previewId: safeString(previewId, null, MAX_SHORT_STRING_LENGTH),
     status: safeString(result?.status || "READY", "READY", 100),
+    items,
+    headers: normalizeHeaders(result?.headers),
+    pageInfo: normalizePageInfo(result?.pageInfo),
+    totalCount: safeInteger(result?.totalCount, items.length, { min: 0 }),
     columns: normalizeColumns(result?.columns),
     rows: normalizePreviewRows(result?.previewRows || result?.rows),
     rowCount: safeInteger(result?.rowCount, 0, { min: 0 }),
@@ -364,10 +400,15 @@ function buildCsvPreviewData(result) {
 
 function buildCsvPreviewPageData(result) {
   const previewId = resolvePreviewId(result);
+  const items = normalizeCsvItems(result?.items || result?.rows || result?.previewRows);
 
   return {
     previewId: safeString(previewId, null, MAX_SHORT_STRING_LENGTH),
     status: safeString(result?.status || "READY", "READY", 100),
+    items,
+    headers: normalizeHeaders(result?.headers),
+    pageInfo: normalizePageInfo(result?.pageInfo),
+    totalCount: safeInteger(result?.totalCount, items.length, { min: 0 }),
     rows: normalizePreviewRows(result?.rows || result?.previewRows),
     columns: normalizeColumns(result?.columns),
     rowCount: safeInteger(result?.rowCount, 0, { min: 0 }),
@@ -413,6 +454,10 @@ export function toCsvPreviewDto(result) {
 
     // Temporary compatibility fields.
     uploadToken: data.previewId,
+    items: data.items,
+    headers: data.headers,
+    pageInfo: data.pageInfo,
+    totalCount: data.totalCount,
     previewRows: data.rows,
   };
 }
@@ -426,7 +471,18 @@ export function toCsvPreviewPageDto(result) {
 
     // Temporary compatibility fields.
     uploadToken: data.previewId,
+    items: data.items,
+    headers: data.headers,
+    pageInfo: data.pageInfo,
+    totalCount: data.totalCount,
     rows: data.rows,
+  };
+}
+
+export function toCsvPreviewResponseDto(result) {
+  return {
+    statusCode: result?.durable ? 202 : 200,
+    body: toCsvPreviewDto(result),
   };
 }
 
@@ -434,4 +490,5 @@ export default {
   toProductImportAcceptedDto,
   toCsvPreviewDto,
   toCsvPreviewPageDto,
+  toCsvPreviewResponseDto,
 };

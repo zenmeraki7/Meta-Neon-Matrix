@@ -14,9 +14,9 @@ const defaultJobOptions = buildDefaultJobOptions({
 });
 
 export async function addProductSyncClearProductTypesJob(data, options = {}) {
-  if (!data?.shop || !data?.operationId) {
+  if (!data?.shop || !data?.operationId || !data?.executionId) {
     throw new Error(
-      "product sync clear product types job requires shop and operationId",
+      "product sync clear product types job requires shop, operationId, and executionId",
     );
   }
 

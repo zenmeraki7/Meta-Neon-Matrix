@@ -37,8 +37,9 @@ test("result ingestion persists checkpoint and checksum fields for resumability"
   assert.ok(src.includes("editHistoryIngestionCheckpoint"));
   assert.ok(src.includes("shop_historyId_ingestionRunId"));
   assert.ok(src.includes("rowOffset"));
-  assert.ok(src.includes("MALFORMED_RESULT_JSONL_ROWS"));
-  assert.ok(src.includes("UNMAPPED_RESULT_ROWS"));
+  assert.ok(src.includes("malformedRowCount += 1"));
+  assert.ok(src.includes("chunkUnmappedRowCount += 1"));
+  assert.ok(src.includes("SHOPIFY_RESULT_PARTIAL"));
 });
 
 test("prisma schema defines dedicated ingestion checkpoint model keyed by shop/history/run", () => {

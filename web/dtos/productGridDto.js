@@ -1,15 +1,7 @@
-function encodeCursor(cursor) {
-  if (!cursor) return null;
-  if (typeof cursor === "string") return cursor;
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64");
-}
-
 export function toProductGridDto(payload) {
-  const { listed, products, variants, definitions, metafields } = payload;
+  const { listed, products, variants, metafields } = payload;
 
   const productById = new Map(products.map((product) => [String(product.id), product]));
-  const definitionKeys = definitions.map((d) => `${d.namespace}.${d.key}`);
-  const definitionByKey = new Map(definitions.map((d) => [`${d.namespace}.${d.key}`, d]));
   const metafieldByVariant = new Map();
 
   for (const mf of metafields) {
@@ -31,18 +23,8 @@ export function toProductGridDto(payload) {
       const existing = metafieldByVariant.get(String(variant.id)) || new Map();
       const metafieldMap = {};
 
-      for (const key of definitionKeys) {
-        if (existing.has(key)) {
-          metafieldMap[key] = existing.get(key);
-          continue;
-        }
-        const definition = definitionByKey.get(key);
-        metafieldMap[key] = {
-          value: null,
-          pendingValue: null,
-          editStatus: "SYNCED",
-          type: definition?.type || null,
-        };
+      for (const [key, value] of existing.entries()) {
+        metafieldMap[key] = value;
       }
 
       return {
@@ -66,7 +48,7 @@ export function toProductGridDto(payload) {
 
   return {
     rows,
-    nextCursor: encodeCursor(listed.nextCursor),
-    total: rows.length,
+    nextCursor: listed.nextCursor || null,
+    total: Number(listed.total || 0),
   };
 }

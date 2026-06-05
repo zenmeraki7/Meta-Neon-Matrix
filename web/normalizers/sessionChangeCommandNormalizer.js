@@ -9,7 +9,7 @@ const NUMERIC_STRING = /^\d+$/;
 const SAFE_CHANGE_FIELDS = new Set(["variantId", "namespace", "key", "value"]);
 
 function normalizeRouteContext(params = {}, locals = {}) {
-  const shopId = toTrimmedString(locals.shop);
+  const shopId = toTrimmedString(locals.shopify?.session?.shop);
   const sessionId = toTrimmedString(params.id);
   if (!shopId || !sessionId) {
     throw buildError("Session not found", 404, "SESSION_NOT_FOUND");

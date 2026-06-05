@@ -127,6 +127,7 @@ model Product {
   @@index([shop, mirrorBatchId, vendor])
   @@index([shop, mirrorBatchId, status])
   @@index([shop, mirrorBatchId, statusNormalized])
+  @@index([shop, mirrorBatchId, totalInventory])
   @@index([shop, mirrorBatchId, title, id])
   @@index([shop, mirrorBatchId, handle, id])
   @@index([shop, mirrorBatchId, createdAt, id])
@@ -471,6 +472,7 @@ model SyncHistory {
   @@index([shop, status])
   @@index([shop, operationType])
   @@index([shop, executionState])
+  @@unique([shop, bulkOperationId, operationType])
 }
 
 model MirrorBatch {
@@ -1314,6 +1316,25 @@ model FilterTrack {
   @@index([type])
 }
 
+model IdempotencyRecord {
+  id          String    @id
+  shop        String
+  scope       String
+  key         String
+  requestHash String
+  state       String
+  response    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+  expiresAt   DateTime
+
+  @@unique([shop, scope, key])
+  @@index([shop])
+  @@index([shop, state, expiresAt])
+  @@index([expiresAt])
+}
+
 model ReferralCode {
   id           String   @id @default(cuid())
   shop         String
@@ -1350,6 +1371,18 @@ model Location {
 
   @@id([shop, id])
   @@index([shop])
+}
+
+model ShopifyTaxonomyCategory {
+  id         String   @id
+  name       String
+  fullName   String
+  searchText String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([name])
+  @@index([fullName])
 }
 
 model ProductMediaMirror {

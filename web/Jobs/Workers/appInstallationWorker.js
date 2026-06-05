@@ -11,9 +11,79 @@ import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
 import { adminGraphqlWithRetry } from "../../utils/shopifyAdminApi.js";
+import {
+  enqueueAutomaticProductRuleSchedulerTick,
+  enqueueCatalogMissedUpdatesPollingTick,
+  enqueueMissedBulkOperationPollingTick,
+  enqueueOperationEnqueueIntentRecoveryTick,
+  enqueueOutboxDispatcherSchedulerTick,
+  enqueueRecurringEditSchedulerTick,
+  enqueueScheduledEditRecoveryTick,
+  enqueueScheduledExportSchedulerTick,
+  enqueueStuckBulkMutationRecoveryTick,
+  enqueueUnresolvedBulkOperationRecoveryTick,
+} from "../../queues/adapters/workerSchedulerQueueAdapter.js";
+import { scheduleReconciliationJob } from "../Queues/reconciliationJob.js";
 
 const QUEUE_NAME = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 const productService = new Services();
+
+async function registerShopRepeatableJobs(shop) {
+  const results = await Promise.allSettled([
+    enqueueAutomaticProductRuleSchedulerTick({
+      shop,
+      repeatEveryMs: Number(process.env.AUTOMATIC_PRODUCT_RULE_SCHEDULER_INTERVAL_MS || 60_000),
+    }),
+    enqueueRecurringEditSchedulerTick({
+      shop,
+      repeatEveryMs: Number(process.env.RECURRING_EDIT_SCHEDULER_INTERVAL_MS || 60_000),
+    }),
+    enqueueScheduledExportSchedulerTick({
+      shop,
+      repeatEveryMs: Number(process.env.SCHEDULED_EXPORT_SCHEDULER_INTERVAL_MS || 10_000),
+    }),
+    enqueueOperationEnqueueIntentRecoveryTick({
+      shop,
+      repeatEveryMs: 60_000,
+    }),
+    enqueueMissedBulkOperationPollingTick({
+      shop,
+      repeatEveryMs: 60_000,
+    }),
+    enqueueCatalogMissedUpdatesPollingTick({
+      queueName: process.env.CATALOG_MISSED_UPDATES_POLL_QUEUE || "catalog-missed-updates-polling",
+      shop,
+      repeatEveryMs: 15 * 60 * 1000,
+    }),
+    enqueueScheduledEditRecoveryTick({
+      shop,
+      repeatEveryMs: 60_000,
+    }),
+    enqueueUnresolvedBulkOperationRecoveryTick({
+      shop,
+      repeatEveryMs: 60_000,
+    }),
+    enqueueStuckBulkMutationRecoveryTick({
+      shop,
+      repeatEveryMs: 60_000,
+    }),
+    enqueueOutboxDispatcherSchedulerTick({
+      queueName: "outbox-dispatcher-scheduler",
+      shop,
+      repeatEveryMs: Number.parseInt(process.env.OUTBOX_DISPATCHER_POLL_INTERVAL_MS || "5000", 10),
+    }),
+    scheduleReconciliationJob({ shop }),
+  ]);
+  results.forEach((result, index) => {
+    if (result.status !== "rejected") return;
+    logger.error("Failed to register shop repeatable job", {
+      worker: "appInstallationWorker",
+      shop,
+      index,
+      message: result.reason?.message || String(result.reason),
+    });
+  });
+}
 
 async function claimInstallation(shop) {
   const result = await db.store.updateMany({
@@ -143,6 +213,7 @@ const appInstallationWorker = new Worker(
       await Promise.allSettled([
         sentWelcomeMailToStore({ email, shopOwner, shop }),
         sentInstalledMailToAdmin({ email, shop }),
+        registerShopRepeatableJobs(shop),
       ]);
 
       logger.info("App installation background job completed", {

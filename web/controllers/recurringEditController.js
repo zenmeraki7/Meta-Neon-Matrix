@@ -32,17 +32,6 @@ import {
   toRecurringEditUpdatedDto,
 } from "../dtos/recurringEditDto.js";
 
-function resolveRecurringEditFallbackCode(error, fallbackCode) {
-  if (
-    error?.code === "RECURRING_EDIT_NOT_FOUND" ||
-    error?.code === "NOT_FOUND"
-  ) {
-    return "NOT_FOUND";
-  }
-
-  return fallbackCode;
-}
-
 export async function createRecurringEditController(req, res) {
   let session;
 
@@ -57,11 +46,7 @@ export async function createRecurringEditController(req, res) {
       idempotencyKey: getIdempotencyKey(req),
     });
 
-    const result = await createRecurringEdit({
-      shop: command.shop,
-      body: command.input,
-      subscription: command.subscription,
-    });
+    const result = await createRecurringEdit(command);
 
     return res.status(201).json(toRecurringEditCreatedDto(result));
   } catch (error) {
@@ -71,10 +56,7 @@ export async function createRecurringEditController(req, res) {
       session,
       error,
       source: "recurringEditController.create",
-      fallbackCode: resolveRecurringEditFallbackCode(
-        error,
-        "RECURRING_EDIT_CREATE_FAILED",
-      ),
+      fallbackCode: "RECURRING_EDIT_CREATE_FAILED",
     });
   }
 }
@@ -101,10 +83,7 @@ export async function listRecurringEditsController(req, res) {
       session,
       error,
       source: "recurringEditController.list",
-      fallbackCode: resolveRecurringEditFallbackCode(
-        error,
-        "RECURRING_EDIT_LIST_FAILED",
-      ),
+      fallbackCode: "RECURRING_EDIT_LIST_FAILED",
     });
   }
 }
@@ -131,10 +110,7 @@ export async function getRecurringEditByIdController(req, res) {
       session,
       error,
       source: "recurringEditController.getById",
-      fallbackCode: resolveRecurringEditFallbackCode(
-        error,
-        "RECURRING_EDIT_GET_FAILED",
-      ),
+      fallbackCode: "RECURRING_EDIT_GET_FAILED",
     });
   }
 }
@@ -154,12 +130,7 @@ export async function updateRecurringEditController(req, res) {
       idempotencyKey: getIdempotencyKey(req),
     });
 
-    const result = await updateRecurringEdit({
-      shop: command.shop,
-      recurringEditId: command.recurringEditId,
-      body: command.patch,
-      subscription: command.subscription,
-    });
+    const result = await updateRecurringEdit(command);
 
     return res.status(200).json(toRecurringEditUpdatedDto(result));
   } catch (error) {
@@ -169,10 +140,7 @@ export async function updateRecurringEditController(req, res) {
       session,
       error,
       source: "recurringEditController.update",
-      fallbackCode: resolveRecurringEditFallbackCode(
-        error,
-        "RECURRING_EDIT_UPDATE_FAILED",
-      ),
+      fallbackCode: "RECURRING_EDIT_UPDATE_FAILED",
     });
   }
 }
@@ -202,10 +170,7 @@ export async function toggleRecurringEditStatusController(req, res) {
       session,
       error,
       source: "recurringEditController.toggleStatus",
-      fallbackCode: resolveRecurringEditFallbackCode(
-        error,
-        "RECURRING_EDIT_STATUS_UPDATE_FAILED",
-      ),
+      fallbackCode: "RECURRING_EDIT_STATUS_UPDATE_FAILED",
     });
   }
 }
@@ -233,10 +198,7 @@ export async function deleteRecurringEditController(req, res) {
       session,
       error,
       source: "recurringEditController.delete",
-      fallbackCode: resolveRecurringEditFallbackCode(
-        error,
-        "RECURRING_EDIT_DELETE_FAILED",
-      ),
+      fallbackCode: "RECURRING_EDIT_DELETE_FAILED",
     });
   }
 }

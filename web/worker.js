@@ -60,6 +60,7 @@ const workerModulePaths = [
   "./Jobs/Workers/productUpdateWorker.js",
   "./Jobs/Workers/productDeleteWorker.js",
   "./Jobs/Workers/productSyncWorker.js",
+  "./Jobs/Workers/productMirrorBatchCleanupWorker.js",
   "./Jobs/Workers/productSyncClearProductTypesWorker.js",
   "./Jobs/Workers/operationEnqueueIntentRecoveryWorker.js",
   "./Jobs/Workers/recurringEditExecutionWorker.js",

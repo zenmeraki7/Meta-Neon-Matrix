@@ -8,36 +8,46 @@ import {
   updateProductCodeSnippet,
   validateProductCodeSnippet,
 } from "../services/productCodeSnippetService.js";
-import { errorResponse, successResponse } from "../utils/responseUtils.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
-
-function getSessionOrThrow(res) {
-  const session = res.locals.shopify?.session;
-  if (!session?.shop) {
-    const error = new Error("UNAUTHENTICATED");
-    error.code = "UNAUTHENTICATED";
-    throw error;
-  }
-  return session;
-}
-
-function getUserFromSession(session) {
-  return session?.id || session?.shop || null;
-}
+import {
+  buildAuthenticatedActor,
+  requireShopifySession,
+} from "./controllerUtils.js";
+import {
+  buildCreateProductCodeSnippetCommand,
+  buildDeleteProductCodeSnippetCommand,
+  buildGetProductCodeSnippetCommand,
+  buildListProductCodeSnippetsCommand,
+  buildPreviewProductCodeSnippetCommand,
+  buildSearchSnippetPreviewProductsCommand,
+  buildUpdateProductCodeSnippetCommand,
+  buildValidateProductCodeSnippetCommand,
+} from "../normalizers/productCodeSnippetCommandNormalizer.js";
+import {
+  toSnippetArchivedDto,
+  toSnippetCreatedDto,
+  toSnippetDetailDto,
+  toSnippetListDto,
+  toSnippetPreviewDto,
+  toSnippetPreviewProductsDto,
+  toSnippetUpdatedDto,
+  toSnippetValidationResponseDto,
+} from "../dtos/productCodeSnippetDto.js";
 
 export async function createProductCodeSnippetController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await createProductCodeSnippet({
+    session = requireShopifySession(res);
+    const command = buildCreateProductCodeSnippetCommand({
       shop: session.shop,
       body: req.body,
-      createdBy: getUserFromSession(session),
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await createProductCodeSnippet(command);
 
-    return res.status(201).json(successResponse("Snippet created successfully", data));
+    return res.status(201).json(toSnippetCreatedDto(data));
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -47,7 +57,7 @@ export async function createProductCodeSnippetController(req, res) {
     });
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
-      "VALIDATION_FAILED",
+      "INTERNAL_ERROR",
     );
     return res.status(statusCode).json(body);
   }
@@ -57,13 +67,15 @@ export async function listProductCodeSnippetsController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await listProductCodeSnippets({
+    session = requireShopifySession(res);
+    const command = buildListProductCodeSnippetsCommand({
       shop: session.shop,
       query: req.query,
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await listProductCodeSnippets(command);
 
-    return res.status(200).json(successResponse("Snippets fetched successfully", data));
+    return res.status(200).json(toSnippetListDto(data));
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -83,13 +95,15 @@ export async function getProductCodeSnippetByIdController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await getProductCodeSnippetById({
+    session = requireShopifySession(res);
+    const command = buildGetProductCodeSnippetCommand({
       shop: session.shop,
-      productCodeSnippetId: req.params.id,
+      params: req.params,
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await getProductCodeSnippetById(command);
 
-    return res.status(200).json(successResponse("Snippet fetched successfully", data));
+    return res.status(200).json(toSnippetDetailDto(data));
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -99,7 +113,7 @@ export async function getProductCodeSnippetByIdController(req, res) {
     });
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
-      "NOT_FOUND",
+      "INTERNAL_ERROR",
     );
     return res.status(statusCode).json(body);
   }
@@ -109,15 +123,16 @@ export async function updateProductCodeSnippetController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await updateProductCodeSnippet({
+    session = requireShopifySession(res);
+    const command = buildUpdateProductCodeSnippetCommand({
       shop: session.shop,
-      productCodeSnippetId: req.params.id,
+      params: req.params,
       body: req.body,
-      updatedBy: getUserFromSession(session),
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await updateProductCodeSnippet(command);
 
-    return res.status(200).json(successResponse("Snippet updated successfully", data));
+    return res.status(200).json(toSnippetUpdatedDto(data));
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -127,7 +142,7 @@ export async function updateProductCodeSnippetController(req, res) {
     });
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
-      "VALIDATION_FAILED",
+      "INTERNAL_ERROR",
     );
     return res.status(statusCode).json(body);
   }
@@ -137,14 +152,15 @@ export async function deleteProductCodeSnippetController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await archiveProductCodeSnippet({
+    session = requireShopifySession(res);
+    const command = buildDeleteProductCodeSnippetCommand({
       shop: session.shop,
-      productCodeSnippetId: req.params.id,
-      updatedBy: getUserFromSession(session),
+      params: req.params,
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await archiveProductCodeSnippet(command);
 
-    return res.status(200).json(successResponse("Snippet archived successfully", data));
+    return res.status(200).json(toSnippetArchivedDto(data));
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -154,7 +170,7 @@ export async function deleteProductCodeSnippetController(req, res) {
     });
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
-      "VALIDATION_FAILED",
+      "INTERNAL_ERROR",
     );
     return res.status(statusCode).json(body);
   }
@@ -164,21 +180,16 @@ export async function validateProductCodeSnippetController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await validateProductCodeSnippet({
+    session = requireShopifySession(res);
+    const command = buildValidateProductCodeSnippetCommand({
       shop: session.shop,
-      productCodeSnippetId: req.params.id,
+      params: req.params,
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await validateProductCodeSnippet(command);
+    const responseDto = toSnippetValidationResponseDto(data);
 
-    if (data.validationStatus === "VALID") {
-      return res
-        .status(200)
-        .json(successResponse("Snippet validation completed", data));
-    }
-
-    return res
-      .status(422)
-      .json(errorResponse("Snippet validation failed", data));
+    return res.status(responseDto.statusCode).json(responseDto.body);
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -188,7 +199,7 @@ export async function validateProductCodeSnippetController(req, res) {
     });
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
-      "VALIDATION_FAILED",
+      "INTERNAL_ERROR",
     );
     return res.status(statusCode).json(body);
   }
@@ -198,14 +209,16 @@ export async function previewProductCodeSnippetController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await previewSavedProductCodeSnippet({
+    session = requireShopifySession(res);
+    const command = buildPreviewProductCodeSnippetCommand({
       shop: session.shop,
-      productCodeSnippetId: req.params.id,
-      productId: req.body.productId,
+      params: req.params,
+      body: req.body,
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await previewSavedProductCodeSnippet(command);
 
-    return res.status(200).json(successResponse("Snippet preview completed", data));
+    return res.status(200).json(toSnippetPreviewDto(data));
   } catch (error) {
     await logApiError({
       shop: session?.shop,
@@ -215,7 +228,7 @@ export async function previewProductCodeSnippetController(req, res) {
     });
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
-      "VALIDATION_FAILED",
+      "INTERNAL_ERROR",
     );
     return res.status(statusCode).json(body);
   }
@@ -225,14 +238,15 @@ export async function searchSnippetPreviewProductsController(req, res) {
   let session;
 
   try {
-    session = getSessionOrThrow(res);
-    const data = await searchProductsForSnippetPreview({
+    session = requireShopifySession(res);
+    const command = buildSearchSnippetPreviewProductsCommand({
       shop: session.shop,
-      search: req.query.search,
-      limit: req.query.limit,
+      query: req.query,
+      actor: buildAuthenticatedActor(req, session),
     });
+    const data = await searchProductsForSnippetPreview(command);
 
-    return res.status(200).json(successResponse("Products fetched successfully", data));
+    return res.status(200).json(toSnippetPreviewProductsDto(data));
   } catch (error) {
     await logApiError({
       shop: session?.shop,

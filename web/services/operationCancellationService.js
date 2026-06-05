@@ -146,6 +146,7 @@ export async function requestEditHistoryCancellation({
   };
   await idempotencyStore.complete({
     recordId: begin.recordId,
+    shop,
     response,
   });
   return response;
@@ -248,6 +249,7 @@ export async function requestExportJobCancellation({
   };
   await idempotencyStore.complete({
     recordId: begin.recordId,
+    shop,
     response,
   });
   return response;
@@ -260,4 +262,3 @@ export async function requestExportJobCancellation({
     });
   }
 }
-

@@ -147,7 +147,11 @@ async function pollMissedUpdatesForShop(shop) {
   return { shop, processedProducts, stagedMetafields, cursorBefore: cursor, cursorAfter: maxUpdatedAt };
 }
 
-async function pollMissedUpdates() {
+async function pollMissedUpdates({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("catalog missed-updates polling requires shop");
+  }
   const readiness = await getPollingReadiness();
   if (!readiness.ready) {
     logger.warn("Catalog missed-updates polling skipped: required tables missing", {
@@ -161,43 +165,44 @@ async function pollMissedUpdates() {
     };
   }
 
-  const stores = await db.store.findMany({
+  const store = await db.store.findUnique({
     where: {
-      isUnInstalled: false,
+      shopUrl: scopedShop,
     },
     select: {
       shopUrl: true,
       accessToken: true,
       accessTokenEncrypted: true,
+      isUnInstalled: true,
     },
-    take: 200,
   });
 
-  const activeShops = stores
-    .filter((store) => store?.shopUrl && (store?.accessToken || store?.accessTokenEncrypted))
-    .map((store) => String(store.shopUrl));
+  const canPoll =
+    store?.shopUrl
+    && !store.isUnInstalled
+    && (store?.accessToken || store?.accessTokenEncrypted);
+  if (!canPoll) {
+    return { scanned: 0, synced: 0, failed: 0, failures: [], skipped: true };
+  }
 
   let scanned = 0;
   let synced = 0;
   const failures = [];
 
-  for (const shop of activeShops) {
-    scanned += 1;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await pollMissedUpdatesForShop(shop);
-      synced += 1;
-    } catch (error) {
-      failures.push({
-        shop,
-        message: error?.message || String(error),
-      });
-      logger.error("Catalog missed-updates polling failed for shop", {
-        worker: "catalogMissedUpdatesPollingWorker",
-        shop,
-        message: error?.message || String(error),
-      });
-    }
+  scanned += 1;
+  try {
+    await pollMissedUpdatesForShop(scopedShop);
+    synced += 1;
+  } catch (error) {
+    failures.push({
+      shop: scopedShop,
+      message: error?.message || String(error),
+    });
+    logger.error("Catalog missed-updates polling failed for shop", {
+      worker: "catalogMissedUpdatesPollingWorker",
+      shop: scopedShop,
+      message: error?.message || String(error),
+    });
   }
 
   return { scanned, synced, failed: failures.length, failures };
@@ -208,7 +213,7 @@ async function getPollingReadiness() {
   for (const table of REQUIRED_TABLES) {
     // eslint-disable-next-line no-await-in-loop
     const rows = await db.$queryRaw`
-      SELECT to_regclass(${`public.${table}`}) AS regclass
+      SELECT to_regclass(${`public.${table}`})::text AS regclass
     `;
     if (!rows?.[0]?.regclass) {
       missingTables.push(table);
@@ -222,7 +227,7 @@ async function getPollingReadiness() {
 
 export const catalogMissedUpdatesPollingWorker = new Worker(
   QUEUE_NAME,
-  async () => pollMissedUpdates(),
+  async (job) => pollMissedUpdates({ shop: job?.data?.shop }),
   {
     connection,
     concurrency: 1,
@@ -245,8 +250,22 @@ catalogMissedUpdatesPollingWorker.on("failed", (job, error) => {
   });
 });
 
-async function registerRepeatableTick() {
-  const readiness = await getPollingReadiness();
+export async function registerCatalogMissedUpdatesPollingTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("catalog missed-updates polling registration requires shop");
+  }
+  let readiness;
+  try {
+    readiness = await getPollingReadiness();
+  } catch (error) {
+    logger.error("Catalog missed-updates polling scheduler not registered: readiness check failed", {
+      worker: "catalogMissedUpdatesPollingWorker",
+      message: error?.message || String(error),
+    });
+    return;
+  }
+
   if (!readiness.ready) {
     logger.warn("Catalog missed-updates polling scheduler not registered: required tables missing", {
       worker: "catalogMissedUpdatesPollingWorker",
@@ -257,7 +276,7 @@ async function registerRepeatableTick() {
 
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
@@ -265,6 +284,7 @@ async function registerRepeatableTick() {
   try {
     await enqueueCatalogMissedUpdatesPollingTick({
       queueName: QUEUE_NAME,
+      shop: scopedShop,
       repeatEveryMs: POLL_INTERVAL_MS,
     });
   } finally {
@@ -276,7 +296,4 @@ async function registerRepeatableTick() {
   }
 }
 
-await registerRepeatableTick();
-
 export default catalogMissedUpdatesPollingWorker;
-

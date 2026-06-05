@@ -16,13 +16,17 @@ const reconciliationQueue = new Queue(RECONCILIATION_QUEUE_NAME, {
   }),
 });
 
-export async function scheduleReconciliationJob() {
+export async function scheduleReconciliationJob({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("reconciliation job requires shop");
+  }
   const repeatEveryMs = Number(process.env.RECONCILIATION_REPEAT_MS || 60 * 60 * 1000);
   return reconciliationQueue.add(
     "RECONCILIATION_CRON",
-    { reason: "scheduled_reconciliation" },
+    { shop: scopedShop, reason: "scheduled_reconciliation" },
     {
-      jobId: "reconciliation-cron",
+      jobId: `reconciliation-cron:${scopedShop}`,
       repeat: { every: repeatEveryMs },
     },
   );

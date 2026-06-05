@@ -1,4 +1,6 @@
-import { db } from "../repositories/repositoryDb.js";
+import { db as defaultDb } from "../repositories/repositoryDb.js";
+
+const db = defaultDb;
 
 export async function guardedEditHistoryUpdate({
   id,
@@ -7,7 +9,7 @@ export async function guardedEditHistoryUpdate({
   expectedStatuses = [],
   extraWhere = {},
   data,
-  db = db,
+  db = defaultDb,
 }) {
   const where = {
     id,
@@ -24,4 +26,3 @@ export async function guardedEditHistoryUpdate({
   const result = await db.editHistory.updateMany({ where, data });
   return result.count === 1;
 }
-

@@ -19,36 +19,24 @@ const LIMIT = 100;
 const LEADER_LOCK_KEY = "leader:operation-enqueue-intent-recovery:scheduler";
 const LEADER_LOCK_TTL_MS = 45_000;
 
-async function runIntentDispatch(queueKey) {
-  const shops = await db.operationEnqueueIntent.findMany({
-    where: {
-      status: "PENDING",
-      queueKey,
-      runAt: { lte: new Date() },
-    },
-    select: { shop: true },
-    distinct: ["shop"],
-    take: LIMIT,
+async function runIntentDispatch({ shop, queueKey }) {
+  const result = await dispatchPendingEnqueueIntents({
+    shop,
+    queueKey,
+    limit: LIMIT,
   });
-
-  let dispatched = 0;
-  for (const row of shops) {
-    // eslint-disable-next-line no-await-in-loop
-    const result = await dispatchPendingEnqueueIntents({
-      shop: row.shop,
-      queueKey,
-      limit: LIMIT,
-    });
-    dispatched += Number(result.dispatched || 0);
-  }
-  return dispatched;
+  return Number(result.dispatched || 0);
 }
 
-async function runTick() {
+async function runTick(job) {
+  const shop = String(job?.data?.shop || "").trim();
+  if (!shop) {
+    throw new Error("operation enqueue intent recovery tick requires shop");
+  }
   try {
     const [scheduledDispatched, pipelineDispatched] = await Promise.all([
-      runIntentDispatch(ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT),
-      runIntentDispatch(ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE),
+      runIntentDispatch({ shop, queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT }),
+      runIntentDispatch({ shop, queueKey: ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE }),
     ]);
 
     if (scheduledDispatched > 0 || pipelineDispatched > 0) {
@@ -70,7 +58,7 @@ async function runTick() {
 
 export const operationEnqueueIntentRecoveryWorker = new Worker(
   QUEUE_NAME,
-  async () => runTick(),
+  async (job) => runTick(job),
   { connection, concurrency: 1 },
 );
 operationEnqueueIntentRecoveryWorker.on("error", (error) => {
@@ -80,16 +68,23 @@ operationEnqueueIntentRecoveryWorker.on("error", (error) => {
   });
 });
 
-async function registerRepeatableTick() {
+export async function registerOperationEnqueueIntentRecoveryTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("operation enqueue intent recovery registration requires shop");
+  }
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
 
   try {
-    await enqueueOperationEnqueueIntentRecoveryTick(POLL_INTERVAL_MS);
+    await enqueueOperationEnqueueIntentRecoveryTick({
+      shop: scopedShop,
+      repeatEveryMs: POLL_INTERVAL_MS,
+    });
   } finally {
     await releaseRedisLock({
       connection,
@@ -99,7 +94,4 @@ async function registerRepeatableTick() {
   }
 }
 
-await registerRepeatableTick();
-
 export default operationEnqueueIntentRecoveryWorker;
-

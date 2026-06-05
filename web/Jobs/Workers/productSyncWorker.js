@@ -319,100 +319,94 @@ async function enqueueStoresForSync(stores, reason, now = new Date()) {
   };
 }
 
-async function syncAllStoresBatched() {
-  const batchSize = ALL_STORES_SYNC_BATCH_SIZE;
-  let offset = 0;
+async function syncAllStoresBatched({ shopUrl }) {
+  const scopedShop = String(shopUrl || "").trim();
+  if (!scopedShop) {
+    throw new Error("schedule-all-product-syncs requires shopUrl");
+  }
   const windowStart = toIsoHourWindowStart();
-
-  let enqueuedCount = 0;
-  let skippedCount = 0;
-  let failedCount = 0;
-  let total = 0;
-
-  while (true) {
-    const stores = await db.store.findMany({
-      where: { isUnInstalled: false },
-      select: { id: true, shopUrl: true },
-      orderBy: { id: "asc" },
-      take: batchSize,
-      skip: offset,
-    });
-
-    if (stores.length === 0) break;
-    total += stores.length;
-
-    const results = await Promise.allSettled(stores.map((store) => (
-      seedAndEnqueueProductSyncJob({
-        shopUrl: store.shopUrl,
-        reason: "scheduled_all_stores",
-        windowStart,
-      }).then((result) => ({ store, result }))
-    )));
-    for (const settled of results) {
-      if (settled.status === "rejected") {
-        failedCount += 1;
-        logger.error("Failed to seed/enqueue product sync execution job", {
-          syncReason: "scheduled_all_stores",
-          windowStart,
-          message: settled.reason?.message || String(settled.reason),
-          stack: settled.reason?.stack,
-        });
-        continue;
-      }
-      if (settled.value?.result?.enqueued?.skipped) skippedCount += 1;
-      else enqueuedCount += 1;
-    }
-
-    offset += stores.length;
-    if (ALL_STORES_SYNC_BATCH_DELAY_MS > 0) {
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((resolve) => setTimeout(resolve, ALL_STORES_SYNC_BATCH_DELAY_MS));
-    }
+  const store = await db.store.findUnique({
+    where: { shopUrl: scopedShop },
+    select: { shopUrl: true, isUnInstalled: true },
+  });
+  if (!store || store.isUnInstalled) {
+    return {
+      enqueuedCount: 0,
+      skippedCount: 1,
+      failedCount: 0,
+      total: 1,
+      windowStart,
+      reason: "scheduled_all_stores",
+    };
   }
 
+  const result = await seedAndEnqueueProductSyncJob({
+    shopUrl: store.shopUrl,
+    reason: "scheduled_all_stores",
+    windowStart,
+  });
   return {
-    enqueuedCount,
-    skippedCount,
-    failedCount,
-    total,
+    enqueuedCount: result?.enqueued?.skipped ? 0 : 1,
+    skippedCount: result?.enqueued?.skipped ? 1 : 0,
+    failedCount: 0,
+    total: 1,
     windowStart,
     reason: "scheduled_all_stores",
   };
 }
 
-async function handleAutoSync() {
+async function handleAutoSync({ shopUrl }) {
+  const scopedShop = String(shopUrl || "").trim();
+  if (!scopedShop) {
+    throw new Error("auto-sync requires shopUrl");
+  }
   const now = new Date();
   const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-  const storesToSync = await db.store.findMany({
+  const store = await db.store.findUnique({
     where: {
-      isUnInstalled: false,
-      isProductSyncing: false,
-      OR: [
-        { lastProductSyncAt: { lt: sixHoursAgo } },
-        { lastProductSyncAt: null },
-      ],
+      shopUrl: scopedShop,
     },
-    select: { shopUrl: true },
-    orderBy: { lastProductSyncAt: "asc" },
-    take: AUTO_SYNC_BATCH_SIZE,
+    select: {
+      shopUrl: true,
+      isUnInstalled: true,
+      isProductSyncing: true,
+      lastProductSyncAt: true,
+    },
   });
-  return enqueueStoresForSync(storesToSync, "auto_sync", now);
+  const due = store
+    && !store.isUnInstalled
+    && !store.isProductSyncing
+    && (!store.lastProductSyncAt || new Date(store.lastProductSyncAt) < sixHoursAgo);
+  return enqueueStoresForSync(due ? [store] : [], "auto_sync", now);
 }
 
-async function handlePrioritySync() {
+async function handlePrioritySync({ shopUrl }) {
+  const scopedShop = String(shopUrl || "").trim();
+  if (!scopedShop) {
+    throw new Error("priority-sync requires shopUrl");
+  }
   const now = new Date();
   const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-  const activeStores = await db.store.findMany({
+  const store = await db.store.findUnique({
     where: {
-      isUnInstalled: false,
-      isProductSyncing: false,
-      lastProductSyncAt: { lt: twoHoursAgo },
-      lastActivityAt: { gt: twoHoursAgo },
+      shopUrl: scopedShop,
     },
-    select: { shopUrl: true },
-    take: PRIORITY_SYNC_BATCH_SIZE,
+    select: {
+      shopUrl: true,
+      isUnInstalled: true,
+      isProductSyncing: true,
+      lastProductSyncAt: true,
+      lastActivityAt: true,
+    },
   });
-  return enqueueStoresForSync(activeStores, "priority_sync", now);
+  const due = store
+    && !store.isUnInstalled
+    && !store.isProductSyncing
+    && store.lastProductSyncAt
+    && new Date(store.lastProductSyncAt) < twoHoursAgo
+    && store.lastActivityAt
+    && new Date(store.lastActivityAt) > twoHoursAgo;
+  return enqueueStoresForSync(due ? [store] : [], "priority_sync", now);
 }
 
 async function syncStore({ shopUrl, syncReason, windowStart, operationId, job }) {
@@ -645,11 +639,11 @@ const schedulerProcessor = async (job) => {
   }
   switch (job.name) {
     case "schedule-all-product-syncs":
-      return syncAllStoresBatched();
+      return syncAllStoresBatched({ shopUrl: job.data?.shopUrl || job.data?.shop });
     case "auto-sync":
-      return handleAutoSync();
+      return handleAutoSync({ shopUrl: job.data?.shopUrl || job.data?.shop });
     case "priority-sync":
-      return handlePrioritySync();
+      return handlePrioritySync({ shopUrl: job.data?.shopUrl || job.data?.shop });
     default:
       throw new Error(`UNSUPPORTED_PRODUCT_SYNC_SCHEDULER_JOB:${job.name}`);
   }

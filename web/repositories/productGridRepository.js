@@ -1,39 +1,43 @@
 import { listProducts as listProductsMirror } from "../../db/products.js";
-import { getDefinitions } from "../db/metafieldDefinitions.js";
 import { getVariantsByProductIds } from "../db/productGrid.js";
 import { getMetafieldsForVariants } from "../db/variantMetafields.js";
 import { requireShopScope } from "../utils/shopScope.js";
 
-export async function fetchProductGridRows(shopId, filters) {
-  const scopedShop = requireShopScope(shopId, "shopId");
+function normalizeFilters(filters = {}) {
+  return {
+    limit: filters?.limit,
+    cursor: filters?.cursor,
+    search: filters?.search,
+    status: filters?.status,
+    vendor: filters?.vendor,
+    productType: filters?.productType,
+    tag: filters?.tag,
+  };
+}
+
+function toSafeNumericIds(rows, field = "id") {
+  return rows
+    .map((row) => String(row?.[field] ?? "").trim())
+    .filter((id) => /^\d+$/.test(id));
+}
+
+export async function fetchProductGridRows(shop, filters = {}) {
+  const scopedShop = requireShopScope(shop, "shop");
+  const normalizedFilters = normalizeFilters(filters);
   const listed = await listProductsMirror(scopedShop, {
-    limit: filters.limit,
-    cursor: filters.cursor,
-    search: filters.search,
-    status: filters.status,
-    vendor: filters.vendor,
+    ...normalizedFilters,
   });
 
-  const filteredProducts = filters.productType
-    ? listed.products.filter((p) => String(p.productType || "") === filters.productType)
-    : listed.products;
-  const tagFilteredProducts = filters.tag
-    ? filteredProducts.filter((p) => Array.isArray(p.tags) && p.tags.includes(filters.tag))
-    : filteredProducts;
-
-  const productIds = tagFilteredProducts.map((p) => BigInt(p.id));
+  const products = Array.isArray(listed.products) ? listed.products : [];
+  const productIds = toSafeNumericIds(products);
   const variants = await getVariantsByProductIds(scopedShop, productIds);
-  const variantIds = variants.map((v) => BigInt(v.id));
-  const [definitions, metafields] = await Promise.all([
-    getDefinitions(scopedShop),
-    getMetafieldsForVariants(scopedShop, variantIds),
-  ]);
+  const variantIds = toSafeNumericIds(variants);
+  const metafields = await getMetafieldsForVariants(scopedShop, variantIds);
 
   return {
     listed,
-    products: tagFilteredProducts,
+    products,
     variants,
-    definitions,
     metafields,
   };
 }

@@ -5,7 +5,7 @@ import { scheduledExportRunRepository } from "../repositories/scheduledExportRun
 import {
   createScheduledExportHistory,
   createScheduledExportJob,
-  findExportHistoryByScheduledTask,
+  findExportHistoryByScheduledTaskForShop,
   findExportJobById,
   findExportJobByScheduledRun,
   findExportJobForRunFinalize,
@@ -57,6 +57,7 @@ function isTerminalRunStatus(status) {
 async function markRunFailed(run, scheduledExport, errorMessage) {
   const transition = await scheduledExportRunRepository.markProcessingFinished(
     run.id,
+    scheduledExport.shop,
     "FAILED",
     {
       errorMessage,
@@ -82,9 +83,13 @@ async function markRunFailed(run, scheduledExport, errorMessage) {
 }
 
 async function markRunSkipped(run, scheduledExport, reason) {
-  const transition = await scheduledExportRunRepository.markPendingSkipped(run.id, {
-    errorMessage: reason,
-  });
+  const transition = await scheduledExportRunRepository.markPendingSkipped(
+    run.id,
+    scheduledExport.shop,
+    {
+      errorMessage: reason,
+    },
+  );
 
   if (!transition.count) {
     return null;
@@ -172,7 +177,10 @@ async function releaseShopLock(lock) {
     token: lock.token,
   }).catch(() => { });
 }
-export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
+export async function scheduleDueScheduledExportRuns({ shop, limit = 100 } = {}) {
+  if (!shop) {
+    throw new Error("SCHEDULED_EXPORT_SCHEDULER_REQUIRES_SHOP");
+  }
   // console.log("⏰ Scheduled export scheduler triggered");
   const schedulerLock = await acquireSchedulerLock();
   if (!schedulerLock?.acquired) {
@@ -191,7 +199,7 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
     const now = new Date();
     // console.log("🕒 Current time:", now.toISOString());
 
-    const dueIds = await scheduledExportRepository.findDueScheduledExportIds(now, limit);
+    const dueIds = await scheduledExportRepository.findDueScheduledExportIdsForShop(shop, now, limit);
     // console.log("📦 Due Scheduled Exports:", dueIds);
 
     let scheduled = 0;
@@ -206,7 +214,7 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
             return null;
           }
 
-          const scheduledExport = await scheduledExportRepository.findById(id, tx);
+          const scheduledExport = await scheduledExportRepository.findByIdForShop(id, shop, tx);
           if (
             !scheduledExport ||
             scheduledExport.isDeleted ||
@@ -221,6 +229,7 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
           const executionKey = buildExecutionKey(id, scheduledFor);
           const existingRun = await scheduledExportRunRepository.findByExecutionKey(
             executionKey,
+            scheduledExport.shop,
             tx,
           );
 
@@ -291,7 +300,7 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
         }
 
         await logWorkerError({
-          shop: "unknown",
+          shop,
           err: error,
           source: "ScheduledExportExecutionService.scheduleDueScheduledExportRuns",
         });
@@ -311,7 +320,10 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
 }
 
 export async function executeScheduledExportRun(runId, shopFromJob = null) {
-  let run = await scheduledExportRunRepository.findByIdWithScheduledExport(runId);
+  if (!shopFromJob || !runId) {
+    throw new Error("SCHEDULED_EXPORT_RUN_REQUIRES_SHOP_AND_RUN_ID");
+  }
+  let run = await scheduledExportRunRepository.findByIdWithScheduledExport(runId, shopFromJob);
   if (!run) {
     return { skipped: true, reason: "run_not_found" };
   }
@@ -368,7 +380,7 @@ shopRenewInterval = setInterval(async () => {
   let exclusiveShopLockKey = null;
 
   try {
-    run = await scheduledExportRunRepository.findByIdWithScheduledExport(runId);
+    run = await scheduledExportRunRepository.findByIdWithScheduledExport(runId, scheduledExport.shop);
     if (!run || isTerminalRunStatus(run.status)) {
       return { skipped: true, reason: "run_not_actionable" };
     }
@@ -405,9 +417,13 @@ shopRenewInterval = setInterval(async () => {
     }
     const existingExportJob = await findExportJobByScheduledRun(scheduledExport.shop, run.id);
     if (existingExportJob?.id) {
-      await scheduledExportRunRepository.updateById(run.id, {
-        exportJobId: existingExportJob.id,
-      });
+      await scheduledExportRunRepository.updateById(
+        run.id,
+        scheduledExport.shop,
+        {
+          exportJobId: existingExportJob.id,
+        },
+      );
       return {
         success: true,
         runId: run.id,
@@ -416,7 +432,7 @@ shopRenewInterval = setInterval(async () => {
       };
     }
 
-    const claimed = await scheduledExportRunRepository.updateProcessingState(run.id);
+    const claimed = await scheduledExportRunRepository.updateProcessingState(run.id, scheduledExport.shop);
     if (!claimed.count && run.status !== "PROCESSING") {
       return { skipped: true, reason: "run_not_claimed" };
     }
@@ -426,13 +442,17 @@ shopRenewInterval = setInterval(async () => {
         return null;
       }
 
-      const currentRun = await scheduledExportRunRepository.findByIdWithScheduledExport(run.id, tx);
+      const currentRun = await scheduledExportRunRepository.findByIdWithScheduledExport(
+        run.id,
+        scheduledExport.shop,
+        tx,
+      );
       if (!currentRun || isTerminalRunStatus(currentRun.status)) {
         return null;
       }
 
       if (currentRun.exportJobId) {
-        const existingJob = await findExportJobById(currentRun.exportJobId, tx);
+        const existingJob = await findExportJobById(currentRun.exportJobId, currentRun.shop, tx);
         return existingJob
           ? { exportJob: existingJob, frozenCount: Number(existingJob.targetSnapshotCount || 0), reused: true }
           : null;
@@ -463,6 +483,7 @@ shopRenewInterval = setInterval(async () => {
 
       await scheduledExportRunRepository.updateById(
         currentRun.id,
+        currentRun.shop,
         {
           exportJobId: createdExportJob.id,
         },
@@ -503,36 +524,41 @@ shopRenewInterval = setInterval(async () => {
       });
       const frozenCount = Number(resolvedTarget.frozenCount || 0);
 
-      await scheduledExportRunRepository.updateById(currentRun.id, {
-        targetMirrorBatchId: resolvedTarget.mirrorBatchId,
-        filterAst: resolvedTarget.filterAst,
-        normalizedFilterAst: resolvedTarget.normalizedFilterAst,
-        targetingSnapshotMeta: {
-          astVersion: resolvedTarget.versions.filterAstVersion,
-          compilerVersion: resolvedTarget.versions.targetingCompilerVersion,
+      await scheduledExportRunRepository.updateById(
+        currentRun.id,
+        currentRun.shop,
+        {
+          targetMirrorBatchId: resolvedTarget.mirrorBatchId,
+          filterAst: resolvedTarget.filterAst,
+          normalizedFilterAst: resolvedTarget.normalizedFilterAst,
+          targetingSnapshotMeta: {
+            astVersion: resolvedTarget.versions.filterAstVersion,
+            compilerVersion: resolvedTarget.versions.targetingCompilerVersion,
+            fieldRegistryVersion: resolvedTarget.versions.fieldRegistryVersion,
+            operatorRegistryVersion: resolvedTarget.versions.operatorRegistryVersion,
+            targetGranularity: resolvedTarget.targetGranularity,
+            shop: createdExportJob.shop,
+            mirrorBatchId: resolvedTarget.mirrorBatchId,
+            targetCount: frozenCount,
+            filterHash: resolvedTarget.filterHash,
+            snapshotChecksum: resolvedTarget.snapshotChecksum || null,
+            normalizedAst: resolvedTarget.normalizedFilterAst,
+            source: "EXPORT",
+            semantics: "DYNAMIC_AT_RUN",
+            runId: currentRun.id,
+            scheduledExportId: currentRun.scheduledExport.id,
+            resolvedAt: new Date(),
+          },
+          targetingMode: "DYNAMIC_AT_RUN",
+          targetGranularity: resolvedTarget.targetGranularity,
+          targetingCompilerVersion: resolvedTarget.versions.targetingCompilerVersion,
           fieldRegistryVersion: resolvedTarget.versions.fieldRegistryVersion,
           operatorRegistryVersion: resolvedTarget.versions.operatorRegistryVersion,
-          targetGranularity: resolvedTarget.targetGranularity,
-          shop: createdExportJob.shop,
-          mirrorBatchId: resolvedTarget.mirrorBatchId,
-          targetCount: frozenCount,
           filterHash: resolvedTarget.filterHash,
-          snapshotChecksum: resolvedTarget.snapshotChecksum || null,
-          normalizedAst: resolvedTarget.normalizedFilterAst,
-          source: "EXPORT",
-          semantics: "DYNAMIC_AT_RUN",
-          runId: currentRun.id,
-          scheduledExportId: currentRun.scheduledExport.id,
-          resolvedAt: new Date(),
+          targetResolvedAt: new Date(),
         },
-        targetingMode: "DYNAMIC_AT_RUN",
-        targetGranularity: resolvedTarget.targetGranularity,
-        targetingCompilerVersion: resolvedTarget.versions.targetingCompilerVersion,
-        fieldRegistryVersion: resolvedTarget.versions.fieldRegistryVersion,
-        operatorRegistryVersion: resolvedTarget.versions.operatorRegistryVersion,
-        filterHash: resolvedTarget.filterHash,
-        targetResolvedAt: new Date(),
-      }, tx);
+        tx,
+      );
 
       const targetFrozenSet = await markExportJobTargetFrozen({
         exportJobId: createdExportJob.id,
@@ -610,16 +636,18 @@ export async function finalizeScheduledExportRunFromExportJob({
   status,
   errorMessage = null,
 }) {
-  const exportJob = await findExportJobForRunFinalize(exportJobId);
+  if (!shop || !exportJobId) {
+    throw new Error("SCHEDULED_EXPORT_FINALIZE_REQUIRES_SHOP_AND_EXPORT_JOB_ID");
+  }
+  const exportJob = await findExportJobForRunFinalize(exportJobId, shop);
 
   if (!exportJob?.scheduledExportId || !exportJob?.scheduledExportRunId) {
     return null;
   }
-  if (shop && exportJob.shop !== shop) {
-    throw new Error("CROSS_SHOP_SCHEDULED_EXPORT_FINALIZE_BLOCKED");
-  }
-
-  const run = await scheduledExportRunRepository.findById(exportJob.scheduledExportRunId);
+  const run = await scheduledExportRunRepository.findById(
+    exportJob.scheduledExportRunId,
+    exportJob.shop,
+  );
   if (!run || isTerminalRunStatus(run.status)) {
     return run;
   }
@@ -630,6 +658,7 @@ export async function finalizeScheduledExportRunFromExportJob({
 
   const transition = await scheduledExportRunRepository.markProcessingFinished(
     exportJob.scheduledExportRunId,
+    exportJob.shop,
     normalizedStatus,
     {
       completedAt,
@@ -645,7 +674,10 @@ export async function finalizeScheduledExportRunFromExportJob({
   if (!transition.count) {
     return run.status;
   }
-  const existingHistory = await findExportHistoryByScheduledTask(exportJob.scheduledExportRunId);
+  const existingHistory = await findExportHistoryByScheduledTaskForShop(
+    exportJob.scheduledExportRunId,
+    exportJob.shop,
+  );
   if (!existingHistory) {
     await createScheduledExportHistory({
       data: {
@@ -691,5 +723,3 @@ export async function finalizeScheduledExportRunFromExportJob({
 
   return normalizedStatus;
 }
-
-

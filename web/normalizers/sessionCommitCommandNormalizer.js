@@ -6,7 +6,7 @@ import {
 } from "./normalizerPrimitives.js";
 
 export function normalizeCommitBulkEditSessionCommand(params = {}, locals = {}, headers = {}) {
-  const shopId = toTrimmedString(locals.shop);
+  const shopId = toTrimmedString(locals.shopify?.session?.shop);
   const sessionId = toTrimmedString(params.id);
 
   if (!shopId || !sessionId) {

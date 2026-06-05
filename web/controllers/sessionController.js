@@ -1,4 +1,6 @@
 import { jsonResponse } from "../lib/serialise.js";
+import { logApiError } from "../utils/errorLogUtils.js";
+import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 import {
   createBulkEditSession,
   discardSessionPendingChanges,
@@ -8,100 +10,144 @@ import {
   getSessionPreviewById,
 } from "../useCases/sessionQueryUseCases.js";
 
-function toStatusCode(error, fallback = 500) {
-  const code = Number(error?.statusCode || fallback);
-  return Number.isFinite(code) ? code : fallback;
+async function handleSessionControllerError({ req, res, error, source, fallbackCode = "INTERNAL_ERROR" }) {
+  await logApiError({
+    shop: res.locals?.shopify?.session?.shop,
+    err: error,
+    req,
+    source,
+  });
+
+  const { statusCode, body } = buildPublicApiErrorResponse(error, fallbackCode);
+  return jsonResponse(res, body, statusCode);
+}
+
+function respondSessionNotFound(res) {
+  const { statusCode, body } = buildPublicApiErrorResponse(
+    { code: "NOT_FOUND" },
+    "NOT_FOUND",
+  );
+  return jsonResponse(res, body, statusCode);
 }
 
 export async function createSessionController(req, res) {
   try {
+    const shop = res.locals.shopify.session.shop;
     const session = await createBulkEditSession({
-      shop: res.locals.shop,
+      shop,
       filterParams: req.body?.filterParams,
       variantCount: req.body?.variantCount,
     });
     jsonResponse(res, { session }, 201);
   } catch (error) {
-    const body = { error: error?.message || "Failed to create session" };
-    if (Array.isArray(error?.fields) && error.fields.length) body.fields = error.fields;
-    jsonResponse(res, body, toStatusCode(error));
+    return handleSessionControllerError({
+      req,
+      res,
+      error,
+      source: "sessionController.createSessionController",
+      fallbackCode: "VALIDATION_FAILED",
+    });
   }
 }
 
 export async function getSessionController(req, res) {
   try {
+    const shop = res.locals.shopify.session.shop;
     const session = await getSessionById({
-      shop: res.locals.shop,
+      shop,
       sessionId: req.params.id,
     });
     if (!session) {
-      jsonResponse(res, { error: "Session not found" }, 404);
-      return;
+      return respondSessionNotFound(res);
     }
     jsonResponse(res, { session });
   } catch (error) {
-    jsonResponse(res, { error: error?.message || "Failed to load session" }, toStatusCode(error));
+    return handleSessionControllerError({
+      req,
+      res,
+      error,
+      source: "sessionController.getSessionController",
+    });
   }
 }
 
 export async function getSessionPreviewController(req, res) {
   try {
+    const shop = res.locals.shopify.session.shop;
     const preview = await getSessionPreviewById({
-      shop: res.locals.shop,
+      shop,
       sessionId: req.params.id,
     });
     if (!preview) {
-      jsonResponse(res, { error: "Session not found" }, 404);
-      return;
+      return respondSessionNotFound(res);
     }
     jsonResponse(res, preview);
   } catch (error) {
-    jsonResponse(res, { error: error?.message || "Failed to load preview" }, toStatusCode(error));
+    return handleSessionControllerError({
+      req,
+      res,
+      error,
+      source: "sessionController.getSessionPreviewController",
+    });
   }
 }
 
 export async function getSessionColumnErrorsController(req, res) {
   try {
+    const shop = res.locals.shopify.session.shop;
     const columns = await getSessionColumnErrors({
-      shop: res.locals.shop,
+      shop,
       sessionId: req.params.id,
     });
     if (!columns) {
-      jsonResponse(res, { error: "Session not found" }, 404);
-      return;
+      return respondSessionNotFound(res);
     }
     jsonResponse(res, { columns });
   } catch (error) {
-    jsonResponse(res, { error: error?.message || "Failed to load column errors" }, toStatusCode(error));
+    return handleSessionControllerError({
+      req,
+      res,
+      error,
+      source: "sessionController.getSessionColumnErrorsController",
+    });
   }
 }
 
 export async function getSessionColumnVariantErrorsController(req, res) {
   try {
+    const shop = res.locals.shopify.session.shop;
     const result = await getSessionColumnVariantErrors({
-      shop: res.locals.shop,
+      shop,
       sessionId: req.params.id,
       namespace: req.query?.namespace,
       key: req.query?.key,
     });
     jsonResponse(res, result);
   } catch (error) {
-    const body = { error: error?.message || "Failed to load error variants" };
-    if (error?.code) body.code = error.code;
-    jsonResponse(res, body, toStatusCode(error));
+    return handleSessionControllerError({
+      req,
+      res,
+      error,
+      source: "sessionController.getSessionColumnVariantErrorsController",
+      fallbackCode: "VALIDATION_FAILED",
+    });
   }
 }
 
 export async function discardSessionController(req, res) {
   try {
+    const shop = res.locals.shopify.session.shop;
     const result = await discardSessionPendingChanges({
-      shop: res.locals.shop,
+      shop,
       sessionId: req.params.id,
     });
     jsonResponse(res, result);
   } catch (error) {
-    const body = { error: error?.message || "Failed to discard pending changes" };
-    if (error?.code) body.code = error.code;
-    jsonResponse(res, body, toStatusCode(error));
+    return handleSessionControllerError({
+      req,
+      res,
+      error,
+      source: "sessionController.discardSessionController",
+    });
   }
 }

@@ -4,7 +4,7 @@ import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
 import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { getSession } from "../../utils/sessionHandler.js";
-import ProductBulkService from "../../services/productService/productBulkEditService.js";
+import ProductBulkService from "../../services/bulkEdit/ProductBulkService.js";
 import {
   enqueueBulkEditExecuteStageJob,
   enqueueBulkEditMutationPlanJob,
@@ -278,4 +278,3 @@ bulkEditPipelineWorker.on("failed", async (job, error) => {
 });
 
 export default bulkEditPipelineWorker;
-

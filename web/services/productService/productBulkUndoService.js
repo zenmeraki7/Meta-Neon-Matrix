@@ -205,6 +205,7 @@ class UndoEditService {
     };
     await this.idempotencyStore.complete({
       recordId: begin.recordId,
+      shop,
       response,
     });
     return response;
@@ -536,4 +537,3 @@ class UndoEditService {
 }
 
 export default UndoEditService;
-

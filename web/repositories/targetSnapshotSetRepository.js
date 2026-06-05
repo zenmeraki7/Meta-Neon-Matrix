@@ -67,7 +67,8 @@ function buildSetChecksum({
   targetCount,
   productCount,
   variantCount,
-  sortedRowChecksums,
+  rowChecksumDigest,
+  sortedRowChecksums = null,
 }) {
   return sha256(
     stableStringify({
@@ -82,7 +83,10 @@ function buildSetChecksum({
       targetCount,
       productCount,
       variantCount,
-      rowChecksumAlgorithm: "sha256-stable-json-v1",
+      rowChecksumAlgorithm: rowChecksumDigest
+        ? "sha256-stable-jsonl-ordered-v2"
+        : "sha256-stable-json-v1",
+      rowChecksumDigest: rowChecksumDigest || null,
       sortedRowChecksums,
     }),
   );
@@ -113,9 +117,10 @@ export async function upsertFrozenSnapshotSetFromLegacy({
     select: { id: true, status: true },
   });
 
-  const set = existing
-    ? await db.targetSnapshotSet.update({
-      where: { id: existing.id },
+  let set = null;
+  if (existing) {
+    const updated = await db.targetSnapshotSet.updateMany({
+      where: { id: existing.id, shop },
       data: {
         previewContractId: resolvedPreviewContractId,
         mirrorBatchId: resolvedMirrorBatchId,
@@ -127,8 +132,15 @@ export async function upsertFrozenSnapshotSetFromLegacy({
         freezeErrorCode: null,
         freezeErrorMessage: null,
       },
-    })
-    : await db.targetSnapshotSet.create({
+    });
+    if (Number(updated?.count || 0) !== 1) {
+      throw new Error("TARGET_SNAPSHOT_SET_TENANT_UPDATE_CONFLICT");
+    }
+    set = await db.targetSnapshotSet.findFirst({
+      where: { id: existing.id, shop },
+    });
+  } else {
+    set = await db.targetSnapshotSet.create({
       data: {
         shop,
         operationId: resolvedOperationId,
@@ -141,80 +153,105 @@ export async function upsertFrozenSnapshotSetFromLegacy({
         status: "FREEZING",
       },
     });
+  }
 
   try {
-    const legacyRows = await db.targetSnapshot.findMany({
-      where: {
-        shop,
-        ownerType: "EDIT_HISTORY",
-        ownerId: historyId,
-        mirrorBatchId: resolvedMirrorBatchId,
-      },
-      orderBy: [{ ordinal: "asc" }, { id: "asc" }],
-      select: {
-        productId: true,
-        variantId: true,
-        targetType: true,
-        targetIdentity: true,
-        beforeValues: true,
-      },
-    });
-
     await db.targetSnapshotItem.deleteMany({
       where: { shop, snapshotSetId: set.id },
     });
 
-    const rows = [];
-    const rowChecksums = [];
+    const PAGE_SIZE = 1000;
+    const rowChecksumHash = crypto.createHash("sha256");
     let productCount = 0;
     let variantCount = 0;
+    let targetCount = 0;
+    let cursor = null;
 
-    for (const legacyRow of legacyRows) {
-      const targetType = String(legacyRow?.targetType || "").toUpperCase();
-      const targetKey = buildTargetKey(legacyRow);
-      if (!targetKey || targetKey.endsWith(":")) {
-        continue;
+    while (true) {
+      const legacyRows = await db.targetSnapshot.findMany({
+        where: {
+          shop,
+          ownerType: "EDIT_HISTORY",
+          ownerId: historyId,
+          mirrorBatchId: resolvedMirrorBatchId,
+          ...(cursor
+            ? {
+              OR: [
+                { ordinal: { gt: cursor.ordinal } },
+                { ordinal: cursor.ordinal, id: { gt: cursor.id } },
+              ],
+            }
+            : {}),
+        },
+        orderBy: [{ ordinal: "asc" }, { id: "asc" }],
+        take: PAGE_SIZE,
+        select: {
+          id: true,
+          ordinal: true,
+          productId: true,
+          variantId: true,
+          targetType: true,
+          targetIdentity: true,
+          beforeValues: true,
+        },
+      });
+      if (!legacyRows.length) break;
+
+      const rows = [];
+      for (const legacyRow of legacyRows) {
+        const targetType = String(legacyRow?.targetType || "").toUpperCase();
+        const targetKey = buildTargetKey(legacyRow);
+        if (!targetKey || targetKey.endsWith(":")) {
+          continue;
+        }
+        const rowChecksum = buildRowChecksum({
+          snapshotSetId: set.id,
+          shop,
+          operationId: resolvedOperationId,
+          mirrorBatchId: resolvedMirrorBatchId,
+          row: legacyRow,
+          targetKey,
+          compilerVersion,
+          projectionVersion,
+        });
+        rowChecksumHash.update(rowChecksum);
+        rowChecksumHash.update("\n");
+        if (targetType === "PRODUCT") productCount += 1;
+        if (targetType === "VARIANT") variantCount += 1;
+        targetCount += 1;
+        rows.push({
+          snapshotSetId: set.id,
+          shop,
+          operationId: resolvedOperationId,
+          mirrorBatchId: resolvedMirrorBatchId,
+          productId: String(legacyRow.productId || "").trim(),
+          variantId: legacyRow.variantId ? String(legacyRow.variantId).trim() : null,
+          targetKey,
+          targetType,
+          mutationGroupKey: source,
+          beforeValues: legacyRow.beforeValues || {},
+          plannedMutation: {},
+          targetFingerprint: sha256(targetKey),
+          rowChecksum,
+        });
       }
-      const rowChecksum = buildRowChecksum({
-        snapshotSetId: set.id,
-        shop,
-        operationId: resolvedOperationId,
-        mirrorBatchId: resolvedMirrorBatchId,
-        row: legacyRow,
-        targetKey,
-        compilerVersion,
-        projectionVersion,
-      });
-      rowChecksums.push(rowChecksum);
-      if (targetType === "PRODUCT") productCount += 1;
-      if (targetType === "VARIANT") variantCount += 1;
-      rows.push({
-        snapshotSetId: set.id,
-        shop,
-        operationId: resolvedOperationId,
-        mirrorBatchId: resolvedMirrorBatchId,
-        productId: String(legacyRow.productId || "").trim(),
-        variantId: legacyRow.variantId ? String(legacyRow.variantId).trim() : null,
-        targetKey,
-        targetType,
-        mutationGroupKey: source,
-        beforeValues: legacyRow.beforeValues || {},
-        plannedMutation: {},
-        targetFingerprint: sha256(targetKey),
-        rowChecksum,
-      });
+
+      if (rows.length) {
+        // eslint-disable-next-line no-await-in-loop
+        await db.targetSnapshotItem.createMany({
+          data: rows,
+        });
+      }
+
+      const last = legacyRows[legacyRows.length - 1];
+      cursor = {
+        ordinal: last.ordinal,
+        id: last.id,
+      };
+      if (legacyRows.length < PAGE_SIZE) break;
     }
 
-    const CHUNK = 1000;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      // eslint-disable-next-line no-await-in-loop
-      await db.targetSnapshotItem.createMany({
-        data: rows.slice(i, i + CHUNK),
-      });
-    }
-
-    const targetCount = rows.length;
-    const sortedRowChecksums = [...rowChecksums].sort();
+    const rowChecksumDigest = rowChecksumHash.digest("hex");
     const setChecksum = buildSetChecksum({
       shop,
       operationId: resolvedOperationId,
@@ -227,7 +264,7 @@ export async function upsertFrozenSnapshotSetFromLegacy({
       targetCount,
       productCount,
       variantCount,
-      sortedRowChecksums,
+      rowChecksumDigest,
     });
 
     const freezeFinalizeResult = await db.targetSnapshotSet.updateMany({
@@ -260,8 +297,8 @@ export async function upsertFrozenSnapshotSetFromLegacy({
       error.code = "SNAPSHOT_FINALIZATION_CONFLICT";
       throw error;
     }
-    const frozenSet = await db.targetSnapshotSet.findUnique({
-      where: { id: set.id },
+    const frozenSet = await db.targetSnapshotSet.findFirst({
+      where: { id: set.id, shop },
     });
     if (!frozenSet || frozenSet.status !== "FROZEN") {
       throw new Error("TARGET_SNAPSHOT_SET_FREEZE_FINALIZE_MISSING");

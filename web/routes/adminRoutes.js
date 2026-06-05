@@ -13,7 +13,7 @@ router.get("/dashboard", adminController.getDashboard);
 // Store Routes
 router.get("/stores/stats", adminController.getStoreStats);
 router.get("/stores", adminController.getAllStores);
-router.get("/stores/:shopUrl", adminController.getStoreDetails);
+router.get("/stores/current", adminController.getStoreDetails);
 
 // Edit History Routes
 router.get("/edit-history/stats", adminController.getEditHistoryStats);

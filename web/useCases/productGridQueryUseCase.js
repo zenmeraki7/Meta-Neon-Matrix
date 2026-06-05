@@ -2,7 +2,7 @@ import { toProductGridDto } from "../dtos/productGridDto.js";
 import { fetchProductGridRows } from "../repositories/productGridRepository.js";
 
 async function listProducts(command) {
-  const result = await fetchProductGridRows(command.shopId, command.filters);
+  const result = await fetchProductGridRows(command.shop || command.shopId, command.filters || {});
   return toProductGridDto(result);
 }
 

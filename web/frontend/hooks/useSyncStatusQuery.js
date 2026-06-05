@@ -45,6 +45,10 @@ function isStaleProductSync(syncStatus) {
 function isActiveSyncStatus(syncStatus) {
   if (!syncStatus) return false;
 
+  if (typeof syncStatus.syncInProgress === "boolean") {
+    return syncStatus.syncInProgress && !isStaleProductSync(syncStatus);
+  }
+
   if (isStaleProductSync(syncStatus)) {
     return false;
   }
@@ -114,6 +118,7 @@ export function useSyncStatusQuery(options = {}) {
       return 4000 + jitterMs;
     },
     refetchOnWindowFocus: false,
+    refetchOnMount: "always",
     refetchIntervalInBackground: false,
     refetchOnReconnect: true,
     staleTime: 4000,

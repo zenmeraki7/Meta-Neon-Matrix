@@ -1,3 +1,5 @@
+import { toStoreAccessDto } from "./storeAccessDto.js";
+
 function asIso(value) {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -5,15 +7,17 @@ function asIso(value) {
 }
 
 export function toBootstrapSummaryDto(payload = {}) {
+  const syncStatus = payload.syncSummaryResponse?.syncStatus || payload.syncStatus || null;
+
   return {
-    ok: Boolean(payload.ok),
+    ok: payload.ok !== false,
     shop: payload.shop ? String(payload.shop) : null,
     generatedAt: asIso(payload.generatedAt) || new Date().toISOString(),
-    storeDetails: payload.storeDetails && typeof payload.storeDetails === "object"
-      ? payload.storeDetails
+    storeDetails: payload.storeDetails
+      ? toStoreAccessDto(payload.storeDetails)
       : null,
-    syncStatus: payload.syncStatus && typeof payload.syncStatus === "object"
-      ? payload.syncStatus
+    syncStatus: syncStatus && typeof syncStatus === "object"
+      ? syncStatus
       : null,
     operationSummary: payload.operationSummary && typeof payload.operationSummary === "object"
       ? payload.operationSummary
@@ -26,7 +30,8 @@ export function toBootstrapSummaryDto(payload = {}) {
       : undefined,
     planSnapshot: payload.planSnapshot && typeof payload.planSnapshot === "object"
       ? payload.planSnapshot
-      : undefined,
+      : payload.planSnapshot === undefined
+        ? undefined
+        : { currentPlanKey: "FREE", plans: [] },
   };
 }
-

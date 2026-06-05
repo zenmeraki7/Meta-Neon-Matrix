@@ -1,4 +1,4 @@
-﻿DO $$
+DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'OperationFingerprintStatus') THEN
     CREATE TYPE "OperationFingerprintStatus" AS ENUM (

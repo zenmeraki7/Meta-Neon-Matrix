@@ -2,10 +2,15 @@ import express from "express";
 import {
   getStoreAccess,
 } from "../controllers/storeController.js";
-import { validateBody } from "../middleware/validateQuery.js";
-import { languageSchema } from "../validations/storeAccessSchema.js";
+import { attachStoreAccessDependencies } from "../middleware/attachStoreAccessDependencies.js";
+import { requireShopifySession } from "../middleware/requireShopifySession.js";
 
 const router = express.Router();
-router.get("/details", getStoreAccess);
+router.get(
+  "/details",
+  requireShopifySession,
+  attachStoreAccessDependencies,
+  getStoreAccess,
+);
 
 export default router;

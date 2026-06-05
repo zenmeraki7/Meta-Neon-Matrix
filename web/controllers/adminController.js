@@ -6,6 +6,10 @@
 import adminService from "../services/adminService.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
+function getVerifiedShop(res) {
+  return String(res.locals?.shopify?.session?.shop || "").trim();
+}
+
 export function __setBulkEditRecoveryServiceFactory(factory) {
   adminService.setBulkEditRecoveryServiceFactory(factory);
 }
@@ -13,7 +17,7 @@ export function __setBulkEditRecoveryServiceFactory(factory) {
 // Dashboard Overview
 export const getDashboard = async (req, res) => {
   try {
-    const overview = await adminService.getDashboardOverview();
+    const overview = await adminService.getDashboardOverview(getVerifiedShop(res));
     res.json({ success: true, data: overview });
   } catch (error) {
     const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
@@ -23,7 +27,7 @@ export const getDashboard = async (req, res) => {
 
 export const getCompletedEditHistorySummary = async (req, res) => {
   try {
-    const result = await adminService.getCompletedEditHistorySummary();
+    const result = await adminService.getCompletedEditHistorySummary(getVerifiedShop(res));
 
     res.status(200).json({
       success: true,
@@ -39,7 +43,7 @@ export const getCompletedEditHistorySummary = async (req, res) => {
 // Store Management
 export const getStoreStats = async (req, res) => {
   try {
-    const stats = await adminService.getStoreStats();
+    const stats = await adminService.getStoreStats(getVerifiedShop(res));
     res.json({ success: true, data: stats });
   } catch (error) {
     const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
@@ -58,6 +62,7 @@ export const getAllStores = async (req, res) => {
       return res.status(statusCode).json(body);
     }
     const result = await adminService.getAllStores({
+      shop: getVerifiedShop(res),
       cursor: cursor || null,
       limit: parseInt(limit) || 20,
       status: status || "all",
@@ -72,8 +77,7 @@ export const getAllStores = async (req, res) => {
 
 export const getStoreDetails = async (req, res) => {
   try {
-    const { shopUrl } = req.params;
-    const details = await adminService.getStoreDetails(shopUrl);
+    const details = await adminService.getStoreDetails(getVerifiedShop(res));
     res.json({ success: true, data: details });
   } catch (error) {
     const { statusCode, body } = buildPublicApiErrorResponse(error, "NOT_FOUND");
@@ -84,8 +88,7 @@ export const getStoreDetails = async (req, res) => {
 // Edit History Management
 export const getEditHistoryStats = async (req, res) => {
   try {
-    const { shopUrl } = req.query;
-    const stats = await adminService.getEditHistoryStats(shopUrl);
+    const stats = await adminService.getEditHistoryStats(getVerifiedShop(res));
     res.json({ success: true, data: stats });
   } catch (error) {
     const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
@@ -95,7 +98,7 @@ export const getEditHistoryStats = async (req, res) => {
 
 export const getEditHistoryList = async (req, res) => {
   try {
-    const { page, cursor, limit, status, type, shopUrl, sortBy, sortOrder } = req.query;
+    const { page, cursor, limit, status, type, sortBy, sortOrder } = req.query;
     if (page && String(page) !== "1") {
       const { statusCode, body } = buildPublicApiErrorResponse(
         { code: "VALIDATION_FAILED" },
@@ -104,11 +107,11 @@ export const getEditHistoryList = async (req, res) => {
       return res.status(statusCode).json(body);
     }
     const result = await adminService.getEditHistoryList({
+      shop: getVerifiedShop(res),
       cursor: cursor || null,
       limit: parseInt(limit) || 20,
       status: status || "all",
       type: type || "all",
-      shopUrl: shopUrl || null,
       sortBy: sortBy || "editTime",
       sortOrder: sortOrder || "desc",
     });
@@ -121,7 +124,7 @@ export const getEditHistoryList = async (req, res) => {
 
 export const getFailedEdits = async (req, res) => {
   try {
-    const { page, cursor, limit, shopUrl } = req.query;
+    const { page, cursor, limit } = req.query;
     if (page && String(page) !== "1") {
       const { statusCode, body } = buildPublicApiErrorResponse(
         { code: "VALIDATION_FAILED" },
@@ -130,9 +133,9 @@ export const getFailedEdits = async (req, res) => {
       return res.status(statusCode).json(body);
     }
     const result = await adminService.getFailedEdits({
+      shop: getVerifiedShop(res),
       cursor: cursor || null,
       limit: parseInt(limit) || 20,
-      shopUrl: shopUrl || null,
     });
     res.json({ success: true, data: result });
   } catch (error) {
@@ -144,8 +147,7 @@ export const getFailedEdits = async (req, res) => {
 // Sync History Management
 export const getSyncHistoryStats = async (req, res) => {
   try {
-    const { shopUrl } = req.query;
-    const stats = await adminService.getSyncHistoryStats(shopUrl);
+    const stats = await adminService.getSyncHistoryStats(getVerifiedShop(res));
     res.json({ success: true, data: stats });
   } catch (error) {
     const { statusCode, body } = buildPublicApiErrorResponse(error, "INTERNAL_ERROR");
@@ -155,7 +157,7 @@ export const getSyncHistoryStats = async (req, res) => {
 
 export const getSyncHistoryList = async (req, res) => {
   try {
-    const { page, cursor, limit, status, operationType, shopUrl } = req.query;
+    const { page, cursor, limit, status, operationType } = req.query;
     if (page && String(page) !== "1") {
       const { statusCode, body } = buildPublicApiErrorResponse(
         { code: "VALIDATION_FAILED" },
@@ -164,11 +166,11 @@ export const getSyncHistoryList = async (req, res) => {
       return res.status(statusCode).json(body);
     }
     const result = await adminService.getSyncHistoryList({
+      shop: getVerifiedShop(res),
       cursor: cursor || null,
       limit: parseInt(limit) || 20,
       status: status || "all",
       operationType: operationType || "all",
-      shopUrl: shopUrl || null,
     });
     res.json({ success: true, data: result });
   } catch (error) {
@@ -198,6 +200,7 @@ export const recoverStuckBulkEditOperation = async (req, res) => {
     }
     const response = await adminService.recoverStuckBulkEditOperation({
       historyId: id,
+      shop: getVerifiedShop(res),
       mode,
       reason,
       idempotencyKey,

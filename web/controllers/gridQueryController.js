@@ -21,11 +21,7 @@ export async function getProductsGridController(req, res) {
 
 export async function getVariantsGridController(req, res) {
   try {
-    const shop = String(res.locals.shop || "").trim();
-    const command = normalizeVariantGridQuery(req.params || {}, req.query || {}, {
-      ...res.locals,
-      shop,
-    });
+    const command = normalizeVariantGridQuery(req.params || {}, req.query || {}, res.locals || {});
     const result = await variantGridQueryUseCase.listVariants(command);
     jsonResponse(res, result);
   } catch (error) {

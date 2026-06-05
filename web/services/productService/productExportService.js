@@ -79,9 +79,9 @@ export class ProductExportService {
 
     const where = { shop: this.session.shop };
     if (normalizedType.includes("scheduled")) {
-      where.type = "scheduled export";
+      where.type = { equals: "Scheduled export", mode: "insensitive" };
     } else if (normalizedType.includes("manual")) {
-      where.type = "manual export";
+      where.type = { equals: "Manual export", mode: "insensitive" };
     }
 
     let cursorFilter = {};
@@ -115,11 +115,15 @@ export class ProductExportService {
           completedAt: true,
           type: true,
           status: true,
-          processedCount: true,
+          statusNormalized: true,
+          executionState: true,
+          executionStateNormalized: true,
           targetSnapshotCount: true,
-          progressPercent: true,
+          totalItems: true,
           durationMs: true,
           error: true,
+          failureStage: true,
+          targetMirrorBatchId: true,
         },
       }),
       db.exportJob.count({ where }),
@@ -168,10 +172,14 @@ export class ProductExportService {
       filename: true,
       type: true,
       status: true,
+      statusNormalized: true,
+      executionState: true,
+      executionStateNormalized: true,
       totalItems: true,
-      processedCount: true,
       targetSnapshotCount: true,
       durationMs: true,
+      failureStage: true,
+      targetMirrorBatchId: true,
       startedAt: true,
       completedAt: true,
       fields: true,
@@ -298,8 +306,8 @@ export class ProductExportService {
         });
         const frozenCount = Number(resolvedTarget.frozenCount || 0);
 
-        await tx.exportJob.update({
-          where: { id: job.id },
+        await tx.exportJob.updateMany({
+          where: { id: job.id, shop },
           data: {
             targetSnapshotCount: frozenCount,
             executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
@@ -318,8 +326,8 @@ export class ProductExportService {
         source: "manual_export",
         executionId: jobId,
       });
-      await db.exportJob.update({
-        where: { id: jobId },
+      await db.exportJob.updateMany({
+        where: { id: jobId, shop },
         data: {
           executionState: OPERATION_LIFECYCLE_STATES.QUEUED,
           executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
@@ -334,6 +342,7 @@ export class ProductExportService {
       });
       await this.idempotencyStore.complete({
         recordId: begin.recordId,
+        shop: this.session.shop,
         response,
       });
       return response;
@@ -342,4 +351,3 @@ export class ProductExportService {
     }
   }
 }
-

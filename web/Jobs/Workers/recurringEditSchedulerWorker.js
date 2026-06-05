@@ -13,9 +13,13 @@ const POLL_INTERVAL_MS = 60_000;
 const LEADER_LOCK_KEY = "leader:recurring-edit-scheduler:register";
 const LEADER_LOCK_TTL_MS = 45_000;
 
-async function runSchedulerTick() {
+async function runSchedulerTick(job) {
+  const shop = String(job?.data?.shop || "").trim();
+  if (!shop) {
+    throw new Error("recurring edit scheduler tick requires shop");
+  }
   try {
-    await scheduleDueRecurringEditRuns();
+    await scheduleDueRecurringEditRuns({ shop });
   } catch (error) {
     logger.error("Recurring edit scheduler tick failed", {
       error: error.message,
@@ -27,7 +31,7 @@ async function runSchedulerTick() {
 
 export const recurringEditSchedulerWorker = new Worker(
   QUEUE_NAME,
-  async () => runSchedulerTick(),
+  async (job) => runSchedulerTick(job),
   { connection, concurrency: 1 },
 );
 recurringEditSchedulerWorker.on("error", (error) => {
@@ -37,16 +41,24 @@ recurringEditSchedulerWorker.on("error", (error) => {
   });
 });
 
-async function registerRepeatableTick() {
+export async function registerRecurringEditSchedulerTick({
+  shop,
+  enqueueSchedulerTick = enqueueRecurringEditSchedulerTick,
+  repeatEveryMs = POLL_INTERVAL_MS,
+}) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("recurring edit scheduler registration requires shop");
+  }
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
 
   try {
-    await enqueueRecurringEditSchedulerTick(POLL_INTERVAL_MS);
+    await enqueueSchedulerTick({ shop: scopedShop, repeatEveryMs });
   } finally {
     await releaseRedisLock({
       connection,
@@ -55,7 +67,5 @@ async function registerRepeatableTick() {
     }).catch(() => {});
   }
 }
-
-await registerRepeatableTick();
 
 export default recurringEditSchedulerWorker;

@@ -32,7 +32,8 @@ export async function acquireOperationLease({
       "expiresAt" = EXCLUDED."expiresAt",
       "heartbeatAt" = EXCLUDED."heartbeatAt",
       "releasedAt" = NULL
-    WHERE "OperationLease"."expiresAt" <= ${now}
+    WHERE "OperationLease"."shop" = ${shop}
+      AND "OperationLease"."expiresAt" <= ${now}
   `;
 
   if (!result) {
@@ -146,4 +147,3 @@ export async function assertOperationLeaseOwnership({
 export function buildLeaseOwnerId(prefix = "worker") {
   return `${prefix}:${crypto.randomUUID()}`;
 }
-

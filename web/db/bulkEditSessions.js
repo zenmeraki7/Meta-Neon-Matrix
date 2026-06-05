@@ -94,11 +94,12 @@ export async function commitSession(sessionId, shop) {
  * @param {string} status
  * @returns {Promise<object|null>}
  */
-export async function updateStatus(sessionId, status) {
+export async function updateStatus(sessionId, shop, status) {
   const resolvedId = String(sessionId || "").trim();
+  const resolvedShop = String(shop || "").trim();
   const resolvedStatus = String(status || "").trim().toUpperCase();
-  if (!resolvedId || !resolvedStatus) {
-    throw new Error("updateStatus requires sessionId and status");
+  if (!resolvedId || !resolvedShop || !resolvedStatus) {
+    throw new Error("updateStatus requires sessionId, shop, and status");
   }
 
   const rows = await prisma.$queryRaw`
@@ -107,6 +108,7 @@ export async function updateStatus(sessionId, status) {
       status = ${resolvedStatus},
       updated_at = now()
     WHERE id = ${resolvedId}::uuid
+      AND shop_id = ${resolvedShop}
     RETURNING *
   `;
   return rows[0] || null;

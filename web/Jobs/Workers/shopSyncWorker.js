@@ -347,7 +347,7 @@ async function processShopSyncJob(job) {
     const { productService, collectionService } = createServices();
     const syncResult = normalizedSyncType === "product"
       ? await productService.startBulkOperationToFetchProducts({ session })
-      : await collectionService.clearCollections(session);
+      : await collectionService.startCollectionSync(session);
 
     const startResult = assertSyncStartResult(syncResult, syncType);
     if (!startResult.bulkOperationId) {

@@ -1,6 +1,6 @@
 import {
   buildAuthenticatedActor,
-  handleControllerError,
+  handleLoggedControllerError,
   requireShopifySession,
 } from "./controllerUtils.js";
 import {
@@ -25,8 +25,10 @@ import {
 } from "../dtos/productQueryDto.js";
 
 export const getProductsWithQuery = async (req, res) => {
+  let session;
+
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
     const command = buildProductQueryCommand({
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),
@@ -36,31 +38,46 @@ export const getProductsWithQuery = async (req, res) => {
     const result = await executeProductQuery(command);
     return res.status(200).json(toProductQueryResponseDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "PRODUCT_QUERY_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productQueryController.getProductsWithQuery",
+      fallbackCode: "PRODUCT_QUERY_FAILED",
+    });
   }
 };
 
 export const checkEditStatus = async (req, res) => {
+  let session;
+
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
     const command = buildBulkEditStatusCommand({
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),
       params: req.params,
     });
-    const result = await getBulkEditStatus({
-      shop: command.shop,
-      id: command.historyId,
-    });
+    const result = await getBulkEditStatus(command);
     return res.status(200).json(toBulkEditStatusDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "BULK_EDIT_STATUS_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productQueryController.checkEditStatus",
+      fallbackCode: "BULK_EDIT_STATUS_FAILED",
+    });
   }
 };
 
 export const getProductTypes = async (req, res) => {
+  let session;
+
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
     const command = buildProductTypeOptionsCommand({
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),
@@ -69,13 +86,22 @@ export const getProductTypes = async (req, res) => {
     const result = await getProductTypeOptions(command);
     return res.status(200).json(toProductOptionListDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "PRODUCT_TYPE_OPTIONS_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productQueryController.getProductTypes",
+      fallbackCode: "PRODUCT_TYPE_OPTIONS_FAILED",
+    });
   }
 };
 
 export const getProductFilterValues = async (req, res) => {
+  let session;
+
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
     const command = buildProductFilterValueOptionsCommand({
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),
@@ -85,13 +111,22 @@ export const getProductFilterValues = async (req, res) => {
     const result = await getProductFilterValueOptions(command);
     return res.status(200).json(toProductOptionListDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "PRODUCT_FILTER_VALUES_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productQueryController.getProductFilterValues",
+      fallbackCode: "PRODUCT_FILTER_VALUES_FAILED",
+    });
   }
 };
 
 export const getFilterRegistry = async (req, res) => {
+  let session;
+
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
     const command = buildFilterRegistryCommand({
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),
@@ -100,6 +135,13 @@ export const getFilterRegistry = async (req, res) => {
     const result = await getPreviewFilterRegistry(command);
     return res.status(200).json(toFilterRegistryDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "FILTER_REGISTRY_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productQueryController.getFilterRegistry",
+      fallbackCode: "FILTER_REGISTRY_FAILED",
+    });
   }
 };

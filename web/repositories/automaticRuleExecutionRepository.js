@@ -45,9 +45,9 @@ export async function findEditHistoryUnique(whereOrQuery, select = undefined, db
     && typeof whereOrQuery === "object"
     && Object.prototype.hasOwnProperty.call(whereOrQuery, "where")
   ) {
-    return db.editHistory.findUnique(whereOrQuery);
+    return db.editHistory.findFirst(whereOrQuery);
   }
-  return db.editHistory.findUnique({ where: whereOrQuery, select });
+  return db.editHistory.findFirst({ where: whereOrQuery, select });
 }
 
 export async function createEditHistory(data, db = prisma) {

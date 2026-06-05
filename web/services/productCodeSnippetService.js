@@ -29,6 +29,11 @@ function serializeSnippet(snippet) {
   };
 }
 
+function resolveActorIdentifier(actor, fallback = null) {
+  if (!actor || typeof actor !== "object") return fallback;
+  return actor.actorId || actor.actorEmail || actor.actorName || fallback;
+}
+
 async function getSnippetOrThrow(shop, id) {
   const snippet = await productCodeSnippetRepository.findByIdForShop(id, shop);
   if (!snippet) {
@@ -40,8 +45,10 @@ async function getSnippetOrThrow(shop, id) {
 export async function createProductCodeSnippet({
   shop,
   body,
+  actor = null,
   createdBy = null,
 }) {
+  const actorIdentifier = resolveActorIdentifier(actor, createdBy || shop);
   const status = normalizeStatus(body.status, "DRAFT");
   if (status === "ARCHIVED") {
     throw new Error("New snippets cannot be created as archived");
@@ -61,8 +68,8 @@ export async function createProductCodeSnippet({
     normalizedAst: validation.ast,
     lastValidationStatus: validation.validationStatus,
     lastValidationError: null,
-    createdBy,
-    updatedBy: createdBy,
+    createdBy: actorIdentifier,
+    updatedBy: actorIdentifier,
   });
 
   return serializeSnippet(created);
@@ -92,8 +99,10 @@ export async function updateProductCodeSnippet({
   shop,
   productCodeSnippetId,
   body,
+  actor = null,
   updatedBy = null,
 }) {
+  const actorIdentifier = resolveActorIdentifier(actor, updatedBy || shop);
   const existing = await getSnippetOrThrow(shop, productCodeSnippetId);
   if (existing.status === "ARCHIVED") {
     throw new Error("Archived snippets cannot be updated");
@@ -119,7 +128,7 @@ export async function updateProductCodeSnippet({
     normalizedAst: validation.ast,
     lastValidationStatus: validation.validationStatus,
     lastValidationError: null,
-    updatedBy,
+    updatedBy: actorIdentifier,
     },
   });
 
@@ -129,8 +138,10 @@ export async function updateProductCodeSnippet({
 export async function archiveProductCodeSnippet({
   shop,
   productCodeSnippetId,
+  actor = null,
   updatedBy = null,
 }) {
+  const actorIdentifier = resolveActorIdentifier(actor, updatedBy || shop);
   const existing = await getSnippetOrThrow(shop, productCodeSnippetId);
 
   const archived = await productCodeSnippetRepository.updateByIdForShop({
@@ -138,7 +149,7 @@ export async function archiveProductCodeSnippet({
     shop,
     data: {
       status: "ARCHIVED",
-      updatedBy,
+      updatedBy: actorIdentifier,
     },
   });
 
@@ -277,4 +288,3 @@ export async function searchProductsForSnippetPreview({
 
   return products;
 }
-

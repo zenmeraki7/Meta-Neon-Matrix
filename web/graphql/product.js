@@ -1,122 +1,161 @@
-export const graphqlProductsBulkSyncQuery = `{
-  products {
+export const PRODUCT_NESTED_CONNECTION_PAGE_SIZE = 250;
+
+const PRODUCT_CORE_FIELDS = `
+  __typename
+  id
+  title
+  handle
+  status
+  productType
+  vendor
+  tags
+  templateSuffix
+  createdAt
+  updatedAt
+  publishedAt
+  onlineStoreUrl
+  descriptionHtml
+
+  seo {
+    __typename
+    title
+    description
+  }
+
+  totalInventory
+
+  category {
+    __typename
+    id
+    name
+  }
+
+  options {
+    __typename
+    id
+    name
+    position
+    values
+  }
+
+  featuredMedia {
+    __typename
+    ... on MediaImage {
+      id
+      alt
+      preview {
+        __typename
+        image {
+          __typename
+          url
+          altText
+        }
+      }
+    }
+  }
+`;
+
+const VARIANT_FIELDS = `
+  __typename
+  id
+  title
+  sku
+  barcode
+  price
+  compareAtPrice
+  inventoryQuantity
+  inventoryPolicy
+  taxable
+  taxCode
+  position
+
+  selectedOptions {
+    __typename
+    name
+    value
+  }
+
+  inventoryItem {
+    __typename
+    id
+    tracked
+    requiresShipping
+
+    unitCost {
+      __typename
+      amount
+    }
+
+    countryCodeOfOrigin
+    harmonizedSystemCode
+
+    measurement {
+      __typename
+      weight {
+        __typename
+        value
+        unit
+      }
+    }
+  }
+`;
+
+const COLLECTION_CONNECTION = `
+  collections(first: ${PRODUCT_NESTED_CONNECTION_PAGE_SIZE}) {
     edges {
       node {
         __typename
         id
         title
-        handle
-        status
-        productType
-        vendor
-        tags
-        templateSuffix
-        createdAt
-        updatedAt
-        publishedAt
-        onlineStoreUrl
-        descriptionHtml
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+`;
 
-        seo {
-          title
-          description
-        }
+const VARIANT_CONNECTION = `
+  variants(first: ${PRODUCT_NESTED_CONNECTION_PAGE_SIZE}) {
+    edges {
+      node {
+        ${VARIANT_FIELDS}
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+`;
 
-        totalInventory
+export const graphqlProductsBulkSyncQuery = `{
+  products {
+    edges {
+      node {
+        ${PRODUCT_CORE_FIELDS}
 
-        category {
-          __typename
-          id
-          name
-        }
-
-        metafields(first: 100) {
+        metafields(first: ${PRODUCT_NESTED_CONNECTION_PAGE_SIZE}) {
           edges {
             node {
               __typename
+              id
               namespace
               key
               type
               value
             }
           }
-        }
-
-        options {
-          __typename
-          id
-          name
-          position
-          values
-        }
-
-        collections(first: 100) {
-          edges {
-            node {
-              __typename
-              id
-              title
-            }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
 
-        featuredMedia {
-          __typename
-          ... on MediaImage {
-            id
-            alt
-            preview {
-              image {
-                url
-                altText
-              }
-            }
-          }
-        }
+        ${COLLECTION_CONNECTION}
 
-        variants(first: 250) {
-          edges {
-            node {
-              __typename
-              id
-              title
-              sku
-              barcode
-              price
-              compareAtPrice
-              inventoryQuantity
-              inventoryPolicy
-              taxable
-              taxCode
-              position
-
-              selectedOptions {
-                name
-                value
-              }
-
-              inventoryItem {
-                id
-                tracked
-                requiresShipping
-
-                unitCost {
-                  amount
-                }
-
-                countryCodeOfOrigin
-                harmonizedSystemCode
-
-                measurement {
-                  weight {
-                    value
-                    unit
-                  }
-                }
-              }
-            }
-          }
-        }
+        ${VARIANT_CONNECTION}
       }
     }
   }
@@ -127,86 +166,11 @@ export const graphqlProductsExportQuery = `
     products(first: $first, after: $after, query: $query) {
       edges {
         node {
-          id
-          title
-          handle
-          status
-          productType
-          vendor
-          tags
-          templateSuffix
-          createdAt
-          updatedAt
-          publishedAt
-          onlineStoreUrl
-          descriptionHtml
+          ${PRODUCT_CORE_FIELDS}
 
-          seo {
-            title
-            description
-          }
+          ${COLLECTION_CONNECTION}
 
-          totalInventory
-
-          category {
-            id
-            name
-          }
-
-          featuredMedia {
-            ... on MediaImage {
-              id
-              alt
-              preview {
-                image {
-                  url
-                  altText
-                }
-              }
-            }
-          }
-
-          variants(first: 100) {
-            edges {
-              node {
-                id
-                title
-                sku
-                barcode
-                price
-                compareAtPrice
-                inventoryQuantity
-                inventoryPolicy
-                taxable
-                taxCode
-                position
-
-                selectedOptions {
-                  name
-                  value
-                }
-
-                inventoryItem {
-                  tracked
-                  requiresShipping
-
-                  unitCost {
-                    amount
-                  }
-
-                  countryCodeOfOrigin
-                  harmonizedSystemCode
-
-                  measurement {
-                    weight {
-                      value
-                      unit
-                    }
-                  }
-                }
-              }
-            }
-          }
+          ${VARIANT_CONNECTION}
         }
       }
 

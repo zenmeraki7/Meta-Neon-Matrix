@@ -13,7 +13,10 @@ import {
   markFullSyncFailed,
 } from "../../../services/mirrorHealthService.js";
 import { recordMirrorAnomaly } from "../../../services/mirrorAnomalyService.js";
-import { markMirrorBatchStatus } from "../../../repositories/productSyncRepository.js";
+import {
+  markMirrorBatchStatus,
+  stageProductMirrorBatch,
+} from "../../../repositories/productSyncRepository.js";
 
 const ACTIVE_SYNC_STAGES = [
   "SHOPIFY_BULK_RUNNING",
@@ -25,7 +28,10 @@ const ACTIVE_SYNC_STAGES = [
   "FILE_DOWNLOADING",
 ];
 
-const ACTIVE_SYNC_STATUSES = ["processing", "queued"];
+const ACTIVE_SYNC_STATUSES = ["processing"];
+const BULK_RESULT_DOWNLOAD_TIMEOUT_MS = Number(
+  process.env.BULK_RESULT_DOWNLOAD_TIMEOUT_MS || 120_000,
+);
 
 async function transitionMirrorSyncFromHistory({
   shop,
@@ -205,10 +211,13 @@ export async function handleSyncOperation({ bulkOperationId, shop = null }) {
       );
     }
 
-    const urlResponse = await axios.get(new URL(bulkOperation.url).toString(), {
-      headers: { Accept: "application/json" },
-      responseType: "stream",
-    });
+    if (syncHistory.operationType === "Product" && syncHistory.syncBatchId) {
+      await stageProductMirrorBatch({
+        shop: syncHistory.shop,
+        syncBatchId: syncHistory.syncBatchId,
+        syncHistoryId: syncHistory.id,
+      });
+    }
 
     if (
       (syncHistory.operationType === "Product" ||
@@ -221,6 +230,12 @@ export async function handleSyncOperation({ bulkOperationId, shop = null }) {
         status: "FILE_DOWNLOADING",
       });
     }
+
+    const urlResponse = await axios.get(new URL(bulkOperation.url).toString(), {
+      headers: { Accept: "application/json" },
+      responseType: "stream",
+      timeout: BULK_RESULT_DOWNLOAD_TIMEOUT_MS,
+    });
 
     if (urlResponse.status !== 200) {
       throw new Error(`Failed to download bulk result. status=${urlResponse.status}`);
@@ -322,6 +337,7 @@ export async function handleSyncOperation({ bulkOperationId, shop = null }) {
         session,
         syncBatchId: syncHistory.syncBatchId,
         syncHistoryId: syncHistory.id,
+        skipStaging: true,
       });
 
       recordCount = syncResult.totalProductsProcessed || 0;

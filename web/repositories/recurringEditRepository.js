@@ -10,9 +10,7 @@ export const recurringEditRepository = {
   },
 
   async findById(id, db = prisma) {
-    return getClient(db).recurringEdit.findUnique({
-      where: { id },
-    });
+    throw new Error("recurringEditRepository.findById requires shop; use findByIdForShop");
   },
 
   async findByIdForShop(id, shop, db = prisma) {
@@ -61,8 +59,16 @@ export const recurringEditRepository = {
   },
 
   async findDueRecurringEditIds(now, limit = 100, db = prisma) {
+    throw new Error("findDueRecurringEditIds requires shop; use findDueRecurringEditIdsForShop");
+  },
+
+  async findDueRecurringEditIdsForShop(shop, now, limit = 100, db = prisma) {
+    if (!shop) {
+      throw new Error("findDueRecurringEditIdsForShop requires shop");
+    }
     return getClient(db).recurringEdit.findMany({
       where: {
+        shop,
         isDeleted: false,
         status: "ACTIVE",
         nextRunAt: {

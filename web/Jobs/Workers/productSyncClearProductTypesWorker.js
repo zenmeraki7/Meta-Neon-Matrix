@@ -5,6 +5,7 @@ import { db } from "../../repositories/repositoryDb.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
+import { getProductSyncCacheKeys } from "../../utils/cacheKeyRegistry.js";
 
 const QUEUE_NAME =
   process.env.PRODUCT_SYNC_CLEAR_PRODUCT_TYPES_QUEUE || "product-sync-clear-product-types";
@@ -45,10 +46,23 @@ const productSyncClearProductTypesWorker = new Worker(
 
     const syncHistory = await db.syncHistory.findFirst({
       where: { id: operationId, shop },
-      select: { id: true, status: true, bulkOperationId: true },
+      select: {
+        id: true,
+        status: true,
+        bulkOperationId: true,
+        executionIdentity: true,
+      },
     });
     if (!syncHistory) {
       throw new Error("SYNC_HISTORY_NOT_FOUND");
+    }
+    if (syncHistory.executionIdentity && syncHistory.executionIdentity !== executionId) {
+      return {
+        skipped: true,
+        reason: "stale_execution",
+        operationId,
+        shop,
+      };
     }
     if (syncHistory.bulkOperationId) {
       return { skipped: true, reason: "already_submitted", operationId, shop };
@@ -94,8 +108,8 @@ const productSyncClearProductTypesWorker = new Worker(
           lastProductTypeSyncAt: new Date(),
         },
       }),
-      db.syncHistory.update({
-        where: { id: operationId },
+      db.syncHistory.updateMany({
+        where: { id: operationId, shop },
         data: {
           status: "processing",
           bulkOperationId,
@@ -103,7 +117,7 @@ const productSyncClearProductTypesWorker = new Worker(
       }),
     ]);
 
-    await clearKeyCaches(`${shop}:sync_details`);
+    await Promise.all(getProductSyncCacheKeys(shop).map((key) => clearKeyCaches(key)));
 
     return {
       success: true,
@@ -119,4 +133,3 @@ const productSyncClearProductTypesWorker = new Worker(
 );
 
 export default productSyncClearProductTypesWorker;
-

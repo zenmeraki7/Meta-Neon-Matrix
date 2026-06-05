@@ -8,6 +8,7 @@ import {
   SkeletonDisplayText,
   BlockStack,
   IndexTable,
+  Spinner,
 } from "@shopify/polaris";
 import { memo, useMemo, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
@@ -78,6 +79,8 @@ const ProductRow = memo(function ProductRow({ rowId, index }) {
 const ProductsTable = ({
   productIds = [],
   loading,
+  fetching = false,
+  fetchingDirection = null,
   pagination,
   onNext,
   onPrev,
@@ -129,6 +132,9 @@ const ProductsTable = ({
   const handleVirtualScroll = useCallback((event) => {
     setScrollTop(event.currentTarget.scrollTop || 0);
   }, []);
+
+  const isNextLoading = fetching && fetchingDirection === "next";
+  const isPreviousLoading = fetching && fetchingDirection === "previous";
 
   if (loading) return <LoadingTable />;
 
@@ -206,12 +212,15 @@ const ProductsTable = ({
           <Text tone="subdued" variant="bodySm">
             {t("exportFilteredProductsText")}
           </Text>
-          <Pagination
-            hasPrevious={pagination?.hasPrevPage}
-            onPrevious={onPrev}
-            hasNext={pagination?.hasNextPage}
-            onNext={onNext}
-          />
+          <InlineStack gap="200" blockAlign="center">
+            {fetching ? <Spinner size="small" accessibilityLabel={t("loading", { ns: "common" })} /> : null}
+            <Pagination
+              hasPrevious={Boolean(pagination?.hasPrevPage) && !isPreviousLoading}
+              onPrevious={onPrev}
+              hasNext={Boolean(pagination?.hasNextPage) && !isNextLoading}
+              onNext={onNext}
+            />
+          </InlineStack>
         </InlineStack>
       </Box>
     </Box>

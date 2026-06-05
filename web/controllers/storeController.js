@@ -1,24 +1,23 @@
 import { logApiError } from "../utils/errorLogUtils.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
-import { getStoreAccessDto } from "../services/storeAccessService.js";
+import { getStoreAccess as getStoreAccessForShop } from "../services/storeAccessService.js";
+import { toStoreAccessDto } from "../dtos/storeAccessDto.js";
 
 export const getStoreAccess = async (req, res) => {
-  const session = res.locals.shopify?.session;
-
   try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
+    const { ensureStore, readShopTimezone } = res.locals.storeAccessDependencies;
 
-    const responseData = await getStoreAccessDto({ session });
-    return res.status(200).json(responseData);
+    const result = await getStoreAccessForShop({
+      shop,
+      ensureStore,
+      readShopTimezone,
+    });
+    return res.status(200).json(toStoreAccessDto(result));
   } catch (error) {
     await logApiError({
-      shop: session?.shop,
+      shop: res.locals?.shopify?.session?.shop,
       err: error,
       req,
       source: "storeController.getStoreAccess",

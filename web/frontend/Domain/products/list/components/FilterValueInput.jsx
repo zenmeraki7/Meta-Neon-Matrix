@@ -3,6 +3,7 @@ import {
   ChoiceList,
   TextField,
   Autocomplete,
+  Text,
 } from "@shopify/polaris";
 
 const FilterValueInput = memo(function FilterValueInput({
@@ -17,11 +18,20 @@ const FilterValueInput = memo(function FilterValueInput({
   enumChoices,
 }) {
   if (filter.isSearchable) {
+    const allowFreeText = !filter.api;
+
     return (
       <Autocomplete
         options={options}
         selected={value ? [value] : []}
         loading={loading}
+        emptyState={
+          inputText && inputText.trim().length >= 2 && !loading ? (
+            <Text as="p" variant="bodySm" tone="subdued">
+              No suggestions found
+            </Text>
+          ) : null
+        }
         onSelect={([selected]) => {
           const option = options.find((entry) => entry.value === selected);
           onChange(selected, option?.label || selected || "");
@@ -33,7 +43,12 @@ const FilterValueInput = memo(function FilterValueInput({
             autoComplete="off"
             value={inputText}
             onFocus={() => onSearch(inputText || "")}
-            onChange={onSearch}
+            onChange={(next) => {
+              if (allowFreeText) {
+                onChange(next, next);
+              }
+              onSearch(next);
+            }}
           />
         }
       />

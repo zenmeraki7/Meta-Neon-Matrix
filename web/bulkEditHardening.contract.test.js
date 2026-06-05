@@ -22,11 +22,14 @@ test("result ingestion uses lease plus CAS guard before terminal counter write",
   assert.equal(normalizeBlock.includes("|| row?.product?.id"), false);
 });
 
-test("verification forces FULL mode for variant/inventory/metafield targets and validates tuple semantics", () => {
+test("verification bounds high-risk verification and validates tuple semantics", () => {
   const source = read("web/services/bulkEdit/BulkEditVerificationService.js");
   assert.ok(source.includes("function requiresFullVerification(history)"));
-  assert.ok(source.includes('if (requiresFullVerification(history)) return VERIFY_MODES.FULL'));
-  assert.ok(source.includes("deterministicFullRequired"));
+  const configuredIndex = source.indexOf("const configured = String(history?.batch?.verificationMode");
+  const fullIndex = source.indexOf("if (requiresFullVerification(history)) return VERIFY_MODES.FULL");
+  assert.ok(configuredIndex > -1 && fullIndex > -1 && configuredIndex < fullIndex);
+  assert.ok(source.includes("MAX_VERIFICATION_ROWS_PER_RUN"));
+  assert.equal(source.includes("verifyRows.push(row)"), false);
   assert.ok(source.includes("completionBlockedByCoverage"));
   assert.ok(source.includes("fullCoverageAchieved"));
   assert.ok(source.includes("verificationTargetCount"));
@@ -98,7 +101,6 @@ test("execute submit persists submission intent and reconciles from existing sub
   assert.ok(source.includes("shopifySubmissionIntent"));
   assert.ok(source.includes("buildSubmissionIntent"));
   assert.ok(source.includes("const existingSubmission = await db.bulkSubmission.findFirst"));
-  assert.ok(source.includes("PENDING_SUBMIT_INTENT_REQUIRES_RECONCILIATION"));
   assert.ok(source.includes("submissionStage: \"STAGED_UPLOAD_CREATED\""));
   assert.ok(source.includes("submissionStage: \"UPLOADED\""));
   assert.ok(source.includes("submissionStage: \"SUBMIT_RESPONSE_RECEIVED\""));
@@ -111,13 +113,38 @@ test("execute submit persists submission intent and reconciles from existing sub
   assert.ok(source.includes("SUBMIT_FENCE_MISMATCH"));
   assert.ok(source.includes("reconciled: true"));
   assert.ok(source.includes("pendingIntent: true"));
+  assert.equal(source.includes("PENDING_SUBMIT_INTENT_REQUIRES_RECONCILIATION"), false);
+  assert.ok(source.includes("const slot = await this.assertNoActiveMutationOperation();"));
 });
 
 test("bulk operation mutation webhook routing prefers durable submission ledger", () => {
   const source = read("web/Jobs/Workers/bulkOperationMutationWorker.js");
   assert.ok(source.includes("resolveOperationKindByLedger"));
-  assert.ok(source.includes("prisma.bulkSubmission.findUnique"));
+  assert.ok(source.includes("db.bulkSubmission.findUnique"));
   assert.ok(source.includes("routedBy: ledgerResolution.source"));
+});
+
+test("shopify bulk mutation submission avoids stale batch merges and lazy imports", () => {
+  const source = read("web/services/bulkEdit/ShopifyBulkMutationService.js");
+  assert.equal(source.includes("await import("), false);
+  assert.equal(source.includes("async getDb()"), false);
+  assert.equal(source.includes("resolveUploadToShopifyStagedTarget"), false);
+  assert.equal(source.includes("resolveStageProgressUpsert"), false);
+  assert.equal(source.includes("mergeBatch(history.batch"), false);
+  assert.ok(source.includes("let batchState = history.batch"));
+  assert.ok(source.includes("rememberBatch(mergeCurrentBatch({"));
+});
+
+test("shopify bulk mutation submission keeps deterministic and bounded submission semantics", () => {
+  const source = read("web/services/bulkEdit/ShopifyBulkMutationService.js");
+  assert.equal(source.includes("batchId || Date.now()"), false);
+  assert.equal(source.includes("text.split(\"\\n\")"), false);
+  assert.equal(source.includes("async submitBulkMutation(args)"), false);
+  assert.ok(source.includes("text.split(/\\r?\\n/)"));
+  assert.ok(source.includes("ADAPTIVE_BATCH_SIZE_MIN"));
+  assert.ok(source.includes("ADAPTIVE_BATCH_SIZE_MAX"));
+  assert.ok(source.includes("if (bulkErrors.length && !bulkOperation.id)"));
+  assert.ok(source.includes("const stagedUploadPathHash = hashValue(stagedUploadPath);"));
 });
 
 test("bulk operation mutation worker routes all mutation statuses through ingest orchestrator only", () => {

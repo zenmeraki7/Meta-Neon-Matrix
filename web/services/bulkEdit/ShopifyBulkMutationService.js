@@ -13,6 +13,10 @@ import {
   normalizeEditHistoryExecutionState,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
+import { db as defaultDb } from "../../repositories/repositoryDb.js";
+import { uploadToShopifyStagedTarget as defaultUploadToShopifyStagedTarget } from "../../utils/productBulkEditUtils.js";
+import { upsertOperationStageProgress as defaultUpsertOperationStageProgress } from "../operationStageProgressService.js";
+import CacheService from "../../utils/cacheService.js";
 
 const CURRENT_BULK_OPERATION_QUERY = `
   query CurrentBulkOperation {
@@ -44,6 +48,17 @@ const CAS_MUTABLE_EXECUTION_STATES = [
   OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
   OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
 ];
+
+const ADAPTIVE_BATCH_SIZE_MIN = clampBatchSize(
+  process.env.BULK_EDIT_DYNAMIC_BATCH_SIZE_MIN || "25",
+  1,
+  500,
+);
+const ADAPTIVE_BATCH_SIZE_MAX = clampBatchSize(
+  process.env.BULK_EDIT_DYNAMIC_BATCH_SIZE_MAX || "250",
+  ADAPTIVE_BATCH_SIZE_MIN,
+  1_000,
+);
 
 function determineMutationMode(fields = []) {
   const normalizedFields = Array.isArray(fields) ? fields.filter(Boolean) : [];
@@ -93,14 +108,11 @@ function assertSubmissionInput({
 }
 
 function buildOperationName({ historyId, batchId }) {
-  return `bulkEdit_${historyId}_${batchId || Date.now()}`;
+  return `bulkEdit_${historyId}_${batchId || "unbatched"}`;
 }
 
 function normalizeBulkOperationResponse(result) {
-  const bulkOperation =
-    result?.bulkOperation ||
-    result?.body?.data?.bulkOperationRunMutation?.bulkOperation ||
-    null;
+  const bulkOperation = result?.bulkOperation || null;
 
   return {
     id: bulkOperation?.id || null,
@@ -148,7 +160,7 @@ function hashValue(value) {
 function countJsonlLines(payload) {
   const text = String(payload || "");
   if (!text.trim()) return 0;
-  return text.split("\n").filter((line) => String(line || "").trim().length > 0).length;
+  return text.split(/\r?\n/).filter((line) => String(line || "").trim().length > 0).length;
 }
 
 function clampBatchSize(value, min, max) {
@@ -163,16 +175,8 @@ function deriveAdaptiveBatchSize({
   batchTargetCount,
   currentBatchSize,
 }) {
-  const minBatchSize = clampBatchSize(
-    process.env.BULK_EDIT_DYNAMIC_BATCH_SIZE_MIN || "25",
-    1,
-    500,
-  );
-  const maxBatchSize = clampBatchSize(
-    process.env.BULK_EDIT_DYNAMIC_BATCH_SIZE_MAX || "250",
-    minBatchSize,
-    1_000,
-  );
+  const minBatchSize = ADAPTIVE_BATCH_SIZE_MIN;
+  const maxBatchSize = ADAPTIVE_BATCH_SIZE_MAX;
 
   const availableBudget = Number(throttleStatus?.currentlyAvailable || 0);
   const restoreRate = Number(throttleStatus?.restoreRate || 0);
@@ -226,31 +230,12 @@ export class ShopifyBulkMutationService {
   constructor(session, client, deps = {}) {
     this.session = session;
     this.client = client;
-    this.db = deps.db || null;
-    this.uploadToShopifyStagedTarget = deps.uploadToShopifyStagedTarget || null;
-    this.upsertOperationStageProgress = deps.upsertOperationStageProgress || null;
-    this.cacheSet = deps.cacheSet || null;
-  }
-
-  async getDb() {
-    if (this.db) return this.db;
-    const { db } = await import("../../repositories/repositoryDb.js");
-    this.db = db;
-    return this.db;
-  }
-
-  async resolveUploadToShopifyStagedTarget() {
-    if (this.uploadToShopifyStagedTarget) return this.uploadToShopifyStagedTarget;
-    const mod = await import("../../utils/productBulkEditUtils.js");
-    this.uploadToShopifyStagedTarget = mod.uploadToShopifyStagedTarget;
-    return this.uploadToShopifyStagedTarget;
-  }
-
-  async resolveStageProgressUpsert() {
-    if (this.upsertOperationStageProgress) return this.upsertOperationStageProgress;
-    const mod = await import("../operationStageProgressService.js");
-    this.upsertOperationStageProgress = mod.upsertOperationStageProgress;
-    return this.upsertOperationStageProgress;
+    this.db = deps.db || defaultDb;
+    this.uploadToShopifyStagedTarget =
+      deps.uploadToShopifyStagedTarget || defaultUploadToShopifyStagedTarget;
+    this.upsertOperationStageProgress =
+      deps.upsertOperationStageProgress || defaultUpsertOperationStageProgress;
+    this.cacheSet = deps.cacheSet || ((key, value) => CacheService.set(key, value));
   }
 
   async getCurrentBulkOperation() {
@@ -335,8 +320,8 @@ export class ShopifyBulkMutationService {
       formattedProducts,
       fields,
     });
-    const db = await this.getDb();
-    const stageProgressUpsert = await this.resolveStageProgressUpsert();
+    const db = this.db;
+    const stageProgressUpsert = this.upsertOperationStageProgress;
 
     const history = await db.editHistory.findFirst({
       where: {
@@ -386,32 +371,12 @@ export class ShopifyBulkMutationService {
     if (alreadySubmitted) {
       throw new Error("SHOPIFY_BULK_OPERATION_ALREADY_SUBMITTED");
     }
-    await stageProgressUpsert({
-      shop: this.session.shop,
-      operationType: "BULK_EDIT",
-      operationId: historyId,
-      executionId: history.executionIdentity || executionId || null,
-      stageKey: "SHOPIFY_SUBMISSION",
-      stageStatus: "PREPARED_JSONL",
-      detail: {
-        batchId: batchId || null,
-        jsonlHash: hashValue(formattedProducts),
-        jsonlRowCount: countJsonlLines(formattedProducts),
-      },
-    });
-    await stageProgressUpsert({
-      shop: this.session.shop,
-      operationType: "BULK_EDIT",
-      operationId: historyId,
-      executionId: history.executionIdentity || executionId || null,
-      stageKey: "SHOPIFY_SUBMISSION",
-      stageStatus: "PENDING_SUBMIT",
-      detail: {
-        batchId: batchId || null,
-        submitFence: submitFence || null,
-      },
-    });
-
+    let batchState = history.batch && typeof history.batch === "object" ? history.batch : {};
+    const mergeCurrentBatch = (patch) => mergeBatch(batchState, patch);
+    const rememberBatch = (nextBatch) => {
+      batchState = nextBatch && typeof nextBatch === "object" ? nextBatch : batchState;
+      return batchState;
+    };
     const existingSubmission = await db.bulkSubmission.findFirst({
       where: {
         shop: this.session.shop,
@@ -447,7 +412,7 @@ export class ShopifyBulkMutationService {
           executionStateNormalized: normalizeEditHistoryExecutionState(
             OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
           ),
-          batch: mergeBatch(history.batch, {
+          batch: rememberBatch(mergeCurrentBatch({
             shopifySubmissionIntent: null,
             shopifyBulkOperation: {
               id: existingSubmission.shopifyBulkOperationId,
@@ -468,7 +433,7 @@ export class ShopifyBulkMutationService {
             lastProductId,
             hasMore,
             nextRetryCursorIndex,
-          }),
+          })),
         },
       });
       return {
@@ -485,6 +450,7 @@ export class ShopifyBulkMutationService {
     }
 
     const pendingIntent = history.batch?.shopifySubmissionIntent;
+    let replayUploadIntent = null;
     if (
       pendingIntent
       && String(pendingIntent.status || "").toUpperCase() === "PENDING"
@@ -535,7 +501,7 @@ export class ShopifyBulkMutationService {
             executionStateNormalized: normalizeEditHistoryExecutionState(
               OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
             ),
-            batch: mergeBatch(history.batch, {
+            batch: rememberBatch(mergeCurrentBatch({
               shopifySubmissionIntent: null,
               shopifyBulkOperation: {
                 id: intentBulkOperationId,
@@ -553,7 +519,7 @@ export class ShopifyBulkMutationService {
               shopifyBulkOperationId: intentBulkOperationId,
               submittedBatchId: batchId || null,
               lastSubmittedAt: new Date().toISOString(),
-            }),
+            })),
           },
         });
         if (movedRunningFromIntent.count !== 1) {
@@ -567,43 +533,18 @@ export class ShopifyBulkMutationService {
           bulkOperationId: intentBulkOperationId,
         };
       }
-      const slotFromPending = await this.assertNoActiveMutationOperation();
-      if (!slotFromPending.available) {
-        const movedWaiting = await db.editHistory.updateMany({
-          where: {
-            id: historyId,
-            shop: this.session.shop,
-            executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-          },
-          data: {
-            executionState: OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
-            executionStateNormalized: normalizeEditHistoryExecutionState(
-              OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
-            ),
-            batch: mergeBatch(history.batch, {
-              waitingForShopifySlot: true,
-              currentShopifyBulkOperation: slotFromPending.currentBulkOperation,
-              waitingForShopifySlotAt: new Date().toISOString(),
-            }),
-          },
-        });
-        if (movedWaiting.count !== 1) {
-          throw new Error("SHOPIFY_SUBMISSION_WAIT_SLOT_TRANSITION_REJECTED");
-        }
-        return {
-          submitted: false,
-          waitingForShopifySlot: true,
-          currentBulkOperation: slotFromPending.currentBulkOperation,
-          pendingIntent: true,
-        };
+      if (
+        String(pendingIntent.submissionStage || "").toUpperCase() === "UPLOADED"
+        && String(pendingIntent.stagedUploadPath || "").trim()
+      ) {
+        replayUploadIntent = pendingIntent;
       }
-      throw new Error("PENDING_SUBMIT_INTENT_REQUIRES_RECONCILIATION");
     }
 
     const slot = await this.assertNoActiveMutationOperation();
 
     if (!slot.available) {
-      const movedWaiting = await this.db.editHistory.updateMany({
+      const movedWaiting = await db.editHistory.updateMany({
         where: {
           id: historyId,
           shop: this.session.shop,
@@ -614,11 +555,11 @@ export class ShopifyBulkMutationService {
           executionStateNormalized: normalizeEditHistoryExecutionState(
             OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
           ),
-          batch: mergeBatch(history.batch, {
+          batch: rememberBatch(mergeCurrentBatch({
             waitingForShopifySlot: true,
             currentShopifyBulkOperation: slot.currentBulkOperation,
             waitingForShopifySlotAt: new Date().toISOString(),
-          }),
+          })),
         },
       });
       if (movedWaiting.count !== 1) {
@@ -643,34 +584,50 @@ export class ShopifyBulkMutationService {
       };
     }
 
-    const operationName = buildOperationName({ historyId, batchId });
+    const operationName = String(replayUploadIntent?.operationName || "").trim()
+      || buildOperationName({ historyId, batchId });
     const mode = determineMutationMode(fields);
-    const submissionIntent = buildSubmissionIntent({
-      executionId: history.executionIdentity || executionId || null,
-      batchId,
-      lastProductId,
-      hasMore,
-      nextRetryCursorIndex,
-      operationName,
-    });
-    const intentSet = await db.editHistory.updateMany({
-      where: {
-        id: historyId,
-        shop: this.session.shop,
-        executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-        batch: {
-          path: ["shopifyBulkOperation", "id"],
-          equals: null,
-        },
-      },
-      data: {
-        batch: mergeBatch(history.batch, {
-          shopifySubmissionIntent: submissionIntent,
+    const submissionIntent = replayUploadIntent
+      ? {
+        ...buildSubmissionIntent({
+          executionId: history.executionIdentity || executionId || null,
+          batchId,
+          lastProductId,
+          hasMore,
+          nextRetryCursorIndex,
+          operationName,
         }),
-      },
-    });
-    if (intentSet.count !== 1) {
-      throw new Error("SHOPIFY_SUBMISSION_INTENT_SET_REJECTED");
+        ...replayUploadIntent,
+        submissionStage: "UPLOADED",
+      }
+      : buildSubmissionIntent({
+        executionId: history.executionIdentity || executionId || null,
+        batchId,
+        lastProductId,
+        hasMore,
+        nextRetryCursorIndex,
+        operationName,
+      });
+    if (!replayUploadIntent) {
+      const intentSet = await db.editHistory.updateMany({
+        where: {
+          id: historyId,
+          shop: this.session.shop,
+          executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
+          batch: {
+            path: ["shopifyBulkOperation", "id"],
+            equals: null,
+          },
+        },
+        data: {
+          batch: rememberBatch(mergeCurrentBatch({
+            shopifySubmissionIntent: submissionIntent,
+          })),
+        },
+      });
+      if (intentSet.count !== 1) {
+        throw new Error("SHOPIFY_SUBMISSION_INTENT_SET_REJECTED");
+      }
     }
     await stageProgressUpsert({
       shop: this.session.shop,
@@ -683,81 +640,100 @@ export class ShopifyBulkMutationService {
         batchId: batchId || null,
         operationName,
         submitFence: submitFence || null,
+        jsonlHash: hashValue(formattedProducts),
+        jsonlRowCount: countJsonlLines(formattedProducts),
       },
     });
 
-    const stagedTarget = await this.createStagedUploadTarget({
-      operationName,
-    });
-    const stagedTargetSet = await db.editHistory.updateMany({
-      where: {
-        id: historyId,
+    let stagedUploadPath = String(replayUploadIntent?.stagedUploadPath || "").trim();
+    if (stagedUploadPath) {
+      await stageProgressUpsert({
         shop: this.session.shop,
-        executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-      },
-      data: {
-        batch: mergeBatch(history.batch, {
-          shopifySubmissionIntent: {
-            ...submissionIntent,
-            submissionStage: "STAGED_UPLOAD_CREATED",
-          },
-        }),
-      },
-    });
-    if (stagedTargetSet.count !== 1) {
-      throw new Error("SHOPIFY_SUBMISSION_STAGE_UPLOAD_TRANSITION_REJECTED");
-    }
-    await stageProgressUpsert({
-      shop: this.session.shop,
-      operationType: "BULK_EDIT",
-      operationId: historyId,
-      executionId: history.executionIdentity || executionId || null,
-      stageKey: "SHOPIFY_SUBMISSION",
-      stageStatus: "STAGED_UPLOAD_CREATED",
-      detail: {
+        operationType: "BULK_EDIT",
+        operationId: historyId,
+        executionId: history.executionIdentity || executionId || null,
+        stageKey: "SHOPIFY_SUBMISSION",
+        stageStatus: "REPLAY_UPLOADED",
+        detail: {
+          operationName,
+          stagedUploadPath,
+          stagedUploadPathHash: hashValue(stagedUploadPath),
+        },
+      });
+    } else {
+      const stagedTarget = await this.createStagedUploadTarget({
         operationName,
+      });
+      const stagedTargetSet = await db.editHistory.updateMany({
+        where: {
+          id: historyId,
+          shop: this.session.shop,
+          executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
+        },
+        data: {
+          batch: rememberBatch(mergeCurrentBatch({
+            shopifySubmissionIntent: {
+              ...submissionIntent,
+              submissionStage: "STAGED_UPLOAD_CREATED",
+            },
+          })),
+        },
+      });
+      if (stagedTargetSet.count !== 1) {
+        throw new Error("SHOPIFY_SUBMISSION_STAGE_UPLOAD_TRANSITION_REJECTED");
+      }
+      await stageProgressUpsert({
+        shop: this.session.shop,
+        operationType: "BULK_EDIT",
+        operationId: historyId,
+        executionId: history.executionIdentity || executionId || null,
+        stageKey: "SHOPIFY_SUBMISSION",
+        stageStatus: "STAGED_UPLOAD_CREATED",
+        detail: {
+          operationName,
+          stagedTarget,
+        },
+      });
+
+      stagedUploadPath = await this.uploadToShopifyStagedTarget(
         stagedTarget,
-      },
-    });
-
-    const uploadToStagedTarget = await this.resolveUploadToShopifyStagedTarget();
-    const stagedUploadPath = await uploadToStagedTarget(
-      stagedTarget,
-      formattedProducts,
-    );
-    const uploadedSet = await db.editHistory.updateMany({
-      where: {
-        id: historyId,
+        formattedProducts,
+      );
+      const stagedUploadPathHash = hashValue(stagedUploadPath);
+      const uploadedSet = await db.editHistory.updateMany({
+        where: {
+          id: historyId,
+          shop: this.session.shop,
+          executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
+        },
+        data: {
+          batch: rememberBatch(mergeCurrentBatch({
+            shopifySubmissionIntent: {
+              ...submissionIntent,
+              submissionStage: "UPLOADED",
+              stagedUploadPath,
+              stagedUploadPathHash,
+            },
+          })),
+        },
+      });
+      if (uploadedSet.count !== 1) {
+        throw new Error("SHOPIFY_SUBMISSION_UPLOAD_TRANSITION_REJECTED");
+      }
+      await stageProgressUpsert({
         shop: this.session.shop,
-        executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-      },
-      data: {
-        batch: mergeBatch(history.batch, {
-          shopifySubmissionIntent: {
-            ...submissionIntent,
-            submissionStage: "UPLOADED",
-            stagedUploadPath,
-            stagedUploadPathHash: hashValue(stagedUploadPath),
-          },
-        }),
-      },
-    });
-    if (uploadedSet.count !== 1) {
-      throw new Error("SHOPIFY_SUBMISSION_UPLOAD_TRANSITION_REJECTED");
+        operationType: "BULK_EDIT",
+        operationId: historyId,
+        executionId: history.executionIdentity || executionId || null,
+        stageKey: "SHOPIFY_SUBMISSION",
+        stageStatus: "UPLOADED",
+        detail: {
+          operationName,
+          stagedUploadPath,
+          stagedUploadPathHash,
+        },
+      });
     }
-    await stageProgressUpsert({
-      shop: this.session.shop,
-      operationType: "BULK_EDIT",
-      operationId: historyId,
-      executionId: history.executionIdentity || executionId || null,
-      stageKey: "SHOPIFY_SUBMISSION",
-      stageStatus: "UPLOADED",
-      detail: {
-        operationName,
-        stagedUploadPath,
-        stagedUploadPathHash: hashValue(stagedUploadPath),
-      },
-    });
 
     const bulkRes = await this.client.query({
       data: {
@@ -769,17 +745,15 @@ export class ShopifyBulkMutationService {
       },
     });
 
-    const bulkErrors =
-      bulkRes?.body?.data?.bulkOperationRunMutation?.userErrors;
-
-    if (bulkErrors?.length) {
+    const result = bulkRes?.body?.data?.bulkOperationRunMutation;
+    const bulkOperation = normalizeBulkOperationResponse(result);
+    const bulkErrors = Array.isArray(result?.userErrors) ? result.userErrors : [];
+    if (bulkErrors.length && !bulkOperation.id) {
       throw new Error(
         `Bulk operation returned errors: ${JSON.stringify(bulkErrors)}`,
       );
     }
-
-    const result = bulkRes?.body?.data?.bulkOperationRunMutation;
-    const bulkOperation = normalizeBulkOperationResponse(result);
+    const stagedUploadPathHash = hashValue(stagedUploadPath);
     const throttleStatus = bulkRes?.body?.extensions?.cost?.throttleStatus || null;
     const actualQueryCost = Number(
       bulkRes?.body?.extensions?.cost?.actualQueryCost || 0,
@@ -801,15 +775,16 @@ export class ShopifyBulkMutationService {
         executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
       },
       data: {
-        batch: mergeBatch(history.batch, {
+        batch: rememberBatch(mergeCurrentBatch({
           shopifySubmissionIntent: {
             ...submissionIntent,
             submissionStage: "SUBMIT_RESPONSE_RECEIVED",
             stagedUploadPath,
-            stagedUploadPathHash: hashValue(stagedUploadPath),
+            stagedUploadPathHash,
             bulkOperationId: bulkOperation.id,
+            userErrors: bulkErrors,
           },
-        }),
+        })),
       },
     });
     if (responseReceivedSet.count !== 1) {
@@ -825,10 +800,11 @@ export class ShopifyBulkMutationService {
       detail: {
         operationName,
         stagedUploadPath,
-        stagedUploadPathHash: hashValue(stagedUploadPath),
+        stagedUploadPathHash,
         shopifyBulkOperationId: bulkOperation.id,
         shopifyStatus: bulkOperation.status || null,
         shopifyType: bulkOperation.type || null,
+        userErrors: bulkErrors,
         adaptiveSizing,
       },
     });
@@ -867,7 +843,7 @@ export class ShopifyBulkMutationService {
           executionStateNormalized: normalizeEditHistoryExecutionState(
             OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
           ),
-          batch: mergeBatch(history.batch, {
+          batch: rememberBatch(mergeCurrentBatch({
             shopifySubmissionIntent: null,
             waitingForShopifySlot: false,
             shopifyBulkOperation: {
@@ -884,6 +860,7 @@ export class ShopifyBulkMutationService {
               hasMore,
               nextRetryCursorIndex,
               stagedUploadPath,
+              userErrors: bulkErrors,
             },
             shopifyBulkOperationId: bulkOperation.id,
             submittedBatchId: batchId,
@@ -896,7 +873,7 @@ export class ShopifyBulkMutationService {
               ...adaptiveSizing,
               updatedAt: submittedAt.toISOString(),
             },
-          }),
+          })),
         },
       });
       return updated;
@@ -905,20 +882,11 @@ export class ShopifyBulkMutationService {
       throw new Error("SHOPIFY_SUBMISSION_FINALIZE_CONFLICT");
     }
 
-    if (this.cacheSet) {
-      await this.cacheSet(`${this.session.shop}:PRODUCT_UPDATE`, {
-        running: true,
-        historyId,
-        bulkOperationId: bulkOperation.id,
-      });
-    } else {
-      const { default: CacheService } = await import("../../utils/cacheService.js");
-      await CacheService.set(`${this.session.shop}:PRODUCT_UPDATE`, {
-        running: true,
-        historyId,
-        bulkOperationId: bulkOperation.id,
-      });
-    }
+    await this.cacheSet(`${this.session.shop}:PRODUCT_UPDATE`, {
+      running: true,
+      historyId,
+      bulkOperationId: bulkOperation.id,
+    });
     await stageProgressUpsert({
       shop: this.session.shop,
       operationType: "BULK_EDIT",
@@ -949,9 +917,4 @@ export class ShopifyBulkMutationService {
       nextRetryCursorIndex,
     };
   }
-
-  async submitBulkMutation(args) {
-    return this.submitProductSetBulkMutation(args);
-  }
 }
-

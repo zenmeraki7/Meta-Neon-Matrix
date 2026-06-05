@@ -11,8 +11,15 @@ const locationService = new LocationService();
 router.get("/get-all", async (req, res) => {
   try {
     const session = requireShopifySession(res);
-    const result = await locationService.fetchLocations(session, req);
-    return res.status(200).json(result);
+    const locations = await locationService.fetchLocations({
+      session,
+      search: req.query?.search,
+    });
+    return res.status(200).json({
+      success: true,
+      total: locations.length,
+      data: locations,
+    });
   } catch (error) {
     return handleControllerError(res, error, "LOCATION_FETCH_FAILED");
   }

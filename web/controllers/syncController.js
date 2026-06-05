@@ -8,30 +8,26 @@ import {
 import { startProductSync } from "../services/sync/SyncCommandService.js";
 import { normalizeSyncStartCommand } from "../normalizers/syncStartCommandNormalizer.js";
 import { toSyncCommandResponseDto } from "../dtos/syncCommandResponseDto.js";
+import {
+  toSyncStatusDetailDto,
+  toSyncStatusSummaryDto,
+  toTrackedSyncStatusDto,
+} from "../dtos/syncStatusResponseDto.js";
 
 export const syncProductData = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-
   try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
-
-        console.log(`[api:sync_request] shop=${session.shop} force=${req.query.force || req.body?.force}`);
-
+    const session = res.locals.shopify.session;
     const command = normalizeSyncStartCommand(req, session);
+    console.log(`[api:sync_request] shop=${session.shop} force=${command.force}`);
+
     const result = await startProductSync(command);
     const responseDto = toSyncCommandResponseDto(result);
-    console.log(`[api:sync_triggered] shop=${session.shop} bulkOperationId=${result.bulkOperationId} syncHistoryId=${result.syncHistoryId}`);
+    console.log(`[api:sync_triggered] shop=${session.shop} syncHistoryId=${responseDto.syncHistoryId}`);
 
     return res.status(200).json(responseDto);
   } catch (error) {
     await logApiError({
-      shop: session?.shop,
+      shop: res.locals?.shopify?.session?.shop,
       err: error,
       req,
       source: "syncController.syncProductData",
@@ -46,24 +42,15 @@ export const syncProductData = async (req, res) => {
 };
 
 export const getSyncStatus = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-
   try {
-    const shop = session?.shop;
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
 
-    if (!shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
-
-    const response = await getSyncStatusDetailForShop(shop);
-    return res.status(200).json(response);
+    const result = await getSyncStatusDetailForShop(shop);
+    return res.status(200).json(toSyncStatusDetailDto(result));
   } catch (error) {
     await logApiError({
-      shop: session?.shop,
+      shop: res.locals?.shopify?.session?.shop,
       err: error,
       req,
       source: "syncController.getSyncStatus",
@@ -77,26 +64,16 @@ export const getSyncStatus = async (req, res) => {
   }
 };
 
-export const getSyncStatusDetail = getSyncStatus;
-
 export const getSyncStatusSummary = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-
   try {
-    const shop = session?.shop;
-    if (!shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
 
-    const response = await getSyncStatusSummaryForShop(shop);
-    return res.status(200).json(response);
+    const result = await getSyncStatusSummaryForShop(shop);
+    return res.status(200).json(toSyncStatusSummaryDto(result));
   } catch (error) {
     await logApiError({
-      shop: session?.shop,
+      shop: res.locals?.shopify?.session?.shop,
       err: error,
       req,
       source: "syncController.getSyncStatusSummary",
@@ -111,24 +88,19 @@ export const getSyncStatusSummary = async (req, res) => {
 };
 
 export const trackProductSync = async (req, res) => {
-  let session = null;
   try {
-    session = res.locals?.shopify?.session || null;
-    const shop = session?.shop;
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
+    const { bulkOperationStatusReader } = res.locals.syncStatusDependencies;
 
-    if (!shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
-
-    const response = await getTrackedProductSyncStatus({ session, shop });
-    return res.status(200).json(response);
+    const result = await getTrackedProductSyncStatus({
+      shop,
+      bulkOperationStatusReader,
+    });
+    return res.status(200).json(toTrackedSyncStatusDto(result));
   } catch (error) {
     await logApiError({
-      shop: session?.shop,
+      shop: res.locals?.shopify?.session?.shop,
       err: error,
       req,
       source: "syncController.trackProductSync",

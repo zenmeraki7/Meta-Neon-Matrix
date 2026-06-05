@@ -7,6 +7,7 @@ export async function commitBulkEditSessionUseCase(command) {
   const queued = await enqueueBulkEditWrite({
     shopId: committed.shopId,
     sessionId: committed.sessionId,
+    changeCount: committed.changeCount,
   });
 
   return toSessionCommitResultDto({

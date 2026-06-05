@@ -1,1 +1,1 @@
-export { default } from "./ProductBulkService.js";
+export { default } from "../bulkEdit/ProductBulkService.js";

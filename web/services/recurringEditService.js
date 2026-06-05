@@ -24,6 +24,13 @@ const WEEKDAY_NAMES = [
   "Saturday",
 ];
 
+function buildRecurringEditError(message, statusCode = 400, code = "VALIDATION_FAILED") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
 function normalizeStatus(rawStatus, fallback = "ACTIVE") {
   if (!rawStatus) return fallback;
 
@@ -246,12 +253,12 @@ function serializeRecurringEditListItem(edit, countsById = {}, latestRunsById = 
 async function getRecurringEditHydrated(id, shop) {
   const edit = await recurringEditRepository.findByIdForShop(id, shop);
   if (!edit) {
-    throw new Error("Recurring edit not found");
+    throw buildRecurringEditError("Recurring edit not found", 404, "RECURRING_EDIT_NOT_FOUND");
   }
 
   const [statusCounts, latestRuns] = await Promise.all([
-    recurringEditRunRepository.groupStatusCounts([edit.id]),
-    recurringEditRunRepository.findLatestRuns([edit.id]),
+    recurringEditRunRepository.groupStatusCounts([edit.id], shop),
+    recurringEditRunRepository.findLatestRuns([edit.id], shop),
   ]);
 
   const countsById = indexRunCounts(statusCounts);
@@ -269,8 +276,8 @@ async function getRecurringEditHydrated(id, shop) {
     sampleLimit: 1,
   });
   const latestHistory = latestRunsById[edit.id]?.editHistoryId
-    ? await db.editHistory.findUnique({
-        where: { id: latestRunsById[edit.id].editHistoryId },
+    ? await db.editHistory.findFirst({
+        where: { id: latestRunsById[edit.id].editHistoryId, shop },
         select: {
           processedCount: true,
           totalItems: true,
@@ -287,39 +294,40 @@ async function getRecurringEditHydrated(id, shop) {
   };
 }
 
-export async function createRecurringEdit({ shop, body, subscription }) {
+export async function createRecurringEdit({ shop, input, body, subscription }) {
   await assertProRecurringEditAccess(subscription);
 
-  const filterParams = Array.isArray(body.filterParams) ? body.filterParams : [];
+  const normalizedInput = input || body || {};
+  const filterParams = Array.isArray(normalizedInput.filterParams) ? normalizedInput.filterParams : [];
   const filterParamsToPersist = [];
-  const rules = buildRulesFromBody(body);
+  const rules = buildRulesFromBody(normalizedInput);
   const rule = validateRules(rules);
-  const status = normalizeStatus(body.status, "ACTIVE");
+  const status = normalizeStatus(normalizedInput.status, "ACTIVE");
 
   if (status === "ACTIVE") {
     await assertRecurringEditActiveLimit({ shop });
   }
 
-  const scheduleInput = buildRecurringScheduleInput(body);
-  const title = String(body.title || "").trim() || buildDefaultTitle(rule);
+  const scheduleInput = buildRecurringScheduleInput(normalizedInput);
+  const title = String(normalizedInput.title || "").trim() || buildDefaultTitle(rule);
   const nextRunAt = status === "ACTIVE"
     ? computeRecurringEditNextRunAt({ ...scheduleInput, status }, scheduleInput.startAt || new Date())
     : null;
   const targetingPayload = TargetingEngineService.prepareTargetingPayload({
-    filterAst: body.filterAst ?? null,
+    filterAst: normalizedInput.filterAst ?? null,
     legacyFilterParams: filterParams,
     targetGranularity: "PRODUCT",
     source: "RECURRING",
     applyMirrorScope: false,
   });
   const recurringExecutionPlan = planMutationExecution({
-    operationKey: body.operationKey || null,
+    operationKey: normalizedInput.operationKey || null,
     shop,
     planType: "RECURRING_EDIT",
     mutationIntent: {
       mutationType: "PRODUCT_SET",
       fieldsBeingEdited: rules.map((item) => item?.field).filter(Boolean),
-      operationKey: body.operationKey || null,
+      operationKey: normalizedInput.operationKey || null,
     },
     targetGranularity: targetingPayload.targetGranularity || "PRODUCT",
     targetCount: 0,
@@ -457,8 +465,8 @@ export async function listRecurringEdits({
   const endCursor = pageItems.length ? pageItems[pageItems.length - 1].id : null;
   const ids = pageItems.map((edit) => edit.id);
   const [statusCounts, latestRuns] = await Promise.all([
-    recurringEditRunRepository.groupStatusCounts(ids),
-    recurringEditRunRepository.findLatestRuns(ids),
+    recurringEditRunRepository.groupStatusCounts(ids, shop),
+    recurringEditRunRepository.findLatestRuns(ids, shop),
   ]);
 
   const countsById = indexRunCounts(statusCounts);
@@ -486,26 +494,28 @@ export async function getRecurringEditById({ shop, recurringEditId }) {
 export async function updateRecurringEdit({
   shop,
   recurringEditId,
+  patch,
   body,
   subscription,
 }) {
   const existing = await recurringEditRepository.findByIdForShop(recurringEditId, shop);
   if (!existing) {
-    throw new Error("Recurring edit not found");
+    throw buildRecurringEditError("Recurring edit not found", 404, "RECURRING_EDIT_NOT_FOUND");
   }
 
+  const normalizedPatch = patch || body || {};
   const mergedBody = {
-    ...body,
-    scheduleType: body.scheduleType ?? body.frequency ?? existing.scheduleType,
-    timezone: body.timezone ?? existing.timezone,
-    startAt: body.startAt ?? existing.startAt,
-    endAt: body.endAt ?? existing.endAt,
-    scheduleConfig: body.scheduleConfig ?? existing.scheduleConfig,
-    intervalMinutes: body.intervalMinutes ?? existing.intervalMinutes,
-    cronExpression: body.cronExpression ?? existing.cronExpression,
+    ...normalizedPatch,
+    scheduleType: normalizedPatch.scheduleType ?? normalizedPatch.frequency ?? existing.scheduleType,
+    timezone: normalizedPatch.timezone ?? existing.timezone,
+    startAt: normalizedPatch.startAt ?? existing.startAt,
+    endAt: normalizedPatch.endAt ?? existing.endAt,
+    scheduleConfig: normalizedPatch.scheduleConfig ?? existing.scheduleConfig,
+    intervalMinutes: normalizedPatch.intervalMinutes ?? existing.intervalMinutes,
+    cronExpression: normalizedPatch.cronExpression ?? existing.cronExpression,
   };
 
-  const nextStatus = normalizeStatus(body.status, existing.status);
+  const nextStatus = normalizeStatus(normalizedPatch.status, existing.status);
   if (nextStatus === "ACTIVE") {
     await assertProRecurringEditAccess(subscription);
     if (existing.status !== "ACTIVE") {
@@ -517,26 +527,26 @@ export async function updateRecurringEdit({
   }
 
   const scheduleInput = buildRecurringScheduleInput(mergedBody, existing);
-  const rules = body.rules ? buildRulesFromBody(body) : existing.rules;
+  const rules = normalizedPatch.rules ? buildRulesFromBody(normalizedPatch) : existing.rules;
   const rule = validateRules(rules);
-  const filterParams = Array.isArray(body.filterParams) ? body.filterParams : existing.filterParams;
+  const filterParams = Array.isArray(normalizedPatch.filterParams) ? normalizedPatch.filterParams : existing.filterParams;
   const filterParamsToPersist = [];
-  const title = body.title !== undefined
-    ? String(body.title || "").trim() || buildDefaultTitle(rule)
+  const title = normalizedPatch.title !== undefined
+    ? String(normalizedPatch.title || "").trim() || buildDefaultTitle(rule)
     : existing.title;
   const nextRunAt = nextStatus === "ACTIVE"
     ? computeRecurringEditNextRunAt({ ...existing, ...scheduleInput, status: nextStatus }, new Date())
     : null;
   const targetingPayload = TargetingEngineService.prepareTargetingPayload({
-    filterAst: body.filterAst ?? existing.filterAst ?? null,
-    legacyFilterParams: body.filterAst ? null : filterParams,
-    targetGranularity: body.targetGranularity ?? existing.targetGranularity ?? "PRODUCT",
+    filterAst: normalizedPatch.filterAst ?? existing.filterAst ?? null,
+    legacyFilterParams: normalizedPatch.filterAst ? null : filterParams,
+    targetGranularity: normalizedPatch.targetGranularity ?? existing.targetGranularity ?? "PRODUCT",
     source: "RECURRING",
     applyMirrorScope: false,
   });
   const recurringExecutionPlan = planMutationExecution({
     operationKey:
-      body.operationKey ||
+      normalizedPatch.operationKey ||
       existing?.targetingSnapshotMeta?.operationKey ||
       null,
     shop,
@@ -545,7 +555,7 @@ export async function updateRecurringEdit({
       mutationType: "PRODUCT_SET",
       fieldsBeingEdited: rules.map((item) => item?.field).filter(Boolean),
       operationKey:
-        body.operationKey ||
+        normalizedPatch.operationKey ||
         existing?.targetingSnapshotMeta?.operationKey ||
         null,
     },
@@ -613,7 +623,7 @@ export async function toggleRecurringEditStatus({
 }) {
   const existing = await recurringEditRepository.findByIdForShop(recurringEditId, shop);
   if (!existing) {
-    throw new Error("Recurring edit not found");
+    throw buildRecurringEditError("Recurring edit not found", 404, "RECURRING_EDIT_NOT_FOUND");
   }
 
   const requestedStatus = normalizeStatus(
@@ -648,7 +658,7 @@ export async function toggleRecurringEditStatus({
 export async function deleteRecurringEdit({ shop, recurringEditId }) {
   const existing = await recurringEditRepository.findByIdForShop(recurringEditId, shop);
   if (!existing) {
-    throw new Error("Recurring edit not found");
+    throw buildRecurringEditError("Recurring edit not found", 404, "RECURRING_EDIT_NOT_FOUND");
   }
 
   await recurringEditRepository.updateByIdForShop({
@@ -667,4 +677,3 @@ export async function deleteRecurringEdit({ shop, recurringEditId }) {
     deleted: true,
   };
 }
-

@@ -23,6 +23,7 @@ async function resolveAndDispatch(row) {
   const claimed = await db.webhookDelivery.updateMany({
     where: {
       id: row.id,
+      shop,
       status: "QUEUED",
     },
     data: {
@@ -50,7 +51,7 @@ async function resolveAndDispatch(row) {
       source: "unresolved_bulk_operation_recovery",
     });
     await db.webhookDelivery.updateMany({
-      where: { id: row.id, status: "DISPATCHING" },
+      where: { id: row.id, shop, status: "DISPATCHING" },
       data: { status: "PROCESSED", lastError: null, processedAt: new Date() },
     });
     return { resolved: true, kind: "edit" };
@@ -73,14 +74,14 @@ async function resolveAndDispatch(row) {
       source: "unresolved_bulk_operation_recovery",
     });
     await db.webhookDelivery.updateMany({
-      where: { id: row.id, status: "DISPATCHING" },
+      where: { id: row.id, shop, status: "DISPATCHING" },
       data: { status: "PROCESSED", lastError: null, processedAt: new Date() },
     });
     return { resolved: true, kind: "undo" };
   }
 
   await db.webhookDelivery.updateMany({
-    where: { id: row.id, status: "DISPATCHING" },
+    where: { id: row.id, shop, status: "DISPATCHING" },
     data: {
       status: "QUEUED",
       attemptCount: { increment: 1 },
@@ -90,9 +91,14 @@ async function resolveAndDispatch(row) {
   return { resolved: false, reason: "owner_not_found" };
 }
 
-async function runTick() {
+async function runTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("unresolved bulk operation recovery requires shop");
+  }
   const rows = await db.webhookDelivery.findMany({
     where: {
+      shop: scopedShop,
       topic: "bulk_operations/finish_unresolved",
       status: "QUEUED",
       entityId: { not: null },
@@ -114,7 +120,7 @@ async function runTick() {
 
 export const unresolvedBulkOperationRecoveryWorker = new Worker(
   QUEUE_NAME,
-  async () => runTick(),
+  async (job) => runTick({ shop: job?.data?.shop }),
   { connection, concurrency: 1 },
 );
 
@@ -136,16 +142,23 @@ unresolvedBulkOperationRecoveryWorker.on("failed", (job, error) => {
   });
 });
 
-async function registerRepeatableTick() {
+export async function registerUnresolvedBulkOperationRecoveryTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("unresolved bulk operation recovery registration requires shop");
+  }
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
 
   try {
-    await enqueueUnresolvedBulkOperationRecoveryTick(POLL_INTERVAL_MS);
+    await enqueueUnresolvedBulkOperationRecoveryTick({
+      shop: scopedShop,
+      repeatEveryMs: POLL_INTERVAL_MS,
+    });
   } finally {
     await releaseRedisLock({
       connection,
@@ -155,7 +168,4 @@ async function registerRepeatableTick() {
   }
 }
 
-await registerRepeatableTick();
-
 export default unresolvedBulkOperationRecoveryWorker;
-

@@ -10,9 +10,7 @@ export const productCodeSnippetRepository = {
   },
 
   async findById(id, db = prisma) {
-    return getClient(db).productCodeSnippet.findUnique({
-      where: { id },
-    });
+    throw new Error("productCodeSnippetRepository.findById requires shop; use findByIdForShop");
   },
 
   async findByIdForShop(id, shop, db = prisma) {

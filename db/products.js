@@ -318,18 +318,55 @@ export async function getProduct(shopId, productId) {
 /**
  * Lists active products with cursor pagination and optional filters.
  * @param {string} shopId
- * @param {{ limit?: number, cursor?: string|null, search?: string|null, status?: string|null, vendor?: string|null }} params
- * @returns {Promise<{ products: Array<object>, nextCursor: string|null }>}
+ * @param {{ limit?: number, cursor?: string|null, search?: string|null, status?: string|null, vendor?: string|null, productType?: string|null, tag?: string|null }} params
+ * @returns {Promise<{ products: Array<object>, nextCursor: string|null, total: number }>}
  * @throws {Error}
  */
 export async function listProducts(
   shopId,
-  { limit = 50, cursor = null, search = null, status = null, vendor = null } = {},
+  {
+    limit = 50,
+    cursor = null,
+    search = null,
+    status = null,
+    vendor = null,
+    productType = null,
+    tag = null,
+  } = {},
 ) {
   const resolvedShopId = String(shopId || "").trim();
   if (!resolvedShopId) throw new Error("listProducts requires shopId");
   const resolvedLimit = Math.max(1, Math.min(200, Number(limit) || 50));
   const decoded = decodeCursor(cursor);
+  const normalizedSearch = String(search || "").trim() || null;
+  const normalizedStatus = String(status || "").trim() || null;
+  const normalizedVendor = String(vendor || "").trim() || null;
+  const normalizedProductType = String(productType || "").trim() || null;
+  const normalizedTag = String(tag || "").trim() || null;
+
+  const totalRows = await sql`
+    SELECT COUNT(*)::int AS count
+    FROM products p
+    WHERE p.shop_id = ${resolvedShopId}
+      AND p.is_deleted = false
+      AND (${normalizedStatus}::text IS NULL OR p.status = ${normalizedStatus})
+      AND (${normalizedVendor}::text IS NULL OR p.vendor = ${normalizedVendor})
+      AND (${normalizedProductType}::text IS NULL OR p.product_type = ${normalizedProductType})
+      AND (${normalizedTag}::text IS NULL OR p.tags ? ${normalizedTag})
+      AND (
+        ${normalizedSearch ? `%${normalizedSearch}%` : null}::text IS NULL
+        OR p.title ILIKE ${normalizedSearch ? `%${normalizedSearch}%` : null}
+        OR p.handle ILIKE ${normalizedSearch ? `%${normalizedSearch}%` : null}
+        OR EXISTS (
+          SELECT 1
+          FROM variants v
+          WHERE v.shop_id = p.shop_id
+            AND v.product_id = p.id
+            AND v.is_deleted = false
+            AND v.sku ILIKE ${normalizedSearch ? `%${normalizedSearch}%` : null}
+        )
+      )
+  `;
 
   const rows = await sql`
     SELECT
@@ -346,19 +383,21 @@ export async function listProducts(
     FROM products p
     WHERE p.shop_id = ${resolvedShopId}
       AND p.is_deleted = false
-      AND (${status ? status : null}::text IS NULL OR p.status = ${status ? status : null})
-      AND (${vendor ? vendor : null}::text IS NULL OR p.vendor = ${vendor ? vendor : null})
+      AND (${normalizedStatus}::text IS NULL OR p.status = ${normalizedStatus})
+      AND (${normalizedVendor}::text IS NULL OR p.vendor = ${normalizedVendor})
+      AND (${normalizedProductType}::text IS NULL OR p.product_type = ${normalizedProductType})
+      AND (${normalizedTag}::text IS NULL OR p.tags ? ${normalizedTag})
       AND (
-        ${search ? `%${search}%` : null}::text IS NULL
-        OR p.title ILIKE ${search ? `%${search}%` : null}
-        OR p.handle ILIKE ${search ? `%${search}%` : null}
+        ${normalizedSearch ? `%${normalizedSearch}%` : null}::text IS NULL
+        OR p.title ILIKE ${normalizedSearch ? `%${normalizedSearch}%` : null}
+        OR p.handle ILIKE ${normalizedSearch ? `%${normalizedSearch}%` : null}
         OR EXISTS (
           SELECT 1
           FROM variants v
           WHERE v.shop_id = p.shop_id
             AND v.product_id = p.id
             AND v.is_deleted = false
-            AND v.sku ILIKE ${search ? `%${search}%` : null}
+            AND v.sku ILIKE ${normalizedSearch ? `%${normalizedSearch}%` : null}
         )
       )
       AND (
@@ -397,5 +436,5 @@ export async function listProducts(
       })
     : null;
 
-  return { products, nextCursor };
+  return { products, nextCursor, total: Number(totalRows?.[0]?.count || 0) };
 }

@@ -1,8 +1,83 @@
+import { createRequire } from "node:module";
 import { db } from "../../repositories/repositoryDb.js";
 import { assertSnapshotItemsFullyIngested } from "../targetSnapshotItemIntegrityService.js";
 
+const require = createRequire(import.meta.url);
+const prismaGenerated = require("../../generated/prisma/index.js");
+const { Prisma } = prismaGenerated;
+
+const PAGE_SIZE = 1000;
+const CHECKPOINT_EVERY_PAGES = 10;
+const MAX_MIRROR_APPLY_PAGES = 10000;
+
 function normalizeFieldName(field) {
   return String(field || "").trim();
+}
+
+function normalizeFieldKey(field) {
+  return normalizeFieldName(field)
+    .replace(/[\s_-]+/g, "")
+    .toLowerCase();
+}
+
+function stableStringify(value) {
+  if (value === null || value === undefined) return "null";
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  if (typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function canonicalProductFieldName(field) {
+  switch (normalizeFieldKey(field)) {
+    case "title":
+      return "title";
+    case "status":
+      return "status";
+    case "vendor":
+      return "vendor";
+    case "producttype":
+      return "productType";
+    case "handle":
+      return "handle";
+    case "templatesuffix":
+      return "templateSuffix";
+    default:
+      return normalizeFieldName(field);
+  }
+}
+
+function canonicalVariantFieldName(field) {
+  switch (normalizeFieldKey(field)) {
+    case "sku":
+      return "sku";
+    case "barcode":
+      return "barcode";
+    case "taxcode":
+      return "taxCode";
+    case "inventorypolicy":
+      return "inventoryPolicy";
+    case "weightunit":
+      return "weightUnit";
+    case "option1value":
+      return "option1Value";
+    case "option2value":
+      return "option2Value";
+    case "option3value":
+      return "option3Value";
+    case "taxable":
+      return "taxable";
+    case "tracked":
+      return "tracked";
+    case "physicalproduct":
+      return "physicalProduct";
+    case "weight":
+      return "weight";
+    default:
+      return normalizeFieldName(field);
+  }
 }
 
 function normalizeScalar(value) {
@@ -24,6 +99,15 @@ function toFloatOrNull(value) {
   return num;
 }
 
+function toDecimalOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  try {
+    return new Prisma.Decimal(String(value));
+  } catch {
+    return null;
+  }
+}
+
 function toBooleanOrNull(value) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "boolean") return value;
@@ -37,22 +121,23 @@ function toBooleanOrNull(value) {
 
 function mapProductFieldToMirrorPatch(field, rawValue) {
   const value = normalizeScalar(rawValue);
-  switch (normalizeFieldName(field)) {
+  const normalized = canonicalProductFieldName(field);
+  switch (normalizeFieldKey(field)) {
     case "title":
     case "status":
     case "vendor":
-    case "productType":
+    case "producttype":
     case "handle":
-    case "templateSuffix":
-      return { [field]: value == null ? null : String(value) };
+    case "templatesuffix":
+      return { [normalized]: value == null ? null : String(value) };
     case "description":
-    case "descriptionHtml":
+    case "descriptionhtml":
       return { descriptionHtml: value == null ? null : String(value) };
-    case "seoTitle":
-    case "Meta Title":
+    case "seotitle":
+    case "metatitle":
       return { seoTitle: value == null ? null : String(value) };
-    case "seoDescription":
-    case "Meta Description":
+    case "seodescription":
+    case "metadescription":
       return { seoDescription: value == null ? null : String(value) };
     case "tags":
       if (Array.isArray(value)) return { tags: value.map((item) => String(item)) };
@@ -67,27 +152,29 @@ function mapProductFieldToMirrorPatch(field, rawValue) {
 
 function mapVariantFieldToMirrorPatch(field, rawValue) {
   const value = normalizeScalar(rawValue);
-  const normalized = normalizeFieldName(field);
-  switch (normalized) {
+  const normalized = canonicalVariantFieldName(field);
+  switch (normalizeFieldKey(field)) {
     case "sku":
     case "barcode":
-    case "taxCode":
-    case "inventoryPolicy":
-    case "weightUnit":
-    case "option1Value":
-    case "option2Value":
-    case "option3Value":
+    case "taxcode":
+    case "inventorypolicy":
+    case "weightunit":
+    case "option1value":
+    case "option2value":
+    case "option3value":
       return { [normalized]: value == null ? null : String(value) };
     case "price":
-    case "compareAtPrice":
+      return { price: toDecimalOrNull(value) };
+    case "compareatprice":
+      return { compareAtPrice: toDecimalOrNull(value) };
     case "cost":
-      return { [normalized]: value == null ? null : String(value) };
+      return { cost: toDecimalOrNull(value) };
     case "inventory":
-    case "inventoryQuantity":
+    case "inventoryquantity":
       return { inventoryQuantity: toIntOrNull(value) };
     case "taxable":
     case "tracked":
-    case "physicalProduct":
+    case "physicalproduct":
       return { [normalized]: toBooleanOrNull(value) };
     case "weight":
       return { weight: toFloatOrNull(value) };
@@ -101,7 +188,7 @@ function extractProductFieldChanges(record) {
     ? record.afterValues.productFieldChanges
     : [];
   const direct = Array.isArray(record?.productFieldChanges) ? record.productFieldChanges : [];
-  return fromAfterValues.length > 0 ? fromAfterValues : direct;
+  return mergeFieldChanges(direct, fromAfterValues);
 }
 
 function extractVariantFieldChanges(record) {
@@ -109,7 +196,41 @@ function extractVariantFieldChanges(record) {
     ? record.afterValues.variantFieldChanges
     : [];
   const direct = Array.isArray(record?.variantFieldChanges) ? record.variantFieldChanges : [];
-  return fromAfterValues.length > 0 ? fromAfterValues : direct;
+  return mergeVariantFieldChanges(direct, fromAfterValues);
+}
+
+function mergeFieldChanges(...sources) {
+  const byField = new Map();
+  for (const source of sources) {
+    for (const change of Array.isArray(source) ? source : []) {
+      const key = normalizeFieldKey(change?.field);
+      if (key) byField.set(key, change);
+    }
+  }
+  return [...byField.values()];
+}
+
+function mergeVariantFieldChanges(...sources) {
+  const byVariantAndField = new Map();
+  for (const source of sources) {
+    for (const group of Array.isArray(source) ? source : []) {
+      const variantId = String(group?.variantId || "").trim();
+      const entries = Array.isArray(group?.changes)
+        ? group.changes
+        : group?.field
+          ? [group]
+          : [];
+      for (const entry of entries) {
+        const fieldKey = normalizeFieldKey(entry?.field);
+        if (!fieldKey) continue;
+        byVariantAndField.set(`${variantId}:${fieldKey}`, {
+          ...entry,
+          variantId: variantId || entry?.variantId || null,
+        });
+      }
+    }
+  }
+  return [...byVariantAndField.values()];
 }
 
 function buildMirrorPatches(record) {
@@ -156,6 +277,56 @@ function buildMirrorPatches(record) {
   };
 }
 
+function mergeBatch(existingBatch, patch) {
+  return {
+    ...(existingBatch && typeof existingBatch === "object" ? existingBatch : {}),
+    ...patch,
+  };
+}
+
+function readBatchObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function addPatchGroup(groups, patch, id) {
+  const keys = Object.keys(patch || {});
+  if (!keys.length || !id) return;
+  const key = stableStringify(patch);
+  const existing = groups.get(key) || { patch, ids: new Set() };
+  existing.ids.add(String(id));
+  groups.set(key, existing);
+}
+
+function buildMirrorApplyOptions({ status, mirrorBatchId, appliedAt = null, reason = null }) {
+  return {
+    mirrorApplyStatus: status,
+    mirrorAppliedAt: appliedAt,
+    mirrorBatchId,
+    ...(reason ? { mirrorApplyReason: reason } : {}),
+  };
+}
+
+function isObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSnapshotItemFullyIngested(row) {
+  return (
+    isObject(row?.plannedMutation) &&
+    Object.keys(row.plannedMutation).length > 0 &&
+    isObject(row?.beforeValues) &&
+    Object.keys(row.beforeValues).length > 0
+  );
+}
+
+async function bulkMarkChangeRecords({ shop, rowIds, options }) {
+  if (!rowIds.length) return;
+  await db.changeRecord.updateMany({
+    where: { id: { in: rowIds }, shop },
+    data: { options },
+  });
+}
+
 export async function applyMirrorFromSuccessfulChangeRecords({
   shop,
   historyId,
@@ -187,46 +358,118 @@ export async function applyMirrorFromSuccessfulChangeRecords({
   }
 
   const mirrorBatchId = String(
-    store?.activeMirrorBatchId || history?.targetMirrorBatchId || "",
+    store?.activeMirrorBatchId || "",
   ).trim();
   if (!mirrorBatchId) {
-    return {
-      attemptedRows: 0,
-      appliedRows: 0,
-      unresolvedRows: 0,
-      appliedProductRows: 0,
-      appliedVariantRows: 0,
-      mirrorBatchId: null,
+    throw new Error("MIRROR_APPLY_ACTIVE_MIRROR_BATCH_REQUIRED");
+  }
+  const targetMirrorBatchId = String(history?.targetMirrorBatchId || "").trim();
+  if (!targetMirrorBatchId || mirrorBatchId !== targetMirrorBatchId) {
+    const error = new Error("MIRROR_APPLY_ACTIVE_BATCH_MISMATCH");
+    error.details = {
+      shop,
+      historyId,
+      activeMirrorBatchId: mirrorBatchId,
+      targetMirrorBatchId,
     };
+    throw error;
   }
 
-  const rows = await db.changeRecord.findMany({
-    where: {
-      shop,
-      editHistoryId: historyId,
-      status: "SUCCESS",
-    },
-    select: {
-      id: true,
-      productId: true,
-      variantId: true,
-      productFieldChanges: true,
-      variantFieldChanges: true,
-      afterValues: true,
-      options: true,
-    },
-  });
+  let batchState = readBatchObject(history.batch);
+  const priorMirrorApply = readBatchObject(batchState.mirrorApply);
+  let attemptedRows = Number(priorMirrorApply.attemptedRows || 0);
+  let appliedRows = Number(priorMirrorApply.appliedRows || 0);
+  let unresolvedRows = Number(priorMirrorApply.unresolvedRows || 0);
+  let missingMirrorRows = Number(priorMirrorApply.missingMirrorRows || 0);
+  let appliedProductRows = Number(priorMirrorApply.appliedProductRows || 0);
+  let appliedVariantRows = Number(priorMirrorApply.appliedVariantRows || 0);
+  let cursorId = String(priorMirrorApply.lastAppliedChangeRecordId || "").trim() || null;
+  let cursorCreatedAt = priorMirrorApply.lastAppliedChangeRecordCreatedAt
+    ? new Date(priorMirrorApply.lastAppliedChangeRecordCreatedAt)
+    : null;
+  const resumedFromChangeRecordId = cursorId;
+  let pageCount = 0;
 
-  let appliedRows = 0;
-  let unresolvedRows = 0;
-  let appliedProductRows = 0;
-  let appliedVariantRows = 0;
+  const flushMirrorApplyCheckpoint = async ({ status = "IN_PROGRESS" } = {}) => {
+    batchState = mergeBatch(batchState, {
+      mirrorApply: {
+        ...readBatchObject(batchState.mirrorApply),
+        status,
+        attemptedRows,
+        appliedRows,
+        unresolvedRows,
+        missingMirrorRows,
+        appliedProductRows,
+        appliedVariantRows,
+        mirrorBatchId,
+        lastAppliedChangeRecordId: cursorId,
+        lastAppliedChangeRecordCreatedAt: cursorCreatedAt?.toISOString?.() || null,
+        checkpointedAt: new Date().toISOString(),
+      },
+    });
+    await db.editHistory.updateMany({
+      where: { id: historyId, shop },
+      data: { batch: batchState },
+    });
+  };
 
-  const targetKeys = rows
-    .map((row) => String(row?.targetIdentity || "").trim())
-    .filter(Boolean);
-  const snapshotRows = targetKeys.length
-    ? await db.targetSnapshotItem.findMany({
+  while (true) {
+    pageCount += 1;
+    if (pageCount > MAX_MIRROR_APPLY_PAGES) {
+      throw new Error("MIRROR_APPLY_PAGE_LIMIT_EXCEEDED");
+    }
+
+    const rows = await db.changeRecord.findMany({
+      where: {
+        shop,
+        editHistoryId: historyId,
+        status: "SUCCESS",
+        ...(cursorId && cursorCreatedAt
+          ? {
+            OR: [
+              { createdAt: { gt: cursorCreatedAt } },
+              { createdAt: cursorCreatedAt, id: { gt: cursorId } },
+            ],
+          }
+          : cursorId
+            ? { id: { gt: cursorId } }
+            : {}),
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: PAGE_SIZE,
+      select: {
+        id: true,
+        createdAt: true,
+        targetIdentity: true,
+        productId: true,
+        variantId: true,
+        productFieldChanges: true,
+        variantFieldChanges: true,
+        afterValues: true,
+      },
+    });
+    if (!rows.length) break;
+    attemptedRows += rows.length;
+
+    const targetKeys = rows
+      .map((row) => String(row?.targetIdentity || "").trim())
+      .filter(Boolean);
+    if (targetKeys.length !== rows.length) {
+      const invalidRows = rows.filter((row) => !String(row?.targetIdentity || "").trim());
+      const invalidIds = invalidRows.map((row) => row.id);
+      unresolvedRows += invalidIds.length;
+      await bulkMarkChangeRecords({
+        shop,
+        rowIds: invalidIds,
+        options: buildMirrorApplyOptions({
+          status: "UNRESOLVED",
+          mirrorBatchId,
+          reason: "MIRROR_APPLY_TARGET_IDENTITY_REQUIRED",
+        }),
+      });
+    }
+
+    const snapshotRows = await db.targetSnapshotItem.findMany({
         where: {
           shop,
           snapshotSetId,
@@ -239,75 +482,189 @@ export async function applyMirrorFromSuccessfulChangeRecords({
           plannedMutation: true,
           beforeValues: true,
         },
-      })
-    : [];
-  assertSnapshotItemsFullyIngested(snapshotRows, "mirror_apply");
-
-  for (const row of rows) {
-    const { productPatch, variantPatches } = buildMirrorPatches(row);
-    let rowApplied = false;
-
-    if (Object.keys(productPatch).length > 0 && row.productId) {
-      // eslint-disable-next-line no-await-in-loop
-      const updated = await db.product.updateMany({
-        where: {
-          shop,
-          id: String(row.productId),
-          mirrorBatchId,
-        },
-        data: productPatch,
       });
-      if (Number(updated?.count || 0) > 0) {
-        rowApplied = true;
-        appliedProductRows += Number(updated.count);
-      }
-    }
+    const snapshotRowsByTargetKey = new Map(
+      snapshotRows.map((row) => [String(row.targetKey || ""), row]),
+    );
 
-    for (const [variantId, variantPatch] of variantPatches.entries()) {
-      // eslint-disable-next-line no-await-in-loop
-      const updated = await db.variant.updateMany({
-        where: {
-          shop,
-          id: String(variantId),
-          mirrorBatchId,
-        },
-        data: variantPatch,
-      });
-      if (Number(updated?.count || 0) > 0) {
-        rowApplied = true;
-        appliedVariantRows += Number(updated.count);
-      }
-    }
-
-    const previousOptions =
-      row.options && typeof row.options === "object" && !Array.isArray(row.options)
-        ? row.options
-        : {};
-
-    // eslint-disable-next-line no-await-in-loop
-    await db.changeRecord.update({
-      where: { id: row.id },
-      data: {
-        options: {
-          ...previousOptions,
-          mirrorApplyStatus: rowApplied ? "APPLIED_PENDING_RECONCILE" : "UNRESOLVED",
-          mirrorAppliedAt: rowApplied ? new Date().toISOString() : null,
-          mirrorBatchId,
-        },
-      },
+    const missingSnapshotRows = rows.filter((row) => {
+      const targetKey = String(row?.targetIdentity || "").trim();
+      return targetKey && !snapshotRowsByTargetKey.has(targetKey);
     });
+    if (missingSnapshotRows.length) {
+      unresolvedRows += missingSnapshotRows.length;
+      await bulkMarkChangeRecords({
+        shop,
+        rowIds: missingSnapshotRows.map((row) => row.id),
+        options: buildMirrorApplyOptions({
+          status: "UNRESOLVED",
+          mirrorBatchId,
+          reason: "MIRROR_APPLY_SNAPSHOT_ITEM_MISSING",
+        }),
+      });
+    }
 
-    if (rowApplied) appliedRows += 1;
-    else unresolvedRows += 1;
+    const corruptSnapshotRows = snapshotRows.filter((row) => !isSnapshotItemFullyIngested(row));
+    if (corruptSnapshotRows.length) {
+      const corruptTargetKeys = new Set(corruptSnapshotRows.map((row) => String(row?.targetKey || "")));
+      const badRows = rows.filter((row) => corruptTargetKeys.has(String(row?.targetIdentity || "").trim()));
+      if (badRows.length) {
+        unresolvedRows += badRows.length;
+        await bulkMarkChangeRecords({
+          shop,
+          rowIds: badRows.map((row) => row.id),
+          options: buildMirrorApplyOptions({
+            status: "UNRESOLVED",
+            mirrorBatchId,
+            reason: "TARGET_SNAPSHOT_ITEM_NOT_FULLY_INGESTED",
+          }),
+        });
+      }
+    }
+    const integrityRows = snapshotRows.filter((row) => isSnapshotItemFullyIngested(row));
+    assertSnapshotItemsFullyIngested(integrityRows, "mirror_apply");
+
+    const eligibleTargetKeys = new Set(integrityRows.map((row) => String(row?.targetKey || "")));
+    const eligibleRows = rows.filter((row) =>
+      eligibleTargetKeys.has(String(row?.targetIdentity || "").trim()));
+    const productGroups = new Map();
+    const variantGroups = new Map();
+    const rowPlans = new Map();
+
+    for (const row of rows) {
+      if (!eligibleTargetKeys.has(String(row?.targetIdentity || "").trim())) continue;
+      const { productPatch, variantPatches } = buildMirrorPatches(row);
+      const productId = String(row.productId || "").trim();
+      addPatchGroup(productGroups, productPatch, productId);
+      const variantIds = [];
+      for (const [variantId, variantPatch] of variantPatches.entries()) {
+        addPatchGroup(variantGroups, variantPatch, variantId);
+        variantIds.push(String(variantId));
+      }
+      rowPlans.set(row.id, {
+        productId,
+        hasProductPatch: Object.keys(productPatch).length > 0,
+        variantIds,
+      });
+    }
+
+    const productIds = [...new Set([...rowPlans.values()]
+      .filter((plan) => plan.hasProductPatch && plan.productId)
+      .map((plan) => plan.productId))];
+    const variantIds = [...new Set([...rowPlans.values()].flatMap((plan) => plan.variantIds))];
+    const [existingProducts, existingVariants] = await Promise.all([
+      productIds.length
+        ? db.product.findMany({
+          where: { shop, mirrorBatchId, id: { in: productIds } },
+          select: { id: true },
+        })
+        : [],
+      variantIds.length
+        ? db.variant.findMany({
+          where: { shop, mirrorBatchId, id: { in: variantIds } },
+          select: { id: true },
+        })
+        : [],
+    ]);
+    const existingProductIds = new Set(existingProducts.map((row) => String(row.id)));
+    const existingVariantIds = new Set(existingVariants.map((row) => String(row.id)));
+
+    const productUpdateResults = await Promise.all([...productGroups.values()].map((group) => {
+      const ids = [...group.ids].filter((id) => existingProductIds.has(id));
+      if (!ids.length) return { count: 0 };
+      return db.product.updateMany({
+        where: {
+          shop,
+          mirrorBatchId,
+          id: { in: ids },
+        },
+        data: group.patch,
+      });
+    }));
+    const variantUpdateResults = await Promise.all([...variantGroups.values()].map((group) => {
+      const ids = [...group.ids].filter((id) => existingVariantIds.has(id));
+      if (!ids.length) return { count: 0 };
+      return db.variant.updateMany({
+        where: {
+          shop,
+          mirrorBatchId,
+          id: { in: ids },
+        },
+        data: group.patch,
+      });
+    }));
+    appliedProductRows += productUpdateResults.reduce((sum, result) => sum + Number(result?.count || 0), 0);
+    appliedVariantRows += variantUpdateResults.reduce((sum, result) => sum + Number(result?.count || 0), 0);
+
+    const appliedRowIds = [];
+    const missingMirrorRowIds = [];
+    const unresolvedRowIds = [];
+    for (const row of eligibleRows) {
+      const plan = rowPlans.get(row.id);
+      const productApplied = plan?.hasProductPatch && existingProductIds.has(plan.productId);
+      const variantApplied = (plan?.variantIds || []).some((variantId) => existingVariantIds.has(variantId));
+      if (productApplied || variantApplied) {
+        appliedRowIds.push(row.id);
+      } else if (plan?.hasProductPatch || (plan?.variantIds || []).length) {
+        missingMirrorRowIds.push(row.id);
+      } else {
+        unresolvedRowIds.push(row.id);
+      }
+    }
+
+    const appliedAt = new Date().toISOString();
+    await Promise.all([
+      bulkMarkChangeRecords({
+        shop,
+        rowIds: appliedRowIds,
+        options: buildMirrorApplyOptions({
+          status: "APPLIED_PENDING_RECONCILE",
+          mirrorBatchId,
+          appliedAt,
+        }),
+      }),
+      bulkMarkChangeRecords({
+        shop,
+        rowIds: missingMirrorRowIds,
+        options: buildMirrorApplyOptions({
+          status: "MIRROR_TARGET_MISSING",
+          mirrorBatchId,
+          reason: "TARGET_NOT_FOUND_IN_ACTIVE_MIRROR",
+        }),
+      }),
+      bulkMarkChangeRecords({
+        shop,
+        rowIds: unresolvedRowIds,
+        options: buildMirrorApplyOptions({
+          status: "UNRESOLVED",
+          mirrorBatchId,
+          reason: "NO_MIRROR_PATCH_BUILT",
+        }),
+      }),
+    ]);
+    appliedRows += appliedRowIds.length;
+    missingMirrorRows += missingMirrorRowIds.length;
+    unresolvedRows += unresolvedRowIds.length;
+
+    cursorId = rows[rows.length - 1].id;
+    cursorCreatedAt = rows[rows.length - 1].createdAt;
+    if (pageCount % CHECKPOINT_EVERY_PAGES === 0 || rows.length < PAGE_SIZE) {
+      await flushMirrorApplyCheckpoint({ status: "IN_PROGRESS" });
+    }
+    if (rows.length < PAGE_SIZE) break;
   }
 
+  await flushMirrorApplyCheckpoint({ status: "APPLY_COMPLETED" });
+
   return {
-    attemptedRows: rows.length,
+    attemptedRows,
     appliedRows,
     unresolvedRows,
+    missingMirrorRows,
     appliedProductRows,
     appliedVariantRows,
     mirrorBatchId,
+    resumedFromChangeRecordId,
+    lastAppliedChangeRecordId: cursorId,
   };
 }
-

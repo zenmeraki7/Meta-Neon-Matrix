@@ -26,10 +26,15 @@ const LIMIT = 100;
 const LEADER_LOCK_KEY = "leader:scheduled-edit-recovery:scheduler";
 const LEADER_LOCK_TTL_MS = 45_000;
 
-async function requeuePendingScheduledEdits() {
+async function requeuePendingScheduledEdits({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("scheduled edit recovery requires shop");
+  }
   const now = new Date();
   const rows = await db.editHistory.findMany({
     where: {
+      shop: scopedShop,
       type: "Scheduled edit",
       scheduledAt: { gt: now },
       statusNormalized: normalizeEditHistoryStatus("pending"),
@@ -87,26 +92,18 @@ async function requeuePendingScheduledEdits() {
   }
 }
 
-async function runRecoveryTick() {
+async function runRecoveryTick(job) {
+  const shop = String(job?.data?.shop || "").trim();
+  if (!shop) {
+    throw new Error("scheduled edit recovery tick requires shop");
+  }
   try {
-    await requeuePendingScheduledEdits();
-    const shops = await db.operationEnqueueIntent.findMany({
-      where: {
-        status: "PENDING",
-        queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
-      },
-      select: { shop: true },
-      distinct: ["shop"],
-      take: LIMIT,
+    await requeuePendingScheduledEdits({ shop });
+    await dispatchPendingEnqueueIntents({
+      shop,
+      queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
+      limit: LIMIT,
     });
-    for (const row of shops) {
-      // eslint-disable-next-line no-await-in-loop
-      await dispatchPendingEnqueueIntents({
-        shop: row.shop,
-        queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT,
-        limit: LIMIT,
-      });
-    }
   } catch (error) {
     await logWorkerError({
       shop: "unknown",
@@ -118,20 +115,27 @@ async function runRecoveryTick() {
 
 export const scheduledEditRecoveryWorker = new Worker(
   QUEUE_NAME,
-  async () => runRecoveryTick(),
+  async (job) => runRecoveryTick(job),
   { connection, concurrency: 1 },
 );
 
-async function registerRepeatableTick() {
+export async function registerScheduledEditRecoveryTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("scheduled edit recovery registration requires shop");
+  }
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
 
   try {
-    await enqueueScheduledEditRecoveryTick(POLL_INTERVAL_MS);
+    await enqueueScheduledEditRecoveryTick({
+      shop: scopedShop,
+      repeatEveryMs: POLL_INTERVAL_MS,
+    });
   } finally {
     await releaseRedisLock({
       connection,
@@ -141,7 +145,4 @@ async function registerRepeatableTick() {
   }
 }
 
-await registerRepeatableTick();
-
 export default scheduledEditRecoveryWorker;
-

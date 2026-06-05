@@ -47,7 +47,6 @@ const LANGUAGE_OPTIONS = [
   { label: "Korean", value: "ko" },
   { label: "Russian", value: "ru" },
 ];
-const DASHBOARD_STATUS_RAIL_MIN_HEIGHT = "120px";
 
 const MetricCard = memo(function MetricCard({
   title,
@@ -212,6 +211,8 @@ export default function DashboardPage() {
     ],
     [storeAccess, t],
   );
+  const hasStatusBanner =
+    storeAccess?.isCreditAvailable || storeAccess?.isProductInitialySyning;
 
   return (
     <Page
@@ -297,39 +298,37 @@ export default function DashboardPage() {
           </Card>
         </Layout.Section>
 
-        <Layout.Section>
-          <Box minHeight={DASHBOARD_STATUS_RAIL_MIN_HEIGHT}>
-            {storeAccess?.isCreditAvailable || storeAccess?.isProductInitialySyning ? (
-              <BlockStack gap="300">
-                {storeAccess?.isCreditAvailable && (
-                  <Banner
-                    tone="success"
-                    title="Free access active"
-                    action={{
-                      content: "Request extension",
-                      onAction: () => navigate("/suggestionpage"),
-                    }}
-                  >
-                    <p>{t("freeAccessMessage")}</p>
-                  </Banner>
-                )}
+        {hasStatusBanner && (
+          <Layout.Section>
+            <BlockStack gap="300">
+              {storeAccess?.isCreditAvailable && (
+                <Banner
+                  tone="success"
+                  title="Free access active"
+                  action={{
+                    content: "Request extension",
+                    onAction: () => navigate("/suggestionpage"),
+                  }}
+                >
+                  <p>{t("freeAccessMessage")}</p>
+                </Banner>
+              )}
 
-                {storeAccess?.isProductInitialySyning && (
-                  <Banner
-                    tone="info"
-                    title="Product sync in progress"
-                    action={{
-                      content: "Check status",
-                      onAction: () => navigate("/refresh"),
-                    }}
-                  >
-                    <p>{t("productSyncMessage")}</p>
-                  </Banner>
-                )}
-              </BlockStack>
-            ) : null}
-          </Box>
-        </Layout.Section>
+              {storeAccess?.isProductInitialySyning && (
+                <Banner
+                  tone="info"
+                  title="Product sync in progress"
+                  action={{
+                    content: "Check status",
+                    onAction: () => navigate("/refresh"),
+                  }}
+                >
+                  <p>{t("productSyncMessage")}</p>
+                </Banner>
+              )}
+            </BlockStack>
+          </Layout.Section>
+        )}
 
         <Layout.Section>
           <Grid>

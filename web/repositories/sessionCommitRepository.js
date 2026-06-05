@@ -1,15 +1,29 @@
 import { prisma } from "../config/database.js";
 import { requireShopScope } from "../utils/shopScope.js";
 
+function serviceError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+async function countPendingChanges(tx, sessionId, shopId) {
+  const countRows = await tx.$queryRaw`
+    SELECT COUNT(*)::int AS count
+    FROM bulk_edit_changes
+    WHERE session_id = ${sessionId}::uuid
+      AND shop_id = ${shopId}
+      AND status = 'PENDING'
+  `;
+  return Number(countRows[0]?.count || 0);
+}
+
 export async function commitSessionAtomically(sessionId, shopId) {
   const resolvedSessionId = String(sessionId || "").trim();
   const resolvedShopId = requireShopScope(shopId, "shopId");
 
   if (!resolvedSessionId) {
-    const error = new Error("Session not found");
-    error.statusCode = 404;
-    error.code = "SESSION_NOT_FOUND";
-    throw error;
+    throw serviceError("Session not found", "SESSION_NOT_FOUND");
   }
 
   return prisma.$transaction(async (tx) => {
@@ -22,31 +36,27 @@ export async function commitSessionAtomically(sessionId, shopId) {
     `;
     const session = sessionRows[0] || null;
     if (!session) {
-      const error = new Error("Session not found");
-      error.statusCode = 404;
-      error.code = "SESSION_NOT_FOUND";
-      throw error;
+      throw serviceError("Session not found", "SESSION_NOT_FOUND");
     }
-    if (String(session.status) !== "DRAFT") {
-      const error = new Error("Session is not open");
-      error.statusCode = 409;
-      error.code = "SESSION_NOT_OPEN";
-      throw error;
+    if (session.status === null || session.status === undefined) {
+      throw serviceError("Session status is invalid", "SESSION_STATUS_INVALID");
+    }
+    const status = String(session.status).trim().toUpperCase();
+    if (status === "COMMITTED") {
+      return {
+        sessionId: resolvedSessionId,
+        shopId: resolvedShopId,
+        changeCount: await countPendingChanges(tx, resolvedSessionId, resolvedShopId),
+        alreadyCommitted: true,
+      };
+    }
+    if (status !== "DRAFT") {
+      throw serviceError("Session is not open", "SESSION_NOT_OPEN");
     }
 
-    const countRows = await tx.$queryRaw`
-      SELECT COUNT(*)::int AS count
-      FROM bulk_edit_changes
-      WHERE session_id = ${resolvedSessionId}::uuid
-        AND shop_id = ${resolvedShopId}
-        AND status = 'PENDING'
-    `;
-    const pendingCount = Number(countRows[0]?.count || 0);
+    const pendingCount = await countPendingChanges(tx, resolvedSessionId, resolvedShopId);
     if (pendingCount === 0) {
-      const error = new Error("No pending changes to commit");
-      error.statusCode = 422;
-      error.code = "NO_PENDING_CHANGES";
-      throw error;
+      throw serviceError("No pending changes to commit", "NO_PENDING_CHANGES");
     }
 
     const updatedRows = await tx.$queryRaw`
@@ -59,10 +69,7 @@ export async function commitSessionAtomically(sessionId, shopId) {
       RETURNING id
     `;
     if (!Array.isArray(updatedRows) || updatedRows.length !== 1) {
-      const error = new Error("Session is not open");
-      error.statusCode = 409;
-      error.code = "SESSION_NOT_OPEN";
-      throw error;
+      throw serviceError("Session is not open", "SESSION_NOT_OPEN");
     }
 
     return {

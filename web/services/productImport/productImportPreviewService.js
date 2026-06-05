@@ -170,6 +170,7 @@ export async function createCsvPreview({ shop, file, limit, idempotencyKey }) {
   };
   await idempotencyStore.complete({
     recordId: begin.recordId,
+    shop,
     response,
   });
   return response;
@@ -204,4 +205,3 @@ export async function previewCsvPage({ shop, uploadToken, cursor, limit }) {
     limit: normalizedLimit,
   });
 }
-

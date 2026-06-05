@@ -195,8 +195,12 @@ const bulkImportEditWorker = new Worker(
     const attempt = getJobAttempt(job);
 
     try {
-      const history = await db.editHistory.findUnique({
-        where: { id: historyId },
+      if (!historyId || !shop) {
+        throw new Error("bulk import edit job requires historyId and shop");
+      }
+
+      const history = await db.editHistory.findFirst({
+        where: { id: historyId, shop },
         select: {
           id: true,
           shop: true,
@@ -207,10 +211,6 @@ const bulkImportEditWorker = new Worker(
 
       if (!history) {
         throw new Error("History document not found");
-      }
-
-      if (!shop || history.shop !== shop) {
-        throw new Error("Cross-shop import execution blocked");
       }
 
       if (history.status === "processing" && job.attemptsMade > 0) {
@@ -343,8 +343,8 @@ const bulkImportEditWorker = new Worker(
       }
 
       if (!explicitTargets.length) {
-      await db.editHistory.update({
-        where: { id: historyId },
+      await db.editHistory.updateMany({
+        where: { id: historyId, shop: history.shop },
         data: {
           totalRows,
           totalItems: 0,
@@ -409,8 +409,8 @@ const bulkImportEditWorker = new Worker(
         mirrorBatchId,
       });
 
-      await db.editHistory.update({
-        where: { id: historyId },
+      await db.editHistory.updateMany({
+        where: { id: historyId, shop: history.shop },
         data: {
           totalRows,
           totalItems: frozenCount,
@@ -448,7 +448,7 @@ const bulkImportEditWorker = new Worker(
       });
 
       await db.spreadsheetFile.updateMany({
-        where: { editHistoryId: historyId },
+        where: { editHistoryId: historyId, shop: history.shop },
         data: { totalRows },
       });
 
@@ -483,7 +483,7 @@ const bulkImportEditWorker = new Worker(
       await removeLocalFile(filePath);
 
       await db.editHistory.updateMany({
-        where: { id: historyId, ...(shop ? { shop } : {}) },
+        where: { id: historyId, shop },
         data: {
           status: "failed",
           executionState: BULK_EDIT_EXECUTION_STATES.FAILED,
@@ -552,4 +552,3 @@ bulkImportEditWorker.on("failed", async (job) => {
 });
 
 export default bulkImportEditWorker;
-

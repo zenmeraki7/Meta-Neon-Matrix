@@ -10,7 +10,10 @@ export async function getVariantsByProductIds(shop, productIds) {
   const resolvedShop = String(shop || "").trim();
   if (!resolvedShop) throw new Error("getVariantsByProductIds requires shop");
   if (!Array.isArray(productIds) || productIds.length === 0) return [];
-  const ids = productIds.map((id) => BigInt(id).toString());
+  const ids = productIds
+    .map((id) => String(id ?? "").trim())
+    .filter((id) => /^\d+$/.test(id));
+  if (!ids.length) return [];
   return prisma.$queryRaw`
     SELECT
       id,
@@ -28,4 +31,3 @@ export async function getVariantsByProductIds(shop, productIds) {
     ORDER BY product_id ASC, position ASC, id ASC
   `;
 }
-

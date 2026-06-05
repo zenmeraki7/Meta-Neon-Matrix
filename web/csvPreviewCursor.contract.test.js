@@ -21,12 +21,19 @@ test("csv preview route exposes POST upload-token bootstrap and GET cursor page 
 
 test("csv preview controller returns cursor-paged rows and supports upload token bootstrap", () => {
   const controller = read("web/controllers/productImportController.js");
+  const previewService = read("web/services/productImport/productImportPreviewService.js");
+  const dto = read("web/dtos/productImportDto.js");
+
   assert.ok(controller.includes("export const createCsvPreviewController = async (req, res) => {"));
-  assert.ok(controller.includes("uploadToken: previewDoc.id"));
-  assert.ok(controller.includes("buildPreviewResponse({ allItems, headers, cursor: 0, limit })"));
-  assert.ok(controller.includes('const uploadToken = String(req.query?.uploadToken || "").trim();'));
-  assert.ok(controller.includes("pageInfo: {"));
-  assert.ok(controller.includes("nextCursor: hasNextPage ? encodeCursor(end) : null"));
+  assert.ok(controller.includes("const result = await createCsvPreview(command);"));
+  assert.ok(controller.includes("const result = await previewCsvPage(command);"));
+  assert.ok(controller.includes("toCsvPreviewResponseDto(result)"));
+  assert.ok(controller.includes("toCsvPreviewPageDto(result)"));
+  assert.ok(previewService.includes("uploadToken: previewDoc.id"));
+  assert.ok(previewService.includes("pageInfo: {"));
+  assert.ok(previewService.includes("nextCursor: hasNextPage ? encodeCursor(end) : null"));
+  assert.ok(dto.includes("items: data.items"));
+  assert.ok(dto.includes("pageInfo: data.pageInfo"));
 });
 
 test("spreadsheet preview table renders only server response rows without local hard cap slicing", () => {
@@ -57,4 +64,3 @@ test("spreadsheet preview table renders only server response rows without local 
     "Spreadsheet page must request cursor pages from server",
   );
 });
-

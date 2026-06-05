@@ -82,9 +82,22 @@ async function persistUnresolvedBulkMutationDelivery({
     .update(JSON.stringify(payload || {}))
     .digest("hex");
 
-  await db.webhookDelivery.upsert({
-    where: { id },
-    create: {
+  const data = {
+    payloadHash,
+    status: "QUEUED",
+    lastError: "UNRESOLVED_BULK_OPERATION_OWNER",
+    lastWebhookId: String(payload?.webhookId || "") || null,
+    attemptCount: { increment: 1 },
+  };
+  const updated = await db.webhookDelivery.updateMany({
+    where: { id, shop },
+    data,
+  });
+  if (updated.count === 1) return;
+
+  try {
+    await db.webhookDelivery.create({
+      data: {
       id,
       topic: "bulk_operations/finish_unresolved",
       shop,
@@ -97,15 +110,18 @@ async function persistUnresolvedBulkMutationDelivery({
       payloadHash,
       status: "QUEUED",
       lastError: "UNRESOLVED_BULK_OPERATION_OWNER",
-    },
-    update: {
-      payloadHash,
-      status: "QUEUED",
-      lastError: "UNRESOLVED_BULK_OPERATION_OWNER",
-      lastWebhookId: String(payload?.webhookId || "") || null,
-      attemptCount: { increment: 1 },
-    },
-  });
+      },
+    });
+  } catch (error) {
+    if (error?.code !== "P2002") throw error;
+    const retried = await db.webhookDelivery.updateMany({
+      where: { id, shop },
+      data,
+    });
+    if (retried.count !== 1) {
+      throw new Error("WEBHOOK_DELIVERY_CROSS_TENANT_ID_COLLISION");
+    }
+  }
 }
 
 const bulkOperationMutationWorker = new Worker(
@@ -252,4 +268,3 @@ bulkOperationMutationWorker.on("failed", async (job) => {
 });
 
 export default bulkOperationMutationWorker;
-

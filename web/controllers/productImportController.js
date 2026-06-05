@@ -1,7 +1,10 @@
 import fs from "fs";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
-import { buildActorContext } from "../utils/operationContextUtils.js";
-import { ProductImportCommandService } from "../services/productImport/ProductImportCommandService.js";
+import {
+  buildAuthenticatedActor,
+  getIdempotencyKey,
+  handleLoggedControllerError,
+  requireShopifySession,
+} from "./controllerUtils.js";
 import {
   createCsvPreview,
   previewCsvPage,
@@ -11,8 +14,11 @@ import {
   buildCreateProductImportCommand,
   buildPreviewCsvPageCommand,
 } from "../normalizers/productImportCommandNormalizer.js";
-
-const productImportCommandService = new ProductImportCommandService();
+import {
+  toCsvPreviewPageDto,
+  toCsvPreviewResponseDto,
+  toProductImportAcceptedDto,
+} from "../dtos/productImportDto.js";
 
 function removeUploadedFile(filePath) {
   if (!filePath) return;
@@ -23,108 +29,91 @@ function removeUploadedFile(filePath) {
   }
 }
 
-function requireShopifySession(res) {
-  const session = res.locals?.shopify?.session;
-  if (!session?.shop) {
-    const error = new Error("Authentication required");
-    error.code = "UNAUTHENTICATED";
-    throw error;
-  }
-  return session;
-}
+export const createImportCsvController = (productImportCommandService) => async (req, res) => {
+  let session;
 
-function buildActor(req, session) {
-  return buildActorContext({
-    req,
-    session,
-    fallbackType: "MERCHANT_ADMIN",
-  });
-}
-
-function getIdempotencyKey(req) {
-  return req.get("Idempotency-Key") || null;
-}
-
-function buildContext(req, session) {
-  return Object.freeze({
-    shop: session.shop,
-    actor: buildActor(req, session),
-    subscription: req.subscription || null,
-  });
-}
-
-function handleControllerError(res, error, fallbackCode) {
-  const { statusCode, body } = buildPublicApiErrorResponse(error, fallbackCode);
-  return res.status(statusCode).json(body);
-}
-
-export const importCsvController = async (req, res) => {
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
     const command = buildCreateProductImportCommand({
       file: req.file,
       body: req.body || {},
       idempotencyKey: getIdempotencyKey(req),
-      context: buildContext(req, session),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
     });
 
     const result = await productImportCommandService.createImportCommand(command);
 
-    return res.status(202).json({
-      success: true,
-      operationId: result.operationId,
-      importId: result.importId,
-      status: result.status,
-    });
+    return res.status(202).json(toProductImportAcceptedDto(result));
   } catch (error) {
     removeUploadedFile(req.file?.path);
-    return handleControllerError(res, error, "PRODUCT_IMPORT_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productImportController.importCsv",
+      fallbackCode: "PRODUCT_IMPORT_FAILED",
+    });
   }
 };
 
 export const previewCsvController = async (req, res) => {
+  let session;
+
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
 
     const command = buildPreviewCsvPageCommand({
       query: req.query || {},
-      context: buildContext(req, session),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
     });
 
-    const payload = await previewCsvPage({
-      shop: command.shop,
-      uploadToken: command.uploadToken,
-      cursor: command.cursor,
-      limit: command.limit,
-    });
-    return res.status(200).json(payload);
+    const result = await previewCsvPage(command);
+    return res.status(200).json(toCsvPreviewPageDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "CSV_PREVIEW_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productImportController.previewCsv",
+      fallbackCode: "CSV_PREVIEW_FAILED",
+    });
   }
 };
 
 export const createCsvPreviewController = async (req, res) => {
+  let session;
+
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
 
     const command = buildCreateCsvPreviewCommand({
       file: req.file,
       query: req.query || {},
       idempotencyKey: getIdempotencyKey(req),
-      context: buildContext(req, session),
+      shop: session.shop,
+      actor: buildAuthenticatedActor(req, session),
+      subscription: req.subscription || null,
     });
 
-    const payload = await createCsvPreview({
-      shop: command.shop,
-      file: command.file,
-      limit: command.limit,
-      idempotencyKey: command.idempotencyKey,
-    });
+    const result = await createCsvPreview(command);
+    const responseDto = toCsvPreviewResponseDto(result);
 
-    const statusCode = payload?.durable ? 202 : 200;
-    return res.status(statusCode).json(payload);
+    return res.status(responseDto.statusCode).json(responseDto.body);
   } catch (error) {
     removeUploadedFile(req.file?.path);
-    return handleControllerError(res, error, "CSV_PREVIEW_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productImportController.createCsvPreview",
+      fallbackCode: "CSV_PREVIEW_FAILED",
+    });
   }
 };

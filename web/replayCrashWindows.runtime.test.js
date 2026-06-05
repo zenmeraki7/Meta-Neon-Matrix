@@ -141,6 +141,7 @@ test("automatic rule finalize rejects stale processing token replay", async (t) 
   try {
     const stale = await finalizeAutomaticProductRuleRunFromHistory({
       historyId: "h1",
+      shop: "shop-a.myshopify.com",
       status: "SUCCESS",
       processingToken: "stale-token",
     });
@@ -149,6 +150,7 @@ test("automatic rule finalize rejects stale processing token replay", async (t) 
 
     const fresh = await finalizeAutomaticProductRuleRunFromHistory({
       historyId: "h1",
+      shop: "shop-a.myshopify.com",
       status: "SUCCESS",
       processingToken: "token-live",
     });
@@ -159,4 +161,3 @@ test("automatic rule finalize rejects stale processing token replay", async (t) 
     for (const undo of restore.reverse()) undo();
   }
 });
-

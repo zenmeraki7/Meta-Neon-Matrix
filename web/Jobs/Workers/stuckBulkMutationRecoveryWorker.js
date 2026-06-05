@@ -24,11 +24,16 @@ function buildRecoveryCooldownKey({ shop, bulkOperationId, mode }) {
   return `stuck-recovery-cooldown:${shop}:${bulkOperationId}:${mode}`;
 }
 
-async function recoverStuckBulkMutations() {
+async function recoverStuckBulkMutations({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("stuck bulk mutation recovery requires shop");
+  }
   const cutoff = new Date(Date.now() - 3 * 60 * 1000);
 
   const stuck = await db.editHistory.findMany({
     where: {
+      shop: scopedShop,
       OR: [
         {
           executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
@@ -145,7 +150,7 @@ async function recoverStuckBulkMutations() {
 
 export const stuckBulkMutationRecoveryWorker = new Worker(
   QUEUE_NAME,
-  async () => recoverStuckBulkMutations(),
+  async (job) => recoverStuckBulkMutations({ shop: job?.data?.shop }),
   {
     connection,
     concurrency: 1,
@@ -168,9 +173,9 @@ stuckBulkMutationRecoveryWorker.on("failed", (job, error) => {
   });
 });
 
-async function enqueueRecoveryJob() {
+async function enqueueRecoveryJob({ shop }) {
   try {
-    await enqueueStuckBulkMutationRecoveryJob();
+    await enqueueStuckBulkMutationRecoveryJob({ shop });
   } catch (error) {
     logger.error("Failed to enqueue stuck bulk mutation recovery job", {
       worker: "stuckBulkMutationRecoveryWorker",
@@ -179,16 +184,23 @@ async function enqueueRecoveryJob() {
   }
 }
 
-async function registerRepeatableTick() {
+export async function registerStuckBulkMutationRecoveryTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("stuck bulk mutation recovery registration requires shop");
+  }
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
 
   try {
-    await enqueueStuckBulkMutationRecoveryTick(POLL_INTERVAL_MS);
+    await enqueueStuckBulkMutationRecoveryTick({
+      shop: scopedShop,
+      repeatEveryMs: POLL_INTERVAL_MS,
+    });
   } finally {
     await releaseRedisLock({
       connection,
@@ -197,6 +209,3 @@ async function registerRepeatableTick() {
     }).catch(() => {});
   }
 }
-
-await registerRepeatableTick();
-

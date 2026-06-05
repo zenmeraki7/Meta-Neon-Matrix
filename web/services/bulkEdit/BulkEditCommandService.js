@@ -24,6 +24,7 @@ import {
 } from "./bulkEditPlanUtils.js";
 import { buildPlannedUndoState } from "../bulkEditExecutionStateService.js";
 import { loadAuthoritativeSubscriptionForShop } from "../subscriptionAuthorityService.js";
+import { assertMirrorSafeForTargeting } from "../mirrorHealthService.js";
 import {
   buildIdempotencyRequestHash,
 } from "../idempotency/IdempotencyStoreService.js";
@@ -31,7 +32,39 @@ import { createIdempotencyStore } from "../../repositories/idempotencyRepository
 import {
   createManualEditHistoryWithImmutableCommand,
   findPreviewContractRecord,
+  markManualEditHistoryEnqueueFailed,
 } from "../../repositories/bulkEditCommandRepository.js";
+
+const BULK_EDIT_HISTORY_CACHE_KEYS = [
+  "fetchHistories",
+  "sync_details",
+  "sync_summary",
+  "sync_summary:v2",
+];
+
+function resolveSessionActorContext(session) {
+  return buildActorContext({
+    session,
+    fallbackType: "MERCHANT_ADMIN",
+  });
+}
+
+async function clearBulkEditHistoryCaches(shop) {
+  await Promise.all(
+    BULK_EDIT_HISTORY_CACHE_KEYS.map((key) => clearKeyCaches(`${shop}:${key}`)),
+  );
+}
+
+function resolveShopPlanLimits(subscription = {}) {
+  const limits = subscription?.shopPlanLimits
+    || subscription?.planLimits
+    || subscription?.limits
+    || {};
+  if (limits && typeof limits === "object" && !Array.isArray(limits)) {
+    return limits;
+  }
+  return {};
+}
 
 export class BulkEditCommandService {
   constructor(session) {
@@ -40,8 +73,8 @@ export class BulkEditCommandService {
   }
 
   async createManualBulkEditOperation(input = {}) {
-    if (input && typeof input === "object" && Object.prototype.hasOwnProperty.call(input, "body")) {
-      throw new Error("RAW_REQ_SHAPE_FORBIDDEN");
+    if (!this.session?.shop) {
+      throw new Error("BULK_EDIT_COMMAND_REQUIRES_SHOP_SESSION");
     }
 
     const command = input.command || {};
@@ -51,6 +84,20 @@ export class BulkEditCommandService {
       error.code = "VALIDATION_FAILED";
       throw error;
     }
+
+    const actor = resolveSessionActorContext(this.session);
+    const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(
+      this.session.shop,
+    );
+
+    const historyData = await this.#buildManualHistoryData(
+      command,
+      authoritativeSubscription,
+      {
+        actor,
+        entitlementSnapshot: buildEntitlementSnapshot(authoritativeSubscription),
+      },
+    );
 
     const begin = await this.idempotencyStore.begin({
       shop: this.session.shop,
@@ -65,27 +112,6 @@ export class BulkEditCommandService {
       return begin.response;
     }
 
-    const actor = input.actor || buildActorContext({
-        req: { body: command, query: {}, headers: {} },
-        session: this.session,
-        fallbackType: "MERCHANT_ADMIN",
-      });
-
-    const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(
-      this.session.shop,
-    );
-
-    const effectiveSubscription = input.subscription || authoritativeSubscription;
-
-    const historyData = await this.#buildManualHistoryData(
-      command,
-      effectiveSubscription,
-      {
-        actor,
-        entitlementSnapshot: buildEntitlementSnapshot(effectiveSubscription),
-      },
-    );
-
     const { historyId, historyShop, executionIdentity } =
       await createManualEditHistoryWithImmutableCommand({
         historyData,
@@ -99,14 +125,29 @@ export class BulkEditCommandService {
           }),
       });
 
-    await clearKeyCaches(`${historyShop}:fetchHistories`);
+    try {
+      await enqueueBulkEditTargetFreezeJob({
+        historyId,
+        shop: historyShop,
+        source: "manual_bulk_edit_pipeline",
+        executionId: executionIdentity,
+      });
+    } catch (error) {
+      await markManualEditHistoryEnqueueFailed({
+        historyId,
+        shop: historyShop,
+        executionIdentity,
+        errorMessage: error?.message,
+      });
+      await this.idempotencyStore.abort({
+        recordId: begin.recordId,
+        shop: this.session.shop,
+      });
+      await clearBulkEditHistoryCaches(historyShop);
+      throw error;
+    }
 
-    await enqueueBulkEditTargetFreezeJob({
-      historyId,
-      shop: historyShop,
-      source: "manual_bulk_edit_pipeline",
-      executionId: executionIdentity,
-    });
+    await clearBulkEditHistoryCaches(historyShop);
 
     const response = {
       success: true,
@@ -117,17 +158,110 @@ export class BulkEditCommandService {
     };
     await this.idempotencyStore.complete({
       recordId: begin.recordId,
+      shop: this.session.shop,
       response,
     });
     return response;
   }
 
-  async createEditHistoryPayload(body, subscription, operationContext = {}) {
-    return this.#buildManualHistoryData(body, subscription, operationContext);
-  }
+  async buildSystemEditHistoryData(body = {}, subscription = {}, operationContext = {}) {
+    if (!this.session?.shop) {
+      throw new Error("BULK_EDIT_COMMAND_REQUIRES_SHOP_SESSION");
+    }
 
-  async _bulkOperationEdit(body, subscription, operationContext = {}) {
-    return this.#buildManualHistoryData(body, subscription, operationContext);
+    const rules = normalizeRules(body);
+    const targetGranularity =
+      String(body.targetGranularity || body.targetType || "").trim()
+      || resolveTargetGranularityFromRules(rules);
+    const explicitTargets = Array.isArray(body.explicitTargets)
+      ? body.explicitTargets.filter(Boolean)
+      : [];
+    const explicitProductIds = Array.isArray(body.productIds)
+      ? body.productIds.filter(Boolean)
+      : [];
+    const explicitVariantIds = Array.isArray(body.variantIds)
+      ? body.variantIds.filter(Boolean)
+      : [];
+    const targetCount = explicitTargets.length
+      || explicitVariantIds.length
+      || explicitProductIds.length
+      || Number(body.targetCount || 0);
+    const queryWhere =
+      body.queryWhere && typeof body.queryWhere === "object"
+        ? body.queryWhere
+        : (body.where && typeof body.where === "object" ? body.where : {});
+    const filterAst =
+      body.filterAst && typeof body.filterAst === "object"
+        ? body.filterAst
+        : null;
+    const locationId = body.locationId ?? body.location ?? null;
+    const title = body.title || await buildHistoryTitle(rules);
+    const executionPlan = buildExecutionPlanForEdit({
+      operationKey: body.operationKey || null,
+      shop: this.session.shop,
+      planType: body.planType || "BULK_EDIT",
+      rules,
+      targetGranularity,
+      targetCount,
+      shopPlanLimits: resolveShopPlanLimits(subscription),
+    });
+    const undoAllowed = !rules.some((rule) => rule.field === "deleteProducts");
+    const blastRadiusAssessment = computeBlastRadiusRisk({
+      targetCount,
+      totalCatalogCount: Number(body.totalCatalogCount || targetCount || 0),
+      fieldsEdited: rules.map((rule) => rule?.field).filter(Boolean),
+      destructiveNature: !undoAllowed,
+      undoAvailability: undoAllowed,
+      verificationMode: "SAMPLE_PLUS_FAILURES",
+    });
+
+    return {
+      shop: this.session.shop,
+      title,
+      queryFilter: JSON.stringify(queryWhere),
+      rules,
+      startedAt: new Date(),
+      status: "pending",
+      statusNormalized: normalizeEditHistoryStatus("pending"),
+      executionState: OPERATION_LIFECYCLE_STATES.PLANNING,
+      executionStateNormalized: normalizeEditHistoryExecutionState(
+        OPERATION_LIFECYCLE_STATES.PLANNING,
+      ),
+      executionIdentity: crypto.randomUUID(),
+      processedCount: 0,
+      totalItems: targetCount,
+      targetSnapshotCount: 0,
+      targetMirrorBatchId: body.targetMirrorBatchId || null,
+      durationMs: 0,
+      batch: {
+        frozen: false,
+        hasMore: targetCount > 0,
+        lastProductId: null,
+        size: executionPlan.batchSize,
+        previewCount: targetCount,
+        currentBatchTargetCount: 0,
+        queuedAt: new Date().toISOString(),
+        filterParams: Array.isArray(body.filterParams) ? body.filterParams : [],
+        filterAst,
+        maxBulkEditTargets: getPlanMaxBulkEditTargets(subscription),
+        executionPlan,
+        operationKey: executionPlan.operationKey,
+        explicitProductIds,
+        explicitVariantIds,
+        explicitTargets,
+        explicitWhere: queryWhere,
+        targetGranularity,
+        locationId: locationId || null,
+        blastRadiusAssessment,
+      },
+      ...(rules.some((rule) => rule.field === "inventory") && { locationId }),
+      entitlementSnapshot: operationContext.entitlementSnapshot || null,
+      actorType: operationContext.actor?.actorType || null,
+      actorId: operationContext.actor?.actorId || null,
+      actorEmail: operationContext.actor?.actorEmail || null,
+      actorName: operationContext.actor?.actorName || null,
+      undo: buildPlannedUndoState({ allowed: undoAllowed }),
+    };
   }
 
   async #buildManualHistoryData(body, subscription, operationContext = {}) {
@@ -135,15 +269,9 @@ export class BulkEditCommandService {
     const previewContractId = body.previewContractId ?? body.previewId;
     const {
       editedField,
-      filterParams,
-      filterAst,
-      previewFilterHash,
-      previewMirrorBatchId,
       confirmBroadTarget,
       criticalConfirmationText,
       operationKey,
-      queryWhere,
-      productIds,
       title: explicitTitle,
     } = body;
 
@@ -207,11 +335,15 @@ export class BulkEditCommandService {
 
     const expectedHash = String(fingerprint.filterHash || "");
     const expectedBatch = String(fingerprint.mirrorBatchId || "");
+    if (!expectedHash || !expectedBatch) {
+      throw new Error("PREVIEW_FINGERPRINT_INCOMPLETE");
+    }
 
-    if (
-      (previewFilterHash && String(previewFilterHash || "") !== expectedHash)
-      || (previewMirrorBatchId && String(previewMirrorBatchId || "") !== expectedBatch)
-    ) {
+    const mirrorState = await assertMirrorSafeForTargeting(this.session.shop, {
+      purpose: "EXECUTE",
+    });
+    const activeMirrorBatchId = String(mirrorState?.activeMirrorBatchId || "");
+    if (activeMirrorBatchId !== expectedBatch) {
       throw new Error("Preview is stale. Please re-preview before executing.");
     }
 
@@ -243,16 +375,6 @@ export class BulkEditCommandService {
     }
 
     const count = previewCount;
-    const limit = subscription?.limit || 100;
-    const planName = subscription?.planName || "Free Plan";
-    const isUnlimited = subscription?.isUnlimited || false;
-
-    if (!isUnlimited && count > limit) {
-      throw new Error(
-        `Your current plan (${planName}) allows editing up to ${limit} products at a time. You are trying to edit ${count} products. Please upgrade your plan or reduce the number of products.`,
-      );
-    }
-
     const maxBulkEditTargets = getPlanMaxBulkEditTargets(subscription);
 
     if (count > maxBulkEditTargets) {
@@ -268,7 +390,7 @@ export class BulkEditCommandService {
       rules,
       targetGranularity,
       targetCount: count,
-      shopPlanLimits: { batchSize: 250 },
+      shopPlanLimits: resolveShopPlanLimits(subscription),
     });
 
     const blastRadiusAssessment = computeBlastRadiusRisk({
@@ -320,7 +442,7 @@ export class BulkEditCommandService {
         frozen: true,
         hasMore: count > 0,
         lastProductId: null,
-        size: 75,
+        size: executionPlan.batchSize,
         previewCount: count,
         currentBatchTargetCount: 0,
         queuedAt: new Date().toISOString(),

@@ -1,9 +1,9 @@
-import crypto from "crypto";
 import {
   ProductEditOperationRegistry,
   resolveProductEditOperation,
   assertValidOperationKey,
 } from "./productEditOperationRegistry.js";
+import { requireShopScope } from "../../../utils/shopScope.js";
 
 const EXECUTION_PATHS = Object.freeze({
   BULK_OPERATION_RUN_MUTATION: "bulkOperationRunMutation",
@@ -34,6 +34,29 @@ const RISK_LEVELS = Object.freeze({
   CRITICAL: "CRITICAL",
 });
 
+const RISK_MATRIX = Object.freeze([
+  {
+    when: ({ count, supportsUndo }) => !supportsUndo && count >= 100_000,
+    level: RISK_LEVELS.CRITICAL,
+  },
+  {
+    when: ({ count }) => count >= 100_000,
+    level: RISK_LEVELS.HIGH,
+  },
+  {
+    when: ({ requiresBeforeSnapshot, supportsUndo }) => requiresBeforeSnapshot && !supportsUndo,
+    level: RISK_LEVELS.HIGH,
+  },
+  {
+    when: ({ count }) => count >= 10_000,
+    level: RISK_LEVELS.MODERATE,
+  },
+  {
+    when: ({ requiresBeforeSnapshot }) => requiresBeforeSnapshot,
+    level: RISK_LEVELS.MODERATE,
+  },
+]);
+
 const MUTATION_NAMES = Object.freeze({
   PRODUCT_UPDATE: "productUpdate",
   PRODUCT_VARIANTS_BULK_UPDATE: "productVariantsBulkUpdate",
@@ -52,6 +75,20 @@ function normalizeFields(fieldsBeingEdited) {
   return [...new Set(fieldsBeingEdited.filter(Boolean).map((f) => String(f).trim()))];
 }
 
+function resolveShopPlanLimits(shop, shopPlanLimits) {
+  if (!shopPlanLimits || typeof shopPlanLimits !== "object" || Array.isArray(shopPlanLimits)) {
+    return {};
+  }
+  const perShop = shopPlanLimits.byShop || shopPlanLimits.shops || null;
+  if (perShop && typeof perShop === "object" && !Array.isArray(perShop)) {
+    return {
+      ...shopPlanLimits,
+      ...(perShop[shop] || {}),
+    };
+  }
+  return shopPlanLimits;
+}
+
 function chooseBatchSize({ executionPath, targetCount, shopPlanLimits }) {
   const count = Number(targetCount || 0);
   const limits = shopPlanLimits && typeof shopPlanLimits === "object" ? shopPlanLimits : {};
@@ -59,11 +96,14 @@ function chooseBatchSize({ executionPath, targetCount, shopPlanLimits }) {
   const explicit = Number(limits.batchSize || 0);
   if (explicit > 0) return explicit;
 
-  if (executionPath === EXECUTION_PATHS.BULK_OPERATION_RUN_MUTATION) return 1000;
-  if (executionPath === EXECUTION_PATHS.GRAPHQL_BATCH_MUTATIONS) return count > 10_000 ? 250 : 100;
-  if (executionPath === EXECUTION_PATHS.INVENTORY_MUTATIONS) return 100;
-  if (executionPath === EXECUTION_PATHS.MEDIA_MUTATIONS) return 25;
-  return 100;
+  const maxBatchSize = Number(limits.maxBatchSize || 0);
+  const planClamp = (value) => (maxBatchSize > 0 ? Math.min(value, maxBatchSize) : value);
+
+  if (executionPath === EXECUTION_PATHS.BULK_OPERATION_RUN_MUTATION) return planClamp(1000);
+  if (executionPath === EXECUTION_PATHS.GRAPHQL_BATCH_MUTATIONS) return planClamp(count > 10_000 ? 250 : 100);
+  if (executionPath === EXECUTION_PATHS.INVENTORY_MUTATIONS) return planClamp(100);
+  if (executionPath === EXECUTION_PATHS.MEDIA_MUTATIONS) return planClamp(25);
+  return planClamp(100);
 }
 
 function inferRiskLevel({
@@ -72,9 +112,9 @@ function inferRiskLevel({
   requiresBeforeSnapshot = false,
 }) {
   const count = Number(targetCount || 0);
-  if (!supportsUndo && count >= 100_000) return RISK_LEVELS.CRITICAL;
-  if (count >= 100_000 || (requiresBeforeSnapshot && !supportsUndo)) return RISK_LEVELS.HIGH;
-  if (count >= 10_000 || requiresBeforeSnapshot) return RISK_LEVELS.MODERATE;
+  const context = { count, supportsUndo, requiresBeforeSnapshot };
+  const match = RISK_MATRIX.find((entry) => entry.when(context));
+  if (match) return match.level;
   return RISK_LEVELS.LOW;
 }
 
@@ -84,6 +124,58 @@ function resolveCostUnits(executionPath) {
   if (executionPath === EXECUTION_PATHS.MEDIA_MUTATIONS) return 20;
   if (executionPath === EXECUTION_PATHS.METAFIELDS_SET) return 12;
   return 10;
+}
+
+function assertPlanType(planType) {
+  const normalized = String(planType || PLAN_TYPES.BULK_EDIT).toUpperCase();
+  if (!Object.values(PLAN_TYPES).includes(normalized)) {
+    const error = new Error(`UNKNOWN_PLAN_TYPE:${normalized}`);
+    error.code = "UNKNOWN_PLAN_TYPE";
+    throw error;
+  }
+  return normalized;
+}
+
+function assertOperationDefinition(operationKey, operationDef) {
+  if (!operationDef) {
+    const error = new Error(`OPERATION_DEFINITION_MISSING:${operationKey}`);
+    error.code = "OPERATION_DEFINITION_MISSING";
+    throw error;
+  }
+  return operationDef;
+}
+
+function resolveExecutionPath({ operationKey, operationDef, targetCount }) {
+  const registryStrategy = String(operationDef.apiStrategy || "").toUpperCase();
+  const registryExecutionPath = String(operationDef.executionPath || "").trim();
+  if (!registryStrategy) {
+    const error = new Error(`OPERATION_API_STRATEGY_MISSING:${operationKey}`);
+    error.code = "OPERATION_API_STRATEGY_MISSING";
+    throw error;
+  }
+
+  if (registryStrategy === "BULK_OR_CHUNKED") {
+    return Number(targetCount || 0) > 2_000
+      ? EXECUTION_PATHS.BULK_OPERATION_RUN_MUTATION
+      : registryExecutionPath || EXECUTION_PATHS.GRAPHQL_BATCH_MUTATIONS;
+  }
+
+  if (!registryExecutionPath) {
+    const error = new Error(`OPERATION_EXECUTION_PATH_MISSING:${operationKey}`);
+    error.code = "OPERATION_EXECUTION_PATH_MISSING";
+    throw error;
+  }
+
+  if (
+    registryStrategy !== "CHUNKED_API" &&
+    registryStrategy !== "BULK_MUTATION"
+  ) {
+    const error = new Error(`OPERATION_API_STRATEGY_UNSUPPORTED:${operationKey}:${registryStrategy}`);
+    error.code = "OPERATION_API_STRATEGY_UNSUPPORTED";
+    throw error;
+  }
+
+  return registryExecutionPath;
 }
 
 export function planMutationExecution({
@@ -97,6 +189,7 @@ export function planMutationExecution({
   fieldsBeingEdited = [],
   shopPlanLimits = {},
 } = {}) {
+  const scopedShop = requireShopScope(shop);
   const fields = normalizeFields(fieldsBeingEdited);
   const explicitOperationKey =
     String(operationKey || "").trim() ||
@@ -109,10 +202,11 @@ export function planMutationExecution({
       fieldsBeingEdited: fields,
       targetGranularity,
     });
-  const operationDef = ProductEditOperationRegistry.PRODUCT_EDIT_OPERATIONS[resolvedOperationKey]
-    || ProductEditOperationRegistry.PRODUCT_EDIT_OPERATIONS.PRODUCT_GENERIC_SET;
+  const operationDef = assertOperationDefinition(
+    resolvedOperationKey,
+    ProductEditOperationRegistry.PRODUCT_EDIT_OPERATIONS[resolvedOperationKey],
+  );
 
-  let executionPath = EXECUTION_PATHS.GRAPHQL_BATCH_MUTATIONS;
   const graphqlMutationName = operationDef.mutation || MUTATION_NAMES.PRODUCT_UPDATE;
   const requiredScopes = Array.isArray(operationDef.requiredScopes)
     ? operationDef.requiredScopes
@@ -120,54 +214,42 @@ export function planMutationExecution({
   const supportsUndo = operationDef.undoable !== false;
   const requiresVerificationRead = operationDef.requiresVerification !== false;
   const requiresBeforeSnapshot = operationDef.requiresBeforeSnapshot === true;
-
-  const registryStrategy = String(operationDef.apiStrategy || "").toUpperCase();
-  if (registryStrategy === "CHUNKED_API") {
-    executionPath = graphqlMutationName.startsWith("inventory")
-      ? EXECUTION_PATHS.INVENTORY_MUTATIONS
-      : graphqlMutationName.startsWith("collection")
-        ? EXECUTION_PATHS.COLLECTION_OPERATIONS
-        : graphqlMutationName.startsWith("productCreateMedia") || graphqlMutationName.startsWith("productDeleteMedia")
-          ? EXECUTION_PATHS.MEDIA_MUTATIONS
-          : EXECUTION_PATHS.GRAPHQL_BATCH_MUTATIONS;
-  } else if (registryStrategy === "BULK_OR_CHUNKED") {
-    executionPath = Number(targetCount || 0) > 2_000
-      ? EXECUTION_PATHS.BULK_OPERATION_RUN_MUTATION
-      : EXECUTION_PATHS.GRAPHQL_BATCH_MUTATIONS;
-  } else {
-    executionPath = Number(targetCount || 0) > 5_000
-      ? EXECUTION_PATHS.BULK_OPERATION_RUN_MUTATION
-      : EXECUTION_PATHS.GRAPHQL_BATCH_MUTATIONS;
-  }
+  const executionPath = resolveExecutionPath({
+    operationKey: resolvedOperationKey,
+    operationDef,
+    targetCount,
+  });
 
   const batchSize = chooseBatchSize({
     executionPath,
     targetCount,
-    shopPlanLimits,
+    shopPlanLimits: resolveShopPlanLimits(scopedShop, shopPlanLimits),
   });
   const chunkCount = Math.max(1, Math.ceil(Number(targetCount || 0) / Number(batchSize || 1)));
   const apiStrategy = executionPath === EXECUTION_PATHS.BULK_OPERATION_RUN_MUTATION
     ? API_STRATEGIES.BULK_OPERATION
     : API_STRATEGIES.CHUNKED_GRAPHQL;
-  const estimatedCost = chunkCount * resolveCostUnits(executionPath);
+  const costUnit = resolveCostUnits(executionPath);
+  const estimatedCost = chunkCount * costUnit;
   const riskLevel = inferRiskLevel({
     targetCount,
     supportsUndo,
     requiresBeforeSnapshot,
   });
-  const resolvedOperationId =
-    String(operationId || "").trim() ||
-    crypto.randomUUID();
+  const resolvedOperationId = String(operationId || "").trim() || null;
+  const resolvedPlanType = assertPlanType(planType);
 
   return {
     operationKey: resolvedOperationKey,
     operationId: resolvedOperationId,
-    shop: String(shop || "").trim() || null,
-    planType: String(planType || PLAN_TYPES.BULK_EDIT).toUpperCase(),
+    shop: scopedShop,
+    planType: resolvedPlanType,
     targetType: String(targetGranularity || "PRODUCT").toUpperCase(),
     mutationType: graphqlMutationName,
     apiStrategy,
     estimatedCost,
+    estimatedCostUnit: "planner_weight_units",
+    costUnit,
     estimatedChunks: chunkCount,
     requiresBeforeSnapshot,
     requiresVerification: requiresVerificationRead === true,
@@ -179,7 +261,6 @@ export function planMutationExecution({
     requiredScopes,
     graphqlMutationName,
     batchSize,
-    supportsUndo,
     requiresVerificationRead,
   };
 }

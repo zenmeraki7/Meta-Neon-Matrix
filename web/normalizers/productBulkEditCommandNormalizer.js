@@ -248,9 +248,8 @@ function normalizeLang(value) {
   return lang;
 }
 
-function normalizeIdempotencyKey(headers = {}) {
-  const safeHeaders = headers && typeof headers === "object" ? headers : {};
-  const key = normalizeText(safeHeaders.idempotencyKey, "Idempotency-Key", 200);
+function normalizeIdempotencyKey(value) {
+  const key = normalizeText(value, "Idempotency-Key", 200);
 
   if (!key) {
     throw buildRequestError(
@@ -492,8 +491,14 @@ function normalizeOptionalPlainObjectFallback(value, fieldName) {
   return normalizeOptionalPlainObject(value, fieldName) || EMPTY_OBJECT;
 }
 
-function assertCommandContext(context) {
-  const safe = assertPlainObject(context, "command context");
+function assertCommandContext({
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
+}) {
+  const safe = { shop, actor, subscription, entitlement, activePlan };
 
   if (!safe.shop || typeof safe.shop !== "string") {
     throw buildRequestError("Authentication required", "UNAUTHENTICATED");
@@ -616,10 +621,14 @@ function assertScheduledUndoAfterScheduledAt(scheduledAt, scheduledUndoAt) {
 export function buildBulkEditPreviewCommand({
   body = {},
   query = {},
-  context,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
   const safeQuery = normalizeQueryObject(query);
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const payload = normalizeEditPayload({ body, query: safeQuery });
 
   return Object.freeze({
@@ -632,10 +641,14 @@ export function buildBulkEditPreviewCommand({
 export function buildBulkEditExecuteCommand({
   body = {},
   query = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const payload = normalizeEditPayload({ body, query });
 
   requirePreviewContract(payload);
@@ -644,17 +657,21 @@ export function buildBulkEditExecuteCommand({
     ...safeContext,
     ...payload,
     previewContractId: payload.previewId,
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildScheduledEditCommand({
   body = {},
   query = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const payload = normalizeEditPayload({ body, query });
 
   const safeBody = assertPlainObject(body, "body");
@@ -679,31 +696,39 @@ export function buildScheduledEditCommand({
     scheduledAt,
     scheduledUndoAt,
     freezeMode: normalizeFreezeMode(safeBody.freezeMode),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildUndoEditCommand({
   params = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
 
   return Object.freeze({
     ...safeContext,
     historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildCancelEditCommand({
   params = {},
   body = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const safeBody =
     body === undefined || body === null
       ? EMPTY_OBJECT
@@ -713,58 +738,74 @@ export function buildCancelEditCommand({
     ...safeContext,
     historyId: normalizeId(params.id, "historyId"),
     reason: normalizeCancelReason(safeBody.cancelReason),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildPauseEditCommand({
   params = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
 
   return Object.freeze({
     ...safeContext,
     historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildResumeEditCommand({
   params = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
 
   return Object.freeze({
     ...safeContext,
     historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildRetryFailedOnlyCommand({
   params = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
 
   return Object.freeze({
     ...safeContext,
     historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildPreviewVariantDetailsCommand({
   params = {},
   query = {},
-  context,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const safeQuery = normalizeQueryObject(query);
 
   return Object.freeze({

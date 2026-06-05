@@ -17,7 +17,7 @@ export {
 } from "./productExportController.js";
 
 export {
-  importCsvController,
+  createImportCsvController,
 } from "./productImportController.js";
 
-export { clearProductTypes } from "./productSyncController.js";
+export { createClearProductTypesController } from "./productSyncController.js";

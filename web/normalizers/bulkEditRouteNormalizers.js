@@ -9,7 +9,7 @@ function badRequest(code, message, fields = []) {
 }
 
 export function normalizeSessionRouteContext(params = {}, locals = {}) {
-  const shopId = String(locals.shop || "").trim();
+  const shopId = String(locals.shopify?.session?.shop || "").trim();
   const sessionId = String(params.id || "").trim();
   if (!shopId || !sessionId) {
     const error = new Error("Session not found");

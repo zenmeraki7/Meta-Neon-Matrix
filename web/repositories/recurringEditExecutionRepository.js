@@ -49,30 +49,35 @@ export async function createRecurringEditHistoryAndLinkRun({
     },
   });
 
-  await recurringEditRunRepository.updateById(runId, {
-    editHistoryId: editHistory.id,
-    mirrorBatchId: null,
-    filterAst: currentRecurringEdit.filterAst ?? null,
-    normalizedFilterAst: currentRecurringEdit.normalizedFilterAst ?? null,
-    targetingSnapshotMeta: {
-      ...(currentRecurringEdit.targetingSnapshotMeta || {}),
-      createdCompilerVersion:
-        compilerVersions.createdCompilerVersion || currentRecurringEdit.targetingCompilerVersion || null,
-      currentCompilerVersion: compilerVersions.currentCompilerVersion,
-      source: "RECURRING",
-      semantics: "DYNAMIC_AT_RUN",
-      runId,
-      recurringEditId: currentRecurringEdit.id,
-      resolvedAt: null,
+  await recurringEditRunRepository.updateById(
+    runId,
+    currentRecurringEdit.shop,
+    {
+      editHistoryId: editHistory.id,
+      mirrorBatchId: null,
+      filterAst: currentRecurringEdit.filterAst ?? null,
+      normalizedFilterAst: currentRecurringEdit.normalizedFilterAst ?? null,
+      targetingSnapshotMeta: {
+        ...(currentRecurringEdit.targetingSnapshotMeta || {}),
+        createdCompilerVersion:
+          compilerVersions.createdCompilerVersion || currentRecurringEdit.targetingCompilerVersion || null,
+        currentCompilerVersion: compilerVersions.currentCompilerVersion,
+        source: "RECURRING",
+        semantics: "DYNAMIC_AT_RUN",
+        runId,
+        recurringEditId: currentRecurringEdit.id,
+        resolvedAt: null,
+      },
+      targetingMode: "DYNAMIC_AT_RUN",
+      targetGranularity: currentRecurringEdit.targetGranularity || "PRODUCT",
+      targetingCompilerVersion: compilerVersions.currentCompilerVersion,
+      fieldRegistryVersion: currentRecurringEdit.fieldRegistryVersion || null,
+      operatorRegistryVersion: currentRecurringEdit.operatorRegistryVersion || null,
+      filterHash: currentRecurringEdit.filterHash || null,
+      targetResolvedAt: null,
     },
-    targetingMode: "DYNAMIC_AT_RUN",
-    targetGranularity: currentRecurringEdit.targetGranularity || "PRODUCT",
-    targetingCompilerVersion: compilerVersions.currentCompilerVersion,
-    fieldRegistryVersion: currentRecurringEdit.fieldRegistryVersion || null,
-    operatorRegistryVersion: currentRecurringEdit.operatorRegistryVersion || null,
-    filterHash: currentRecurringEdit.filterHash || null,
-    targetResolvedAt: null,
-  }, tx);
+    tx,
+  );
 
   return {
     editHistoryId: editHistory.id,
@@ -96,9 +101,12 @@ export async function markEditHistoryQueuedIfFrozen(editHistoryId, shop) {
   });
 }
 
-export async function findHistoryForRecurringFinalize(historyId) {
-  return prisma.editHistory.findUnique({
-    where: { id: historyId },
+export async function findHistoryForRecurringFinalize(historyId, shop) {
+  if (!shop || !historyId) {
+    throw new Error("RECURRING_FINALIZE_REQUIRES_SHOP_AND_HISTORY_ID");
+  }
+  return prisma.editHistory.findFirst({
+    where: { id: historyId, shop },
     select: {
       recurringRunId: true,
       recurringEditId: true,

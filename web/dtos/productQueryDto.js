@@ -25,10 +25,18 @@ export function toProductOptionListDto(result) {
   const data = safeArray(result);
   return {
     success: true,
-    data: data.map((value) => ({
-      value: safeString(value, ""),
-      label: safeString(value, ""),
-    })),
+    data: data.map((item) => {
+      if (item && typeof item === "object") {
+        const value = safeString(item.value ?? item.title ?? item.label ?? item.name ?? item.id, "");
+        const label = safeString(item.label ?? item.title ?? item.value ?? item.name ?? item.id, value);
+        return { value, label };
+      }
+
+      return {
+        value: safeString(item, ""),
+        label: safeString(item, ""),
+      };
+    }),
     meta: { count: data.length },
   };
 }

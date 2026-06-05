@@ -224,9 +224,8 @@ function normalizeId(value, fieldName = "id") {
   return normalizeSafeToken(value, fieldName, MAX_ID_LENGTH);
 }
 
-function normalizeIdempotencyKey(headers = {}) {
-  const safeHeaders = headers && typeof headers === "object" ? headers : {};
-  const key = normalizeText(safeHeaders.idempotencyKey, "Idempotency-Key", 200);
+function normalizeIdempotencyKey(value) {
+  const key = normalizeText(value, "Idempotency-Key", 200);
 
   if (!key) {
     throw buildRequestError(
@@ -411,8 +410,14 @@ function normalizeOptionalPlainObjectFallback(value, fieldName) {
   return normalizeOptionalPlainObject(value, fieldName) || EMPTY_OBJECT;
 }
 
-function assertCommandContext(context) {
-  const safe = assertPlainObject(context, "command context");
+function assertCommandContext({
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
+}) {
+  const safe = { shop, actor, subscription, entitlement, activePlan };
 
   if (!safe.shop || typeof safe.shop !== "string") {
     throw buildRequestError("Authentication required", "UNAUTHENTICATED");
@@ -432,10 +437,20 @@ function assertCommandContext(context) {
 
 export function buildCreateProductExportCommand({
   body = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({
+    shop,
+    actor,
+    subscription,
+    entitlement,
+    activePlan,
+  });
 
   const safeBody = assertNoUnknownKeys(
     body,
@@ -449,15 +464,25 @@ export function buildCreateProductExportCommand({
     fileName: normalizeFileName(safeBody.fileName),
     filterParams: normalizeFilterParams(safeBody.filterParams),
     filterAst: normalizeFilterAst(safeBody.filterAst),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildDownloadProductExportCommand({
   params = {},
-  context,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({
+    shop,
+    actor,
+    subscription,
+    entitlement,
+    activePlan,
+  });
 
   return Object.freeze({
     ...safeContext,
@@ -468,10 +493,20 @@ export function buildDownloadProductExportCommand({
 export function buildCancelExportCommand({
   params = {},
   body = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({
+    shop,
+    actor,
+    subscription,
+    entitlement,
+    activePlan,
+  });
 
   const safeBody =
     body === undefined || body === null
@@ -482,34 +517,54 @@ export function buildCancelExportCommand({
     ...safeContext,
     exportJobId: normalizeId(params.id, "exportJobId"),
     reason: normalizeText(safeBody.cancelReason, "cancelReason", 300),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildPauseExportCommand({
   params = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({
+    shop,
+    actor,
+    subscription,
+    entitlement,
+    activePlan,
+  });
 
   return Object.freeze({
     ...safeContext,
     exportJobId: normalizeId(params.id, "exportJobId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }
 
 export function buildResumeExportCommand({
   params = {},
-  headers = {},
-  context,
+  idempotencyKey,
+  shop,
+  actor = null,
+  subscription = null,
+  entitlement = null,
+  activePlan = EMPTY_OBJECT,
 }) {
-  const safeContext = assertCommandContext(context);
+  const safeContext = assertCommandContext({
+    shop,
+    actor,
+    subscription,
+    entitlement,
+    activePlan,
+  });
 
   return Object.freeze({
     ...safeContext,
     exportJobId: normalizeId(params.id, "exportJobId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });
 }

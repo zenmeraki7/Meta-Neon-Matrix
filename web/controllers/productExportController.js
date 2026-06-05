@@ -20,52 +20,18 @@ import {
   productExportLifecycleUseCases,
 } from "../useCases/productExportUseCases.js";
 
-function assertSafeDownloadUrl(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.trim()) {
-    const error = new Error("EXPORT_FILE_URL_INVALID");
-    error.code = "CONFLICT";
-    throw error;
-  }
-  let parsed;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    const error = new Error("EXPORT_FILE_URL_INVALID");
-    error.code = "CONFLICT";
-    throw error;
-  }
-  if (parsed.protocol !== "https:") {
-    const error = new Error("EXPORT_FILE_URL_UNSAFE");
-    error.code = "CONFLICT";
-    throw error;
-  }
-  return parsed.toString();
-}
-
-function buildContext(req, session) {
-  return Object.freeze({
-    shop: session.shop,
-    actor: buildActorFromSession(session),
-    subscription: req.subscription || null,
-    entitlement: req.entitlement || null,
-    activePlan: req.activePlan || {},
-  });
-}
-
-function buildHeaders(req) {
-  return Object.freeze({
-    idempotencyKey: req.get("Idempotency-Key") || null,
-  });
-}
-
 export const createProductExport = async (req, res, next) => {
   try {
     setPrivateNoStore(res);
     const session = requireShopifySession(res, "UNAUTHENTICATED");
     const command = buildCreateProductExportCommand({
       body: req.body || {},
-      headers: buildHeaders(req),
-      context: buildContext(req, session),
+      idempotencyKey: req.get("Idempotency-Key") || null,
+      shop: session.shop,
+      actor: buildActorFromSession(session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
     });
     const result = await productExportUseCases.create(command);
     return res.status(200).json(toExportJobQueuedResponseDto(result));
@@ -80,11 +46,15 @@ export const handleDownloadExportProductsData = async (req, res, next) => {
     const session = requireShopifySession(res, "UNAUTHENTICATED");
     const command = buildDownloadProductExportCommand({
       params: req.params || {},
-      context: buildContext(req, session),
+      shop: session.shop,
+      actor: buildActorFromSession(session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
     });
     const result = await productExportUseCases.download(command);
     const redirect = toExportDownloadRedirectDto(result);
-    return res.redirect(assertSafeDownloadUrl(redirect.downloadUrl));
+    return res.redirect(redirect.downloadUrl);
   } catch (error) {
     return next(error);
   }
@@ -97,8 +67,12 @@ export const cancelExportOperation = async (req, res, next) => {
     const command = buildCancelExportCommand({
       params: req.params || {},
       body: req.body || {},
-      headers: buildHeaders(req),
-      context: buildContext(req, session),
+      idempotencyKey: req.get("Idempotency-Key") || null,
+      shop: session.shop,
+      actor: buildActorFromSession(session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
     });
     const result = await productExportLifecycleUseCases.cancel(command);
     return res.status(200).json(toExportCancellationResponseDto(result));
@@ -113,8 +87,12 @@ export const pauseExportOperation = async (req, res, next) => {
     const session = requireShopifySession(res, "UNAUTHENTICATED");
     const command = buildPauseExportCommand({
       params: req.params || {},
-      headers: buildHeaders(req),
-      context: buildContext(req, session),
+      idempotencyKey: req.get("Idempotency-Key") || null,
+      shop: session.shop,
+      actor: buildActorFromSession(session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
     });
     const result = await productExportLifecycleUseCases.pause(command);
     return res.status(200).json(toExportPauseResponseDto(result));
@@ -129,8 +107,12 @@ export const resumePausedExportOperation = async (req, res, next) => {
     const session = requireShopifySession(res, "UNAUTHENTICATED");
     const command = buildResumeExportCommand({
       params: req.params || {},
-      headers: buildHeaders(req),
-      context: buildContext(req, session),
+      idempotencyKey: req.get("Idempotency-Key") || null,
+      shop: session.shop,
+      actor: buildActorFromSession(session),
+      subscription: req.subscription || null,
+      entitlement: req.entitlement || null,
+      activePlan: req.activePlan || {},
     });
     const result = await productExportLifecycleUseCases.resume(command);
     return res.status(200).json(toExportResumeResponseDto(result));

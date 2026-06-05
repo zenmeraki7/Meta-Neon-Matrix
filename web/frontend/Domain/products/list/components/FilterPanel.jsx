@@ -19,10 +19,13 @@ import {
   operatorRequiresValue,
   getTranslatedOperatorLabel,
   normalizeAutocompleteOption,
+  normalizeFilterValueForSubmit,
+  isFilterDraftValid,
 } from "../utils/filterUtils";
 import { useApiClient } from "../../../../hooks/useApiClient";
 
 const MIN_AUTOCOMPLETE_QUERY_LENGTH = 2;
+const AUTOCOMPLETE_DEBOUNCE_MS = 250;
 
 async function fetchAutocompleteOptions({
   api,
@@ -38,7 +41,7 @@ async function fetchAutocompleteOptions({
 
   try {
     const data = await api.get(
-      `${filter.api}?search=${encodeURIComponent(query)}&isNameOnly=true`,
+      `${filter.api}?search=${encodeURIComponent(query)}&limit=10`,
       {
         headers: { Accept: "application/json" },
         signal,
@@ -147,8 +150,14 @@ const FilterPanel = memo(function FilterPanel({
       setDraft((prev) => ({
         ...prev,
         inputText: query,
-        value: q ? prev.value : "",
+        value: filter.api ? (q ? prev.value : "") : q,
       }));
+
+      if (!filter.api) {
+        setOptions([]);
+        setLoading(false);
+        return;
+      }
 
       clearTimeout(debounceTimer.current);
       abortControllerRef.current?.abort();
@@ -188,7 +197,7 @@ const FilterPanel = memo(function FilterPanel({
           setOptions,
           setLoading,
         });
-      }, 300);
+      }, AUTOCOMPLETE_DEBOUNCE_MS);
     },
     [api, filter]
   );
@@ -209,56 +218,62 @@ const FilterPanel = memo(function FilterPanel({
     onApply({
       field: filter.key,
       operator: draft.operator,
-      value: draft.value,
+      value: normalizeFilterValueForSubmit(filter, draft.value),
     });
-  }, [filter.key, draft, onApply]);
+  }, [filter, draft, onApply]);
+
+  const canApply = isFilterDraftValid(filter, draft);
 
   return (
-    <Box width="280px" padding="200">
-      <BlockStack gap="300">
-        <Text as="p" variant="bodySm" tone="subdued">
-          {t("configureField", {
-            field: filter.translatedLabel || filter.label,
-          })}
-        </Text>
+    <Box width="min(420px, calc(100vw - 32px))">
+      <BlockStack gap="0">
+        <Box padding="400" maxHeight="360px" overflowX="hidden" overflowY="auto">
+          <BlockStack gap="300">
+            <Text as="p" variant="bodySm" tone="subdued">
+              {t("configureField", {
+                field: filter.translatedLabel || filter.label,
+              })}
+            </Text>
 
-        {filter.operators.length > 0 && (
-          <Select
-            labelHidden
-            options={operatorOptions}
-            value={draft.operator}
-            onChange={handleOperatorChange}
-          />
-        )}
+            {filter.operators.length > 0 && (
+              <Select
+                labelHidden
+                options={operatorOptions}
+                value={draft.operator}
+                onChange={handleOperatorChange}
+              />
+            )}
 
-        <FilterValueInput
-          filter={filter}
-          value={draft.value}
-          inputText={draft.inputText}
-          options={options}
-          loading={loading}
-          placeholder={placeholder}
-          enumChoices={enumChoices}
-          onChange={handleValueChange}
-          onSearch={handleSearch}
-        />
+            {operatorRequiresValue(draft.operator) && (
+              <FilterValueInput
+                filter={filter}
+                value={draft.value}
+                inputText={draft.inputText}
+                options={options}
+                loading={loading}
+                placeholder={placeholder}
+                enumChoices={enumChoices}
+                onChange={handleValueChange}
+                onSearch={handleSearch}
+              />
+            )}
+          </BlockStack>
+        </Box>
 
-        <InlineStack gap="200" align="end">
+        <Box padding="300" borderBlockStartWidth="025" borderColor="border-secondary">
+          <InlineStack gap="200" align="end">
           <Button onClick={onCancel}>
             {t("cancel", "Cancel")}
           </Button>
           <Button
             variant="primary"
-            disabled={
-              operatorRequiresValue(draft.operator)
-                ? !String(draft.value || "").trim()
-                : false
-            }
+            disabled={!canApply}
             onClick={handleApply}
           >
             {t("addFilter")}
           </Button>
-        </InlineStack>
+          </InlineStack>
+        </Box>
       </BlockStack>
     </Box>
   );

@@ -15,7 +15,6 @@ import { buildExecutionPlanForEdit } from "./helpers/bulkEditOperationHelpers.js
 export const PREVIEW_VARIANT_SELECT = Object.freeze({
   id: true,
   productId: true,
-  mirrorBatchId: true,
   position: true,
   title: true,
   price: true,
@@ -231,8 +230,8 @@ export class ProductBulkPreviewService {
     });
     const previewId = existingPreviewTrack?.id || crypto.randomUUID();
     if (existingPreviewTrack?.id) {
-      await db.filterTrack.update({
-        where: { id: existingPreviewTrack.id },
+      await db.filterTrack.updateMany({
+        where: { id: existingPreviewTrack.id, shop: this.session.shop },
         data: {
           previewResCount: target.count,
           filterParams: Array.isArray(filterParams) ? filterParams : [],
@@ -471,4 +470,3 @@ export class ProductBulkPreviewService {
     };
   }
 }
-

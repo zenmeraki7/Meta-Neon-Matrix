@@ -20,6 +20,7 @@ export const getAllCategories =
         search: query.search,
         limit: query.limit,
         cursor: query.cursor,
+        subscription: req.subscription || null,
         actor: buildActorFromSession(session),
       });
 
@@ -46,6 +47,7 @@ export const getCategoryOptions =
         search: query.search,
         limit: query.limit,
         cursor: query.cursor,
+        subscription: req.subscription || null,
         actor: buildActorFromSession(session),
       });
 

@@ -110,6 +110,7 @@ export async function formatAndSyncProductsToDB({
   session,
   syncBatchId,
   syncHistoryId = null,
+  skipStaging = false,
 }) {
   if (!syncBatchId) {
     throw new Error("syncBatchId is required for staged product sync");
@@ -160,7 +161,16 @@ export async function formatAndSyncProductsToDB({
       }
     };
 
+    const assertNestedConnectionNotTruncated = (node, fieldName) => {
+      if (node?.[fieldName]?.pageInfo?.hasNextPage === true) {
+        throw new Error(`PRODUCT_SYNC_NESTED_CONNECTION_TRUNCATED:${fieldName}`);
+      }
+    };
+
     const normalizeProductNode = (node) => {
+      assertNestedConnectionNotTruncated(node, "variants");
+      assertNestedConnectionNotTruncated(node, "metafields");
+      assertNestedConnectionNotTruncated(node, "collections");
       const productMetafields = extractMetafields(node.metafields);
       collectMetaobjectRefsFromMetafields(productMetafields);
       return {
@@ -272,6 +282,7 @@ export async function formatAndSyncProductsToDB({
       }
 
       await insertProductMirrorBatch({
+        shop,
         productRows,
         variantRows,
         inventoryItemRows,
@@ -305,9 +316,11 @@ export async function formatAndSyncProductsToDB({
       crlfDelay: Infinity,
     });
 
-    console.log(`[sync:staging_start] shop=${shop} syncBatchId=${syncBatchId}`);
-    await stageProductMirrorBatch({ shop, syncBatchId, syncHistoryId });
-    console.log(`[sync:staging_done] shop=${shop}`);
+    if (!skipStaging) {
+      console.log(`[sync:staging_start] shop=${shop} syncBatchId=${syncBatchId}`);
+      await stageProductMirrorBatch({ shop, syncBatchId, syncHistoryId });
+      console.log(`[sync:staging_done] shop=${shop}`);
+    }
 
     const finalizeCurrentProduct = async () => {
       if (!currentProduct) return;

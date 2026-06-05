@@ -19,39 +19,31 @@ function isReconciliationDue(lastFullSyncAt) {
   return Date.now() - new Date(lastFullSyncAt).getTime() >= thresholdMs;
 }
 
-async function processReconciliationJob() {
-  const stores = await db.store.findMany({
+async function processReconciliationJob(job) {
+  const shop = String(job?.data?.shop || "").trim();
+  if (!shop) {
+    throw new Error("reconciliation job requires shop");
+  }
+
+  const store = await db.store.findUnique({
     where: {
-      isUnInstalled: false,
+      shopUrl: shop,
     },
     select: {
       shopUrl: true,
       isProductSyncing: true,
       lastFullSyncAt: true,
     },
-    orderBy: { shopUrl: "asc" },
   });
 
   let queued = 0;
   let skipped = 0;
   const enqueuedShops = new Set();
 
-  for (const store of stores) {
-    const shop = String(store?.shopUrl || "").trim();
-    if (!shop) {
-      skipped += 1;
-      continue;
-    }
-
-    if (store.isProductSyncing || !isReconciliationDue(store.lastFullSyncAt)) {
-      skipped += 1;
-      continue;
-    }
-
+  if (!store || store.isProductSyncing || !isReconciliationDue(store.lastFullSyncAt)) {
+    skipped += 1;
+  } else {
     try {
-      // shop-sync queue enforces dedupe/fingerprints per shop+syncType+reason.
-      // This is safe to call repeatedly across reconciliation ticks.
-      // eslint-disable-next-line no-await-in-loop
       await addShopSyncJob({
         shop,
         syncType: "product",
@@ -70,27 +62,19 @@ async function processReconciliationJob() {
     }
   }
 
-  const stalePendingSignals = await db.mirrorReconcileSignal.groupBy({
-    by: ["shop"],
+  const stalePendingSignals = await db.mirrorReconcileSignal.count({
     where: {
+      shop,
       status: "pending",
       latestEventAt: { lt: new Date(Date.now() - STALE_SIGNAL_THRESHOLD_MS) },
     },
-    _count: { shop: true },
   });
 
-  for (const row of stalePendingSignals) {
-    const shop = String(row?.shop || "").trim();
-    const pendingCount = Number(row?._count?.shop || 0);
-    if (!shop || pendingCount < STALE_SIGNAL_COUNT_THRESHOLD) {
-      continue;
-    }
-    if (enqueuedShops.has(shop)) {
-      continue;
-    }
-
+  if (
+    stalePendingSignals >= STALE_SIGNAL_COUNT_THRESHOLD
+    && !enqueuedShops.has(shop)
+  ) {
     try {
-      // eslint-disable-next-line no-await-in-loop
       await addShopSyncJob({
         shop,
         syncType: "product",
@@ -104,13 +88,13 @@ async function processReconciliationJob() {
         worker: "reconciliationWorker",
         queue: RECONCILIATION_QUEUE_NAME,
         shop,
-        pendingCount,
+        pendingCount: stalePendingSignals,
         message: error?.message || String(error),
       });
     }
   }
 
-  return { queued, skipped, totalStores: stores.length };
+  return { queued, skipped, shop };
 }
 
 export const reconciliationWorker = new Worker(

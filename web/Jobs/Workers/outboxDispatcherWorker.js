@@ -14,9 +14,13 @@ const OUTBOX_DISPATCH_BATCH = Number.parseInt(process.env.OUTBOX_DISPATCH_BATCH 
 const LEADER_LOCK_KEY = "leader:outbox-dispatcher-scheduler:register";
 const LEADER_LOCK_TTL_MS = 45_000;
 
-async function runOutboxDispatchTick() {
+async function runOutboxDispatchTick(job) {
+  const shop = String(job?.data?.shop || "").trim();
+  if (!shop) {
+    throw new Error("outbox dispatcher tick requires shop");
+  }
   try {
-    await dispatchPendingOutboxEvents({ limit: OUTBOX_DISPATCH_BATCH });
+    await dispatchPendingOutboxEvents({ shop, limit: OUTBOX_DISPATCH_BATCH });
   } catch (error) {
     logger.error("Outbox dispatcher tick failed", {
       error: error?.message,
@@ -28,7 +32,7 @@ async function runOutboxDispatchTick() {
 
 export const outboxDispatcherSchedulerWorker = new Worker(
   QUEUE_NAME,
-  async () => runOutboxDispatchTick(),
+  async (job) => runOutboxDispatchTick(job),
   { connection, concurrency: 1 },
 );
 outboxDispatcherSchedulerWorker.on("error", (error) => {
@@ -38,10 +42,14 @@ outboxDispatcherSchedulerWorker.on("error", (error) => {
   });
 });
 
-async function registerRepeatableTick() {
+export async function registerOutboxDispatcherSchedulerTick({ shop }) {
+  const scopedShop = String(shop || "").trim();
+  if (!scopedShop) {
+    throw new Error("outbox dispatcher registration requires shop");
+  }
   const leaderLock = await acquireRedisLock({
     connection,
-    key: LEADER_LOCK_KEY,
+    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
     ttlMs: LEADER_LOCK_TTL_MS,
   });
   if (!leaderLock.acquired) return;
@@ -49,6 +57,7 @@ async function registerRepeatableTick() {
   try {
     await enqueueOutboxDispatcherSchedulerTick({
       queueName: QUEUE_NAME,
+      shop: scopedShop,
       repeatEveryMs: POLL_INTERVAL_MS,
     });
   } finally {
@@ -59,7 +68,5 @@ async function registerRepeatableTick() {
     }).catch(() => {});
   }
 }
-
-await registerRepeatableTick();
 
 export default outboxDispatcherSchedulerWorker;

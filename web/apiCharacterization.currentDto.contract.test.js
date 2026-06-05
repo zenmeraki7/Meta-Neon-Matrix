@@ -31,11 +31,12 @@ test("characterization: variant grid response DTO keys remain stable", () => {
 
 test("characterization: sync start + status DTOs remain stable", () => {
   const controllerSrc = read("web/controllers/syncController.js");
+  const dtoSrc = read("web/dtos/syncCommandResponseDto.js");
   const serviceSrc = read("web/services/sync/SyncCommandService.js");
-  assert.ok(controllerSrc.includes("message: result.message"));
-  assert.ok(controllerSrc.includes("bulkOperationId: result.bulkOperationId"));
-  assert.ok(controllerSrc.includes("syncHistoryId: result.syncHistoryId"));
-  assert.ok(controllerSrc.includes("syncBatchId: result.syncBatchId"));
+  assert.ok(dtoSrc.includes("message:"));
+  assert.ok(dtoSrc.includes("bulkOperationId: result?.bulkOperationId"));
+  assert.ok(dtoSrc.includes("syncHistoryId: result?.syncHistoryId"));
+  assert.ok(dtoSrc.includes("syncBatchId: result?.syncBatchId"));
   assert.ok(serviceSrc.includes('message: "Product sync started"'));
   assert.ok(controllerSrc.includes("getSyncStatus"));
   assert.ok(controllerSrc.includes("getSyncStatusSummary"));
