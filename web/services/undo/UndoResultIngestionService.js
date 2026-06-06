@@ -81,6 +81,7 @@ export class UndoResultIngestionService {
     const batch = history.batch && typeof history.batch === "object" ? history.batch : {};
     const allowedWebhookTerminalStates = [
       BULK_UNDO_STATES.AWAITING_SHOPIFY,
+      BULK_UNDO_STATES.RECONCILE_SUBMITTED,
       BULK_UNDO_STATES.FINALIZING,
       BULK_UNDO_STATES.RETRYABLE_FAILURE,
     ];
@@ -95,6 +96,7 @@ export class UndoResultIngestionService {
       undo.bulkOperationId
       && String(undo.bulkOperationId) !== String(bulkOperationId)
       && [
+        BULK_UNDO_STATES.RECONCILE_SUBMITTED,
         BULK_UNDO_STATES.AWAITING_SHOPIFY,
         BULK_UNDO_STATES.FINALIZING,
       ].includes(String(undo.state || ""))
@@ -307,4 +309,3 @@ export class UndoResultIngestionService {
     }
   }
 }
-

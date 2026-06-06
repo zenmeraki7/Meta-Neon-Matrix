@@ -1,7 +1,6 @@
 import logger from "../../utils/loggerUtils.js";
-import dayjs from "dayjs";
-import { Worker } from "bullmq";
-import { connection } from "../../config/redis.js";
+import { QueueEvents, Worker } from "bullmq";
+import { connection, createRedisConnection } from "../../config/redis.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import {
   extractVariantsForPrisma,
@@ -17,17 +16,26 @@ import {
 import { recordMirrorAnomaly } from "../../services/mirrorAnomalyService.js";
 import { addShopSyncJob } from "../Queues/shopSyncJob.js";
 import { enforceShopRateLimit } from "../../utils/shopRateLimit.js";
-
-const QueueName =
-  process.env.NODE_ENV === "production"
-    ? "product-update"
-    : "product-update-job-dev";
+import { PRODUCT_UPDATE_QUEUE_NAME } from "../../queues/productWebhookQueue.constants.js";
+import { productUpdateDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { isRetryExhausted } from "../../utils/workerTelemetry.js";
 
 const productUpdateWorker = new Worker(
-  QueueName,
+  PRODUCT_UPDATE_QUEUE_NAME,
   async (job) => {
     try {
       const { shop, id, ...payload } = job.data;
+      const store = await db.store.findUnique({
+        where: { shopUrl: shop },
+        select: {
+          activeMirrorBatchId: true,
+          isUnInstalled: true,
+        },
+      });
+      if (!store || store.isUnInstalled) {
+        return { skipped: true, reason: "shop_not_installed" };
+      }
+
       await enforceShopRateLimit({
         connection,
         shop,
@@ -39,10 +47,20 @@ const productUpdateWorker = new Worker(
       const incomingUpdatedAt = transformedData.updatedAt
         ? new Date(transformedData.updatedAt)
         : null;
-      const store = await db.store.findUnique({
-        where: { shopUrl: shop },
-        select: { activeMirrorBatchId: true },
-      });
+      if (!incomingUpdatedAt) {
+        await markRepairRequired({
+          shop,
+          reason: MIRROR_STALE_REASONS.PARTIAL_MIRROR_DETECTED,
+          summary: "Product update webhook missing updated_at; repair sync required",
+          details: { productId: id },
+        }).catch(() => {});
+        await addShopSyncJob({
+          shop,
+          syncType: "product",
+          reason: "product_update_missing_updated_at",
+        }).catch(() => {});
+        return { skipped: true, reason: "missing_updated_at_repair_scheduled" };
+      }
       const activeBatchId = store?.activeMirrorBatchId || null;
       if (!activeBatchId) {
         await markRepairRequired({
@@ -111,6 +129,7 @@ const productUpdateWorker = new Worker(
           syncType: "product",
           reason: "product_update_missing_variants",
         }).catch(() => { });
+        return { skipped: true, reason: "missing_variants_repair_scheduled" };
       }
 
       let skippedStalePayload = false;
@@ -161,65 +180,37 @@ const productUpdateWorker = new Worker(
           });
         }
 
-        // ↓ REPLACE everything below this line inside the transaction
         if (variants && variants.length > 0) {
-          for (const variant of variants) {
-            await tx.variant.upsert({
-              where: {
-                shop_id_mirrorBatchId: {
-                  shop,
-                  id: variant.id,
-                  mirrorBatchId: activeBatchId,
-                },
-              },
-              create: {
-                shop,
-                id: variant.id,
-                productId: id,
-                mirrorBatchId: activeBatchId,
-                title: variant.title ?? null,
-                sku: variant.sku ?? null,
-                barcode: variant.barcode ?? null,
-                price: variant.price ?? null,
-                compareAtPrice: variant.compareAtPrice ?? null,
-                inventoryQuantity: variant.inventoryQuantity ?? null,
-                inventoryPolicy: variant.inventoryPolicy ?? null,
-                taxable: variant.taxable ?? null,
-                taxCode: variant.taxCode ?? null,
-                position: variant.position ?? null,
-                selectedOptionsJson: variant.selectedOptionsJson ?? null,
-                option1Value: variant.selectedOptionsJson?.[0]?.value ?? null,
-                option2Value: variant.selectedOptionsJson?.[1]?.value ?? null,
-                option3Value: variant.selectedOptionsJson?.[2]?.value ?? null,
-              },
-              update: {
-                title: variant.title ?? undefined,
-                sku: variant.sku ?? undefined,
-                barcode: variant.barcode ?? undefined,
-                price: variant.price ?? undefined,
-                compareAtPrice: variant.compareAtPrice ?? undefined,
-                inventoryQuantity: variant.inventoryQuantity ?? undefined,
-                inventoryPolicy: variant.inventoryPolicy ?? undefined,
-                taxable: variant.taxable ?? undefined,
-                taxCode: variant.taxCode ?? undefined,
-                position: variant.position ?? undefined,
-                selectedOptionsJson: variant.selectedOptionsJson ?? undefined,
-                option1Value: variant.selectedOptionsJson?.[0]?.value ?? undefined,
-                option2Value: variant.selectedOptionsJson?.[1]?.value ?? undefined,
-                option3Value: variant.selectedOptionsJson?.[2]?.value ?? undefined,
-              },
-            });
-          }
-
-          // Remove variants deleted from Shopify
-          const incomingIds = variants.map((v) => v.id);
+          const incomingIds = variants.map((variant) => variant.id);
           await tx.variant.deleteMany({
             where: {
               shop,
               productId: id,
               mirrorBatchId: activeBatchId,
-              id: { notIn: incomingIds },
+              id: { in: incomingIds },
             },
+          });
+          await tx.variant.createMany({
+            data: variants.map((variant) => ({
+              shop,
+              id: variant.id,
+              productId: id,
+              mirrorBatchId: activeBatchId,
+              title: variant.title ?? null,
+              sku: variant.sku ?? null,
+              barcode: variant.barcode ?? null,
+              price: variant.price ?? null,
+              compareAtPrice: variant.compareAtPrice ?? null,
+              inventoryQuantity: variant.inventoryQuantity ?? null,
+              inventoryPolicy: variant.inventoryPolicy ?? null,
+              taxable: variant.taxable ?? null,
+              taxCode: variant.taxCode ?? null,
+              position: variant.position ?? null,
+              selectedOptionsJson: variant.selectedOptionsJson ?? null,
+              option1Value: variant.selectedOptionsJson?.[0]?.value ?? null,
+              option2Value: variant.selectedOptionsJson?.[1]?.value ?? null,
+              option3Value: variant.selectedOptionsJson?.[2]?.value ?? null,
+            })),
           });
         }
       });
@@ -245,9 +236,18 @@ const productUpdateWorker = new Worker(
         lastIncrementalSyncAt: new Date(),
       }).catch(() => { });
 
-      await clearKeyCaches(`${shop}:ProductFetch:`);
-      await clearKeyCaches(`${shop}:productTypes:`);
-      await clearKeyCaches(`${shop}:ProductFilterValues:`);
+      await Promise.all([
+        clearKeyCaches(`${shop}:ProductFetch:`),
+        clearKeyCaches(`${shop}:productTypes:`),
+        clearKeyCaches(`${shop}:ProductFilterValues:`),
+      ]).catch((error) => {
+        logger.warn("Product update cache invalidation failed", {
+          worker: "productUpdateWorker",
+          shop,
+          productId: id,
+          message: error?.message,
+        });
+      });
       await enqueueAutomaticProductRuleSignalJob({
         shop,
         productIds: [id],
@@ -271,6 +271,9 @@ const productUpdateWorker = new Worker(
   {
     connection,
     concurrency: 5,
+    lockDuration: Number(process.env.PRODUCT_UPDATE_LOCK_DURATION_MS || 300_000),
+    stalledInterval: Number(process.env.PRODUCT_UPDATE_STALLED_INTERVAL_MS || 60_000),
+    maxStalledCount: Number(process.env.PRODUCT_UPDATE_MAX_STALLED_COUNT || 1),
     limiter: {
       max: 10,
       duration: 1000,
@@ -278,39 +281,84 @@ const productUpdateWorker = new Worker(
   },
 );
 
-const logTime = () => `[${dayjs().format("YYYY-MM-DD HH:mm:ss")}]`;
+const productUpdateQueueEvents = new QueueEvents(PRODUCT_UPDATE_QUEUE_NAME, {
+  connection: createRedisConnection(),
+});
 
-if (process.env.NODE_ENV !== "production") {
-  productUpdateWorker
-    .on("error", (err) => {
-      logger.error(
-        `${logTime()} Queue Error in productUpdateWorker: ${err.message}`,
-        { stack: err.stack },
-      );
-    })
-    .on("waiting", (jobId) => {
-      logger.info(
-        `${logTime()} productUpdateWorker - Waiting | Job ID: ${jobId}`,
-      );
-    })
-    .on("active", (job) => {
-      logger.info(
-        `${logTime()} productUpdateWorker - Started | Job ID: ${job.id}`,
-        { message: "active" },
-      );
-    })
-    .on("completed", (job, result) => {
-      logger.info(
-        `${logTime()} productUpdateWorker - Completed | Job ID: ${job.id}`,
-        { result },
-      );
-    })
-    .on("failed", (job, err) => {
-      logger.error(
-        `${logTime()} productUpdateWorker - Failed | Job ID: ${job.id} | Error: ${err.message}`,
-        { error: err },
-      );
+productUpdateWorker.on("completed", (job, result) => {
+  logger.info("Product update worker completed", {
+    worker: "productUpdateWorker",
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    productId: job?.data?.id,
+    skipped: Boolean(result?.skipped),
+    reason: result?.reason || null,
+  });
+});
+
+productUpdateWorker.on("failed", (job, error) => {
+  logger.error("Product update worker failed", {
+    worker: "productUpdateWorker",
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    productId: job?.data?.id,
+    attemptsMade: job?.attemptsMade,
+    message: error?.message,
+    stack: error?.stack,
+  });
+  if (isRetryExhausted(job)) {
+    void productUpdateDlqQueue.add(
+      "product-update-dlq",
+      {
+        originalJobId: job?.id,
+        data: job?.data,
+        failedReason: error?.message,
+        stack: error?.stack,
+        failedAt: new Date().toISOString(),
+      },
+      { jobId: `dlq:${PRODUCT_UPDATE_QUEUE_NAME}:${job?.id}` },
+    ).catch((dlqError) => {
+      logger.error("Product update DLQ enqueue failed", {
+        worker: "productUpdateWorker",
+        jobId: job?.id,
+        message: dlqError?.message,
+      });
     });
+  }
+});
+
+productUpdateWorker.on("error", (error) => {
+  logger.error("Product update worker runtime error", {
+    worker: "productUpdateWorker",
+    message: error?.message,
+    stack: error?.stack,
+  });
+});
+
+productUpdateQueueEvents.on("stalled", ({ jobId }) => {
+  logger.warn("Product update queue job stalled", {
+    worker: "productUpdateWorker",
+    jobId,
+  });
+});
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await productUpdateWorker.close();
+    await productUpdateQueueEvents.close();
+  } catch (error) {
+    logger.error("Product update worker shutdown failed", {
+      worker: "productUpdateWorker",
+      signal,
+      message: error?.message,
+    });
+  }
 }
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default productUpdateWorker;

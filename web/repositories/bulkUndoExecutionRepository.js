@@ -80,6 +80,8 @@ export async function claimUndoExecution({ historyId, shop, executionId, jobId, 
 
   if ([
     BULK_UNDO_STATES.AWAITING_SHOPIFY,
+    BULK_UNDO_STATES.AWAITING_CONFIRMATION,
+    BULK_UNDO_STATES.RECONCILE_SUBMITTED,
     BULK_UNDO_STATES.FINALIZING,
     BULK_UNDO_STATES.COMPLETED,
     BULK_UNDO_STATES.PARTIAL,
@@ -280,6 +282,79 @@ export async function moveUndoToAwaitingShopify({
         state: BULK_UNDO_STATES.AWAITING_SHOPIFY,
         bulkOperationId,
         conflicts: conflicts.slice(0, 200),
+      },
+    },
+  });
+}
+
+export async function markUndoReconcileSubmitted({
+  historyId,
+  shop,
+  undo,
+  batch,
+  expectedExecutionId = null,
+  bulkOperationId,
+  cursorId,
+  lastProductId,
+  count,
+  limit,
+}) {
+  return prisma.editHistory.updateMany({
+    where: {
+      id: historyId,
+      shop,
+      AND: [
+        ...(expectedExecutionId
+          ? [{ undo: { path: ["executionIdentity"], equals: expectedExecutionId } }]
+          : []),
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
+      ],
+    },
+    data: {
+      bulkOperationId,
+      processingBatchId: `${undo.executionIdentity || historyId}:${cursorId || "start"}`,
+      batch: {
+        ...batch,
+        lastProductId,
+        hasMore: count === limit,
+        currentBatchTargetCount: count,
+        reconcileReason: "SUBMITTED_BUT_LOCAL_TRANSITION_FAILED",
+        reconcileAt: new Date().toISOString(),
+      },
+      undo: {
+        ...undo,
+        status: "processing",
+        state: BULK_UNDO_STATES.RECONCILE_SUBMITTED,
+        bulkOperationId,
+      },
+    },
+  });
+}
+
+export async function moveUndoToAwaitingConfirmation({
+  historyId,
+  shop,
+  undo,
+  expectedExecutionId = null,
+  conflictReport,
+}) {
+  return prisma.editHistory.updateMany({
+    where: {
+      id: historyId,
+      shop,
+      AND: [
+        ...(expectedExecutionId
+          ? [{ undo: { path: ["executionIdentity"], equals: expectedExecutionId } }]
+          : []),
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
+      ],
+    },
+    data: {
+      undo: {
+        ...undo,
+        status: "pending",
+        state: BULK_UNDO_STATES.AWAITING_CONFIRMATION,
+        conflictReport,
       },
     },
   });

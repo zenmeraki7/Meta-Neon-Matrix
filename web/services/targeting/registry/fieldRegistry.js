@@ -22,6 +22,17 @@ function def(config) {
 }
 
 export const fieldRegistry = Object.freeze({
+  search: def({
+    key: "search",
+    model: "Product",
+    column: "__virtual:globalSearch",
+    valueType: "string",
+    operators: ["CONTAINS", "NOT_CONTAINS"],
+    granularities: ["PRODUCT", "PRODUCT_WITH_MATCHING_VARIANTS"],
+    indexed: true,
+    pathKind: "virtual",
+  }),
+
   // Product fields
   vendor: def({
     key: "vendor",

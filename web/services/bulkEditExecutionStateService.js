@@ -14,6 +14,8 @@ export const BULK_UNDO_STATES = {
   PLANNED: "planned",
   QUEUED: "queued",
   DISPATCHING: "dispatching",
+  AWAITING_CONFIRMATION: "awaiting_confirmation",
+  RECONCILE_SUBMITTED: "reconcile_submitted",
   AWAITING_SHOPIFY: "awaiting_shopify",
   FINALIZING: "finalizing",
   COMPLETED: "completed",

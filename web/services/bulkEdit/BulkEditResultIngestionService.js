@@ -10,6 +10,7 @@ import {
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
 import {
   acquireOperationLease,
+  assertOperationLeaseOwnership,
   buildLeaseOwnerId,
   heartbeatOperationLease,
   releaseOperationLease,
@@ -209,6 +210,7 @@ export class BulkEditResultIngestionService {
     bulkOperationId,
     resultUrl,
     attempt = 1,
+    leaseOwnerId: externalLeaseOwnerId = null,
   }) {
     if (!shop || !historyId) {
       throw new Error("RESULT_INGEST_REQUIRES_SHOP_AND_HISTORY_ID");
@@ -217,19 +219,30 @@ export class BulkEditResultIngestionService {
       throw new Error("RESULT_INGEST_REQUIRES_BULK_OPERATION_AND_RESULT_URL");
     }
 
-    const leaseOwnerId = buildLeaseOwnerId("bulk-edit-result-ingest");
-    const lease = await acquireOperationLease({
-      shop,
-      namespace: "BULK_EDIT_RESULT_INGEST",
-      resourceId: String(historyId),
-      ownerId: leaseOwnerId,
-    });
-    if (!lease?.acquired) {
-      throw new Error("RESULT_INGEST_LEASE_CONFLICT");
+    const leaseOwnerId =
+      externalLeaseOwnerId || buildLeaseOwnerId("bulk-edit-result-ingest");
+    const ownsLease = !externalLeaseOwnerId;
+    if (ownsLease) {
+      const lease = await acquireOperationLease({
+        shop,
+        namespace: "BULK_EDIT_RESULT_INGEST",
+        resourceId: String(historyId),
+        ownerId: leaseOwnerId,
+      });
+      if (!lease?.acquired) {
+        throw new Error("RESULT_INGEST_LEASE_CONFLICT");
+      }
+    } else {
+      await assertOperationLeaseOwnership({
+        shop,
+        namespace: "BULK_EDIT_RESULT_INGEST",
+        resourceId: String(historyId),
+        ownerId: leaseOwnerId,
+      });
     }
     let heartbeatFailures = 0;
     let leaseHeartbeatLost = false;
-    const leaseHeartbeat = setInterval(() => {
+    const leaseHeartbeat = ownsLease ? setInterval(() => {
       heartbeatOperationLease({
         shop,
         namespace: "BULK_EDIT_RESULT_INGEST",
@@ -261,7 +274,7 @@ export class BulkEditResultIngestionService {
           leaseHeartbeatLost = true;
         }
       });
-    }, 30_000);
+    }, 30_000) : null;
     try {
     const history = await db.editHistory.findFirst({
       where: { id: historyId, shop },
@@ -700,13 +713,15 @@ export class BulkEditResultIngestionService {
       rollingChecksum: checkpoint.rollingChecksum,
     };
     } finally {
-      clearInterval(leaseHeartbeat);
-      await releaseOperationLease({
-        shop,
-        namespace: "BULK_EDIT_RESULT_INGEST",
-        resourceId: String(historyId),
-        ownerId: leaseOwnerId,
-      });
+      if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+      if (ownsLease) {
+        await releaseOperationLease({
+          shop,
+          namespace: "BULK_EDIT_RESULT_INGEST",
+          resourceId: String(historyId),
+          ownerId: leaseOwnerId,
+        });
+      }
     }
   }
 }

@@ -423,7 +423,7 @@ export const transformWebhookPayload = (payload, shop) => {
     descriptionHtml: payload.body_html || null,
     descriptionText: stripHtml(payload.body_html),
     createdAt: payload.created_at ? new Date(payload.created_at) : null,
-    updatedAt: payload.updated_at ? new Date(payload.updated_at) : new Date(),
+    updatedAt: payload.updated_at ? new Date(payload.updated_at) : null,
     publishedAt: payload.published_at ? new Date(payload.published_at) : null,
     totalInventory: calculateTotalInventory(payload.variants),
     optionsJson: transformOptions(payload.options),

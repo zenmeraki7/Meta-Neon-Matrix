@@ -96,6 +96,15 @@ function hasRelationFieldPredicates(ast) {
   });
 }
 
+function hasSqlOnlyPredicates(ast) {
+  const predicates = collectPredicates(ast?.root, []);
+  return predicates.some((predicate) => {
+    const spec = getFieldSpecOrThrow(predicate.field);
+    const pathKind = String(spec.pathKind || "scalar");
+    return pathKind === "relation" || pathKind === "virtual";
+  });
+}
+
 function hasNodeWithNot(node) {
   if (!node || typeof node !== "object") return false;
   if (node.not === true) return true;
@@ -271,6 +280,146 @@ function hashValues(values = []) {
     hash.update("\n");
   }
   return hash.digest("hex");
+}
+
+function decodeTargetingCursor(cursorToken) {
+  if (!cursorToken || typeof cursorToken !== "string") return null;
+  try {
+    const payload = JSON.parse(Buffer.from(cursorToken, "base64url").toString("utf8"));
+    return payload && typeof payload === "object" ? payload : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function encodeTargetingCursor(payload) {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function buildProductSqlSort({ sortKey, sortOrder }) {
+  const key = String(sortKey || "ID").toUpperCase();
+  const dir = String(sortOrder || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
+  const cmp = dir === "ASC" ? ">" : "<";
+  if (key === "TITLE") return { key, dir, cmp, column: `p."title"`, cursorField: "title" };
+  if (key === "CREATED_AT") return { key, dir, cmp, column: `p."createdAt"`, cursorField: "createdAt" };
+  if (key === "UPDATED_AT") return { key, dir, cmp, column: `p."updatedAt"`, cursorField: "updatedAt" };
+  return { key: "ID", dir, cmp, column: `p."id"`, cursorField: "id" };
+}
+
+function buildProductSqlCursorClause({
+  cursorPayload,
+  sort,
+  params,
+  mirrorBatchId,
+  filterHash,
+}) {
+  if (!cursorPayload) return "";
+  if (
+    cursorPayload.sortKey !== sort.key ||
+    cursorPayload.sortOrder !== sort.dir.toLowerCase() ||
+    cursorPayload.mirrorBatchId !== mirrorBatchId ||
+    cursorPayload.filterHash !== filterHash ||
+    cursorPayload.targetType !== TARGET_TYPES.PRODUCT
+  ) {
+    throw new TargetingValidationError("Invalid cursor for current targeting query", {
+      code: "INVALID_CURSOR",
+    });
+  }
+  const cursorId = String(cursorPayload.id || "");
+  if (!cursorId) return "";
+  if (sort.key === "ID") {
+    params.push(cursorId);
+    return ` AND p."id" ${sort.cmp} $${params.length}`;
+  }
+
+  const rawSortValue = cursorPayload[sort.cursorField];
+  if (rawSortValue === null || rawSortValue === undefined) return "";
+  const sortValue = sort.cursorField.endsWith("At") ? new Date(rawSortValue) : String(rawSortValue);
+  params.push(sortValue);
+  const sortParam = `$${params.length}`;
+  params.push(cursorId);
+  const idParam = `$${params.length}`;
+  return ` AND (${sort.column} ${sort.cmp} ${sortParam} OR (${sort.column} = ${sortParam} AND p."id" ${sort.cmp} ${idParam}))`;
+}
+
+async function resolveProductSqlPage({
+  db,
+  shop,
+  mirrorBatchId,
+  whereSql,
+  params,
+  queryParams = {},
+  sampleLimit = 20,
+  filterHash,
+}) {
+  const sort = buildProductSqlSort({
+    sortKey: queryParams?.sortKey,
+    sortOrder: queryParams?.sortOrder,
+  });
+  const cursorPayload = decodeTargetingCursor(queryParams?.cursor);
+  const pageParams = [...params];
+  const cursorClause = buildProductSqlCursorClause({
+    cursorPayload,
+    sort,
+    params: pageParams,
+    mirrorBatchId,
+    filterHash,
+  });
+  const pageLimit = Math.max(1, Number(sampleLimit || 20));
+  const countRows = await db.$queryRawUnsafe(
+    `SELECT COUNT(*)::bigint AS count
+     FROM "Product" p
+     WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})`,
+    ...params,
+  );
+  const sampleRows = await db.$queryRawUnsafe(
+    `SELECT p."id", p."title", p."status", p."productType", p."vendor", p."totalInventory",
+            p."featuredImageUrl", p."categoryName", p."handle", p."templateSuffix",
+            p."variantCount", p."visibleOnlineStore", p."createdAt", p."updatedAt"
+     FROM "Product" p
+     WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})${cursorClause}
+     ORDER BY ${sort.column} ${sort.dir}, p."id" ${sort.dir}
+     LIMIT $${pageParams.length + 1}`,
+    ...pageParams,
+    pageLimit + 1,
+  );
+  const hasNextPage = sampleRows.length > pageLimit;
+  const pageRows = hasNextPage ? sampleRows.slice(0, pageLimit) : sampleRows;
+  const last = pageRows[pageRows.length - 1] || null;
+  const nextCursor = last
+    ? encodeTargetingCursor({
+      id: last.id,
+      title: last.title || null,
+      createdAt: last.createdAt ? new Date(last.createdAt).toISOString() : null,
+      updatedAt: last.updatedAt ? new Date(last.updatedAt).toISOString() : null,
+      sortKey: sort.key,
+      sortOrder: sort.dir.toLowerCase(),
+      mirrorBatchId,
+      filterHash,
+      targetType: TARGET_TYPES.PRODUCT,
+    })
+    : null;
+  const count = Number(countRows?.[0]?.count || 0);
+
+  return {
+    mirrorBatchId,
+    where: null,
+    count,
+    sampleProducts: pageRows.map((row) => {
+      const { createdAt: _createdAt, updatedAt: _updatedAt, ...rest } = row;
+      return rest;
+    }),
+    sampleVariants: [],
+    pagination: {
+      total: count,
+      limit: pageLimit,
+      hasNextPage,
+      hasPrevPage: Boolean(cursorPayload),
+      cursor: queryParams?.cursor || null,
+      nextCursor: hasNextPage ? nextCursor : null,
+      nextCursorVariantId: null,
+    },
+  };
 }
 
 function getOrderedSampleIds({ sampleProducts = [], sampleVariants = [] } = {}) {
@@ -642,6 +791,10 @@ async function resolveAndMaybeFreeze({
 }) {
   const flags = getTargetingFeatureFlags();
   await assertMirrorSafeForTargeting(shop, { purpose: flow });
+  const isProductListingFlow =
+    flow === "PREVIEW" &&
+    targetType === TARGET_TYPES.PRODUCT &&
+    String(source || "").toUpperCase() === "PRODUCT_LISTING";
 
   assertAstInputAllowed({ filterAst, flags });
   assertLegacyAdapterAllowed({
@@ -658,7 +811,7 @@ async function resolveAndMaybeFreeze({
     });
   }
 
-  if (!isEngineV2EnabledForFlow(flags, flow)) {
+  if (!isProductListingFlow && !isEngineV2EnabledForFlow(flags, flow)) {
     const legacyAst = Array.isArray(legacyFilterParams) && legacyFilterParams.length
       ? adaptLegacyFilterParamsToAst({
         filterParams: legacyFilterParams,
@@ -765,6 +918,55 @@ async function resolveAndMaybeFreeze({
     purpose: freeze ? "EXECUTE" : "PREVIEW",
   });
 
+  if (
+    isProductListingFlow &&
+    !filterAst &&
+    (!Array.isArray(legacyFilterParams) || legacyFilterParams.length === 0)
+  ) {
+    const filterHash = hashValues(["PRODUCT_LISTING", shop, mirrorBatchId, "ALL_PRODUCTS"]);
+    const timeoutMs = getTargetingStatementTimeoutMs({ flow, freeze });
+    await withTargetingStatementTimeout(db, timeoutMs);
+    const resolved = await resolveProductSqlPage({
+      db,
+      shop,
+      mirrorBatchId,
+      whereSql: "TRUE",
+      params: [shop, mirrorBatchId],
+      queryParams,
+      sampleLimit,
+      filterHash,
+    });
+    return {
+      ...resolved,
+      frozenCount: null,
+      freezeStats: null,
+      explain: {
+        normalizedAst: null,
+        fieldsUsed: [],
+        joinsUsed: [],
+        antiJoinsUsed: [],
+        targetGranularity,
+        mirrorBatchId,
+        estimatedTargetCount: Number(resolved.count || 0),
+        compilerVersion: getTargetingVersionBundle()?.targetingCompilerVersion || null,
+      },
+      queryShape: null,
+      broadTargetAssessment: null,
+      blastRadiusAssessment: null,
+      sampleChecksum: hashValues(getOrderedSampleIds({ sampleProducts: resolved.sampleProducts })),
+      productTargetChecksum: null,
+      variantTargetChecksum: null,
+      targetTypeDistribution: null,
+      filterHash,
+      filterAst: null,
+      normalizedFilterAst: null,
+      targetGranularity,
+      targetModel: "Product",
+      orderBy: [{ id: "asc" }],
+      versions: getTargetingVersionBundle(),
+    };
+  }
+
   const normalized = normalizeAndValidate({
     filterAst,
     legacyFilterParams,
@@ -781,11 +983,14 @@ async function resolveAndMaybeFreeze({
   const queryShape = assertQueryShapeGuardrails(normalized.normalizedFilterAst);
   const filterHash = hashFilterAst(normalized.normalizedFilterAst);
   const hasRelationPredicates = hasRelationFieldPredicates(normalized.normalizedFilterAst);
+  const requiresRelationAwareSql =
+    hasSqlOnlyPredicates(normalized.normalizedFilterAst) ||
+    (flow === "PREVIEW" && targetType === TARGET_TYPES.PRODUCT && Boolean(filterAst));
   const shouldRunParity = shouldRunTargetingParity({
     freeze,
     normalizedFilterAst: normalized.normalizedFilterAst,
   });
-  const compiled = hasRelationPredicates
+  const compiled = requiresRelationAwareSql
     ? {
       where: null,
       targetModel: targetType === "VARIANT" ? "Variant" : "Product",
@@ -808,7 +1013,7 @@ async function resolveAndMaybeFreeze({
   let paritySqlText = null;
   let paritySqlParams = null;
   try {
-    if (hasRelationPredicates) {
+    if (requiresRelationAwareSql) {
       const targetModel = targetType === "VARIANT" ? "Variant" : "Product";
       const { whereSql, params } = compileRelationAwareAstWhereSql(
         normalized.normalizedFilterAst,
@@ -823,31 +1028,16 @@ async function resolveAndMaybeFreeze({
       paritySqlText = whereSql;
       paritySqlParams = params;
       if (targetType === "PRODUCT") {
-        const countRows = await db.$queryRawUnsafe(
-          `SELECT COUNT(*)::bigint AS count
-           FROM "Product" p
-           WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})`,
-          ...params,
-        );
-        const sampleRows = await db.$queryRawUnsafe(
-          `SELECT p."id", p."title", p."status", p."productType", p."vendor", p."totalInventory",
-                  p."featuredImageUrl", p."categoryName", p."handle", p."templateSuffix",
-                  p."variantCount", p."visibleOnlineStore"
-           FROM "Product" p
-           WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})
-           ORDER BY p."id" ASC
-           LIMIT $${params.length + 1}`,
-          ...params,
-          Number(sampleLimit || 20),
-        );
-        resolved = {
+        resolved = await resolveProductSqlPage({
+          db,
+          shop,
           mirrorBatchId,
-          where: null,
-          count: Number(countRows?.[0]?.count || 0),
-          sampleProducts: sampleRows || [],
-          sampleVariants: [],
-          pagination: null,
-        };
+          whereSql,
+          params,
+          queryParams,
+          sampleLimit,
+          filterHash,
+        });
       } else {
         const countRows = await db.$queryRawUnsafe(
           `SELECT COUNT(*)::bigint AS count
@@ -1055,7 +1245,7 @@ async function resolveAndMaybeFreeze({
       }
     }
 
-    if (hasRelationPredicates) {
+    if (requiresRelationAwareSql) {
       await db.targetSnapshot.deleteMany({
         where: { shop, ownerType, ownerId },
       });

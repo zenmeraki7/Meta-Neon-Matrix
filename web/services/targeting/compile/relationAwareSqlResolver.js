@@ -163,6 +163,110 @@ function scalarExpr(alias, column, operator, value, params) {
   }
 }
 
+function arrayStringExpr(alias, column, operator, value, params) {
+  const col = `${alias}."${column}"`;
+  switch (operator) {
+    case "IN": return `${col} && ${pushParam(params, value)}::text[]`;
+    case "NOT_IN": return `(NOT (${col} && ${pushParam(params, value)}::text[]))`;
+    case "IS_EMPTY": return `(${col} IS NULL OR cardinality(${col}) = 0)`;
+    case "IS_NOT_EMPTY": return `(${col} IS NOT NULL AND cardinality(${col}) > 0)`;
+    case "EXISTS": return `(${col} IS NOT NULL AND cardinality(${col}) > 0)`;
+    case "NOT_EXISTS": return `(${col} IS NULL OR cardinality(${col}) = 0)`;
+    default:
+      throw new TargetingValidationError("Unsupported array operator in relation-aware SQL resolver", {
+        code: "UNSUPPORTED_ARRAY_OPERATOR_SQL",
+        meta: { operator },
+      });
+  }
+}
+
+function buildGlobalSearchExpr({ targetType, operator, value, params }) {
+  const normalizedOperator = String(operator || "").toUpperCase();
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    fail("Search value must not be empty", "RELATION_VALUE_EMPTY", {
+      field: "search",
+      operator: normalizedOperator,
+    });
+  }
+  if (!["CONTAINS", "NOT_CONTAINS"].includes(normalizedOperator)) {
+    fail("Search operator is unsupported", "RELATION_OPERATOR_UNSUPPORTED", {
+      field: "search",
+      operator: normalizedOperator,
+    });
+  }
+
+  const likeValue = pushParam(params, `%${rawValue}%`);
+  const productIdExpr = targetType === "VARIANT" ? `v."productId"` : `p."id"`;
+  const baseProductAlias = targetType === "VARIANT" ? "p" : "p";
+  const variantExists = targetType === "VARIANT"
+    ? `(
+        v."sku" ILIKE ${likeValue}
+        OR v."barcode" ILIKE ${likeValue}
+        OR v."title" ILIKE ${likeValue}
+      )`
+    : `EXISTS (
+        SELECT 1
+        FROM "Variant" sv
+        WHERE sv."shop" = p."shop"
+          AND sv."mirrorBatchId" = p."mirrorBatchId"
+          AND sv."productId" = p."id"
+          AND (
+            sv."sku" ILIKE ${likeValue}
+            OR sv."barcode" ILIKE ${likeValue}
+            OR sv."title" ILIKE ${likeValue}
+          )
+      )`;
+  const expr = `(
+    ${baseProductAlias}."title" ILIKE ${likeValue}
+    OR ${baseProductAlias}."handle" ILIKE ${likeValue}
+    OR ${baseProductAlias}."vendor" ILIKE ${likeValue}
+    OR ${baseProductAlias}."productType" ILIKE ${likeValue}
+    OR ${baseProductAlias}."descriptionText" ILIKE ${likeValue}
+    OR ${baseProductAlias}."categoryName" ILIKE ${likeValue}
+    OR ${baseProductAlias}."seoTitle" ILIKE ${likeValue}
+    OR ${baseProductAlias}."seoDescription" ILIKE ${likeValue}
+    OR ${pushParam(params, rawValue)} = ANY(${baseProductAlias}."tags")
+    OR ${variantExists}
+    OR EXISTS (
+      SELECT 1
+      FROM "ProductCollection" pc
+      INNER JOIN "Collection" c
+        ON c."shop" = pc."shop"
+       AND c."mirrorBatchId" = pc."mirrorBatchId"
+       AND c."shopifyId" = pc."collectionId"
+      WHERE pc."shop" = $1
+        AND pc."mirrorBatchId" = $2
+        AND pc."productId" = ${productIdExpr}
+        AND (c."title" ILIKE ${likeValue} OR c."handle" ILIKE ${likeValue})
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM "MetafieldMirror" pm
+      WHERE pm."shop" = $1
+        AND pm."mirrorBatchId" = $2
+        AND pm."ownerType" = 'PRODUCT'
+        AND pm."ownerId" = ${productIdExpr}
+        AND pm."valueTextNormalized" LIKE LOWER(${likeValue})
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM "Variant" mv
+      INNER JOIN "MetafieldMirror" vm
+        ON vm."shop" = mv."shop"
+       AND vm."mirrorBatchId" = mv."mirrorBatchId"
+       AND vm."ownerType" = 'VARIANT'
+       AND vm."ownerId" = mv."id"
+      WHERE mv."shop" = $1
+        AND mv."mirrorBatchId" = $2
+        AND mv."productId" = ${productIdExpr}
+        AND vm."valueTextNormalized" LIKE LOWER(${likeValue})
+    )
+  )`;
+
+  return normalizedOperator === "NOT_CONTAINS" ? `(NOT ${expr})` : expr;
+}
+
 function buildCollectionsExpr({ targetType, operator, value, params }) {
   const compatibility = validateRelationPredicateCompatibility({
     field: "collections",
@@ -269,6 +373,14 @@ function buildMetafieldExpr({ targetType, variantScoped, operator, value, meta, 
 
 function compilePredicate(node, context, params) {
   const spec = getFieldSpecOrThrow(node.field);
+  if (spec.pathKind === "virtual" && node.field === "search") {
+    return buildGlobalSearchExpr({
+      targetType: context.targetType,
+      operator: node.operator,
+      value: node.value,
+      params,
+    });
+  }
   if (spec.pathKind === "relation") {
     if (node.field === "collections") {
       return buildCollectionsExpr({
@@ -312,6 +424,9 @@ function compilePredicate(node, context, params) {
   const alias = context.targetType === "VARIANT"
     ? (isProductField ? "p" : "v")
     : "p";
+  if (spec.valueType === "string[]") {
+    return arrayStringExpr(alias, spec.column, node.operator, node.value, params);
+  }
   return scalarExpr(alias, spec.column, node.operator, node.value, params);
 }
 

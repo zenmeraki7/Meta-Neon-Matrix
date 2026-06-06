@@ -11,6 +11,12 @@ import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
 import { adminGraphqlWithRetry } from "../../utils/shopifyAdminApi.js";
+import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
+import {
+  acquireRedisLock,
+  releaseRedisLock,
+  renewRedisLock,
+} from "../../utils/redisLockUtils.js";
 import {
   enqueueAutomaticProductRuleSchedulerTick,
   enqueueCatalogMissedUpdatesPollingTick,
@@ -26,9 +32,18 @@ import {
 import { scheduleReconciliationJob } from "../Queues/reconciliationJob.js";
 
 const QUEUE_NAME = process.env.APP_INSTALLATION_QUEUE || "app-installation";
+const INSTALLATION_LOCK_TTL_MS = 5 * 60 * 1000;
 const productService = new Services();
 
-async function registerShopRepeatableJobs(shop) {
+async function acquireInstallationLock(shop) {
+  return acquireRedisLock({
+    connection,
+    key: `lock:app_installation:${String(shop).replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+    ttlMs: INSTALLATION_LOCK_TTL_MS,
+  });
+}
+
+async function registerShopRepeatableJobs({ shop, jobId }) {
   const results = await Promise.allSettled([
     enqueueAutomaticProductRuleSchedulerTick({
       shop,
@@ -74,64 +89,168 @@ async function registerShopRepeatableJobs(shop) {
     }),
     scheduleReconciliationJob({ shop }),
   ]);
-  results.forEach((result, index) => {
-    if (result.status !== "rejected") return;
-    logger.error("Failed to register shop repeatable job", {
+  const failures = results
+    .map((result, index) => (
+      result.status === "rejected"
+        ? {
+            index,
+            reason: result.reason?.message || String(result.reason),
+            error: result.reason,
+          }
+        : null
+    ))
+    .filter(Boolean);
+  if (failures.length > 0) {
+    logger.error("Scheduler registration partially failed", {
       worker: "appInstallationWorker",
       shop,
-      index,
-      message: result.reason?.message || String(result.reason),
+      jobId,
+      failures: failures.map(({ index, reason }) => ({ index, reason })),
     });
-  });
+    throw new AggregateError(
+      failures.map(({ error }) => error),
+      `Failed to register ${failures.length} repeatable jobs`,
+    );
+  }
 }
 
-async function claimInstallation(shop) {
-  const result = await db.store.updateMany({
+async function assertCurrentInstallation(shop, installationGeneration) {
+  const store = await db.store.findFirst({
     where: {
       shopUrl: shop,
-      OR: [
-        { installedAt: null },
-        { isUnInstalled: true },
-      ],
+      installationGeneration,
+      isUnInstalled: false,
+      installationStatus: "processing",
+    },
+    select: {
+      installationStatus: true,
+      installationSetupCompletedAt: true,
+    },
+  });
+  return store;
+}
+
+async function claimOrResumeInstallation(shop, installationGeneration) {
+  const claim = await db.store.updateMany({
+    where: {
+      shopUrl: shop,
+      installationGeneration,
+      installationStatus: { in: ["pending", "processing"] },
+      isUnInstalled: false,
     },
     data: {
-      isUnInstalled: false,
-      installedAt: new Date(),
+      installationStatus: "processing",
+      installationProcessingStartedAt: new Date(),
       unInstalledAt: null,
     },
   });
+  if (claim.count > 0) {
+    return { installationStatus: "processing", installationSetupCompletedAt: null };
+  }
 
+  return db.store.findFirst({
+    where: {
+      shopUrl: shop,
+      installationGeneration,
+      isUnInstalled: false,
+    },
+    select: {
+      installationStatus: true,
+      installationSetupCompletedAt: true,
+    },
+  });
+}
+
+async function markInstallationSetupCompleted(shop, installationGeneration) {
+  const result = await db.store.updateMany({
+    where: {
+      shopUrl: shop,
+      installationGeneration,
+      isUnInstalled: false,
+      installationStatus: "processing",
+      installationSetupCompletedAt: null,
+    },
+    data: {
+      installationStatus: "complete",
+      installationProcessingStartedAt: null,
+      installationSetupCompletedAt: new Date(),
+      installedAt: new Date(),
+    },
+  });
   return result.count > 0;
 }
 
 const appInstallationWorker = new Worker(
   QUEUE_NAME,
   async (job) => {
+    const payloadVersion = job.data?.version;
     const shop = job.data?.shop;
+    const installationGeneration = job.data?.installationGeneration;
+    if (payloadVersion !== 1) {
+      logger.warn("Unsupported app installation payload version, discarding", {
+        worker: "appInstallationWorker",
+        jobId: job.id,
+        payloadVersion,
+      });
+      return { skipped: true, reason: "unsupported_payload_version" };
+    }
     if (!shop) {
       throw new Error("app-installation job requires shop");
     }
-
-    // Always resolve from secure session store — never accept token from payload.
-    const session = await getSession(shop);
-    if (!session?.accessToken) {
-      throw new Error(`app-installation session missing or invalid for shop: ${shop}`);
+    if (!installationGeneration) {
+      throw new Error("app-installation job requires installationGeneration");
     }
 
-    try {
-      const claimed = await claimInstallation(shop);
-      if (!claimed) {
-        logger.info("App installation already claimed, skipping", {
+    const lock = await acquireInstallationLock(shop);
+    if (!lock.acquired) {
+      const error = new Error(`app-installation already active for shop: ${shop}`);
+      error.code = "APP_INSTALLATION_LOCKED";
+      throw error;
+    }
+    const lockRenewalTimer = setInterval(async () => {
+      const renewed = await renewRedisLock({
+        connection,
+        key: lock.key,
+        token: lock.token,
+        ttlMs: INSTALLATION_LOCK_TTL_MS,
+      }).catch(() => false);
+      if (!renewed) {
+        logger.error("App installation lock renewal failed", {
           worker: "appInstallationWorker",
           jobId: job.id,
           shop,
+        });
+      }
+    }, Math.floor(INSTALLATION_LOCK_TTL_MS / 3));
+    lockRenewalTimer.unref?.();
+
+    try {
+      const installation = await claimOrResumeInstallation(shop, installationGeneration);
+      if (
+        !installation
+        || installation.installationStatus === "complete"
+        || installation.installationSetupCompletedAt
+      ) {
+        const reason = installation ? "already_complete" : "superseded";
+        logger.warn("App installation superseded or already completed, discarding", {
+          worker: "appInstallationWorker",
+          jobId: job.id,
+          shop,
+          installationGeneration,
+          reason,
           attemptsMade: job.attemptsMade,
         });
         return {
           skipped: true,
-          reason: "already_processed",
+          reason,
           shop,
         };
+      }
+
+      // Always resolve from secure session store - never accept token from payload.
+      const session = await getSession(shop);
+      if (!session?.accessToken) {
+        throw new Error(`app-installation session missing or invalid for shop: ${shop}`);
       }
 
       const { email, shopOwner } = await getShopOwnerEmailAddress(session);
@@ -140,7 +259,14 @@ const appInstallationWorker = new Worker(
         email,
         shop,
         accessToken: session.accessToken,
+        installationGeneration,
       });
+
+      if (!await assertCurrentInstallation(shop, installationGeneration)) {
+        return { skipped: true, reason: "superseded", shop };
+      }
+
+      await registerShopRepeatableJobs({ shop, jobId: job.id });
 
       const countResponse = await adminGraphqlWithRetry({
         session,
@@ -185,15 +311,47 @@ const appInstallationWorker = new Worker(
         mirroredProductCount === 0 ||
         !latestCompletedSync ||
         store.shopifyBulkJobCompleted !== true;
+      let startedInitialSync = false;
 
       if (shouldStartInitialSync) {
-        await productService.startBulkOperationToFetchProducts({
-          session,
-          isInitialSync: true,
-        });
+        const currentBulkOperation = await getCurrentBulkOperationStatus(session, "QUERY");
+        if (["CREATED", "RUNNING", "CANCELING"].includes(currentBulkOperation?.status)) {
+          const matchingProductSync = currentBulkOperation?.id
+            ? await db.syncHistory.findFirst({
+                where: {
+                  shop,
+                  bulkOperationId: currentBulkOperation.id,
+                  operationType: "Product",
+                  status: "processing",
+                },
+                select: { id: true },
+              })
+            : null;
+          if (!matchingProductSync) {
+            const error = new Error("INITIAL_PRODUCT_SYNC_BULK_OPERATION_ALREADY_ACTIVE");
+            error.code = "INITIAL_PRODUCT_SYNC_BULK_OPERATION_ALREADY_ACTIVE";
+            throw error;
+          }
+        }
 
-        await db.store.update({
-          where: { shopUrl: shop },
+        if (!await assertCurrentInstallation(shop, installationGeneration)) {
+          return { skipped: true, reason: "superseded", shop };
+        }
+
+        if (!["CREATED", "RUNNING", "CANCELING"].includes(currentBulkOperation?.status)) {
+          await productService.startBulkOperationToFetchProducts({
+            session,
+            isInitialSync: true,
+          });
+          startedInitialSync = true;
+        }
+
+        await db.store.updateMany({
+          where: {
+            shopUrl: shop,
+            installationGeneration,
+            isUnInstalled: false,
+          },
           data: {
             storeTotalProducts: count,
             isProductInitialySyning: true,
@@ -201,8 +359,12 @@ const appInstallationWorker = new Worker(
           },
         });
       } else {
-        await db.store.update({
-          where: { shopUrl: shop },
+        await db.store.updateMany({
+          where: {
+            shopUrl: shop,
+            installationGeneration,
+            isUnInstalled: false,
+          },
           data: {
             storeTotalProducts: count,
             isProductInitialySyning: false,
@@ -210,36 +372,68 @@ const appInstallationWorker = new Worker(
         });
       }
 
+      if (!await assertCurrentInstallation(shop, installationGeneration)) {
+        return { skipped: true, reason: "superseded", shop };
+      }
+
+      const completed = await markInstallationSetupCompleted(shop, installationGeneration);
+      if (!completed) {
+        logger.warn("Installation superseded before completion, discarding", {
+          worker: "appInstallationWorker",
+          jobId: job.id,
+          shop,
+          installationGeneration,
+        });
+        return { skipped: true, reason: "superseded", shop };
+      }
+
       await Promise.allSettled([
         sentWelcomeMailToStore({ email, shopOwner, shop }),
         sentInstalledMailToAdmin({ email, shop }),
-        registerShopRepeatableJobs(shop),
       ]);
 
       logger.info("App installation background job completed", {
         worker: "appInstallationWorker",
         jobId: job.id,
         shop,
-        startedInitialSync: shouldStartInitialSync,
+        startedInitialSync,
       });
 
       return {
         success: true,
         shop,
-        startedInitialSync: shouldStartInitialSync,
+        startedInitialSync,
       };
     } catch (error) {
+      if (error?.message === "STALE_INSTALLATION_GENERATION") {
+        logger.warn("Installation superseded during setup, discarding", {
+          worker: "appInstallationWorker",
+          jobId: job.id,
+          shop,
+          installationGeneration,
+        });
+        return { skipped: true, reason: "superseded", shop };
+      }
       await logWorkerError({
         shop,
         err: error,
         source: "AppInstallationWorker",
       });
       throw error;
+    } finally {
+      clearInterval(lockRenewalTimer);
+      await releaseRedisLock({
+        connection,
+        key: lock.key,
+        token: lock.token,
+      }).catch(() => {});
     }
   },
   {
     connection,
     concurrency: 3,
+    stalledInterval: Number(process.env.APP_INSTALLATION_STALLED_INTERVAL_MS || 60_000),
+    maxStalledCount: Number(process.env.APP_INSTALLATION_MAX_STALLED_COUNT || 2),
   },
 );
 

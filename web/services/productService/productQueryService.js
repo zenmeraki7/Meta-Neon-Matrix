@@ -8,8 +8,9 @@ import {
 } from "../../repositories/productQueryRepository.js";
 import {
   getActiveMirrorBatchId,
-  resolveCanonicalProductTarget,
 } from "./productTargetingService.js";
+import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
+import { TARGET_TYPES } from "../targeting/constants.js";
 
 const FILTER_VALUE_FIELD_MAP = {
   title: { source: "product", field: "title" },
@@ -79,12 +80,13 @@ function stableJson(value) {
 function buildProductListCacheKey({
   shop,
   mirrorBatchId,
+  filterAst,
   filterParams,
   queryParams,
 }) {
   const normalizedFilterHash = crypto
     .createHash("sha256")
-    .update(stableJson(filterParams || []))
+    .update(stableJson(filterAst || filterParams || []))
     .digest("hex");
 
   const normalizedQuery = {
@@ -136,6 +138,7 @@ function normalizeDistinctOptions(values = [], { splitValues = false } = {}) {
 
 export async function getProductsWithFilters({
   queryParams = {},
+  filterAst = null,
   filterParams = [],
   shop = null,
 }) {
@@ -144,6 +147,7 @@ export async function getProductsWithFilters({
   const cacheKey = buildProductListCacheKey({
     shop,
     mirrorBatchId,
+    filterAst,
     filterParams,
     queryParams: { cursor, limit, sortKey, sortOrder },
   });
@@ -151,11 +155,15 @@ export async function getProductsWithFilters({
 
   if (cachedData) return cachedData;
 
-  const result = await resolveCanonicalProductTarget({
+  const result = await TargetingEngineService.resolvePreviewTargets({
     shop,
-    filterParams,
+    targetType: TARGET_TYPES.PRODUCT,
+    targetGranularity: "PRODUCT",
+    filterAst,
+    legacyFilterParams: null,
     queryParams: { cursor, limit, sortKey, sortOrder },
     sampleLimit: Number.parseInt(limit, 10) || 20,
+    source: "PRODUCT_LISTING",
   });
 
   const returnData = {

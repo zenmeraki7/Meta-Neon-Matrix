@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../../../../hooks/useApiClient";
+import { buildFilterAstFromLegacyFilters } from "../utils/filterAst";
 
 export function canonicalizeFilters(filters = []) {
   return [...filters]
@@ -67,7 +68,18 @@ export default function useProducts({
   const limit = 20;
   const normalizedFilters = useMemo(() => canonicalizeFilters(filterParams), [filterParams]);
   const filtersKey = useMemo(() => buildCanonicalFilterHash(normalizedFilters), [normalizedFilters]);
-  const resolvedFilterHash = String(filterHash || filtersKey);
+  const filterAst = useMemo(
+    () =>
+      normalizedFilters.length
+        ? buildFilterAstFromLegacyFilters({
+          filterParams: normalizedFilters,
+          targetGranularity: "PRODUCT",
+          source: "MANUAL_PREVIEW",
+        })
+        : null,
+    [normalizedFilters],
+  );
+  const resolvedFilterHash = filtersKey;
   const isCursorHashMismatch =
     Boolean(cursor) &&
     Boolean(cursorFilterHash) &&
@@ -103,7 +115,10 @@ export default function useProducts({
 
       const json = await api.post(
         `/api/products/get-all?${params.toString()}`,
-        { filterParams: normalizedFilters },
+        {
+          ...(filterAst ? { filterAst } : {}),
+          filterParams: normalizedFilters,
+        },
         { signal },
       );
       markPerf("products_fetch_end", {

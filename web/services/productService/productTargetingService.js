@@ -59,9 +59,15 @@ function compileLegacyWhereViaEngine({
   if (!Array.isArray(filterParams) || filterParams.length === 0) {
     return {};
   }
+  const { searchFilters, remainingFilters } = splitGlobalSearchFilters(filterParams);
+  const searchWhere = buildGlobalProductSearchWhere(searchFilters);
+
+  if (!remainingFilters.length) {
+    return searchWhere;
+  }
 
   const filterAst = adaptLegacyFilterParamsToAst({
-    filterParams: Array.isArray(filterParams) ? filterParams : [],
+    filterParams: remainingFilters,
     targetGranularity,
     source: "MANUAL_PREVIEW",
   });
@@ -78,7 +84,73 @@ function compileLegacyWhereViaEngine({
       source: "MANUAL_PREVIEW",
     },
   });
-  return compiled.where && typeof compiled.where === "object" ? compiled.where : {};
+  const compiledWhere = compiled.where && typeof compiled.where === "object" ? compiled.where : {};
+  if (!searchWhere || Object.keys(searchWhere).length === 0) {
+    return compiledWhere;
+  }
+  if (!compiledWhere || Object.keys(compiledWhere).length === 0) {
+    return searchWhere;
+  }
+  return { AND: [compiledWhere, searchWhere] };
+}
+
+export function splitGlobalSearchFilters(filterParams = []) {
+  const searchFilters = [];
+  const remainingFilters = [];
+
+  for (const filter of Array.isArray(filterParams) ? filterParams : []) {
+    if (String(filter?.field || "").trim() === "search") {
+      searchFilters.push(filter);
+    } else {
+      remainingFilters.push(filter);
+    }
+  }
+
+  return { searchFilters, remainingFilters };
+}
+
+function buildOneGlobalSearchClause(value) {
+  const term = normalizeText(value);
+  if (!term) return null;
+
+  const stringContains = (field) => ({
+    [field]: { contains: term, mode: "insensitive" },
+  });
+
+  return {
+    OR: [
+      stringContains("title"),
+      stringContains("handle"),
+      stringContains("vendor"),
+      stringContains("productType"),
+      stringContains("descriptionText"),
+      stringContains("categoryName"),
+      stringContains("seoTitle"),
+      stringContains("seoDescription"),
+      { tags: { has: term } },
+      {
+        variants: {
+          some: {
+            OR: [
+              stringContains("sku"),
+              stringContains("barcode"),
+              stringContains("title"),
+            ],
+          },
+        },
+      },
+    ],
+  };
+}
+
+export function buildGlobalProductSearchWhere(searchFilters = []) {
+  const clauses = (Array.isArray(searchFilters) ? searchFilters : [])
+    .map((filter) => buildOneGlobalSearchClause(filter?.value))
+    .filter(Boolean);
+
+  if (clauses.length === 0) return {};
+  if (clauses.length === 1) return clauses[0];
+  return { AND: clauses };
 }
 
 function assertUnscopedExplicitWhere(where) {
@@ -1623,6 +1695,8 @@ export async function freezeExplicitTargetSnapshot({
   targets = [],
   returnStats = false,
   source = null,
+  replaceExisting = true,
+  ordinalOffset = 0,
   db = defaultDb,
 }) {
   if (!ownerType || !ownerId || !shop || !mirrorBatchId) {
@@ -1632,9 +1706,11 @@ export async function freezeExplicitTargetSnapshot({
     throw new Error("FILTER_HASH_REQUIRED");
   }
 
-  await db.targetSnapshot.deleteMany({
-    where: { shop, ownerType, ownerId },
-  });
+  if (replaceExisting) {
+    await db.targetSnapshot.deleteMany({
+      where: { shop, ownerType, ownerId },
+    });
+  }
 
   if (!Array.isArray(targets) || !targets.length) {
     if (!returnStats) return 0;
@@ -1672,7 +1748,7 @@ export async function freezeExplicitTargetSnapshot({
       productId: canonicalizeTargetId(target.productId, "PRODUCT"),
       variantId: target.variantId ? canonicalizeTargetId(target.variantId, "VARIANT") : null,
       targetIdentity: canonicalIdentity,
-      ordinal: index,
+      ordinal: ordinalOffset + index,
       filterHash,
       beforeValues: target.beforeValues || null,
     };

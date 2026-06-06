@@ -10,7 +10,7 @@ import {
 test("buildNormalizedFilterPlan captures collection and metafield filters", () => {
   const plan = buildNormalizedFilterPlan([
     {
-      field: "collection",
+      field: "collections",
       operator: "is",
       value: {
         id: "gid://shopify/Collection/100",
@@ -25,7 +25,7 @@ test("buildNormalizedFilterPlan captures collection and metafield filters", () =
       value: "cotton",
     },
     {
-      field: "variant_metafield",
+      field: "variantMetafield",
       operator: "contains",
       namespace: "spec",
       key: "country",
@@ -63,9 +63,9 @@ test("getProductPrismaWhere skips normalized fields and keeps native filters", (
   const where = getProductPrismaWhere(
     [
       { field: "vendor", operator: "equals", value: "Acme" },
-      { field: "collection", operator: "contains", value: "Summer" },
+      { field: "collections", operator: "contains", value: "Summer" },
       {
-        field: "metafield",
+        field: "productMetafield",
         operator: "equals",
         namespace: "custom",
         key: "material",

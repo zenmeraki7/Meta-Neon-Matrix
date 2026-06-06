@@ -1,5 +1,12 @@
-function mapOperatorToAst(operator) {
+function mapOperatorToAst(operator, field) {
   const raw = String(operator || "").trim().toUpperCase();
+  const normalizedField = String(field || "").trim();
+  if (
+    (normalizedField === "collections" || normalizedField === "tags") &&
+    (raw === "IS" || raw === "EQUALS" || raw === "=" || raw === "==")
+  ) {
+    return "IN";
+  }
   const map = {
     "=": "EQ",
     "==": "EQ",
@@ -37,6 +44,18 @@ function normalizeValue(value) {
   return trimmed;
 }
 
+function normalizeAstValue(field, operator, value) {
+  const normalized = normalizeValue(value);
+  if (
+    (field === "collections" || field === "tags") &&
+    (operator === "IN" || operator === "NOT_IN")
+  ) {
+    if (normalized === null || normalized === undefined) return [];
+    return Array.isArray(normalized) ? normalized : [normalized];
+  }
+  return normalized;
+}
+
 export function buildFilterAstFromLegacyFilters({
   filterParams = [],
   targetGranularity = "PRODUCT",
@@ -46,13 +65,17 @@ export function buildFilterAstFromLegacyFilters({
     ? filterParams
         .map((filter, index) => {
           if (!filter?.field) return null;
+          const field = String(filter.field);
+          const operator = mapOperatorToAst(filter.operator, field);
           return {
             nodeType: "predicate",
-            field: String(filter.field),
-            operator: mapOperatorToAst(filter.operator),
-            value: normalizeValue(filter.value),
+            field,
+            operator,
+            value: normalizeAstValue(field, operator, filter.value),
             meta: {
               legacyIndex: index,
+              ...(filter.namespace ? { namespace: filter.namespace } : {}),
+              ...(filter.key ? { key: filter.key } : {}),
             },
           };
         })

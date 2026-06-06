@@ -12,7 +12,7 @@ function normalizeMetafieldFilter(rawFilter) {
   const valueRaw = rawFilter?.metafieldValue ?? rawFilter?.value?.value ?? rawFilter?.value;
   const value = typeof valueRaw === "object" ? normalizeText(valueRaw?.value) : normalizeText(valueRaw);
   const ownerType =
-    rawFilter?.field === "variant_metafield"
+    rawFilter?.field === "variant_metafield" || rawFilter?.field === "variantMetafield"
       ? "VARIANT"
       : (normalizeText(rawFilter?.ownerType).toUpperCase() || "PRODUCT");
 
@@ -48,7 +48,7 @@ export function buildNormalizedFilterPlan(filterParams = []) {
     const field = normalizeText(rawFilter?.field);
     if (!isNormalizedProductFilter(field)) continue;
 
-    if (field === "collection") {
+    if (field === "collection" || field === "collections") {
       const collectionFilter = normalizeCollectionFilter(rawFilter);
       if (!collectionFilter) continue;
       plan.push({ type: "collection", ...collectionFilter });

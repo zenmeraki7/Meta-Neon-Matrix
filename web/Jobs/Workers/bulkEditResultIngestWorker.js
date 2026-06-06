@@ -1,4 +1,4 @@
-import { QueueEvents, Worker } from "bullmq";
+import { QueueEvents, UnrecoverableError, Worker } from "bullmq";
 import { connection, createRedisConnection } from "../../config/redis.js";
 import shopify from "../../shopify.js";
 import { db } from "../../repositories/repositoryDb.js";
@@ -55,19 +55,32 @@ function resolveResultUrl(jobData = {}) {
 async function fetchBulkOperationResultUrl({ shop, bulkOperationId }) {
   const normalize = (s) => String(s || "").toLowerCase().replace(/\/$/, "");
   const session = await getSession(shop);
-  if (!session?.shop || normalize(session.shop) !== normalize(shop)) {
-    const err = new Error("SHOP_SESSION_NOT_AVAILABLE");
-    err.nonRetryable = true;
-    throw err;
+  if (
+    !session?.accessToken
+    || !session?.shop
+    || normalize(session.shop) !== normalize(shop)
+  ) {
+    throw new UnrecoverableError("SHOP_SESSION_NOT_AVAILABLE");
   }
 
   const client = new shopify.api.clients.Graphql({ session });
-  const response = await client.query({
-    data: {
-      query: BULK_OPERATION_RESULT_QUERY,
-      variables: { id: bulkOperationId },
-    },
-  });
+  let response;
+  try {
+    response = await client.query({
+      data: {
+        query: BULK_OPERATION_RESULT_QUERY,
+        variables: { id: bulkOperationId },
+      },
+    });
+  } catch (error) {
+    const status = Number(
+      error?.response?.status || error?.statusCode || error?.status || 0,
+    );
+    if (status === 401 || status === 403) {
+      throw new UnrecoverableError("SHOPIFY_AUTH_REVOKED");
+    }
+    throw error;
+  }
   const errors = response?.body?.errors;
   if (Array.isArray(errors) && errors.length > 0) {
     const message = errors[0]?.message || "unknown";
@@ -165,11 +178,13 @@ async function processBulkEditResultIngest(job) {
     throw new Error("bulk edit result ingest job requires shop and bulkOperationId");
   }
 
-  const history = await findHistoryByBulkOperation({ shop, bulkOperationId });
+  let history = await findHistoryByBulkOperation({ shop, bulkOperationId });
   if (!history) {
     const source = String(job.data?.source || "").toLowerCase();
     if (source.includes("webhook") || source.includes("polling")) {
-      throw new Error("EDIT_HISTORY_NOT_FOUND_RETRYABLE");
+      const error = new Error("EDIT_HISTORY_NOT_FOUND_RETRYABLE");
+      error.retryable = true;
+      throw error;
     }
     return {
       skipped: true,
@@ -179,20 +194,7 @@ async function processBulkEditResultIngest(job) {
     };
   }
 
-  const executionId = executionIdFromJob || history.executionIdentity || null;
-  if (
-    executionIdFromJob
-    && history.executionIdentity
-    && executionIdFromJob !== history.executionIdentity
-  ) {
-    return {
-      skipped: true,
-      reason: "stale_execution_identity",
-      historyId: history.id,
-      shop,
-      bulkOperationId,
-    };
-  }
+  let executionId = executionIdFromJob || history.executionIdentity || null;
   let ingestLeaseOwnerId = null;
   let ingestLeaseHeartbeat = null;
   let ingestLeaseLost = false;
@@ -273,6 +275,32 @@ async function processBulkEditResultIngest(job) {
       throw err;
     }
 
+    const leasedHistory = await findHistoryByBulkOperation({ shop, bulkOperationId });
+    if (!leasedHistory) {
+      return {
+        skipped: true,
+        reason: "edit_history_not_found_after_lease",
+        historyId: history.id,
+        shop,
+        bulkOperationId,
+      };
+    }
+    history = leasedHistory;
+    executionId = executionIdFromJob || history.executionIdentity || null;
+    if (
+      executionIdFromJob
+      && history.executionIdentity
+      && executionIdFromJob !== history.executionIdentity
+    ) {
+      return {
+        skipped: true,
+        reason: "stale_execution_identity",
+        historyId: history.id,
+        shop,
+        bulkOperationId,
+      };
+    }
+
   if (history.cancelRequestedAt) {
     await transitionOperation({
       shop,
@@ -332,6 +360,9 @@ async function processBulkEditResultIngest(job) {
           message: error?.message || String(error),
           stack: error?.stack,
         });
+        const enqueueError = new Error("VERIFICATION_ENQUEUE_FAILED_AFTER_INGESTION");
+        enqueueError.retryable = true;
+        throw enqueueError;
       }
     return {
       skipped: true,
@@ -374,9 +405,9 @@ async function processBulkEditResultIngest(job) {
     const fetched = await fetchBulkOperationResultUrl({ shop, bulkOperationId });
     const status = String(fetched.status || "").toUpperCase();
     const resultUrl =
-    resolveResultUrl(job.data || {})
-    || fetched.url
+    fetched.url
     || fetched.partialDataUrl
+    || resolveResultUrl(job.data || {})
     || null;
 
   if (status && ["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(status)) {
@@ -520,6 +551,12 @@ async function processBulkEditResultIngest(job) {
     throw err;
   }
 
+  if (ingestLeaseLost) {
+    const err = new Error("INGEST_LEASE_LOST_BEFORE_INGESTION");
+    err.retryable = true;
+    throw err;
+  }
+
   const service = new BulkEditResultIngestionService();
   let result;
   try {
@@ -530,6 +567,7 @@ async function processBulkEditResultIngest(job) {
       bulkOperationId,
       resultUrl,
       attempt: job.attemptsMade + 1,
+      leaseOwnerId: ingestLeaseOwnerId,
     });
     await upsertOperationStageProgress({
       shop,
@@ -648,6 +686,25 @@ async function processBulkEditResultIngest(job) {
     };
   }
 
+    if (ingestLeaseLost) {
+      logger.warn("Ingest lease lost after ingestion completed", {
+        worker: WORKER_NAME,
+        queue: QUEUE_NAME,
+        shop,
+        historyId: history.id,
+        bulkOperationId,
+      });
+      return {
+        success: true,
+        historyId: history.id,
+        shop,
+        bulkOperationId,
+        ingested: result,
+        verificationEnqueued: false,
+        leaseLostAfterIngest: true,
+      };
+    }
+
     try {
       await enqueueVerification({
     historyId: history.id,
@@ -673,15 +730,9 @@ async function processBulkEditResultIngest(job) {
         stageStatus: "QUEUE_FAILED",
         detail: { message: error?.message || String(error) },
       });
-      return {
-        success: true,
-        historyId: history.id,
-        shop,
-        bulkOperationId,
-        ingested: result,
-        verificationEnqueued: false,
-        verificationQueueFailed: true,
-      };
+      const enqueueError = new Error("VERIFICATION_ENQUEUE_FAILED_AFTER_INGESTION");
+      enqueueError.retryable = true;
+      throw enqueueError;
     }
 
     return {
@@ -747,7 +798,7 @@ bulkEditResultIngestWorker.on("completed", (job, result) => {
   });
 });
 bulkEditResultIngestWorker.on("failed", (job, err) => {
-  if (hasExhaustedRetry(job)) {
+  if (hasExhaustedRetry(job) || err?.name === "UnrecoverableError") {
     void bulkEditResultIngestDlqQueue.add(
       "bulk-edit-result-ingest-dlq",
       {
@@ -835,4 +886,3 @@ process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default bulkEditResultIngestWorker;
-

@@ -21,11 +21,13 @@ import {
 export class Services {
   async getProductsWithFilters({
     queryParams = {},
+    filterAst = null,
     filterParams = [],
     shop = null,
   }) {
     return getProductsWithFilters({
       queryParams,
+      filterAst,
       filterParams,
       shop,
     });

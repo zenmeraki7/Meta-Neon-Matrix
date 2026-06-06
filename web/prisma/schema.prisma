@@ -387,6 +387,10 @@ model Store {
   installedAt                     DateTime?
   unInstalledAt                   DateTime?
   isUnInstalled                   Boolean           @default(false)
+  installationGeneration          String?
+  installationStatus              String            @default("pending")
+  installationProcessingStartedAt DateTime?
+  installationSetupCompletedAt    DateTime?
   referralCode                    String?           @unique
   referralLink                    String?           @unique
   referredBy                      String?
@@ -416,6 +420,9 @@ model Store {
   @@index([lastActivityAt])
   @@index([isUnInstalled])
   @@index([installedAt])
+  @@index([installationGeneration])
+  @@index([installationStatus])
+  @@index([installationProcessingStartedAt])
   @@index([createdAt])
 }
 

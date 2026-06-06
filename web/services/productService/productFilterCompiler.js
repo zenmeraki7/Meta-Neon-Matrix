@@ -40,9 +40,12 @@ function warnDeprecatedOnce(key, message) {
 
 export const NORMALIZED_FILTER_FIELDS = new Set([
   "collection",
+  "collections",
   "metafield",
   "product_metafield",
+  "productMetafield",
   "variant_metafield",
+  "variantMetafield",
 ]);
 
 export function isNormalizedProductFilter(field) {

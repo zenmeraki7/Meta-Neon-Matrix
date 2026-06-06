@@ -1,15 +1,19 @@
-import { Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
 import { addbulkEditResultIngestJob } from "../Queues/bulkEditResultIngestJob.js";
 import { addbulkUndoResultIngestJob } from "../Queues/bulkUndoResultIngestJob.js";
 import { db } from "../../repositories/repositoryDb.js";
-import { logWebhookError } from "../../utils/errorLogUtils.js";
 import logger from "../../utils/loggerUtils.js";
 import { getJobAttempt, isRetryExhausted, recordRetryExhausted } from "../../utils/workerTelemetry.js";
 import crypto from "crypto";
+import { sha256Stable } from "../../utils/canonicalJson.js";
+import { bulkOperationMutationDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 
 const QUEUE_NAME =
   process.env.BULK_OPERATION_MUTATION_QUEUE || "bulk-operation-mutation";
+const DLQ_NAME =
+  process.env.BULK_OPERATION_MUTATION_DLQ_QUEUE || "bulk-operation-mutation-dlq";
+const WORKER_NAME = "bulkOperationMutationWorker";
 
 async function resolveOperationKindByLedger(shop, bulkOperationId) {
   const ledgerMatch = await db.bulkSubmission.findUnique({
@@ -36,25 +40,26 @@ async function resolveOperationKindByLedger(shop, bulkOperationId) {
 }
 
 async function hasUndoOwnerForBulkOperation(shop, bulkOperationId) {
-  const byColumn = await db.editHistory.findFirst({
-    where: { shop, bulkOperationId: String(bulkOperationId) },
-    select: { id: true, undo: true },
-  });
-  if (byColumn?.undo && typeof byColumn.undo === "object") {
-    const undoBulkOperationId = String(byColumn.undo.bulkOperationId || "");
-    if (undoBulkOperationId === String(bulkOperationId)) return true;
-  }
-  const byUndo = await db.editHistory.findFirst({
+  const owner = await db.editHistory.findFirst({
     where: {
       shop,
-      undo: {
-        path: ["bulkOperationId"],
-        equals: String(bulkOperationId),
-      },
+      OR: [
+        { bulkOperationId: String(bulkOperationId) },
+        {
+          undo: {
+            path: ["bulkOperationId"],
+            equals: String(bulkOperationId),
+          },
+        },
+      ],
     },
-    select: { id: true },
+    select: { id: true, undo: true },
   });
-  return Boolean(byUndo);
+  const undoBulkOperationId =
+    owner?.undo && typeof owner.undo === "object"
+      ? String(owner.undo.bulkOperationId || "")
+      : "";
+  return undoBulkOperationId === String(bulkOperationId);
 }
 
 function buildUnresolvedBulkWebhookDeliveryId({ shop, bulkOperationId }) {
@@ -77,10 +82,7 @@ async function persistUnresolvedBulkMutationDelivery({
   payload,
 }) {
   const id = buildUnresolvedBulkWebhookDeliveryId({ shop, bulkOperationId });
-  const payloadHash = crypto
-    .createHash("sha256")
-    .update(JSON.stringify(payload || {}))
-    .digest("hex");
+  const payloadHash = sha256Stable(payload || {});
 
   const data = {
     payloadHash,
@@ -119,7 +121,9 @@ async function persistUnresolvedBulkMutationDelivery({
       data,
     });
     if (retried.count !== 1) {
-      throw new Error("WEBHOOK_DELIVERY_CROSS_TENANT_ID_COLLISION");
+      const collision = new Error("WEBHOOK_DELIVERY_CROSS_TENANT_ID_COLLISION");
+      collision.nonRetryable = true;
+      throw collision;
     }
   }
 }
@@ -127,16 +131,32 @@ async function persistUnresolvedBulkMutationDelivery({
 const bulkOperationMutationWorker = new Worker(
   QUEUE_NAME,
   async (job) => {
-    const shop = job.data?.shop;
-    const bulkOperationId = job.data?.admin_graphql_api_id;
+    const shop = String(job.data?.shop || "").trim();
+    const bulkOperationId = String(job.data?.admin_graphql_api_id || "").trim();
     const status = String(job.data?.status || "").toUpperCase();
     const type = String(job.data?.type || "").toUpperCase();
 
     if (!shop || !bulkOperationId) {
-      throw new Error("bulk-operation-mutation job requires shop and admin_graphql_api_id");
+      throw new UnrecoverableError(
+        "bulk-operation-mutation job requires shop and admin_graphql_api_id",
+      );
     }
 
     try {
+      const store = await db.store.findUnique({
+        where: { shopUrl: shop },
+        select: { isUnInstalled: true },
+      });
+      if (!store || store.isUnInstalled) {
+        return {
+          success: true,
+          skipped: true,
+          reason: "shop_not_installed",
+          shop,
+          bulkOperationId,
+        };
+      }
+
       // Single path: all mutation webhook statuses are delegated to the
       // bulk edit result ingestion pipeline for deterministic lifecycle handling.
       if (type === "MUTATION") {
@@ -197,8 +217,8 @@ const bulkOperationMutationWorker = new Worker(
           payload: job.data || {},
         });
         return {
-          success: false,
-          ignored: true,
+          success: true,
+          skipped: true,
           shop,
           bulkOperationId,
           reason: "unresolved_bulk_operation_owner_persisted",
@@ -206,65 +226,133 @@ const bulkOperationMutationWorker = new Worker(
       }
 
       return {
-        success: false,
-        ignored: true,
-        reason: "non_mutation_bulk_operation",
+        success: true,
+        skipped: true,
+        reason: "non_mutation_type",
         shop,
         bulkOperationId,
+        type,
       };
     } catch (error) {
-      await logWebhookError({
+      logger.error("Bulk operation mutation worker handler failed", {
+        worker: WORKER_NAME,
+        queue: QUEUE_NAME,
+        jobId: job?.id,
         shop,
-        req: job.data,
-        source: "bulkOperationMutationWorker",
-        err: error,
+        bulkOperationId,
+        message: error?.message,
+        stack: error?.stack,
       });
+      if (error?.nonRetryable) {
+        throw new UnrecoverableError(error.message);
+      }
       throw error;
     }
   },
   {
     connection,
     concurrency: 1,
+    lockDuration: Number(process.env.BULK_OPERATION_MUTATION_LOCK_DURATION_MS || 60_000),
+    stalledInterval: Number(process.env.BULK_OPERATION_MUTATION_STALLED_INTERVAL_MS || 30_000),
+    maxStalledCount: Number(process.env.BULK_OPERATION_MUTATION_MAX_STALLED_COUNT || 1),
   },
 );
 
 bulkOperationMutationWorker.on("failed", (job, error) => {
   logger.error("Bulk operation mutation worker failed", {
-    worker: "bulkOperationMutationWorker",
+    worker: WORKER_NAME,
     queue: QUEUE_NAME,
     jobId: job?.id,
     shop: job?.data?.shop,
     bulkOperationId: job?.data?.admin_graphql_api_id,
     attempt: getJobAttempt(job),
-    message: error.message,
+    message: error?.message,
+    stack: error?.stack,
   });
-});
-
-bulkOperationMutationWorker.on("completed", (job, result) => {
-  logger.info("Bulk operation mutation worker completed", {
-    worker: "bulkOperationMutationWorker",
-    queue: QUEUE_NAME,
-    jobId: job?.id,
-    shop: job?.data?.shop,
-    bulkOperationId: job?.data?.admin_graphql_api_id,
-    attempt: getJobAttempt(job),
-    result,
-  });
-});
-
-bulkOperationMutationWorker.on("failed", async (job) => {
-  if (isRetryExhausted(job)) {
-    await recordRetryExhausted({
+  if (isRetryExhausted(job) || error?.name === "UnrecoverableError") {
+    void recordRetryExhausted({
       job,
       shop: job?.data?.shop,
-      worker: "bulkOperationMutationWorker",
+      worker: WORKER_NAME,
       queue: QUEUE_NAME,
       entityType: "bulkOperation",
       entityId: job?.data?.admin_graphql_api_id,
       executionId: job?.data?.admin_graphql_api_id,
-      message: "Bulk operation mutation worker exhausted retries",
+      message: error?.message || "Bulk operation mutation worker exhausted retries",
+    }).catch((recordError) => {
+      logger.error("Bulk operation mutation retry exhaustion recording failed", {
+        worker: WORKER_NAME,
+        jobId: job?.id,
+        message: recordError?.message,
+      });
+    });
+    void bulkOperationMutationDlqQueue.add(
+      DLQ_NAME,
+      {
+        originalJobId: job?.id,
+        data: job?.data,
+        failedReason: error?.message,
+        stack: error?.stack,
+        failedAt: new Date().toISOString(),
+      },
+      { jobId: `dlq:${QUEUE_NAME}:${job?.id}` },
+    ).catch((dlqError) => {
+      logger.error("Bulk operation mutation DLQ enqueue failed", {
+        worker: WORKER_NAME,
+        jobId: job?.id,
+        message: dlqError?.message,
+      });
     });
   }
 });
+
+bulkOperationMutationWorker.on("completed", (job, result) => {
+  logger.info("Bulk operation mutation worker completed", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    bulkOperationId: job?.data?.admin_graphql_api_id,
+    attempt: getJobAttempt(job),
+    skipped: Boolean(result?.skipped),
+    reason: result?.reason || null,
+    enqueued: result?.enqueued || null,
+  });
+});
+
+bulkOperationMutationWorker.on("stalled", (jobId) => {
+  logger.warn("Bulk operation mutation worker stalled", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    jobId,
+  });
+});
+
+bulkOperationMutationWorker.on("error", (error) => {
+  logger.error("Bulk operation mutation worker runtime error", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    message: error?.message,
+    stack: error?.stack,
+  });
+});
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await bulkOperationMutationWorker.close();
+  } catch (error) {
+    logger.error("Bulk operation mutation worker shutdown failed", {
+      worker: WORKER_NAME,
+      signal,
+      message: error?.message,
+    });
+  }
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default bulkOperationMutationWorker;

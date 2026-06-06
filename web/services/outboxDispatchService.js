@@ -5,7 +5,6 @@ const OUTBOX_STATUS = Object.freeze({
   PENDING: "PENDING",
   DISPATCHING: "DISPATCHING",
   DISPATCHED: "DISPATCHED",
-  FAILED: "FAILED",
 });
 
 export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
@@ -13,14 +12,20 @@ export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
   if (!scopedShop) {
     throw new Error("dispatchPendingOutboxEvents requires shop");
   }
+
+  const batchLimit = Math.max(1, Number(limit) || 50);
   const pending = await db.outboxEvent.findMany({
     where: { shop: scopedShop, status: OUTBOX_STATUS.PENDING },
     orderBy: { createdAt: "asc" },
-    take: Math.max(1, Number(limit) || 50),
+    take: batchLimit,
   });
 
+  let claimed = 0;
+  let dispatched = 0;
+  let failed = 0;
+
   for (const event of pending) {
-    const claimed = await db.outboxEvent.updateMany({
+    const claim = await db.outboxEvent.updateMany({
       where: {
         id: event.id,
         shop: scopedShop,
@@ -32,9 +37,10 @@ export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
       },
     });
 
-    if (claimed.count !== 1) {
+    if (claim.count !== 1) {
       continue;
     }
+    claimed += 1;
 
     try {
       if (event.eventType === "TARGET_FREEZE_REQUESTED") {
@@ -51,6 +57,7 @@ export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
           updatedAt: new Date(),
         },
       });
+      dispatched += 1;
     } catch (error) {
       await db.outboxEvent.updateMany({
         where: { id: event.id, shop: scopedShop },
@@ -59,14 +66,29 @@ export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
           updatedAt: new Date(),
         },
       });
-      await logDispatchError(event, error);
+      failed += 1;
+      logDispatchError(event, error);
     }
   }
+
+  const remaining = await db.outboxEvent.count({
+    where: { shop: scopedShop, status: OUTBOX_STATUS.PENDING },
+  });
+
+  return {
+    selected: pending.length,
+    claimed,
+    dispatched,
+    failed,
+    remaining,
+    batchLimit,
+    batchLimitReached: pending.length >= batchLimit,
+  };
 }
 
-async function logDispatchError(event, error) {
+function logDispatchError(event, error) {
   try {
-    // Keep dispatcher resilient; outbox row remains retryable.
+    // Keep dispatcher resilient; outbox row remains retryable on the next tick.
     // eslint-disable-next-line no-console
     console.error("Outbox dispatch failed", {
       outboxEventId: event?.id || null,

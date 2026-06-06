@@ -1,6 +1,5 @@
 import { db } from "../../repositories/repositoryDb.js";
 import shopify from "../../shopify.js";
-import { getSession } from "../../utils/sessionHandler.js";
 import {
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
@@ -200,16 +199,15 @@ const VERIFY_OWNER_METAFIELD_QUERY = `#graphql
   }
 `;
 
-async function buildShopifyAdminClient(shop) {
-  const session = await getSession(shop);
-  if (!session?.shop || session.shop !== shop) {
+function buildShopifyAdminClient(shop, session) {
+  if (!session?.accessToken || session.shop !== shop) {
     throw new Error("Shop session not available for verification");
   }
   return new shopify.api.clients.Graphql({ session });
 }
 
-async function fetchShopifyNodesByIds(shop, ids = []) {
-  const client = await buildShopifyAdminClient(shop);
+async function fetchShopifyNodesByIds(shop, ids = [], session) {
+  const client = buildShopifyAdminClient(shop, session);
   const uniqueIds = [...new Set(ids.map(toNodeId).filter(Boolean))];
   if (uniqueIds.length === 0) return new Map();
 
@@ -238,8 +236,9 @@ async function fetchShopifyNodesByIds(shop, ids = []) {
 async function fetchInventoryLevelsByTupleFromShopify({
   shop,
   inventoryRequests = new Map(),
+  session,
 }) {
-  const client = await buildShopifyAdminClient(shop);
+  const client = buildShopifyAdminClient(shop, session);
   const map = new Map();
   for (const [variantId, requiredLocationIds] of inventoryRequests.entries()) {
     // eslint-disable-next-line no-await-in-loop
@@ -266,8 +265,9 @@ async function fetchInventoryLevelsByTupleFromShopify({
 async function fetchMetafieldsByTupleFromShopify({
   shop,
   metafieldRequests = [],
+  session,
 }) {
-  const client = await buildShopifyAdminClient(shop);
+  const client = buildShopifyAdminClient(shop, session);
   const map = new Map();
   const unique = new Map();
   for (const request of metafieldRequests) {
@@ -492,6 +492,10 @@ function compareSimpleExpected({
 }
 
 export class BulkEditVerificationService {
+  constructor(session) {
+    this.session = session;
+  }
+
   async verifyBatch({ shop, historyId, executionId = null }) {
     if (!shop || !historyId) {
       throw new Error("VERIFICATION_REQUIRES_SHOP_AND_HISTORY_ID");
@@ -611,7 +615,11 @@ export class BulkEditVerificationService {
     const productIds = [...new Set(verifyRows.map((row) => row.productId).filter(Boolean))];
     const variantIds = [...new Set(verifyRows.map((row) => row.variantId).filter(Boolean))];
 
-    const nodes = await fetchShopifyNodesByIds(shop, [...productIds, ...variantIds]);
+    const nodes = await fetchShopifyNodesByIds(
+      shop,
+      [...productIds, ...variantIds],
+      this.session,
+    );
     const productsById = new Map();
     const variantsById = new Map();
     for (const node of nodes.values()) {
@@ -675,11 +683,13 @@ export class BulkEditVerificationService {
     const inventoryLevelsByTuple = await fetchInventoryLevelsByTupleFromShopify({
       shop,
       inventoryRequests,
+      session: this.session,
     });
 
     const metafieldsByTuple = await fetchMetafieldsByTupleFromShopify({
       shop,
       metafieldRequests: [...metafieldRequestMap.values()],
+      session: this.session,
     });
 
     const verificationTargetCount = successesLength;

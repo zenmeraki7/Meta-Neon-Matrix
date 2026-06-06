@@ -99,6 +99,8 @@ async function claimScheduledUndo(historyId, shop) {
     [
       BULK_UNDO_STATES.QUEUED,
       BULK_UNDO_STATES.DISPATCHING,
+      BULK_UNDO_STATES.AWAITING_CONFIRMATION,
+      BULK_UNDO_STATES.RECONCILE_SUBMITTED,
       BULK_UNDO_STATES.AWAITING_SHOPIFY,
       BULK_UNDO_STATES.FINALIZING,
       BULK_UNDO_STATES.COMPLETED,
@@ -330,4 +332,3 @@ scheduledEditWorker.on("failed", (job, error) => {
 });
 
 export default scheduledEditWorker;
-

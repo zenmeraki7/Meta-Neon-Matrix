@@ -11,8 +11,10 @@ function read(relPath) {
 
 test("csv import worker freezes explicit targets before execute", () => {
   const source = read("web/Jobs/Workers/bulkImportEditWorker.js");
+  const executeSource = read("web/Jobs/Workers/bulkImportExecuteWorker.js");
   assert.ok(source.includes("freezeExplicitTargetSnapshot("));
-  assert.ok(source.includes("addBulkEditExecuteJob("));
+  assert.ok(source.includes("addBulkImportExecuteJob("));
+  assert.ok(executeSource.includes("addBulkEditExecuteJob("));
   assert.ok(!source.includes("service._bulkOperationHelper("));
 });
 
@@ -34,4 +36,3 @@ test("csv history writes immutable edit command envelope", () => {
   assert.ok(source.includes("buildImmutableEditCommand("));
   assert.ok(source.includes("operator: \"CSV_IMPORT\""));
 });
-

@@ -13,11 +13,23 @@ const defaultJobOptions = buildDefaultJobOptions({
   removeOnFail: { age: 14 * 24 * 3600, count: 10_000 },
 });
 
+const VALID_BULK_STATUSES = new Set([
+  "COMPLETED",
+  "COMPLETED_WITH_ERRORS",
+  "FAILED",
+  "EXPIRED",
+  "CANCELED",
+  "CANCELLED",
+  "CANCELLATION_FAILED",
+]);
+
 export async function addbulkUndoResultIngestJob(data, options = {}) {
   if (!data?.shop || !data?.bulkOperationId) {
     throw new Error("bulk undo result ingest job requires shop and bulkOperationId");
   }
   const entityId = data.bulkOperationId;
+  const rawStatus = String(data?.status || "").trim().toUpperCase();
+  const status = rawStatus && VALID_BULK_STATUSES.has(rawStatus) ? rawStatus : null;
   const jobId =
     options.jobId
     || joinSafeJobId("undo-result-ingest", data?.shop, entityId);
@@ -27,6 +39,7 @@ export async function addbulkUndoResultIngestJob(data, options = {}) {
     {
       ...data,
       bulkOperationId: String(data.bulkOperationId),
+      status,
     },
     mergeJobOptions(defaultJobOptions, {
       ...options,

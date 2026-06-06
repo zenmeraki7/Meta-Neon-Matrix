@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { QueueEvents, Worker } from "bullmq";
 import { connection, createRedisConnection } from "../../config/redis.js";
 import { db } from "../../repositories/repositoryDb.js";
@@ -20,18 +19,25 @@ import {
   releaseExclusiveShopWork,
 } from "../../services/shopWorkLeaseService.js";
 import {
-  getJobAttempt,
   isRetryExhausted,
   recordRetryExhausted,
+  willExhaustRetryFromProcessor,
 } from "../../utils/workerTelemetry.js";
 import { SHOP_SYNC_QUEUE_NAME } from "../../queues/shopSyncQueue.constants.js";
 import { shopSyncDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import {
+  acquireRedisLock,
+  releaseRedisLock,
+  renewRedisLock,
+} from "../../utils/redisLockUtils.js";
 
 const QUEUE_NAME = SHOP_SYNC_QUEUE_NAME;
 const MIRROR_SYNC_OPERATION_TYPE = "MIRROR_SYNC";
 const MIRROR_SYNC_TERMINAL_STATUSES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 const ACTIVE_BULK_OPERATION_STATUSES = new Set(["CREATED", "RUNNING", "CANCELING"]);
 const SUPPORTED_SYNC_TYPES = new Set(["product", "collection"]);
+const SUBMISSION_LOCK_TTL_MS = 15 * 60 * 1000;
+const SUBMISSION_LOCK_HEARTBEAT_MS = 60 * 1000;
 
 function normalizeKeyPart(value) {
   return String(value || "")
@@ -44,11 +50,6 @@ function createServices() {
     productService: new Services(),
     collectionService: new CollectionService(shopify),
   };
-}
-
-function willExhaustRetry(job) {
-  const maxAttempts = Number(job?.opts?.attempts || 1);
-  return Number(job?.attemptsMade || 0) + 1 >= maxAttempts;
 }
 
 function isAuthGone(error) {
@@ -71,34 +72,21 @@ function assertSyncStartResult(result, syncType) {
 
 function shouldMarkMirrorRepairRequired(error) {
   const message = String(error?.message || "");
-  return ![
-    "SHOP_SYNC_LOCK_BUSY",
-    "SHOPIFY_QUERY_BULK_OPERATION_ACTIVE",
-    "SHOPIFY_BULK_SUBMIT_LOCK_BUSY",
-    "Another heavy job is already running for this shop",
-  ].some((code) => message.includes(code));
+  if (error?.code === "RETRYABLE_LOCK_BUSY") return false;
+  if (message.startsWith("SHOPIFY_QUERY_BULK_OPERATION_ACTIVE")) return false;
+  if (message === "MIRROR_SYNC_RECONCILE_SUBMITTED_AFTER_TRANSITION_FAILURE") return false;
+  return true;
 }
 
-async function acquireShopSyncLock({ redis, shop, syncType, ttlMs = 15 * 60 * 1000 }) {
+async function acquireShopSyncLock({ redis, shop, syncType, ttlMs = SUBMISSION_LOCK_TTL_MS }) {
   const key = `lock:shop:${normalizeKeyPart(shop)}:sync:${normalizeKeyPart(syncType)}`;
-  const token = crypto.randomUUID();
-  const acquired = await redis.set(key, token, "NX", "PX", ttlMs);
-  return acquired === "OK" ? { key, token } : null;
+  const lock = await acquireRedisLock({ connection: redis, key, ttlMs });
+  return lock.acquired ? lock : null;
 }
 
 async function releaseShopSyncLock({ redis, key, token }) {
   if (!key || !token) return;
-  await redis.eval(
-    `
-    if redis.call("GET", KEYS[1]) == ARGV[1] then
-      return redis.call("DEL", KEYS[1])
-    end
-    return 0
-    `,
-    1,
-    key,
-    token,
-  );
+  await releaseRedisLock({ connection: redis, key, token });
 }
 
 async function transitionMirrorSyncLedger({
@@ -151,28 +139,18 @@ async function processShopSyncJob(job) {
   });
   await job.updateProgress({ stage: "validated", percent: 10 });
 
-    const store = await db.store.findUnique({
+    const store = await db.store.findFirst({
       where: {
         id: shopId,
+        shopUrl: shop,
       },
       select: {
         id: true,
-        shopUrl: true,
         isUnInstalled: true,
       },
     });
 
-    if (store && store.shopUrl !== shop) {
-      logger.warn("shopId/shopUrl mismatch in shop sync job payload", {
-        worker: "shopSyncWorker",
-        queue: QUEUE_NAME,
-        shopId,
-        shop,
-        actualShopUrl: store.shopUrl,
-      });
-    }
-
-    if (!store || store.isUnInstalled || store.shopUrl !== shop) {
+    if (!store || store.isUnInstalled) {
       await transitionMirrorSyncLedger({
         shop,
         syncOperationId,
@@ -185,7 +163,7 @@ async function processShopSyncJob(job) {
 
       return {
         skipped: true,
-        reason: !store ? "shop_not_found" : store.isUnInstalled ? "shop_uninstalled" : "shop_mismatch",
+        reason: !store ? "shop_not_found_or_mismatch" : "shop_uninstalled",
       };
     }
 
@@ -202,6 +180,15 @@ async function processShopSyncJob(job) {
   }
 
   let exclusiveShopLockKey = null;
+  const submissionLockHeartbeat = setInterval(() => {
+    void renewRedisLock({
+      connection,
+      key: submissionLock.key,
+      token: submissionLock.token,
+      ttlMs: SUBMISSION_LOCK_TTL_MS,
+    }).catch(() => {});
+  }, SUBMISSION_LOCK_HEARTBEAT_MS);
+  submissionLockHeartbeat.unref?.();
 
   try {
     const movedToStarting = await transitionMirrorSyncLedger({
@@ -282,13 +269,6 @@ async function processShopSyncJob(job) {
       throw new Error("MIRROR_SYNC_SUBMIT_FENCE_NOT_ACQUIRED");
     }
 
-    if (normalizedSyncType === "product") {
-      await markInventoryReconciliationPending(shop).catch(() => {});
-    }
-    if (normalizedSyncType === "collection") {
-      await markCollectionReconciliationPending(shop).catch(() => {});
-    }
-
     let session;
     let bulkStatus;
     try {
@@ -320,28 +300,11 @@ async function processShopSyncJob(job) {
     }
     await job.updateProgress({ stage: "bulk_status_checked", percent: 40 });
 
-    const existingSubmission = await db.operationFingerprint.findFirst({
-      where: {
-        id: syncOperationId,
-        shop,
-        operationType: MIRROR_SYNC_OPERATION_TYPE,
-      },
-      select: {
-        status: true,
-        resourceId: true,
-        resourceType: true,
-      },
-    });
-    if (
-      existingSubmission?.status === "RUNNING"
-      && existingSubmission?.resourceType === "shopify_bulk_operation"
-      && existingSubmission?.resourceId
-    ) {
-      return {
-        skipped: true,
-        reason: "shopify_bulk_operation_already_submitted",
-        bulkOperationId: existingSubmission.resourceId,
-      };
+    if (normalizedSyncType === "product") {
+      await markInventoryReconciliationPending(shop).catch(() => {});
+    }
+    if (normalizedSyncType === "collection") {
+      await markCollectionReconciliationPending(shop).catch(() => {});
     }
 
     const { productService, collectionService } = createServices();
@@ -407,7 +370,7 @@ async function processShopSyncJob(job) {
       shop,
       syncOperationId,
       from: ["QUEUED", "RETRYABLE_FAILURE", "STARTING_BULK_QUERY", "SUBMITTING", "RUNNING"],
-      to: retryable && !willExhaustRetry(job) ? "RETRYABLE_FAILURE" : "FAILED",
+      to: retryable && !willExhaustRetryFromProcessor(job) ? "RETRYABLE_FAILURE" : "FAILED",
       data: { lastError: error.message || String(error) },
     }).catch(() => {});
 
@@ -436,8 +399,9 @@ async function processShopSyncJob(job) {
 
     throw error;
   } finally {
+    clearInterval(submissionLockHeartbeat);
     if (exclusiveShopLockKey) {
-      await releaseExclusiveShopWork(exclusiveShopLockKey);
+      await releaseExclusiveShopWork(exclusiveShopLockKey).catch(() => {});
     }
     await releaseShopSyncLock({
       redis: connection,
@@ -561,7 +525,7 @@ shopSyncWorker.on("failed", (job, error) => {
   });
 });
 
-shopSyncWorker.on("completed", async (job, result) => {
+shopSyncWorker.on("completed", (job, result) => {
   logger.info("Shop sync worker completed", {
     worker: "shopSyncWorker",
     queue: QUEUE_NAME,
@@ -574,38 +538,6 @@ shopSyncWorker.on("completed", async (job, result) => {
     reason: result?.reason || null,
   });
 
-  const { shop, syncType } = job?.data || {};
-  if (shop && !result?.skipped && ["product", "FULL_SYNC"].includes(syncType)) {
-    await db.store.updateMany({
-      where: { shopUrl: shop },
-      data: { lastFullSyncAt: new Date() },
-    }).catch((err) => {
-      logger.error("Failed to write lastFullSyncAt", {
-        worker: "shopSyncWorker",
-        shop,
-        message: err.message,
-      });
-    });
-
-    await db.mirrorReconcileSignal.updateMany({
-      where: {
-        shop,
-        status: "pending",
-        entityType: { in: ["product", "inventory_item"] },
-      },
-      data: {
-        status: "resolved",
-        resolvedAt: new Date(),
-        updatedAt: new Date(),
-      },
-    }).catch((err) => {
-      logger.error("Failed to resolve mirrorReconcileSignals", {
-        worker: "shopSyncWorker",
-        shop,
-        message: err.message,
-      });
-    });
-  }
 });
 
 let shuttingDown = false;

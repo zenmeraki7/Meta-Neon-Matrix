@@ -3,7 +3,7 @@ import { connection } from "../../config/redis.js";
 
 const VERIFY_QUEUE_NAME = process.env.BULK_EDIT_VERIFICATION_QUEUE || "bulk-edit-verification";
 
-const verificationQueue = new Queue(VERIFY_QUEUE_NAME, {
+export const verificationQueue = new Queue(VERIFY_QUEUE_NAME, {
   connection,
   defaultJobOptions: {
     attempts: 6,

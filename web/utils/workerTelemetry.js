@@ -6,6 +6,11 @@ export function getJobAttempt(job) {
 
 export function isRetryExhausted(job) {
   const attempts = Number(job?.opts?.attempts || 1);
+  return Number(job?.attemptsMade || 0) >= attempts;
+}
+
+export function willExhaustRetryFromProcessor(job) {
+  const attempts = Number(job?.opts?.attempts || 1);
   return getJobAttempt(job) >= attempts;
 }
 
@@ -35,7 +40,7 @@ export async function recordRetryExhausted({
       worker,
       queue,
       jobId: job?.id || null,
-      attempt: getJobAttempt(job),
+      attempt: Number(job?.attemptsMade || 0),
       maxAttempts: Number(job?.opts?.attempts || 1),
       executionId,
       ...(details || {}),

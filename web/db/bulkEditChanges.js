@@ -195,6 +195,10 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
  */
 export async function listPendingLedgerRows(sessionId, shop) {
   const { resolvedSessionId, resolvedShop } = assertSessionScope(sessionId, shop);
+  const staleWritingMinutes = Math.max(
+    1,
+    Number.parseInt(process.env.METAFIELD_WRITING_STALE_MINUTES || "15", 10) || 15,
+  );
   return prisma.$queryRaw`
     SELECT
       bec.id,
@@ -223,9 +227,188 @@ export async function listPendingLedgerRows(sessionId, shop) {
      AND vm.key = bec.key
     WHERE bec.session_id = ${resolvedSessionId}::uuid
       AND bec.shop_id = ${resolvedShop}
-      AND bec.status = 'PENDING'
+      AND (
+        bec.status = 'PENDING'
+        OR (
+          bec.status = 'WRITING'
+          AND (
+            bec.writing_started_at IS NULL
+            OR bec.writing_started_at < now() - (${staleWritingMinutes} * interval '1 minute')
+          )
+        )
+        OR (bec.status = 'ERROR' AND bec.retryable = true)
+      )
     ORDER BY bec.created_at ASC, bec.id ASC
   `;
+}
+
+export async function countLedgerRows(sessionId, shop) {
+  const { resolvedSessionId, resolvedShop } = assertSessionScope(sessionId, shop);
+  const rows = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS count
+    FROM bulk_edit_changes
+    WHERE session_id = ${resolvedSessionId}::uuid
+      AND shop_id = ${resolvedShop}
+  `;
+  return Number(rows[0]?.count || 0);
+}
+
+export async function markRowsWriting(changeIds, shop) {
+  const ids = (Array.isArray(changeIds) ? changeIds : [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+  const resolvedShop = String(shop || "").trim();
+  if (!ids.length || !resolvedShop) {
+    throw new Error("markRowsWriting requires changeIds and shop");
+  }
+  const staleWritingMinutes = Math.max(
+    1,
+    Number.parseInt(process.env.METAFIELD_WRITING_STALE_MINUTES || "15", 10) || 15,
+  );
+
+  return prisma.$transaction(async (tx) => {
+    const changed = await tx.$queryRaw`
+      UPDATE bulk_edit_changes
+      SET
+        status = 'WRITING',
+        writing_started_at = now(),
+        attempt_count = COALESCE(attempt_count, 0) + 1
+      WHERE id = ANY(${ids}::uuid[])
+        AND shop_id = ${resolvedShop}
+        AND (
+          status = 'PENDING'
+          OR (status = 'ERROR' AND retryable = true)
+          OR (
+            status = 'WRITING'
+            AND (
+              writing_started_at IS NULL
+              OR writing_started_at < now() - (${staleWritingMinutes} * interval '1 minute')
+            )
+          )
+        )
+      RETURNING id, shop_id, variant_id, namespace, key
+    `;
+    if (!changed.length) return [];
+    const changedIds = changed.map((row) => String(row.id));
+    await tx.$queryRaw`
+      UPDATE variant_metafields vm
+      SET edit_status = 'WRITING'
+      FROM bulk_edit_changes bec
+      WHERE bec.id = ANY(${changedIds}::uuid[])
+        AND bec.shop_id = ${resolvedShop}
+        AND vm.shop_id = bec.shop_id
+        AND vm.variant_id = bec.variant_id
+        AND vm.namespace = bec.namespace
+        AND vm.key = bec.key
+    `;
+    return changedIds;
+  });
+}
+
+export async function markRowsWritten(entries, shop) {
+  const resolvedShop = String(shop || "").trim();
+  const payload = (Array.isArray(entries) ? entries : []).map((entry) => ({
+    id: String(entry.id),
+    confirmedValue: entry.confirmedValue == null ? null : String(entry.confirmedValue),
+    digest: entry.digest == null ? null : String(entry.digest),
+  }));
+  if (!payload.length || !resolvedShop) {
+    throw new Error("markRowsWritten requires entries and shop");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw`
+      WITH input AS (
+        SELECT *
+        FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb)
+          AS x(id uuid, "confirmedValue" text, digest text)
+      )
+      UPDATE bulk_edit_changes bec
+      SET
+        status = 'WRITTEN',
+        applied_at = now(),
+        writing_started_at = NULL,
+        shopify_error = NULL
+      FROM input
+      WHERE bec.id = input.id
+        AND bec.shop_id = ${resolvedShop}
+      RETURNING bec.id, bec.shop_id, bec.variant_id, bec.namespace, bec.key,
+        COALESCE(input."confirmedValue", bec.new_value) AS confirmed_value,
+        input.digest
+    `;
+    if (!rows.length) return 0;
+    await tx.$queryRaw`
+      WITH input AS (
+        SELECT *
+        FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb)
+          AS x(id uuid, "confirmedValue" text, digest text)
+      )
+      UPDATE variant_metafields vm
+      SET
+        value = COALESCE(input."confirmedValue", bec.new_value),
+        pending_value = NULL,
+        compare_digest = input.digest,
+        edit_status = 'WRITTEN',
+        last_synced_at = now()
+      FROM input
+      JOIN bulk_edit_changes bec ON bec.id = input.id
+      WHERE bec.shop_id = ${resolvedShop}
+        AND vm.shop_id = bec.shop_id
+        AND vm.variant_id = bec.variant_id
+        AND vm.namespace = bec.namespace
+        AND vm.key = bec.key
+    `;
+    return rows.length;
+  });
+}
+
+export async function markRowsError(entries, shop) {
+  const resolvedShop = String(shop || "").trim();
+  const payload = (Array.isArray(entries) ? entries : []).map((entry) => ({
+    id: String(entry.id),
+    errorCode: String(entry.errorCode || "UNKNOWN_ERROR"),
+    retryable: Boolean(entry.retryable),
+  }));
+  if (!payload.length || !resolvedShop) {
+    throw new Error("markRowsError requires entries and shop");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw`
+      WITH input AS (
+        SELECT *
+        FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb)
+          AS x(id uuid, "errorCode" text, retryable boolean)
+      )
+      UPDATE bulk_edit_changes bec
+      SET
+        status = 'ERROR',
+        writing_started_at = NULL,
+        shopify_error = input."errorCode",
+        retryable = input.retryable
+      FROM input
+      WHERE bec.id = input.id
+        AND bec.shop_id = ${resolvedShop}
+      RETURNING bec.id
+    `;
+    await tx.$queryRaw`
+      WITH input AS (
+        SELECT *
+        FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb)
+          AS x(id uuid, "errorCode" text, retryable boolean)
+      )
+      UPDATE variant_metafields vm
+      SET edit_status = 'ERROR'
+      FROM input
+      JOIN bulk_edit_changes bec ON bec.id = input.id
+      WHERE bec.shop_id = ${resolvedShop}
+        AND vm.shop_id = bec.shop_id
+        AND vm.variant_id = bec.variant_id
+        AND vm.namespace = bec.namespace
+        AND vm.key = bec.key
+    `;
+    return rows.length;
+  });
 }
 
 /**

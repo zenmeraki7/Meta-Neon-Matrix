@@ -1,16 +1,24 @@
-import { Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import shopify from "../../shopify.js";
 import { connection as redisConnection } from "../../config/redis.js";
 import {
+  countLedgerRows,
   listPendingLedgerRows,
-  markRowWriting,
-  markRowWritten,
-  markRowError,
+  markRowsWriting,
+  markRowsWritten,
+  markRowsError,
 } from "../../db/bulkEditChanges.js";
-import { markDeadLetterNotified, moveToDeadLetter } from "../../db/deadLetterChanges.js";
+import {
+  markDeadLettersNotified,
+  moveRowsToDeadLetter,
+} from "../../db/deadLetterChanges.js";
 import { addShopSyncJob } from "../Queues/shopSyncJob.js";
+import logger from "../../utils/loggerUtils.js";
+import { metafieldBulkWriteDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { isRetryExhausted } from "../../utils/workerTelemetry.js";
 
 const QUEUE_NAME = process.env.METAFIELD_BULK_WRITE_QUEUE || "metafield-bulk-write";
+const DLQ_NAME = process.env.METAFIELD_BULK_WRITE_DLQ_QUEUE || "metafield-bulk-write-dlq";
 const WORKER_CONCURRENCY = Number.parseInt(
   process.env.METAFIELD_BULK_WRITE_CONCURRENCY || "2",
   10,
@@ -77,25 +85,27 @@ function normalizeRow(row) {
   };
 }
 
-async function notifyMerchantTerminalFailure(shop, row, errorCode) {
-  console.error("[metafieldBulkWriteWorker] terminal row failure", {
-    shop,
-    changeId: row?.id,
-    variantId: row?.variantId,
-    namespace: row?.namespace,
-    key: row?.key,
-    errorCode,
-  });
-  await markDeadLetterNotified(String(row?.id || ""), shop);
-}
+async function persistErrorResults(results, shop) {
+  if (!results.length) return;
+  await markRowsError(results, shop);
+  const terminal = results.filter(
+    (result) => !result.retryable || Number(result.attemptCount || 0) + 1 >= 3,
+  );
+  if (!terminal.length) return;
 
-async function markRowErrorWithDeadLetter(row, errorCode, retryable) {
-  await markRowError(row.id, row.shop, errorCode, retryable);
-  const nextAttempt = Number(row.attemptCount || 0) + 1;
-  const terminal = !retryable || nextAttempt >= 3;
-  if (!terminal) return;
-  await moveToDeadLetter(row.id, row.shop, errorCode);
-  await notifyMerchantTerminalFailure(row.shop, row, errorCode);
+  await moveRowsToDeadLetter(terminal, shop);
+  for (const result of terminal) {
+    logger.error("Metafield bulk write terminal row failure", {
+      worker: "metafieldBulkWriteWorker",
+      shop,
+      changeId: result.id,
+      variantId: result.variantId,
+      namespace: result.namespace,
+      key: result.key,
+      errorCode: result.errorCode,
+    });
+  }
+  await markDeadLettersNotified(terminal.map((result) => result.id), shop);
 }
 
 async function triggerPreflightSync(shop) {
@@ -132,10 +142,14 @@ async function runDigestPreflight(session, rows) {
   });
 
   const nodes = Array.isArray(response?.body?.data?.nodes) ? response.body.data.nodes : [];
+  const nodeById = new Map(
+    nodes
+      .filter((node) => node?.id)
+      .map((node) => [String(node.id), node]),
+  );
   let staleDetected = false;
-  for (let i = 0; i < candidates.length; i += 1) {
-    const expected = candidates[i];
-    const node = nodes[i];
+  for (const expected of candidates) {
+    const node = nodeById.get(expected.shopifyMetafieldId);
     const compareDigest = node?.compareDigest == null ? null : String(node.compareDigest);
     if (!node?.id || compareDigest !== expected.compareDigest) {
       staleDetected = true;
@@ -157,9 +171,25 @@ async function runDigestPreflight(session, rows) {
  * @returns {void}
  */
 export function assertMetafieldWriteInput(row) {
-  if (!row.compareDigest) {
-    const error = new Error("MISSING_COMPARE_DIGEST");
-    error.code = "MISSING_COMPARE_DIGEST";
+  const required = [
+    ["compareDigest", "MISSING_COMPARE_DIGEST"],
+    ["shopifyOwnerId", "MISSING_SHOPIFY_OWNER_ID"],
+    ["namespace", "MISSING_NAMESPACE"],
+    ["key", "MISSING_KEY"],
+    ["type", "MISSING_TYPE"],
+  ];
+  for (const [field, code] of required) {
+    if (!row[field]) {
+      const error = new Error(code);
+      error.code = code;
+      error.nonRetryable = true;
+      throw error;
+    }
+  }
+  if (row.newValue == null) {
+    const error = new Error("MISSING_NEW_VALUE");
+    error.code = "MISSING_NEW_VALUE";
+    error.nonRetryable = true;
     throw error;
   }
 }
@@ -246,7 +276,7 @@ async function callMetafieldsSet(client, rows) {
  * @param {{ sessionId: string, shop: string }} input
  * @returns {Promise<{processed:number,written:number,errored:number}>}
  */
-export async function runMetafieldBulkWrite({ sessionId, shop }) {
+async function runMetafieldBulkWrite({ sessionId, shop }) {
   const resolvedSessionId = String(sessionId || "").trim();
   const resolvedShop = String(shop || "").trim();
   if (!resolvedSessionId || !resolvedShop) {
@@ -255,7 +285,18 @@ export async function runMetafieldBulkWrite({ sessionId, shop }) {
 
   const pendingRows = await listPendingLedgerRows(resolvedSessionId, resolvedShop);
   if (!pendingRows.length) {
-    throw new Error("EXECUTION_SOURCE_INVALID");
+    const totalRows = await countLedgerRows(resolvedSessionId, resolvedShop);
+    if (totalRows === 0) {
+      const error = new Error("EXECUTION_SOURCE_INVALID");
+      error.nonRetryable = true;
+      throw error;
+    }
+    return {
+      processed: 0,
+      written: 0,
+      errored: 0,
+      reason: "all_rows_already_processed",
+    };
   }
 
   const rows = pendingRows.map(normalizeRow);
@@ -272,35 +313,39 @@ export async function runMetafieldBulkWrite({ sessionId, shop }) {
   let errored = 0;
 
   for (const batch of chunk(rows, METAFIELDS_SET_BATCH_SIZE)) {
-    for (const row of batch) {
-      // eslint-disable-next-line no-await-in-loop
-      await markRowWriting(row.id, row.shop);
+    // eslint-disable-next-line no-await-in-loop
+    const claimedIds = await markRowsWriting(batch.map((row) => row.id), resolvedShop);
+    const claimedIdSet = new Set(claimedIds);
+    const claimedBatch = batch.filter((row) => claimedIdSet.has(row.id));
+    if (!claimedBatch.length) {
+      continue;
     }
 
     let payload;
     try {
       // eslint-disable-next-line no-await-in-loop
-      payload = await callMetafieldsSet(client, batch);
+      payload = await callMetafieldsSet(client, claimedBatch);
     } catch (error) {
-      for (const row of batch) {
-        // eslint-disable-next-line no-await-in-loop
-        await markRowErrorWithDeadLetter(
-          row,
-          error?.code || "METAFIELDS_SET_REQUEST_FAILED",
-          true,
-        );
-        errored += 1;
-        processed += 1;
-      }
+      const failures = claimedBatch.map((row) => ({
+        ...row,
+        errorCode: error?.code || "METAFIELDS_SET_REQUEST_FAILED",
+        retryable: true,
+      }));
+      // eslint-disable-next-line no-await-in-loop
+      await persistErrorResults(failures, resolvedShop);
+      errored += failures.length;
+      processed += failures.length;
       continue;
     }
 
     const userErrors = Array.isArray(payload.userErrors) ? payload.userErrors : [];
-    const perIndexErrors = buildErrorBuckets(userErrors, batch.length);
+    const perIndexErrors = buildErrorBuckets(userErrors, claimedBatch.length);
     const successLookup = buildSuccessLookup(payload.metafields);
 
-    for (let idx = 0; idx < batch.length; idx += 1) {
-      const row = batch[idx];
+    const writtenResults = [];
+    const errorResults = [];
+    for (let idx = 0; idx < claimedBatch.length; idx += 1) {
+      const row = claimedBatch[idx];
       const errors = perIndexErrors[idx];
       const tupleKey = `${row.shopifyOwnerId}::${row.namespace}::${row.key}`;
       const success = successLookup.get(tupleKey) || null;
@@ -308,8 +353,11 @@ export async function runMetafieldBulkWrite({ sessionId, shop }) {
       if (errors.length > 0) {
         const stale = errors.some((e) => String(e?.code || "").toUpperCase() === "STALE_OBJECT");
         const firstCode = String(errors[0]?.code || "SHOPIFY_USER_ERROR");
-        // eslint-disable-next-line no-await-in-loop
-        await markRowErrorWithDeadLetter(row, stale ? "STALE_OBJECT" : firstCode, stale ? false : true);
+        errorResults.push({
+          ...row,
+          errorCode: stale ? "STALE_OBJECT" : firstCode,
+          retryable: !stale,
+        });
         errored += 1;
         processed += 1;
         continue;
@@ -317,17 +365,31 @@ export async function runMetafieldBulkWrite({ sessionId, shop }) {
 
       if (!success) {
         // Ambiguous response row: treat as retryable error.
-        // eslint-disable-next-line no-await-in-loop
-        await markRowErrorWithDeadLetter(row, "METAFIELD_RESULT_MISSING", true);
+        errorResults.push({
+          ...row,
+          errorCode: "METAFIELD_RESULT_MISSING",
+          retryable: true,
+        });
         errored += 1;
         processed += 1;
         continue;
       }
 
-      // eslint-disable-next-line no-await-in-loop
-      await markRowWritten(row.id, row.shop, success.value, success.compareDigest);
+      writtenResults.push({
+        id: row.id,
+        confirmedValue: success.value,
+        digest: success.compareDigest,
+      });
       written += 1;
       processed += 1;
+    }
+    if (writtenResults.length) {
+      // eslint-disable-next-line no-await-in-loop
+      await markRowsWritten(writtenResults, resolvedShop);
+    }
+    if (errorResults.length) {
+      // eslint-disable-next-line no-await-in-loop
+      await persistErrorResults(errorResults, resolvedShop);
     }
   }
 
@@ -339,21 +401,100 @@ export const metafieldBulkWriteWorker = new Worker(
   async (job) => {
     const sessionId = String(job?.data?.sessionId || "").trim();
     const shop = String(job?.data?.shop || "").trim();
-    return runMetafieldBulkWrite({ sessionId, shop });
+    try {
+      return await runMetafieldBulkWrite({ sessionId, shop });
+    } catch (error) {
+      if (error?.nonRetryable) {
+        throw new UnrecoverableError(error.message);
+      }
+      throw error;
+    }
   },
   {
     connection: redisConnection,
     concurrency: Number.isFinite(WORKER_CONCURRENCY) ? WORKER_CONCURRENCY : 2,
+    lockDuration: Number(process.env.METAFIELD_BULK_WRITE_LOCK_DURATION_MS || 600_000),
+    stalledInterval: Number(process.env.METAFIELD_BULK_WRITE_STALLED_INTERVAL_MS || 60_000),
+    maxStalledCount: Number(process.env.METAFIELD_BULK_WRITE_MAX_STALLED_COUNT || 1),
   },
 );
 
-metafieldBulkWriteWorker.on("failed", (job, error) => {
-  console.error("[metafieldBulkWriteWorker] failed", {
+metafieldBulkWriteWorker.on("completed", (job, result) => {
+  logger.info("Metafield bulk write worker completed", {
+    worker: "metafieldBulkWriteWorker",
+    queue: QUEUE_NAME,
     jobId: job?.id,
     sessionId: job?.data?.sessionId,
     shop: job?.data?.shop,
-    error: error?.message || String(error),
+    result,
   });
 });
+
+metafieldBulkWriteWorker.on("failed", (job, error) => {
+  logger.error("Metafield bulk write worker failed", {
+    worker: "metafieldBulkWriteWorker",
+    queue: QUEUE_NAME,
+    jobId: job?.id,
+    sessionId: job?.data?.sessionId,
+    shop: job?.data?.shop,
+    attemptsMade: job?.attemptsMade,
+    message: error?.message || String(error),
+    stack: error?.stack,
+  });
+  if (isRetryExhausted(job) || error?.name === "UnrecoverableError") {
+    void metafieldBulkWriteDlqQueue.add(
+      DLQ_NAME,
+      {
+        originalJobId: job?.id,
+        data: job?.data,
+        failedReason: error?.message,
+        stack: error?.stack,
+        failedAt: new Date().toISOString(),
+      },
+      { jobId: `dlq:${QUEUE_NAME}:${job?.id}` },
+    ).catch((dlqError) => {
+      logger.error("Metafield bulk write DLQ enqueue failed", {
+        worker: "metafieldBulkWriteWorker",
+        jobId: job?.id,
+        message: dlqError?.message,
+      });
+    });
+  }
+});
+
+metafieldBulkWriteWorker.on("stalled", (jobId) => {
+  logger.warn("Metafield bulk write worker stalled", {
+    worker: "metafieldBulkWriteWorker",
+    queue: QUEUE_NAME,
+    jobId,
+  });
+});
+
+metafieldBulkWriteWorker.on("error", (error) => {
+  logger.error("Metafield bulk write worker runtime error", {
+    worker: "metafieldBulkWriteWorker",
+    queue: QUEUE_NAME,
+    message: error?.message,
+    stack: error?.stack,
+  });
+});
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await metafieldBulkWriteWorker.close();
+  } catch (error) {
+    logger.error("Metafield bulk write worker shutdown failed", {
+      worker: "metafieldBulkWriteWorker",
+      signal,
+      message: error?.message,
+    });
+  }
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default metafieldBulkWriteWorker;

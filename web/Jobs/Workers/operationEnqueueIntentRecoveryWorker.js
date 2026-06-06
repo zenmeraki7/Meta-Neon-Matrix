@@ -28,27 +28,48 @@ async function runIntentDispatch({ shop, queueKey }) {
   return Number(result.dispatched || 0);
 }
 
+async function reconcileSubmittedProductSyncs(shop) {
+  const result = await db.operationFingerprint.updateMany({
+    where: {
+      shop,
+      operationType: "PRODUCT_SYNC",
+      status: "RECONCILE_SUBMITTED",
+      resourceType: "shopify_bulk_operation",
+      resourceId: { not: null },
+    },
+    data: {
+      status: "RUNNING",
+      lastError: null,
+      updatedAt: new Date(),
+    },
+  });
+  return result.count;
+}
+
 async function runTick(job) {
   const shop = String(job?.data?.shop || "").trim();
   if (!shop) {
     throw new Error("operation enqueue intent recovery tick requires shop");
   }
   try {
-    const [scheduledDispatched, pipelineDispatched] = await Promise.all([
+    const [scheduledDispatched, pipelineDispatched, productSyncsReconciled] = await Promise.all([
       runIntentDispatch({ shop, queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT }),
       runIntentDispatch({ shop, queueKey: ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE }),
+      reconcileSubmittedProductSyncs(shop),
     ]);
 
-    if (scheduledDispatched > 0 || pipelineDispatched > 0) {
+    if (scheduledDispatched > 0 || pipelineDispatched > 0 || productSyncsReconciled > 0) {
       logger.info("Operation enqueue intent recovery dispatched pending intents", {
         worker: "operationEnqueueIntentRecoveryWorker",
+        shop,
         scheduledDispatched,
         pipelineDispatched,
+        productSyncsReconciled,
       });
     }
   } catch (error) {
     await logWorkerError({
-      shop: "unknown",
+      shop,
       err: error,
       source: "operationEnqueueIntentRecoveryWorker",
     });

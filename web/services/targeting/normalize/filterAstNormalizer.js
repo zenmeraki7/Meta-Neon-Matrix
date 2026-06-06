@@ -32,6 +32,9 @@ function normalizeNode(node) {
     operator: String(node.operator || "").trim().toUpperCase(),
     value: normalizeValue(node.value),
     not: Boolean(node.not),
+    meta: node.meta && typeof node.meta === "object" && !Array.isArray(node.meta)
+      ? { ...node.meta }
+      : {},
   };
 }
 

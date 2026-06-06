@@ -15,7 +15,11 @@ const defaultJobOptions = buildDefaultJobOptions({
 });
 
 export async function addAppInstallationJob(data, options = {}) {
-  const jobId = options.jobId || joinSafeJobId("app-install", data?.shop);
+  const jobId = options.jobId || joinSafeJobId(
+    "app-install",
+    data?.shop,
+    data?.installationGeneration,
+  );
 
   return appInstallationQueue.add(
     "app-installation",

@@ -18,14 +18,10 @@ import {
 import { recordMirrorAnomaly } from "../../services/mirrorAnomalyService.js";
 import { addShopSyncJob } from "../Queues/shopSyncJob.js";
 import { enforceShopRateLimit } from "../../utils/shopRateLimit.js";
-
-const QueueName =
-  process.env.NODE_ENV === "production"
-    ? "product-create"
-    : "product-create-job-dev";
+import { PRODUCT_CREATE_QUEUE_NAME } from "../../queues/productWebhookQueue.constants.js";
 
 const productCreateWorker = new Worker(
-  QueueName,
+  PRODUCT_CREATE_QUEUE_NAME,
   async (job) => {
     try {
       const { shop, id, ...payload } = job.data;

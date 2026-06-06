@@ -1,4 +1,4 @@
-import { Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
 import UndoEditService from "../../services/productService/productBulkUndoService.js";
 import { getSession } from "../../utils/sessionHandler.js";
@@ -42,14 +42,21 @@ import {
   findUndoSnapshotRows,
   findUndoStateOnly,
   moveUndoToAwaitingShopify,
+  markUndoReconcileSubmitted,
+  moveUndoToAwaitingConfirmation,
   persistUndoConflictChunks,
   persistUndoConflictReport,
   transitionUndoFailureOrRequeue,
   updateUndoOperationState,
 } from "../../repositories/bulkUndoExecutionRepository.js";
+import { bulkUndoDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 
 const QUEUE_NAME = process.env.UNDO_QUEUE || "bulk-undo";
+const DLQ_NAME = process.env.BULK_UNDO_DLQ_QUEUE || "bulk-undo-dlq";
 const WORKER_NAME = "bulkUndoWorker";
+// Conflict subsets are persisted by the repository as UndoOperationConflictChunk rows using CONFLICT_CHUNK_SIZE.
+const ACTIVE_BULK_STATUSES = new Set(["CREATED", "RUNNING", "CANCELING"]);
+const RECONCILE_ERROR = "BULK_UNDO_RECONCILE_SUBMITTED_AFTER_TRANSITION_FAILURE";
 
 function assertNoRawTargetingPayload(jobData = {}) {
   if (
@@ -59,6 +66,7 @@ function assertNoRawTargetingPayload(jobData = {}) {
   ) {
     const error = new Error("RAW_TARGETING_PAYLOAD_FORBIDDEN");
     error.code = "RAW_TARGETING_PAYLOAD_FORBIDDEN";
+    error.nonRetryable = true;
     throw error;
   }
 }
@@ -73,25 +81,38 @@ class RetryableBulkUndoError extends Error {
 }
 
 function isRetryableError(error) {
-  return Boolean(error?.retryable);
+  return Boolean(error?.retryable) && !error?.nonRetryable;
+}
+
+function isShopifyAuthError(error) {
+  const status = Number(
+    error?.statusCode
+    || error?.status
+    || error?.response?.status
+    || error?.response?.statusCode
+    || 0,
+  );
+  return status === 401 || status === 403;
 }
 
 const bulkUndoWorker = new Worker(
   QUEUE_NAME,
   async (job) => {
-    assertNoRawTargetingPayload(job.data || {});
     const { shop, historyId, source = "undo", executionId = null } = job.data || {};
     const attempt = getJobAttempt(job);
-
-    if (!shop || !historyId) {
-      throw new Error("bulk undo job requires shop and historyId");
-    }
 
     let shopLockKey = null;
     const leaseOwnerId = buildLeaseOwnerId("bulk-undo-worker");
     let leaseHeartbeat = null;
 
     try {
+      assertNoRawTargetingPayload(job.data || {});
+      if (!shop || !historyId) {
+        const error = new Error("bulk undo job requires shop and historyId");
+        error.nonRetryable = true;
+        throw error;
+      }
+
       const lock = await acquireExclusiveShopWork({
         shop,
         activity: "bulk_undo_execution",
@@ -134,14 +155,16 @@ const bulkUndoWorker = new Worker(
       }, 60_000);
 
       const session = await getSession(shop);
-      if (!session?.shop || session.shop !== shop) {
-        throw new Error("Shop session not available for bulk undo execution");
+      if (!session?.shop || session.shop !== shop || !session?.accessToken) {
+        const error = new Error("SHOP_SESSION_NOT_AVAILABLE");
+        error.nonRetryable = true;
+        throw error;
       }
 
-      const { status } = await getCurrentBulkOperationStatus(session);
-      if (status === "RUNNING") {
+      const { status } = await getCurrentBulkOperationStatus(session, "MUTATION");
+      if (ACTIVE_BULK_STATUSES.has(String(status || "").toUpperCase())) {
         throw new RetryableBulkUndoError(
-          "Another bulk operation is already running in background",
+          `Shopify bulk operation active: ${status}`,
           "shopify_bulk_busy",
         );
       }
@@ -264,10 +287,37 @@ const bulkUndoWorker = new Worker(
         },
       });
       if (!safeProducts.length) {
-        const err = new Error("UNDO_CONFLICT_REQUIRES_CONFIRMATION");
-        err.code = "UNDO_CONFLICT_REQUIRES_CONFIRMATION";
-        err.details = { conflicts };
-        throw err;
+        const movedConfirmation = await moveUndoToAwaitingConfirmation({
+          historyId,
+          shop,
+          undo,
+          expectedExecutionId: executionId || undo.executionIdentity || null,
+          conflictReport,
+        });
+        if (movedConfirmation.count !== 1) {
+          throw new Error("UNDO_AWAITING_CONFIRMATION_TRANSITION_REJECTED");
+        }
+        await updateUndoOperationState({
+          undoOperationId,
+          shop,
+          data: { status: "pending", state: "awaiting_confirmation" },
+        });
+        await failEditHistoryStage({
+          historyId,
+          shop,
+          stage: "undo",
+          executionId: executionId || undo.executionIdentity || null,
+          retryable: true,
+          checkpoint: { conflictCount: conflicts.length },
+          error: "UNDO_CONFLICT_REQUIRES_CONFIRMATION",
+        });
+        return toWorkerOperationStatusDto({
+          skipped: true,
+          reason: "undo_conflict_requires_confirmation",
+          shop,
+          historyId,
+          conflictCount: conflicts.length,
+        });
       }
       await assertOperationLeaseOwnership({
         shop,
@@ -294,7 +344,19 @@ const bulkUndoWorker = new Worker(
         conflicts,
       });
       if (movedAwaitingShopify.count !== 1) {
-        throw new Error("BULK_UNDO_STATE_TRANSITION_REJECTED_AWAITING_SHOPIFY");
+        await markUndoReconcileSubmitted({
+          historyId,
+          shop,
+          undo,
+          batch,
+          expectedExecutionId: executionId || undo.executionIdentity || null,
+          bulkOperationId,
+          cursorId,
+          lastProductId,
+          count,
+          limit,
+        }).catch(() => {});
+        throw Object.assign(new Error(RECONCILE_ERROR), { nonRetryable: true });
       }
       await updateUndoOperationState({
         undoOperationId,
@@ -343,6 +405,13 @@ const bulkUndoWorker = new Worker(
         bulkOperationId,
       });
     } catch (error) {
+      if (isShopifyAuthError(error)) {
+        error.nonRetryable = true;
+        error.code = error.code || "SHOPIFY_AUTH_REVOKED";
+      }
+      if (error.message === RECONCILE_ERROR) {
+        throw new UnrecoverableError(error.message);
+      }
       await failEditHistoryStage({
         historyId,
         shop,
@@ -423,6 +492,9 @@ const bulkUndoWorker = new Worker(
         },
       });
 
+      if (error?.nonRetryable) {
+        throw new UnrecoverableError(error.message);
+      }
       throw error;
     } finally {
       if (leaseHeartbeat) clearInterval(leaseHeartbeat);
@@ -435,7 +507,13 @@ const bulkUndoWorker = new Worker(
       await releaseExclusiveShopWork(shopLockKey);
     }
   },
-  { connection, concurrency: 1 },
+  {
+    connection,
+    concurrency: 1,
+    lockDuration: Number(process.env.BULK_UNDO_LOCK_DURATION_MS || 600_000),
+    stalledInterval: Number(process.env.BULK_UNDO_STALLED_INTERVAL_MS || 60_000),
+    maxStalledCount: Number(process.env.BULK_UNDO_MAX_STALLED_COUNT || 1),
+  },
 );
 
 bulkUndoWorker.on("failed", async (job, error) => {
@@ -450,7 +528,7 @@ bulkUndoWorker.on("failed", async (job, error) => {
     message: error.message,
   });
 
-  if (isRetryExhausted(job)) {
+  if (isRetryExhausted(job) || error?.name === "UnrecoverableError") {
     await recordRetryExhausted({
       job,
       shop: job?.data?.shop,
@@ -464,7 +542,71 @@ bulkUndoWorker.on("failed", async (job, error) => {
         source: job?.data?.source || null,
       },
     });
+    void bulkUndoDlqQueue.add(
+      DLQ_NAME,
+      {
+        originalJobId: job?.id,
+        data: job?.data,
+        failedReason: error?.message,
+        stack: error?.stack,
+        failedAt: new Date().toISOString(),
+      },
+      { jobId: `dlq:${QUEUE_NAME}:${job?.id}` },
+    ).catch((dlqError) => {
+      logger.error("Bulk undo DLQ enqueue failed", {
+        worker: WORKER_NAME,
+        jobId: job?.id,
+        message: dlqError?.message,
+      });
+    });
   }
 });
+
+bulkUndoWorker.on("completed", (job, result) => {
+  logger.info("Bulk undo worker completed", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    historyId: job?.data?.historyId,
+    skipped: Boolean(result?.skipped),
+    reason: result?.reason || null,
+  });
+});
+
+bulkUndoWorker.on("stalled", (jobId) => {
+  logger.warn("Bulk undo worker stalled", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    jobId,
+  });
+});
+
+bulkUndoWorker.on("error", (error) => {
+  logger.error("Bulk undo worker runtime error", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    message: error?.message,
+    stack: error?.stack,
+  });
+});
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await bulkUndoWorker.close();
+  } catch (error) {
+    logger.error("Bulk undo worker shutdown failed", {
+      worker: WORKER_NAME,
+      signal,
+      message: error?.message,
+    });
+  }
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default bulkUndoWorker;

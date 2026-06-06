@@ -18,7 +18,7 @@ import {
 import { requireShopScope } from "../../utils/shopScope.js";
 import {
   GetCollections,
-  StartCollectionBulkQuery,
+  StartCollectionBulkSyncMutation,
 } from "../../graphql/collection.js";
 
 const BLOCKING_BULK_OPERATION_STATUSES = new Set(["CREATED", "RUNNING", "CANCELING"]);
@@ -105,26 +105,43 @@ export class CollectionService {
 
     const client = new this.shopify.api.clients.Graphql({ session });
 
-    let response;
+    let collections = [];
+    let after = null;
     try {
-      response = await Promise.race([
-        client.query({
-          data: {
-            query: GetCollections,
-            variables: {
-              first,
-              query: queryString,
+      do {
+        const response = await Promise.race([
+          client.query({
+            data: {
+              query: GetCollections,
+              variables: {
+                first: Math.min(first - collections.length, 50),
+                after,
+                query: queryString,
+              },
             },
-          },
-        }),
-        new Promise((_, reject) => {
-          setTimeout(() => {
-            const timeoutError = new Error("Shopify collection lookup timed out");
-            timeoutError.code = "TIMEOUT";
-            reject(timeoutError);
-          }, 8000);
-        }),
-      ]);
+          }),
+          new Promise((_, reject) => {
+            setTimeout(() => {
+              const timeoutError = new Error("Shopify collection lookup timed out");
+              timeoutError.code = "TIMEOUT";
+              reject(timeoutError);
+            }, 8000);
+          }),
+        ]);
+
+        const connection = response?.body?.data?.collections || {};
+        const edges = Array.isArray(connection?.edges) ? connection.edges : [];
+        collections = collections.concat(
+          edges.map((edge) => ({
+            shopifyId: edge?.node?.id || null,
+            title: edge?.node?.title || null,
+            handle: edge?.node?.handle || null,
+          })),
+        );
+        after = connection?.pageInfo?.hasNextPage
+          ? connection?.pageInfo?.endCursor || null
+          : null;
+      } while (after && collections.length < first);
     } catch (error) {
       const message = String(error?.message || "").toLowerCase();
       if (
@@ -139,14 +156,9 @@ export class CollectionService {
       throw error;
     }
 
-    const edges = response?.body?.data?.collections?.edges || [];
     return {
       source: "SHOPIFY_LIVE",
-      collections: edges.map((edge) => ({
-        shopifyId: edge?.node?.id || null,
-        title: edge?.node?.title || null,
-        handle: edge?.node?.handle || null,
-      })),
+      collections: collections.slice(0, first),
     };
   }
 
@@ -175,7 +187,7 @@ export class CollectionService {
       const client = new this.shopify.api.clients.Graphql({ session });
       const bulkResponse = await client.query({
         data: {
-          query: StartCollectionBulkQuery,
+          query: StartCollectionBulkSyncMutation,
         },
       });
       if (bulkResponse.body.errors) {

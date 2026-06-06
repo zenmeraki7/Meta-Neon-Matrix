@@ -52,6 +52,18 @@ function normalizeProductQueryRequest(query = {}, body = {}) {
     error.code = "INVALID_FILTER_PARAMS";
     throw error;
   }
+  const filterAst = body.filterAst;
+  if (
+    filterAst != null &&
+    (
+      typeof filterAst !== "object" ||
+      Array.isArray(filterAst)
+    )
+  ) {
+    const error = new Error("INVALID_FILTER_AST");
+    error.code = "INVALID_FILTER_AST";
+    throw error;
+  }
 
   return {
     queryParams: {
@@ -59,6 +71,7 @@ function normalizeProductQueryRequest(query = {}, body = {}) {
       limit: String(limit),
       cursor,
     },
+    filterAst: filterAst && typeof filterAst === "object" ? filterAst : null,
     filterParams: Array.isArray(filterParams) ? filterParams : [],
   };
 }
@@ -91,6 +104,7 @@ export async function executeProductQuery({ shop, query = {}, body = {} }) {
   try {
     result = await productService.getProductsWithFilters({
       queryParams: normalized.queryParams,
+      filterAst: normalized.filterAst,
       filterParams: normalized.filterParams,
       shop,
     });
@@ -207,4 +221,3 @@ export async function getPreviewFilterRegistry() {
     fields,
   };
 }
-

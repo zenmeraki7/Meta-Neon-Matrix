@@ -11,6 +11,7 @@ import { logApiError } from "../utils/errorLogUtils.js";
 import { db } from "../repositories/repositoryDb.js";
 import shopify from "../shopify.js";
 import { buildEncryptedTokenColumns } from "../utils/tokenCrypto.js";
+import { randomUUID } from "node:crypto";
 
 /* ------------------------------------------------------------------ */
 /*  Email helpers (called from worker)                                 */
@@ -45,13 +46,21 @@ export const confirmShopInstallation = async ({
   email,
   shop,
   accessToken,
+  installationGeneration,
 }) => {
   // The store row already exists (created by middleware upsert).
   // Check if this is a new install by whether referralCode has been set yet.
-  const existingStore = await db.store.findUnique({
-    where: { shopUrl: shop },
+  const existingStore = await db.store.findFirst({
+    where: {
+      shopUrl: shop,
+      installationGeneration,
+      isUnInstalled: false,
+    },
     select: { referralCode: true, referredBy: true },
   });
+  if (!existingStore) {
+    throw new Error("STALE_INSTALLATION_GENERATION");
+  }
 
   const isNewInstall = !existingStore?.referralCode;
 
@@ -65,8 +74,12 @@ export const confirmShopInstallation = async ({
     const newReferralCode = generateReferralCode(shop);
 
     // Patch the store row with full referral + email data
-    const updatedStore = await db.store.update({
-      where: { shopUrl: shop },
+    const updateResult = await db.store.updateMany({
+      where: {
+        shopUrl: shop,
+        installationGeneration,
+        isUnInstalled: false,
+      },
       data: {
         shopEmail: email,
         ...buildEncryptedTokenColumns(accessToken),
@@ -78,6 +91,13 @@ export const confirmShopInstallation = async ({
           ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
           : null,
       },
+    });
+    if (updateResult.count === 0) {
+      throw new Error("STALE_INSTALLATION_GENERATION");
+    }
+    const updatedStore = await db.store.findUnique({
+      where: { shopUrl: shop },
+      select: { referredBy: true },
     });
 
     // Notify affiliate if referred
@@ -104,17 +124,23 @@ export const confirmShopInstallation = async ({
     await db.referralCode.deleteMany({ where: { shop } });
   } else {
     // Reinstall — just refresh credentials + email
-    await db.store.update({
-      where: { shopUrl: shop },
+    const updateResult = await db.store.updateMany({
+      where: {
+        shopUrl: shop,
+        installationGeneration,
+        isUnInstalled: false,
+      },
       data: {
         ...buildEncryptedTokenColumns(accessToken),
         shopEmail: email,
         scope: session.scope,
         isUnInstalled: false,
         unInstalledAt: null,
-        installedAt: new Date(),
       },
     });
+    if (updateResult.count === 0) {
+      throw new Error("STALE_INSTALLATION_GENERATION");
+    }
   }
 
   await clearKeyCaches(`${shop}:storeDetails`);
@@ -146,6 +172,7 @@ export const appInstallMiddleware = async (req, res, next) => {
     }
 
     const { shop, accessToken } = session;
+    const installationGeneration = randomUUID();
 
     // ✅ Bare-minimum DB write so the app has a valid store row
     //    before the browser lands on the dashboard.
@@ -158,13 +185,21 @@ export const appInstallMiddleware = async (req, res, next) => {
         isUnInstalled: false,
         unInstalledAt: null,
         scope: session.scope,
-        installedAt: new Date(),
+        installedAt: null,
+        installationGeneration,
+        installationStatus: "pending",
+        installationProcessingStartedAt: null,
+        installationSetupCompletedAt: null,
       },
       update: {
         ...buildEncryptedTokenColumns(accessToken),
         isUnInstalled: false,
         unInstalledAt: null,
-        installedAt: new Date(),
+        installedAt: null,
+        installationGeneration,
+        installationStatus: "pending",
+        installationProcessingStartedAt: null,
+        installationSetupCompletedAt: null,
       },
     });
 
@@ -181,9 +216,10 @@ export const appInstallMiddleware = async (req, res, next) => {
         }
 
         await addAppInstallationJob({
+          version: 1,
           shop,
-          accessToken,
-          session: { shop, accessToken, scope: session.scope },
+          installationGeneration,
+          requestedBy: "oauth",
         });
       } catch (backgroundError) {
         await logApiError({

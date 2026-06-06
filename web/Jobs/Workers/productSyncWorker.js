@@ -1,4 +1,4 @@
-import { QueueEvents, Worker } from "bullmq";
+import { QueueEvents, UnrecoverableError, Worker } from "bullmq";
 import { connection, createRedisConnection } from "../../config/redis.js";
 import { Services } from "../../services/productService/productFilterService.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
@@ -45,10 +45,6 @@ const ACTIVE_BULK_OPERATION_STATUSES = new Set(["CREATED", "RUNNING", "CANCELING
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const LOCK_TTL_MS = 10 * 60 * 1000;
 const PRODUCT_SYNC_STALE_MS = 2 * 60 * 60 * 1000;
-const AUTO_SYNC_BATCH_SIZE = Number(process.env.AUTO_SYNC_BATCH_SIZE || 10);
-const PRIORITY_SYNC_BATCH_SIZE = Number(process.env.PRIORITY_SYNC_BATCH_SIZE || 5);
-const ALL_STORES_SYNC_BATCH_SIZE = Number(process.env.ALL_STORES_SYNC_BATCH_SIZE || 20);
-const ALL_STORES_SYNC_BATCH_DELAY_MS = Number(process.env.ALL_STORES_SYNC_BATCH_DELAY_MS || 50);
 
 function normalizeKeyPart(value) {
   return String(value)
@@ -291,13 +287,19 @@ async function enqueueStoresForSync(stores, reason, now = new Date()) {
       shopUrl: store.shopUrl,
       reason,
       windowStart,
-    }).then((result) => ({ store, result }))
+    })
+      .then((result) => ({ store, result }))
+      .catch((error) => {
+        error.shopUrl = store.shopUrl;
+        throw error;
+      })
   )));
 
   for (const settled of results) {
     if (settled.status === "rejected") {
       failedCount += 1;
       logger.error("Failed to seed/enqueue product sync execution job", {
+        shop: settled.reason?.shopUrl,
         syncReason: reason,
         windowStart,
         message: settled.reason?.message || String(settled.reason),
@@ -319,7 +321,7 @@ async function enqueueStoresForSync(stores, reason, now = new Date()) {
   };
 }
 
-async function syncAllStoresBatched({ shopUrl }) {
+async function syncScheduledShop({ shopUrl }) {
   const scopedShop = String(shopUrl || "").trim();
   if (!scopedShop) {
     throw new Error("schedule-all-product-syncs requires shopUrl");
@@ -418,12 +420,16 @@ async function syncStore({ shopUrl, syncReason, windowStart, operationId, job })
   await assertShopStillInstalled(shopUrl);
   await job.updateProgress({ stage: "shop_validated", percent: 10 });
 
-  await claimStoreSync(shopUrl);
   const shopLock = await acquireShopLock(shopUrl);
   if (!shopLock?.acquired) {
-    await releaseStoreSyncClaim(shopUrl).catch(() => {});
     const error = new Error("PRODUCT_SYNC_LOCK_BUSY");
     error.retryable = true;
+    throw error;
+  }
+  try {
+    await claimStoreSync(shopUrl);
+  } catch (error) {
+    await releaseShopLock(shopLock);
     throw error;
   }
   await job.updateProgress({ stage: "lock_acquired", percent: 20 });
@@ -609,7 +615,13 @@ async function syncStore({ shopUrl, syncReason, windowStart, operationId, job })
       data: { lastError: error.message || String(error) },
     }).catch(() => {});
     if (isNonRetryableProductSyncError(error)) {
-      await job.discard();
+      logger.error("Product sync store failed with non-retryable error", {
+        worker: "productSyncExecuteWorker",
+        shop: shopUrl,
+        operationId,
+        message: error.message,
+      });
+      throw new UnrecoverableError(error.message);
     }
     logger.error("Product sync store failed", {
       worker: "productSyncExecuteWorker",
@@ -639,7 +651,7 @@ const schedulerProcessor = async (job) => {
   }
   switch (job.name) {
     case "schedule-all-product-syncs":
-      return syncAllStoresBatched({ shopUrl: job.data?.shopUrl || job.data?.shop });
+      return syncScheduledShop({ shopUrl: job.data?.shopUrl || job.data?.shop });
     case "auto-sync":
       return handleAutoSync({ shopUrl: job.data?.shopUrl || job.data?.shop });
     case "priority-sync":
@@ -747,7 +759,8 @@ productSyncWorker.on("completed", (job, result) => {
 });
 
 productSyncWorker.on("failed", (job, err) => {
-  if (hasExhaustedRetryFromFailedEvent(job)) {
+  const isUnrecoverable = err?.name === "UnrecoverableError";
+  if (isUnrecoverable || hasExhaustedRetryFromFailedEvent(job)) {
     void productSyncDlqQueue.add(
       "product-sync-dlq",
       {
@@ -784,6 +797,7 @@ productSyncWorker.on("failed", (job, err) => {
     attemptsMade: job?.attemptsMade,
     maxAttempts: getMaxAttempts(job),
     retryable: Boolean(err?.retryable),
+    unrecoverable: isUnrecoverable,
     message: err?.message,
     stack: err?.stack,
     data: job?.data,
@@ -866,7 +880,7 @@ async function recoverStaleProductSyncFlags() {
       isProductSyncing: false,
       isProductInitialySyning: false,
       syncProgressStage: "IDLE",
-      shopifyBulkJobCompleted: true,
+      shopifyBulkJobCompleted: false,
       productSyncRecoveryRequired: true,
       productSyncStartedAt: null,
       lastSyncErrorSummary: "Product sync timed out before completion. Please start sync again.",
@@ -882,6 +896,15 @@ async function runBootRecovery() {
     ttlMs: 5 * 60 * 1000,
   });
   if (!recoveryLock?.acquired) return;
+  const renewal = setInterval(() => {
+    void renewRedisLock({
+      connection,
+      key: recoveryLock.key,
+      token: recoveryLock.token,
+      ttlMs: 5 * 60 * 1000,
+    }).catch(() => {});
+  }, 60_000);
+  renewal.unref?.();
 
   try {
     await recoverStaleProductSyncFlags();
@@ -891,6 +914,7 @@ async function runBootRecovery() {
       stack: error.stack,
     });
   } finally {
+    clearInterval(renewal);
     await releaseRedisLock({
       connection,
       key: recoveryLock.key,

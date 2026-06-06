@@ -11,6 +11,13 @@ import {
   PRODUCT_SYNC_JOB_OPTIONS,
   PRODUCT_SYNC_SCHEDULER_QUEUE_NAME,
 } from "../productSyncQueue.constants.js";
+import {
+  PRODUCT_CREATE_QUEUE_NAME,
+  PRODUCT_DELETE_DLQ_QUEUE_NAME,
+  PRODUCT_DELETE_QUEUE_NAME,
+  PRODUCT_UPDATE_DLQ_QUEUE_NAME,
+  PRODUCT_UPDATE_QUEUE_NAME,
+} from "../productWebhookQueue.constants.js";
 
 const APP_INSTALLATION_QUEUE = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 
@@ -91,6 +98,19 @@ export const bulkEditResultIngestDlqQueue = new Queue(
   },
 );
 
+export const bulkEditVerificationDlqQueue = new Queue(
+  process.env.BULK_EDIT_VERIFICATION_DLQ_QUEUE || "bulk-edit-verification-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
+
 export const bulkExportQueue = new Queue(process.env.EXPORT_QUEUE || "bulk-export", {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
@@ -113,6 +133,46 @@ export const bulkImportEditQueue = new Queue(process.env.IMPORT_EDIT_QUEUE || "i
   }),
 });
 
+export const bulkImportEditDlqQueue = new Queue(
+  process.env.IMPORT_EDIT_DLQ_QUEUE || "importEdit-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
+
+export const bulkImportExecuteQueue = new Queue(
+  process.env.IMPORT_EDIT_EXECUTE_QUEUE || "import-edit-execute",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 8,
+      priority: 7,
+      backoffDelay: 10_000,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 2_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 10_000 },
+    }),
+  },
+);
+
+export const bulkImportExecuteDlqQueue = new Queue(
+  process.env.IMPORT_EDIT_EXECUTE_DLQ_QUEUE || "import-edit-execute-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
+
 export const bulkOperationMutationQueue = new Queue(
   process.env.BULK_OPERATION_MUTATION_QUEUE || "bulk-operation-mutation",
   {
@@ -123,6 +183,19 @@ export const bulkOperationMutationQueue = new Queue(
       backoffDelay: 5_000,
       removeOnComplete: { age: 48 * 3600, count: 2_000 },
       removeOnFail: { age: 14 * 24 * 3600, count: 10_000 },
+    }),
+  },
+);
+
+export const bulkOperationMutationDlqQueue = new Queue(
+  process.env.BULK_OPERATION_MUTATION_DLQ_QUEUE || "bulk-operation-mutation-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
     }),
   },
 );
@@ -141,6 +214,19 @@ export const bulkOperationQueryQueue = new Queue(
   },
 );
 
+export const bulkOperationQueryDlqQueue = new Queue(
+  process.env.BULK_OPERATION_QUERY_DLQ_QUEUE || "bulk-operation-query-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
+
 export const bulkUndoQueue = new Queue(process.env.UNDO_QUEUE || "bulk-undo", {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
@@ -151,6 +237,19 @@ export const bulkUndoQueue = new Queue(process.env.UNDO_QUEUE || "bulk-undo", {
     removeOnFail: { age: 14 * 24 * 3600, count: 5_000 },
   }),
 });
+
+export const bulkUndoDlqQueue = new Queue(
+  process.env.BULK_UNDO_DLQ_QUEUE || "bulk-undo-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
 
 export const bulkUndoResultIngestQueue = new Queue(
   process.env.BULK_UNDO_RESULT_INGEST_QUEUE || "bulk-undo-result-ingest",
@@ -166,8 +265,21 @@ export const bulkUndoResultIngestQueue = new Queue(
   },
 );
 
+export const bulkUndoResultIngestDlqQueue = new Queue(
+  process.env.BULK_UNDO_RESULT_INGEST_DLQ_QUEUE || "bulk-undo-result-ingest-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
+
 export const productCreateQueue = new Queue(
-  process.env.NODE_ENV === "production" ? "product-create" : "product-create-job-dev",
+  PRODUCT_CREATE_QUEUE_NAME,
   {
     connection,
     defaultJobOptions: buildDefaultJobOptions({
@@ -181,7 +293,7 @@ export const productCreateQueue = new Queue(
 );
 
 export const productUpdateQueue = new Queue(
-  process.env.NODE_ENV === "production" ? "product-update" : "product-update-job-dev",
+  PRODUCT_UPDATE_QUEUE_NAME,
   {
     connection,
     defaultJobOptions: buildDefaultJobOptions({
@@ -193,9 +305,18 @@ export const productUpdateQueue = new Queue(
     }),
   },
 );
+export const productUpdateDlqQueue = new Queue(PRODUCT_UPDATE_DLQ_QUEUE_NAME, {
+  connection,
+  defaultJobOptions: buildDefaultJobOptions({
+    attempts: 3,
+    backoffDelay: 5_000,
+    removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+    removeOnFail: { age: 30 * 24 * 3600, count: 10_000 },
+  }),
+});
 
 export const productDeleteQueue = new Queue(
-  process.env.NODE_ENV === "production" ? "product-delete" : "product-delete-job-dev",
+  PRODUCT_DELETE_QUEUE_NAME,
   {
     connection,
     defaultJobOptions: buildDefaultJobOptions({
@@ -204,6 +325,28 @@ export const productDeleteQueue = new Queue(
       backoffDelay: 2_000,
       removeOnComplete: { age: 24 * 3600, count: 2_000 },
       removeOnFail: { age: 14 * 24 * 3600, count: 5_000 },
+    }),
+  },
+);
+export const productDeleteDlqQueue = new Queue(PRODUCT_DELETE_DLQ_QUEUE_NAME, {
+  connection,
+  defaultJobOptions: buildDefaultJobOptions({
+    attempts: 3,
+    backoffDelay: 5_000,
+    removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+    removeOnFail: { age: 30 * 24 * 3600, count: 10_000 },
+  }),
+});
+
+export const metafieldBulkWriteDlqQueue = new Queue(
+  process.env.METAFIELD_BULK_WRITE_DLQ_QUEUE || "metafield-bulk-write-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 3,
+      backoffDelay: 5_000,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 10_000 },
     }),
   },
 );

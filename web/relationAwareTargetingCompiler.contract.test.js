@@ -53,3 +53,37 @@ test("relation-aware compiler supports nested AND/OR/NOT with collections and me
   assert.equal(compiled.params[1], "batch_1");
 });
 
+test("relation-aware compiler handles scalar and array product filters", () => {
+  const ast = {
+    root: {
+      nodeType: "group",
+      logic: "AND",
+      children: [
+        {
+          nodeType: "predicate",
+          field: "vendor",
+          operator: "EQ",
+          value: "Nike",
+        },
+        {
+          nodeType: "predicate",
+          field: "tags",
+          operator: "IN",
+          value: ["clearance"],
+        },
+      ],
+    },
+  };
+
+  const compiled = compileRelationAwareAstWhereSql(ast, {
+    targetType: "PRODUCT",
+    shop: "s.myshopify.com",
+    mirrorBatchId: "batch_1",
+  });
+
+  assert.ok(compiled.whereSql.includes('p."vendor" ='));
+  assert.ok(compiled.whereSql.includes('p."tags" &&'));
+  assert.ok(compiled.whereSql.includes("::text[]"));
+  assert.equal(compiled.params[2], "Nike");
+  assert.deepEqual(compiled.params[3], ["clearance"]);
+});

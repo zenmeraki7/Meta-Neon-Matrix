@@ -318,6 +318,26 @@ function mapBulkUndoSummary(undoValue) {
         detailKey: "historyStatusDetail.undo_dispatching",
       });
 
+    case BULK_UNDO_STATES.AWAITING_CONFIRMATION:
+      return buildStatusSummary({
+        key: "undo_awaiting_confirmation",
+        label: "Undo needs confirmation",
+        labelKey: "historyStatus.undo_awaiting_confirmation",
+        tone: "attention",
+        detail: "Review detected conflicts before continuing the undo.",
+        detailKey: "historyStatusDetail.undo_awaiting_confirmation",
+      });
+
+    case BULK_UNDO_STATES.RECONCILE_SUBMITTED:
+      return buildStatusSummary({
+        key: "undo_reconcile_submitted",
+        label: "Undo submission reconciling",
+        labelKey: "historyStatus.undo_reconcile_submitted",
+        tone: "attention",
+        detail: "Shopify accepted the undo; waiting to reconcile its status.",
+        detailKey: "historyStatusDetail.undo_reconcile_submitted",
+      });
+
     case BULK_UNDO_STATES.AWAITING_SHOPIFY:
       return buildStatusSummary({
         key: "undo_awaiting_shopify",

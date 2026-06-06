@@ -8,6 +8,7 @@ import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import shopify from "../../shopify.js";
+import { verificationQueue } from "../../queues/adapters/bulkEditVerificationQueueAdapter.js";
 import {
   appInstallationQueue,
   bulkEditExecuteQueue,
@@ -15,6 +16,7 @@ import {
   bulkEditResultIngestQueue,
   bulkExportQueue,
   bulkImportEditQueue,
+  bulkImportExecuteQueue,
   bulkOperationMutationQueue,
   bulkOperationQueryQueue,
   bulkUndoQueue,
@@ -41,6 +43,7 @@ const SHOP_SCOPED_QUEUES = [
   bulkEditResultIngestQueue,
   bulkExportQueue,
   bulkImportEditQueue,
+  bulkImportExecuteQueue,
   bulkOperationMutationQueue,
   bulkOperationQueryQueue,
   bulkUndoQueue,
@@ -288,6 +291,10 @@ const appUninstallWorker = new Worker(
             isCollectionSyncing: false,
             isProductTypeSyncing: false,
             isProductInitialySyning: false,
+            installationGeneration: null,
+            installationStatus: "pending",
+            installationProcessingStartedAt: null,
+            installationSetupCompletedAt: null,
           },
         });
       });

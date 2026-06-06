@@ -1,18 +1,12 @@
 import { Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
 import logger from "../../utils/loggerUtils.js";
-import { dispatchPendingOutboxEvents } from "../../workers/outboxDispatcherWorker.js";
+import { dispatchPendingOutboxEvents } from "../../services/outboxDispatchService.js";
 import { enqueueOutboxDispatcherSchedulerTick } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
-import {
-  acquireRedisLock,
-  releaseRedisLock,
-} from "../../utils/redisLockUtils.js";
 
 const QUEUE_NAME = "outbox-dispatcher-scheduler";
 const POLL_INTERVAL_MS = Number.parseInt(process.env.OUTBOX_DISPATCHER_POLL_INTERVAL_MS || "5000", 10);
 const OUTBOX_DISPATCH_BATCH = Number.parseInt(process.env.OUTBOX_DISPATCH_BATCH || "50", 10);
-const LEADER_LOCK_KEY = "leader:outbox-dispatcher-scheduler:register";
-const LEADER_LOCK_TTL_MS = 45_000;
 
 async function runOutboxDispatchTick(job) {
   const shop = String(job?.data?.shop || "").trim();
@@ -20,10 +14,26 @@ async function runOutboxDispatchTick(job) {
     throw new Error("outbox dispatcher tick requires shop");
   }
   try {
-    await dispatchPendingOutboxEvents({ shop, limit: OUTBOX_DISPATCH_BATCH });
+    const result = await dispatchPendingOutboxEvents({
+      shop,
+      limit: OUTBOX_DISPATCH_BATCH,
+    });
+    logger.info("Outbox dispatcher tick completed", {
+      worker: "outboxDispatcherWorker",
+      queue: QUEUE_NAME,
+      jobId: job?.id,
+      shop,
+      ...result,
+    });
+    return result;
   } catch (error) {
     logger.error("Outbox dispatcher tick failed", {
-      error: error?.message,
+      worker: "outboxDispatcherWorker",
+      queue: QUEUE_NAME,
+      jobId: job?.id,
+      shop,
+      attemptsMade: job?.attemptsMade,
+      message: error?.message,
       stack: error?.stack,
     });
     throw error;
@@ -33,11 +43,52 @@ async function runOutboxDispatchTick(job) {
 export const outboxDispatcherSchedulerWorker = new Worker(
   QUEUE_NAME,
   async (job) => runOutboxDispatchTick(job),
-  { connection, concurrency: 1 },
+  {
+    connection,
+    concurrency: 1,
+    lockDuration: Number(process.env.OUTBOX_DISPATCHER_LOCK_DURATION_MS || 60_000),
+    stalledInterval: Number(process.env.OUTBOX_DISPATCHER_STALLED_INTERVAL_MS || 30_000),
+    maxStalledCount: Number(process.env.OUTBOX_DISPATCHER_MAX_STALLED_COUNT || 1),
+  },
 );
+
+outboxDispatcherSchedulerWorker.on("completed", (job, result) => {
+  logger.info("Outbox dispatcher worker completed", {
+    worker: "outboxDispatcherWorker",
+    queue: QUEUE_NAME,
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    dispatched: result?.dispatched || 0,
+    failed: result?.failed || 0,
+    remaining: result?.remaining || 0,
+  });
+});
+
+outboxDispatcherSchedulerWorker.on("failed", (job, error) => {
+  logger.error("Outbox dispatcher worker failed", {
+    worker: "outboxDispatcherWorker",
+    queue: QUEUE_NAME,
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    attemptsMade: job?.attemptsMade,
+    message: error?.message,
+    stack: error?.stack,
+  });
+});
+
+outboxDispatcherSchedulerWorker.on("stalled", (jobId) => {
+  logger.warn("Outbox dispatcher worker stalled", {
+    worker: "outboxDispatcherWorker",
+    queue: QUEUE_NAME,
+    jobId,
+  });
+});
+
 outboxDispatcherSchedulerWorker.on("error", (error) => {
   logger.error("Outbox dispatcher scheduler worker error", {
-    error: error?.message,
+    worker: "outboxDispatcherWorker",
+    queue: QUEUE_NAME,
+    message: error?.message,
     stack: error?.stack,
   });
 });
@@ -47,26 +98,30 @@ export async function registerOutboxDispatcherSchedulerTick({ shop }) {
   if (!scopedShop) {
     throw new Error("outbox dispatcher registration requires shop");
   }
-  const leaderLock = await acquireRedisLock({
-    connection,
-    key: `${LEADER_LOCK_KEY}:${scopedShop}`,
-    ttlMs: LEADER_LOCK_TTL_MS,
+  return enqueueOutboxDispatcherSchedulerTick({
+    queueName: QUEUE_NAME,
+    shop: scopedShop,
+    repeatEveryMs: POLL_INTERVAL_MS,
   });
-  if (!leaderLock.acquired) return;
+}
 
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   try {
-    await enqueueOutboxDispatcherSchedulerTick({
-      queueName: QUEUE_NAME,
-      shop: scopedShop,
-      repeatEveryMs: POLL_INTERVAL_MS,
+    await outboxDispatcherSchedulerWorker.close();
+  } catch (error) {
+    logger.error("Outbox dispatcher worker shutdown failed", {
+      worker: "outboxDispatcherWorker",
+      queue: QUEUE_NAME,
+      signal,
+      message: error?.message,
     });
-  } finally {
-    await releaseRedisLock({
-      connection,
-      key: leaderLock.key,
-      token: leaderLock.token,
-    }).catch(() => {});
   }
 }
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default outboxDispatcherSchedulerWorker;
