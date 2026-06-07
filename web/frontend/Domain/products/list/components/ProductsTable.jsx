@@ -9,7 +9,7 @@ import {
   BlockStack,
   IndexTable,
 } from "@shopify/polaris";
-import { memo, useMemo, useState, useCallback } from "react";
+import { memo, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useSelector } from "react-redux";
 import ProductCell from "./ProductCell";
@@ -20,12 +20,8 @@ import { makeSelectProductRowViewModel } from "../../../../store/slices/productS
 
 const SKELETON_ROWS = 6;
 const TABLE_SHELL_MIN_HEIGHT = "420px";
-const VIRTUALIZATION_ROW_HEIGHT = 56;
-const VIRTUALIZATION_VIEWPORT_HEIGHT = 520;
-const VIRTUALIZATION_OVERSCAN = 8;
-const VIRTUALIZATION_THRESHOLD = 30;
 
-function LoadingTable() {
+const LoadingTable = memo(function LoadingTable() {
   return (
     <Box minHeight={TABLE_SHELL_MIN_HEIGHT}>
       <Box padding="400" borderBlockEndWidth="1" borderColor="border">
@@ -47,13 +43,31 @@ function LoadingTable() {
       </Box>
     </Box>
   );
-}
+});
 
 const ProductRow = memo(function ProductRow({ rowId, index }) {
   const selectRowViewModel = useMemo(makeSelectProductRowViewModel, []);
   const row = useSelector((state) => selectRowViewModel(state, rowId));
   if (!row) {
-    return null;
+    return (
+      <IndexTable.Row id={rowId} key={rowId} position={index}>
+        <IndexTable.Cell>
+          <SkeletonBodyText lines={1} />
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <SkeletonBodyText lines={1} />
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <SkeletonBodyText lines={1} />
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <SkeletonBodyText lines={1} />
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <SkeletonBodyText lines={1} />
+        </IndexTable.Cell>
+      </IndexTable.Row>
+    );
   }
 
   return (
@@ -75,7 +89,7 @@ const ProductRow = memo(function ProductRow({ rowId, index }) {
   );
 });
 
-const ProductsTable = ({
+const ProductsTable = memo(function ProductsTable({
   productIds = [],
   loading,
   pagination,
@@ -83,9 +97,8 @@ const ProductsTable = ({
   onPrev,
   emptyHeading = null,
   emptyText = null,
-}) => {
-  const { t } = useTranslation(["products", "common"]);
-  const [scrollTop, setScrollTop] = useState(0);
+}) {
+  const { t, i18n } = useTranslation(["products", "common"]);
 
   const headings = useMemo(
     () => [
@@ -98,45 +111,33 @@ const ProductsTable = ({
     [t],
   );
 
-  const shouldVirtualize = productIds.length > VIRTUALIZATION_THRESHOLD;
-
-  const visibleWindow = useMemo(() => {
-    if (!shouldVirtualize) {
-      return {
-        startIndex: 0,
-        endIndex: productIds.length,
-      };
-    }
-    const firstVisible = Math.floor(scrollTop / VIRTUALIZATION_ROW_HEIGHT);
-    const visibleRows = Math.ceil(VIRTUALIZATION_VIEWPORT_HEIGHT / VIRTUALIZATION_ROW_HEIGHT);
-    const startIndex = Math.max(0, firstVisible - VIRTUALIZATION_OVERSCAN);
-    const endIndex = Math.min(
-      productIds.length,
-      firstVisible + visibleRows + VIRTUALIZATION_OVERSCAN,
-    );
-    return { startIndex, endIndex };
-  }, [productIds.length, scrollTop, shouldVirtualize]);
-
-  const visibleIds = useMemo(
-    () => productIds.slice(visibleWindow.startIndex, visibleWindow.endIndex),
-    [productIds, visibleWindow],
+  const resourceName = useMemo(
+    () => ({
+      singular: t("product", "product"),
+      plural: t("products", "products"),
+    }),
+    [t],
   );
 
-  const topSpacerHeight = visibleWindow.startIndex * VIRTUALIZATION_ROW_HEIGHT;
-  const bottomSpacerHeight =
-    (productIds.length - visibleWindow.endIndex) * VIRTUALIZATION_ROW_HEIGHT;
-
-  const handleVirtualScroll = useCallback((event) => {
-    setScrollTop(event.currentTarget.scrollTop || 0);
-  }, []);
+  const validIds = useMemo(
+    () => productIds.filter(Boolean).map((id) => String(id)),
+    [productIds],
+  );
+  const paginationSummary = pagination
+    ? t("paginationSummary", {
+        page: pagination.page,
+        totalPages: pagination.totalPages,
+        total: pagination.total?.toLocaleString(i18n.language),
+      })
+    : null;
 
   if (loading) return <LoadingTable />;
 
-  if (!productIds.length) {
+  if (!validIds.length) {
     return (
       <Box padding="1200" minHeight={TABLE_SHELL_MIN_HEIGHT}>
-        <EmptyState heading={emptyHeading || t("filteredProductsEmptyHeading")}>
-          <p>{emptyText || t("filteredProductsEmptyText")}</p>
+        <EmptyState heading={emptyHeading || t("filteredProductsEmptyHeading", "No products found")}>
+          <p>{emptyText || t("filteredProductsEmptyText", "Try adjusting your filters")}</p>
         </EmptyState>
       </Box>
     );
@@ -149,62 +150,35 @@ const ProductsTable = ({
           <BlockStack gap="100">
             <Box paddingInlineStart="600">
               <Text as="h3" variant="headingSm">
-                {t("exportFilteredProductsTitle")}
+                {t("exportFilteredProductsTitle", "Filtered products")}
               </Text>
-              <Text tone="subdued" variant="bodySm">
-                {t("paginationSummary", {
-                  page: pagination?.page,
-                  totalPages: pagination?.totalPages,
-                  total: pagination?.total?.toLocaleString(),
-                })}
-              </Text>
+              {paginationSummary && (
+                <Text tone="subdued" variant="bodySm">
+                  {paginationSummary}
+                </Text>
+              )}
             </Box>
           </BlockStack>
         </InlineStack>
       </Box>
 
       <TableErrorBoundary>
-        <Box
-          maxHeight={shouldVirtualize ? `${VIRTUALIZATION_VIEWPORT_HEIGHT}px` : undefined}
-          overflowY={shouldVirtualize ? "auto" : undefined}
-          onScroll={shouldVirtualize ? handleVirtualScroll : undefined}
+        <IndexTable
+          resourceName={resourceName}
+          itemCount={validIds.length}
+          selectable={false}
+          headings={headings}
         >
-          <IndexTable
-            resourceName={{ singular: "product", plural: "products" }}
-            itemCount={productIds.length}
-            selectable={false}
-            headings={headings}
-          >
-            {shouldVirtualize && topSpacerHeight > 0 ? (
-              <IndexTable.Row id="virtual-spacer-top" position={-1}>
-                <IndexTable.Cell colSpan={headings.length}>
-                  <div style={{ height: `${topSpacerHeight}px` }} />
-                </IndexTable.Cell>
-              </IndexTable.Row>
-            ) : null}
-
-            {visibleIds.map((rawRowId, index) => {
-              const rowId = String(rawRowId || "");
-              if (!rowId) return null;
-              const actualIndex = visibleWindow.startIndex + index;
-              return <ProductRow rowId={rowId} index={actualIndex} key={rowId} />;
-            })}
-
-            {shouldVirtualize && bottomSpacerHeight > 0 ? (
-              <IndexTable.Row id="virtual-spacer-bottom" position={productIds.length + 1}>
-                <IndexTable.Cell colSpan={headings.length}>
-                  <div style={{ height: `${bottomSpacerHeight}px` }} />
-                </IndexTable.Cell>
-              </IndexTable.Row>
-            ) : null}
-          </IndexTable>
-        </Box>
+          {validIds.map((rowId, index) => (
+            <ProductRow rowId={rowId} index={index} key={rowId} />
+          ))}
+        </IndexTable>
       </TableErrorBoundary>
 
       <Box padding="400" borderBlockStartWidth="1" borderColor="border">
         <InlineStack align="space-between" blockAlign="center">
           <Text tone="subdued" variant="bodySm">
-            {t("exportFilteredProductsText")}
+            {t("exportFilteredProductsText", "Export applies to filtered results only")}
           </Text>
           <Pagination
             hasPrevious={pagination?.hasPrevPage}
@@ -216,6 +190,6 @@ const ProductsTable = ({
       </Box>
     </Box>
   );
-};
+});
 
-export default memo(ProductsTable);
+export default ProductsTable;

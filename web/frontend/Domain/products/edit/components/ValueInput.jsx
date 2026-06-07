@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   TextField,
   FormLayout,
@@ -18,11 +19,47 @@ import {
 } from "@shopify/polaris";
 import { SearchIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
-import { getFieldDefinition, InputType, FieldType } from "../constants";
+import {
+  FieldType,
+  getFieldDefinition,
+  InputType,
+  OperationKind,
+  ValueKind,
+} from "../constants";
 import { useFieldValidation } from "../hooks/useFiledValidation";
 import { getValueValidationRules } from "../../../../utils/valueValidation";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
+
+const AUTOCOMPLETE_RESULT_LIMIT = 25;
+const REFERENCE_DATA_STALE_TIME = 5 * 60 * 1000;
+const NUMERIC_PATTERNS = {
+  money: /^\d{1,9}(\.\d{0,2})?$/,
+  inventory: /^\d{1,7}$/,
+  percentage: /^\d{1,3}(\.\d{0,2})?$/,
+  number: /^\d{1,12}(\.\d{0,4})?$/,
+};
+const MONEY_FIELDS = new Set(["price", "compareAtPrice", "cost"]);
+const INVENTORY_FIELDS = new Set([
+  "inventory",
+  "inventoryQuantity",
+  "inventory_quantity",
+  "available",
+  "quantity",
+]);
+
+function getArrayPayload(json) {
+  if (Array.isArray(json?.data)) return json.data;
+  if (Array.isArray(json)) return json;
+  return [];
+}
+
+function getNumericKind(fieldValue, isPercentage) {
+  if (isPercentage) return "percentage";
+  if (MONEY_FIELDS.has(fieldValue)) return "money";
+  if (INVENTORY_FIELDS.has(fieldValue)) return "inventory";
+  return "number";
+}
 
 const ValueInput = ({
   selectedField,
@@ -34,23 +71,20 @@ const ValueInput = ({
   locationValue,
   onLocationChange,
   setSupportValue,
+  confirmationValue = "",
+  onConfirmationChange,
 }) => {
   const { t } = useTranslation();
   const api = useApiClient();
   const [helperText, setHelperText] = useState("");
 
   // State for autocomplete
-  const [autocompleteOptions, setAutocompleteOptions] = useState([]);
   const [autocompleteInputValue, setAutocompleteInputValue] = useState("");
+  const [debouncedAutocompleteQuery, setDebouncedAutocompleteQuery] =
+    useState("");
+  const [hasAutocompleteFocused, setHasAutocompleteFocused] = useState(false);
   // Update the state for autocomplete to track multiple selections
   const [selectedOptions, setSelectedOptions] = useState([]);
-
-  // Add this after the config constant
-  const [loadingAutocomplete, setLoadingAutocomplete] = useState(false);
-  // State for locations
-  const [apiLocations, setApiLocations] = useState([]);
-  const autocompleteAbortRef = useRef(null);
-  const locationAbortRef = useRef(null);
 
   // Debounce ref
   const debounceTimerRef = useRef(null);
@@ -59,13 +93,23 @@ const ValueInput = ({
   const inputType = editType?.inputType || InputType.SINGLE;
   const config = editType || {};
   const allowMultiple = config.allowMultiple || false;
+  const searchValue = searchReplace?.search?.trim() || "";
+  const replaceValue = searchReplace?.replace ?? "";
+  const searchReplaceError =
+    inputType === InputType.SEARCH_REPLACE && searchValue.length === 0
+      ? t("errors.searchValueRequired", {
+          defaultValue: "Search value is required.",
+        })
+      : undefined;
 
-  const isPercentage = editType?.value?.toLowerCase().includes("percent");
+  const isPercentage = editType?.valueKind === ValueKind.PERCENTAGE;
   const isNumeric = fieldDef?.type === FieldType.NUMERIC;
   const isFixedValue =
-    fieldDef?.value === "price" &&
-    editType?.value?.toLowerCase().includes("set") &&
-    !isPercentage;
+    isNumeric &&
+    editType?.operationKind === OperationKind.SET &&
+    editType?.valueKind === ValueKind.FIXED_AMOUNT;
+  const numericKind = getNumericKind(fieldDef?.value, isPercentage);
+  const maxPercentage = Number(editType?.maxPercentage ?? editType?.max ?? 100);
 
   useEffect(() => {
     setHelperText("");
@@ -82,97 +126,145 @@ const ValueInput = ({
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
-      autocompleteAbortRef.current?.abort();
-      locationAbortRef.current?.abort();
     };
   }, []);
 
-  // Fetch locations for inventory
-  useEffect(() => {
-    if (inputType === InputType.LOCATION_SELECT) {
-      fetchLocations();
-    }
-  }, [inputType]);
-
-  // Fetch autocomplete options
-  const fetchAutocompleteOptions = useCallback(
-    async (searchQuery) => {
-      if (!config.apiEndpoint) return;
-
-      autocompleteAbortRef.current?.abort();
-      const controller = new AbortController();
-      autocompleteAbortRef.current = controller;
-      setLoadingAutocomplete(true);
-      try {
-        // Add search query as parameter if provided
-        const url = searchQuery
-          ? `${config.apiEndpoint}?isNameOnly=true&search=${encodeURIComponent(
-            searchQuery
-          )}`
-          : config.apiEndpoint;
-
-        const json = await api.get(url, { signal: controller.signal });
-
-        // Transform API response to autocomplete options format
-        const options = (json.data || json).map((item) => ({
-          value: String(item[config.valueKey || "value"]),
-          label: item[config.labelKey || "label"],
-        }));
-
-        setAutocompleteOptions(options);
-      } catch (err) {
-        if (err?.name === "AbortError") {
-          return;
-        }
-        if (import.meta.env.DEV) {
-          console.error("Failed to fetch autocomplete options:", err);
-        }
-        setHelperText(toSafeErrorMessage(t, err, "common.errors.generic"));
-        setAutocompleteOptions([]);
-      } finally {
-        setLoadingAutocomplete(false);
-      }
+  const locationsQuery = useQuery({
+    queryKey: ["locations"],
+    enabled: inputType === InputType.LOCATION_SELECT,
+    staleTime: REFERENCE_DATA_STALE_TIME,
+    queryFn: async ({ signal }) => {
+      const json = await api.get("/api/location/get-all", { signal });
+      return getArrayPayload(json).map((loc) => ({
+        label: String(loc?.title ?? loc?.label ?? ""),
+        value: String(loc?.id ?? loc?.value ?? ""),
+      })).filter((loc) => loc.value);
     },
-    [api, config.apiEndpoint, config.labelKey, config.valueKey]
-  );
+  });
 
-  // Fetch locations
-  const fetchLocations = async () => {
-      try {
-      locationAbortRef.current?.abort();
-      const controller = new AbortController();
-      locationAbortRef.current = controller;
-      const json = await api.get("/api/location/get-all", {
-        signal: controller.signal,
-      });
+  const apiLocations = locationsQuery.data || [];
 
-      const locationOptions = [
-        ...json.data.map((loc) => ({
-          label: loc.title,
-          value: String(loc.id),
-        })),
-      ];
-      if (!locationValue && typeof onLocationChange === "function") {
-        onLocationChange(
-          locationOptions.length > 0 ? locationOptions[0].value : "all"
-        );
-      }
-
-      setApiLocations(locationOptions);
-    } catch (err) {
-      if (err?.name === "AbortError") {
-        return;
-      }
-      if (import.meta.env.DEV) {
-        console.error("Failed to fetch locations:", err);
-      }
-      setHelperText(toSafeErrorMessage(t, err, "common.errors.generic"));
+  useEffect(() => {
+    if (locationsQuery.error) {
+      setHelperText(
+        toSafeErrorMessage(t, locationsQuery.error, "common.errors.generic"),
+      );
     }
-  };
+  }, [locationsQuery.error, t]);
+
+  useEffect(() => {
+    if (
+      !locationValue &&
+      apiLocations.length === 1 &&
+      typeof onLocationChange === "function"
+    ) {
+      onLocationChange(apiLocations[0].value);
+    }
+  }, [apiLocations, locationValue, onLocationChange]);
+
+  const normalizedAutocompleteQuery = String(debouncedAutocompleteQuery || "").trim();
+  const shouldFetchAutocomplete =
+    inputType === InputType.API_AUTOCOMPLETE &&
+    Boolean(config.apiEndpoint) &&
+    hasAutocompleteFocused &&
+    (normalizedAutocompleteQuery.length === 0 ||
+      normalizedAutocompleteQuery.length >= 2);
+
+  const autocompleteQuery = useQuery({
+    queryKey: [
+      "autocomplete",
+      config.apiEndpoint || "",
+      config.valueKey || "value",
+      config.labelKey || "label",
+      normalizedAutocompleteQuery,
+    ],
+    enabled: shouldFetchAutocomplete,
+    staleTime: REFERENCE_DATA_STALE_TIME,
+    queryFn: async ({ signal }) => {
+        const params = new URLSearchParams({
+          isNameOnly: "true",
+          limit: String(AUTOCOMPLETE_RESULT_LIMIT),
+        });
+
+        if (normalizedAutocompleteQuery) {
+          params.set("search", normalizedAutocompleteQuery);
+        }
+
+      const separator = config.apiEndpoint.includes("?") ? "&" : "?";
+      const url = `${config.apiEndpoint}${separator}${params.toString()}`;
+
+      const json = await api.get(url, { signal });
+      const rawItems = getArrayPayload(json);
+
+      return rawItems.slice(0, AUTOCOMPLETE_RESULT_LIMIT).map((item) => ({
+          value: String(item[config.valueKey || "value"]),
+          label: String(item[config.labelKey || "label"] ?? ""),
+      }));
+    },
+  });
+
+  const autocompleteOptions = autocompleteQuery.data || [];
+
+  useEffect(() => {
+    if (autocompleteQuery.error) {
+      setHelperText(
+        toSafeErrorMessage(t, autocompleteQuery.error, "common.errors.generic"),
+      );
+    }
+  }, [autocompleteQuery.error, t]);
+
+  useEffect(() => {
+    setSelectedOptions([]);
+    setAutocompleteInputValue("");
+    setDebouncedAutocompleteQuery("");
+    setHasAutocompleteFocused(false);
+  }, [selectedField?.value, editType?.value]);
+
+  useEffect(() => {
+    if (inputType !== InputType.API_AUTOCOMPLETE) {
+      return;
+    }
+
+    const rawValue = value == null ? "" : String(value).trim();
+
+    if (!rawValue) {
+      return;
+    }
+
+    const values = allowMultiple
+      ? rawValue
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      : [rawValue];
+
+    setSelectedOptions(values);
+
+    const labels = values.map((selectedValue) => {
+      const matchedOption = autocompleteOptions.find(
+        (option) => option.value === selectedValue,
+      );
+
+      return matchedOption?.label || selectedValue;
+    });
+
+    setAutocompleteInputValue(labels.join(", "));
+  }, [
+    allowMultiple,
+    autocompleteOptions,
+    inputType,
+    selectedField?.value,
+    editType?.value,
+    value,
+  ]);
 
   const validationRules = useMemo(
-    () => getValueValidationRules(isPercentage, isFixedValue),
-    [isPercentage, isFixedValue]
+    () =>
+      getValueValidationRules(isPercentage, isFixedValue, {
+        numericKind,
+        maxPercentage,
+      }),
+    [isPercentage, isFixedValue, maxPercentage, numericKind]
   );
 
   const error = useFieldValidation(value, validationRules);
@@ -183,25 +275,50 @@ const ValueInput = ({
     setHelperText("");
 
     if (isNumeric) {
-      // if (val.includes("-")) {
-      //   setHelperText("Negative value is not allowed");
-      //   return;
-      // }
-      if (!/^\d*\.?\d*$/.test(val)) return;
-      // if (isPercentage && Number(val) > 100) return;
+      const pattern = NUMERIC_PATTERNS[numericKind] || NUMERIC_PATTERNS.number;
+
+      if (!pattern.test(val)) {
+        setHelperText(
+          t("errors.invalidNumericValue", {
+            defaultValue: "Enter a valid numeric value.",
+          }),
+        );
+        return;
+      }
+
+      const numericValue = Number(val);
+
+      if (!Number.isFinite(numericValue)) {
+        setHelperText(
+          t("errors.invalidNumericValue", {
+            defaultValue: "Enter a valid numeric value.",
+          }),
+        );
+        return;
+      }
+
+      if (isPercentage && numericValue > maxPercentage) {
+        setHelperText(
+          t("errors.percentageTooLarge", {
+            max: maxPercentage,
+            defaultValue: `Percentage cannot be greater than ${maxPercentage}.`,
+          }),
+        );
+        return;
+      }
     }
 
     onChange(val);
   };
 
   const getLabel = () => {
-    if (editType?.value?.toLowerCase().includes("decrease"))
+    if (editType?.operationKind === OperationKind.DECREASE)
       return t("DecreaseValue");
 
-    if (editType?.value?.toLowerCase().includes("increase"))
+    if (editType?.operationKind === OperationKind.INCREASE)
       return t("IncreaseValue");
 
-    if (editType?.value?.toLowerCase().includes("set"))
+    if (editType?.operationKind === OperationKind.SET)
       return t("new_value");
 
     return config.inputHelperLabel
@@ -214,22 +331,15 @@ const ValueInput = ({
     (newValue) => {
       setAutocompleteInputValue(newValue);
 
-      // Clear existing timer
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
 
-      // Set new timer
       debounceTimerRef.current = setTimeout(() => {
-        const trimmedValue = String(newValue || "").trim();
-        if (trimmedValue.length >= 2) {
-          fetchAutocompleteOptions(newValue);
-        } else if (trimmedValue.length === 0 && autocompleteOptions.length === 0) {
-          fetchAutocompleteOptions("");
-        }
-      }, 500); // 500ms debounce delay
+        setDebouncedAutocompleteQuery(newValue);
+      }, 500);
     },
-    [fetchAutocompleteOptions, autocompleteOptions.length]
+    []
   );
 
   const updateSelection = useCallback(
@@ -279,9 +389,8 @@ const ValueInput = ({
     <Autocomplete.TextField
       onChange={updateAutocompleteText}
       onFocus={() => {
-        if (autocompleteOptions.length === 0) {
-          fetchAutocompleteOptions("");
-        }
+        setHasAutocompleteFocused(true);
+        setDebouncedAutocompleteQuery(autocompleteInputValue);
       }}
       label={
         config.inputHelperLabel
@@ -336,9 +445,10 @@ const ValueInput = ({
               onChange={(val) =>
                 onSearchReplaceChange?.({
                   search: val,
-                  replace: searchReplace?.replace || "",
+                  replace: replaceValue,
                 })
               }
+              error={searchReplaceError}
               autoComplete="off"
             />
 
@@ -355,7 +465,7 @@ const ValueInput = ({
               }
               onChange={(val) =>
                 onSearchReplaceChange?.({
-                  search: searchReplace?.search || "",
+                  search: searchValue,
                   replace: val,
                 })
               }
@@ -377,8 +487,15 @@ const ValueInput = ({
           />
           <Select
             label={t("location", { defaultValue: "Location" })}
-            options={apiLocations}
-            value={locationValue || "all"}
+            options={[
+              {
+                label: t("selectLocation", { defaultValue: "Select a location" }),
+                value: "",
+                disabled: true,
+              },
+              ...apiLocations,
+            ]}
+            value={locationValue || ""}
             onChange={onLocationChange}
             disabled={apiLocations.length === 0}
           />
@@ -392,7 +509,7 @@ const ValueInput = ({
           options={autocompleteOptions}
           selected={selectedOptions}
           onSelect={updateSelection}
-          loading={loadingAutocomplete}
+          loading={autocompleteQuery.isFetching}
           textField={autocompleteTextField}
           allowMultiple={allowMultiple}
         />
@@ -400,13 +517,32 @@ const ValueInput = ({
 
     case InputType.NONE:
       return (
-        <Banner tone="critical">
-          <Text as="p">
-            {editType?.inputHelperLabel
-              ? t(editType.inputHelperLabel)
-              : t("permanentAction")}
-          </Text>
-        </Banner>
+        <FormLayout>
+          <Banner tone="critical">
+            <Text as="p">
+              {editType?.inputHelperLabel
+                ? t(editType.inputHelperLabel)
+                : t("permanentAction")}
+            </Text>
+          </Banner>
+          {config.requiresConfirmation === true && (
+            <TextField
+              label={t("typeConfirm", {
+                defaultValue: "Type CONFIRM to continue",
+              })}
+              value={confirmationValue}
+              onChange={onConfirmationChange}
+              error={
+                confirmationValue && confirmationValue !== "CONFIRM"
+                  ? t("errors.confirmationMismatch", {
+                      defaultValue: "You must type CONFIRM exactly.",
+                    })
+                  : undefined
+              }
+              autoComplete="off"
+            />
+          )}
+        </FormLayout>
       );
 
     default:

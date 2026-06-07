@@ -23,7 +23,13 @@ import { useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-import { getFieldDefinition, InputType } from "../constants";
+import {
+  FieldType,
+  getFieldDefinition,
+  InputType,
+  OperationKind,
+  ValueKind,
+} from "../constants";
 import { useFieldValidation } from "../hooks/useFiledValidation";
 import { getValueValidationRules } from "../../../../utils/valueValidation";
 import FieldSelector from "../components/FieldSelector";
@@ -71,6 +77,22 @@ function lightweightStableHash(input) {
   return (hash >>> 0).toString(36);
 }
 
+const MONEY_FIELDS = new Set(["price", "compareAtPrice", "cost"]);
+const INVENTORY_FIELDS = new Set([
+  "inventory",
+  "inventoryQuantity",
+  "inventory_quantity",
+  "available",
+  "quantity",
+]);
+
+function getNumericKind(fieldValue, isPercentage) {
+  if (isPercentage) return "percentage";
+  if (MONEY_FIELDS.has(fieldValue)) return "money";
+  if (INVENTORY_FIELDS.has(fieldValue)) return "inventory";
+  return "number";
+}
+
 export default function EditPreviewPage() {
   const filters = useSelector(selectFilters);
   const search = useSelector(selectSearch);
@@ -78,7 +100,13 @@ export default function EditPreviewPage() {
   const { i18n, t } = useTranslation();
   const { isSyncInProgress } = useProductSyncStatus();
   const { showSuccess, showError } = useAppToast();
-  const { versions: filterRegistryVersions } = useFilterRegistry();
+  const {
+    versions: filterRegistryVersions,
+    fallbackReason: filterRegistryFallbackReason,
+  } = useFilterRegistry();
+  const isFilterRegistryDegraded =
+    filterRegistryFallbackReason === "error" ||
+    filterRegistryFallbackReason === "malformed";
 
   const [selectedField, setSelectedField] = useState(getFieldDefinition("price"));
   const [editType, setEditType] = useState(null);
@@ -94,6 +122,8 @@ export default function EditPreviewPage() {
     replace: "",
   });
   const [locationValue, setLocationValue] = useState("");
+  const [destructiveConfirmationValue, setDestructiveConfirmationValue] =
+    useState("");
   const [limitWarning, setLimitWarning] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [pagination, setPagination] = useState({
@@ -141,6 +171,7 @@ export default function EditPreviewPage() {
     setDraftSearchReplace({ search: "", replace: "" });
     setSearchReplace({ search: "", replace: "" });
     setLocationValue("");
+    setDestructiveConfirmationValue("");
     setPagination((current) => ({ ...current, page: 1 }));
   }, [selectedField]);
 
@@ -154,21 +185,32 @@ export default function EditPreviewPage() {
       setDraftSearchReplace({ search: "", replace: "" });
       setSearchReplace({ search: "", replace: "" });
       setLocationValue("");
+      setDestructiveConfirmationValue("");
       setLimitWarning(null);
       setPagination((current) => ({ ...current, page: 1 }));
     },
     [],
   );
 
-  const isPercentage = editType?.value?.toLowerCase().includes("percent");
+  const handleEditTypeChange = useCallback((nextEditType) => {
+    setEditType(nextEditType);
+    setDestructiveConfirmationValue("");
+  }, []);
+
+  const isPercentage = editType?.valueKind === ValueKind.PERCENTAGE;
   const isFixedValue =
-    selectedField?.value === "price" &&
-    editType?.value?.toLowerCase().includes("set") &&
-    !isPercentage;
+    selectedField?.type === FieldType.NUMERIC &&
+    editType?.operationKind === OperationKind.SET &&
+    editType?.valueKind === ValueKind.FIXED_AMOUNT;
+  const numericKind = getNumericKind(selectedField?.value, isPercentage);
+  const maxPercentage = Number(editType?.maxPercentage ?? editType?.max ?? 100);
 
   const submitError = useFieldValidation(
     draftInputValue,
-    getValueValidationRules(isPercentage, isFixedValue),
+    getValueValidationRules(isPercentage, isFixedValue, {
+      numericKind,
+      maxPercentage,
+    }),
   );
 
   const shouldHideEditTypeSelector =
@@ -295,6 +337,13 @@ export default function EditPreviewPage() {
     });
   }, [previewData?.pagination]);
 
+  const requiresDestructiveConfirmation =
+    editType?.inputType === InputType.NONE &&
+    editType?.requiresConfirmation === true;
+  const hasDestructiveConfirmation =
+    !requiresDestructiveConfirmation ||
+    destructiveConfirmationValue === "CONFIRM";
+
   const canRunEdit = useMemo(() => {
     if (!editType || !selectedField) return false;
 
@@ -311,7 +360,7 @@ export default function EditPreviewPage() {
       default:
         return Boolean(draftInputValue?.toString().trim());
     }
-  }, [editType, draftInputValue, draftSearchReplace?.search, selectedField]);
+  }, [editType, draftInputValue, searchReplace?.search, selectedField]);
   const hasFreshPreview = Boolean(
     previewFingerprint?.previewId &&
       previewSignature &&
@@ -378,7 +427,7 @@ export default function EditPreviewPage() {
   );
 
   const handleRunEdit = async () => {
-    if (isSyncInProgress || submitting) {
+    if (isSyncInProgress || submitting || isFilterRegistryDegraded) {
       return;
     }
 
@@ -387,8 +436,11 @@ export default function EditPreviewPage() {
       return;
     }
 
-    if (editType?.inputType === InputType.SEARCH_REPLACE && !draftSearchReplace.search) {
-      showError(t("bulkEditSearchReplaceSearchRequired",))
+    if (
+      editType?.inputType === InputType.SEARCH_REPLACE &&
+      !draftSearchReplace.search?.trim()
+    ) {
+      showError(t("bulkEditSearchReplaceSearchRequired"))
       return;
     }
 
@@ -396,6 +448,15 @@ export default function EditPreviewPage() {
       showError(
         t("bulkEditLocationRequiredError", {
           defaultValue: "Select a location before running this inventory update.",
+        }),
+      );
+      return;
+    }
+
+    if (!hasDestructiveConfirmation) {
+      showError(
+        t("errors.confirmationMismatch", {
+          defaultValue: "You must type CONFIRM exactly.",
         }),
       );
       return;
@@ -484,21 +545,33 @@ const summaryText = useMemo(() => {
           isSyncInProgress ||
           submitting ||
           Boolean(submitError) ||
+          isFilterRegistryDegraded ||
           !canRunEdit ||
           !hasFreshPreview ||
           hasPreviewRegistryMismatch ||
-          !hasRequiredLocation,
+          !hasRequiredLocation ||
+          !hasDestructiveConfirmation,
       }}
       secondaryActions={[
         {
           content: t("ScheduleEdit"),
           onAction: () => setModalState((current) => ({ ...current, scheduleEdit: true })),
-          disabled: isSyncInProgress,
+          disabled:
+            isSyncInProgress ||
+            isFilterRegistryDegraded ||
+            !canRunEdit ||
+            !hasRequiredLocation ||
+            !hasDestructiveConfirmation,
         },
         {
           content: t("RecurringEdit"),
           onAction: () => setModalState((current) => ({ ...current, recurringEdit: true })),
-          disabled: isSyncInProgress,
+          disabled:
+            isSyncInProgress ||
+            isFilterRegistryDegraded ||
+            !canRunEdit ||
+            !hasRequiredLocation ||
+            !hasDestructiveConfirmation,
         },
       ]}
     >
@@ -511,6 +584,25 @@ const summaryText = useMemo(() => {
             >
               <p>
                 {t("bulkEditSyncBlockingMessage",)}
+              </p>
+            </Banner>
+          </Layout.Section>
+        )}
+
+        {isFilterRegistryDegraded && (
+          <Layout.Section>
+            <Banner
+              tone="critical"
+              title={t("filterRegistryLoadErrorTitle", {
+                defaultValue: "Filter definitions could not be loaded",
+              })}
+            >
+              <p>
+                {t("filterRegistryBulkEditBlockedMessage", {
+                  reason: filterRegistryFallbackReason,
+                  defaultValue:
+                    "Refresh the page before previewing or running a bulk edit.",
+                })}
               </p>
             </Banner>
           </Layout.Section>
@@ -557,7 +649,7 @@ const summaryText = useMemo(() => {
                       <EditTypeSelector
                         selectedField={selectedField}
                         editType={editType}
-                        onEditTypeChange={setEditType}
+                        onEditTypeChange={handleEditTypeChange}
                       />
                     )}
                   </FormLayout.Group>
@@ -572,6 +664,8 @@ const summaryText = useMemo(() => {
                     locationValue={locationValue}
                     onLocationChange={setLocationValue}
                     setSupportValue={setSupportValue}
+                    confirmationValue={destructiveConfirmationValue}
+                    onConfirmationChange={setDestructiveConfirmationValue}
                   />
                 </FormLayout>
               </BlockStack>

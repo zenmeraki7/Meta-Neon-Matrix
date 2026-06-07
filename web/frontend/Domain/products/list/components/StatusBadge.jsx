@@ -1,40 +1,19 @@
 // src/components/products/StatusBadge.jsx
 
-import React, { memo, useMemo } from "react";
+import React, { memo } from "react";
 import { Badge } from "@shopify/polaris";
+import { useTranslation } from "react-i18next";
 import { getStatusColor } from "../utils/productHelpers";
 
-function StatusBadgeComponent({ status }) {
+const StatusBadge = memo(function StatusBadge({ status }) {
+  const { t } = useTranslation("products");
+  const normalizedStatus = status != null ? String(status).toUpperCase() : "";
+  const tone = getStatusColor(normalizedStatus);
+  const label = normalizedStatus
+    ? t(`productStatus.${normalizedStatus}`, normalizedStatus)
+    : t("productStatus.UNKNOWN", "Unknown");
 
-  /**
-   * Normalize status once
-   */
-  const normalizedStatus =
-    status?.toUpperCase() ?? "ARCHIVED";
-
-
-
-  /**
-   * Memoize tone calculation
-   */
-  const tone = useMemo(() => {
-    return getStatusColor(normalizedStatus);
-  }, [normalizedStatus]);
-
-
-
-  return (
-    <Badge tone={tone}>
-      {normalizedStatus}
-    </Badge>
-  );
-}
-
-
-
-/**
- * Prevent rerender unless status changes
- */
-const StatusBadge = memo(StatusBadgeComponent);
+  return <Badge tone={tone}>{label}</Badge>;
+});
 
 export default StatusBadge;

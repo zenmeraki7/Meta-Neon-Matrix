@@ -2,19 +2,50 @@ import { useEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "../../../../hooks/useApiClient";
 
+const DEFAULT_PRODUCTS_PAGE_SIZE = 50;
+const MAX_PRODUCTS_PAGE_SIZE = 50;
+const PERF_BUFFER_LIMIT = 200;
+
+function stableValue(value) {
+  if (value === undefined || value === null) return null;
+
+  if (Array.isArray(value)) {
+    return value.map(stableValue).sort((a, b) =>
+      JSON.stringify(a).localeCompare(JSON.stringify(b)),
+    );
+  }
+
+  if (typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = stableValue(value[key]);
+        return acc;
+      }, {});
+  }
+
+  return value;
+}
+
+function stableValueKey(value) {
+  return JSON.stringify(stableValue(value));
+}
+
 export function canonicalizeFilters(filters = []) {
   return [...filters]
     .map((filter) => ({
-      field: String(filter?.field || ""),
-      operator: String(filter?.operator || ""),
-      value: filter?.value == null ? "" : String(filter.value),
+      field: String(filter?.field ?? ""),
+      operator: String(filter?.operator ?? ""),
+      value: stableValue(filter?.value),
     }))
     .sort((a, b) => {
       const byField = a.field.localeCompare(b.field);
       if (byField !== 0) return byField;
+
       const byOperator = a.operator.localeCompare(b.operator);
       if (byOperator !== 0) return byOperator;
-      return a.value.localeCompare(b.value);
+
+      return stableValueKey(a.value).localeCompare(stableValueKey(b.value));
     });
 }
 
@@ -26,90 +57,150 @@ function markPerf(event, detail = {}) {
   if (typeof window === "undefined" || typeof performance === "undefined") {
     return;
   }
+
   const key = `metamatrix:${event}`;
-  performance.mark(key);
-  if (window.__MM_PERF__) {
-    window.__MM_PERF__.push({
-      event,
-      at: Date.now(),
-      detail,
-    });
-  } else {
-    window.__MM_PERF__ = [{ event, at: Date.now(), detail }];
+
+  try {
+    performance.clearMarks(key);
+    performance.mark(key);
+  } catch {
+    // Diagnostic only. Never break product loading.
   }
+
+  const entry = {
+    event,
+    at: Date.now(),
+    detail,
+  };
+
+  const buffer = Array.isArray(window.__MM_PERF__) ? window.__MM_PERF__ : [];
+  buffer.push(entry);
+
+  if (buffer.length > PERF_BUFFER_LIMIT) {
+    buffer.splice(0, buffer.length - PERF_BUFFER_LIMIT);
+  }
+
+  window.__MM_PERF__ = buffer;
 }
 
 function shouldSkipPrefetchForNetworkBudget() {
   if (typeof navigator === "undefined") return false;
-  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+
+  const connection =
+    navigator.connection ||
+    navigator.mozConnection ||
+    navigator.webkitConnection;
+
   if (!connection) return false;
 
-  if (connection.saveData === true) {
-    return true;
-  }
+  if (connection.saveData === true) return true;
 
   const effectiveType = String(connection.effectiveType || "").toLowerCase();
+
   return effectiveType === "slow-2g" || effectiveType === "2g";
 }
 
-function toStableRowId(product, index) {
-  const id = String(product?.id || "").trim();
-  if (id) return id;
-  const handle = String(product?.handle || "").trim();
-  if (handle) return `handle:${handle}:${index}`;
-  const title = String(product?.title || "").trim();
-  const vendor = String(product?.vendor || "").trim();
-  const productType = String(product?.productType || "").trim();
-  return `derived:${title}|${vendor}|${productType}|${index}`;
+function toStableRowId(product) {
+  const id =
+    product?.shopifyProductId ||
+    product?.adminGraphqlApiId ||
+    product?.gid ||
+    product?.id;
+
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+function normalizeProductsPayload(data) {
+  const rawProducts = Array.isArray(data?.products) ? data.products : [];
+  let droppedRows = 0;
+
+  const products = rawProducts
+    .map((product) => {
+      const rowId = toStableRowId(product);
+
+      if (!rowId) {
+        droppedRows += 1;
+        return null;
+      }
+
+      return {
+        ...product,
+        __rowId: rowId,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    products,
+    pagination: data?.pagination || null,
+    count: Number(data?.pagination?.total ?? data?.count ?? products.length) || 0,
+    unavailableReason: data?.unavailableReason || null,
+    mirrorHealth: data?.mirrorHealth || null,
+    droppedRows,
+  };
+}
+
+function normalizeInitialData(initialData) {
+  return initialData ? normalizeProductsPayload(initialData) : undefined;
 }
 
 export default function useProducts({
   cursor = null,
   filterParams = [],
-  filterHash = "[]",
   cursorFilterHash = null,
   initialData = undefined,
   enabled = true,
+  limit = DEFAULT_PRODUCTS_PAGE_SIZE,
 } = {}) {
   const api = useApiClient();
   const queryClient = useQueryClient();
-  const shop =
-    typeof window !== "undefined"
-      ? String(window?.shopify?.config?.shop || window?.Shopify?.shop || "unknown")
-      : "unknown";
 
-  const limit = 20;
-  const normalizedFilters = useMemo(() => canonicalizeFilters(filterParams), [filterParams]);
-  const filtersKey = useMemo(() => buildCanonicalFilterHash(normalizedFilters), [normalizedFilters]);
-  const resolvedFilterHash = String(filterHash || filtersKey);
+  const pageSize = Math.min(
+    Math.max(Number(limit) || DEFAULT_PRODUCTS_PAGE_SIZE, 1),
+    MAX_PRODUCTS_PAGE_SIZE,
+  );
+
+  const normalizedFilters = useMemo(
+    () => canonicalizeFilters(filterParams),
+    [filterParams],
+  );
+
+  const resolvedFilterHash = useMemo(
+    () => buildCanonicalFilterHash(normalizedFilters),
+    [normalizedFilters],
+  );
+
   const isCursorHashMismatch =
-    Boolean(cursor) &&
-    Boolean(cursorFilterHash) &&
-    String(cursorFilterHash) !== resolvedFilterHash;
+    Boolean(cursor) && String(cursorFilterHash || "") !== resolvedFilterHash;
 
   const safeCursor = isCursorHashMismatch ? null : cursor;
 
+  const normalizedInitialData = useMemo(
+    () => normalizeInitialData(initialData),
+    [initialData],
+  );
+
   const query = useQuery({
-    queryKey: ["products", shop, safeCursor || null, limit, resolvedFilterHash],
+    queryKey: ["products", safeCursor || null, pageSize, resolvedFilterHash],
     enabled,
-    initialData,
+    initialData: normalizedInitialData,
     staleTime: 10_000,
     queryFn: async ({ signal }) => {
       if (isCursorHashMismatch) {
         markPerf("products_cursor_hash_mismatch", {
-          shop,
           cursorFilterHash,
           filterHash: resolvedFilterHash,
         });
       }
 
       const params = new URLSearchParams();
-      params.set("limit", String(limit));
+      params.set("limit", String(pageSize));
+
       if (safeCursor) {
         params.set("cursor", safeCursor);
       }
+
       markPerf("products_fetch_start", {
-        shop,
         cursor: safeCursor,
         filterHash: resolvedFilterHash,
       });
@@ -119,29 +210,22 @@ export default function useProducts({
         { filterParams: normalizedFilters },
         { signal },
       );
+
       markPerf("products_fetch_end", {
-        shop,
         cursor: safeCursor,
         filterHash: resolvedFilterHash,
       });
 
-      const products = Array.isArray(json?.data?.products)
-        ? json.data.products.map((product, index) => ({
-            ...product,
-            __rowId: toStableRowId(product, index),
-          }))
-        : [];
+      const normalized = normalizeProductsPayload(json?.data);
 
-      return {
-        products,
-        pagination: json?.data?.pagination || null,
-        count:
-          json?.data?.pagination?.total ??
-          products.length ??
-          0,
-        unavailableReason: json?.data?.unavailableReason || null,
-        mirrorHealth: json?.data?.mirrorHealth || null,
-      };
+      if (normalized.droppedRows > 0) {
+        markPerf("products_rows_dropped_missing_stable_id", {
+          droppedRows: normalized.droppedRows,
+          filterHash: resolvedFilterHash,
+        });
+      }
+
+      return normalized;
     },
     placeholderData: (previousData) => previousData,
   });
@@ -149,68 +233,82 @@ export default function useProducts({
   useEffect(() => {
     if (!enabled) return;
     if (isCursorHashMismatch) return;
+
     if (shouldSkipPrefetchForNetworkBudget()) {
-      markPerf("products_prefetch_skipped_network_budget", { shop });
+      markPerf("products_prefetch_skipped_network_budget");
+      return;
+    }
+
+    if (normalizedFilters.length > 3) {
+      markPerf("products_prefetch_skipped_filter_complexity", {
+        filterCount: normalizedFilters.length,
+      });
+      return;
+    }
+
+    if (query.data?.unavailableReason) {
+      markPerf("products_prefetch_skipped_unavailable", {
+        unavailableReason: query.data.unavailableReason,
+      });
+      return;
+    }
+
+    if (query.data?.mirrorHealth?.status === "degraded") {
+      markPerf("products_prefetch_skipped_mirror_degraded");
       return;
     }
 
     const pageInfo = query.data?.pagination || null;
     const hasNextPage = Boolean(pageInfo?.hasNextPage);
     const endCursor = String(pageInfo?.endCursor || "").trim();
+
     if (!hasNextPage || !endCursor) return;
 
-    const nextQueryKey = ["products", shop, endCursor, limit, resolvedFilterHash];
+    const nextQueryKey = [
+      "products",
+      endCursor,
+      pageSize,
+      resolvedFilterHash,
+    ];
 
-    // Warm the next sequential cursor page for near-zero-latency pagination clicks.
     void queryClient.prefetchQuery({
       queryKey: nextQueryKey,
       staleTime: 10_000,
       queryFn: async ({ signal }) => {
         markPerf("products_prefetch_start", {
-          shop,
           cursor: endCursor,
           filterHash: resolvedFilterHash,
         });
 
         const params = new URLSearchParams();
-        params.set("limit", String(limit));
+        params.set("limit", String(pageSize));
         params.set("cursor", endCursor);
+
         const json = await api.post(
           `/api/products/get-all?${params.toString()}`,
           { filterParams: normalizedFilters },
           { signal },
         );
 
-        const products = Array.isArray(json?.data?.products)
-          ? json.data.products.map((product, index) => ({
-              ...product,
-              __rowId: toStableRowId(product, index),
-            }))
-          : [];
-
         markPerf("products_prefetch_end", {
-          shop,
           cursor: endCursor,
           filterHash: resolvedFilterHash,
         });
 
-        return {
-          products,
-          pagination: json?.data?.pagination || null,
-          count: json?.data?.pagination?.total ?? products.length ?? 0,
-        };
+        return normalizeProductsPayload(json?.data);
       },
     });
   }, [
     api,
     enabled,
     isCursorHashMismatch,
-    limit,
     normalizedFilters,
+    pageSize,
+    query.data?.mirrorHealth?.status,
     query.data?.pagination,
+    query.data?.unavailableReason,
     queryClient,
     resolvedFilterHash,
-    shop,
   ]);
 
   return {
@@ -219,9 +317,15 @@ export default function useProducts({
     totalCount: query.data?.count || 0,
     unavailableReason: query.data?.unavailableReason || null,
     mirrorHealth: query.data?.mirrorHealth || null,
+    droppedRows: query.data?.droppedRows || 0,
+
     loading: query.isLoading,
+    fetching: query.isFetching,
     error: query.error?.message || null,
+    errorObject: query.error || null,
     hasFetched: query.isFetched,
     refetch: query.refetch,
+
+    filterHash: resolvedFilterHash,
   };
 }

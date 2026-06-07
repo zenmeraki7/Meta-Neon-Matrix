@@ -28,6 +28,12 @@ const FREEZE_MODES = new Set([
   "DYNAMIC_AT_RUN",
 ]);
 
+const SEARCH_REPLACE_EDIT_TYPES = new Set([
+  "Search/Replace",
+  "Rename tag",
+  "Search/replace within tag name",
+]);
+
 function buildRequestError(message, code = "VALIDATION_FAILED") {
   const error = new Error(message);
   error.code = code;
@@ -520,27 +526,39 @@ function normalizeEditPayload({ body = {}, query = {} }) {
     optionalPlainObject(safeBody.previewFingerprint, "previewFingerprint") ||
     EMPTY_OBJECT;
 
+  const editedField = normalizeRequiredText(
+    safeBody.editedField ?? safeBody.field,
+    "editedField",
+    160,
+  );
+  const editType = normalizeRequiredText(
+    safeBody.editType ?? safeBody.editedType,
+    "editType",
+    160,
+  );
+  const searchKey = normalizeText(safeBody.searchKey, "searchKey", 300);
+  const replaceText = normalizeText(
+    safeBody.replaceText,
+    "replaceText",
+    MAX_LONG_TEXT_LENGTH,
+  );
+
+  if (SEARCH_REPLACE_EDIT_TYPES.has(editType) && !String(searchKey || "").trim()) {
+    throw buildRequestError(
+      "Search value is required for search/replace edits",
+      "SEARCH_VALUE_REQUIRED",
+    );
+  }
+
   return Object.freeze({
-    editedField: normalizeRequiredText(
-      safeBody.editedField ?? safeBody.field,
-      "editedField",
-      160,
-    ),
-    editType: normalizeRequiredText(
-      safeBody.editType ?? safeBody.editedType,
-      "editType",
-      160,
-    ),
+    editedField,
+    editType,
     editValue: normalizeEditValue(
       safeBody.editValue ?? safeBody.value,
       "editValue",
     ),
-    searchKey: normalizeText(safeBody.searchKey, "searchKey", 300),
-    replaceText: normalizeText(
-      safeBody.replaceText,
-      "replaceText",
-      MAX_LONG_TEXT_LENGTH,
-    ),
+    searchKey,
+    replaceText,
     supportValue: normalizeEditValue(safeBody.supportValue, "supportValue"),
     locationId: normalizeText(
       safeBody.locationId ?? safeBody.location,

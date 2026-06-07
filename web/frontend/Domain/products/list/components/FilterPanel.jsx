@@ -24,6 +24,17 @@ import { useApiClient } from "../../../../hooks/useApiClient";
 
 const MIN_AUTOCOMPLETE_QUERY_LENGTH = 2;
 
+function normalizeMinQueryLength(value) {
+  return Number.isInteger(value) && value >= 0
+    ? value
+    : MIN_AUTOCOMPLETE_QUERY_LENGTH;
+}
+
+function hasDraftValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  return String(value || "").trim().length > 0;
+}
+
 async function fetchAutocompleteOptions({
   api,
   filter,
@@ -68,6 +79,7 @@ const FilterPanel = memo(function FilterPanel({
   initialFilter,
   onApply,
   onCancel,
+  cancelLabel,
   t,
 }) {
   const api = useApiClient();
@@ -79,6 +91,7 @@ const FilterPanel = memo(function FilterPanel({
 
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
 
   const debounceTimer = useRef(null);
   const abortControllerRef = useRef(null);
@@ -92,6 +105,7 @@ const FilterPanel = memo(function FilterPanel({
     });
     setOptions([]);
     setLoading(false);
+    setHasSearched(false);
   }, [filter.key, initialFilter]);
 
   // Cleanup
@@ -131,6 +145,23 @@ const FilterPanel = memo(function FilterPanel({
     [t, filter.translatedLabel, filter.label]
   );
 
+  const noSuggestionsText = useMemo(
+    () =>
+      t("noSuggestionsForField", {
+        field: filter.translatedLabel || filter.label,
+        defaultValue: t("noSuggestions", "No suggestions found"),
+      }),
+    [t, filter.translatedLabel, filter.label]
+  );
+
+  const minQueryLength = useMemo(
+    () => normalizeMinQueryLength(filter.minQueryLength),
+    [filter.minQueryLength]
+  );
+
+  const allowEmptySearchPreload = Boolean(filter.allowEmptySearchPreload);
+  const allowFreeText = filter.allowFreeText !== false;
+
   // Enum labels
   const enumChoices = useMemo(() => {
     if (filter.type !== "enum") return [];
@@ -147,23 +178,23 @@ const FilterPanel = memo(function FilterPanel({
       setDraft((prev) => ({
         ...prev,
         inputText: query,
-        value: q ? prev.value : "",
+        value: allowFreeText ? q : "",
       }));
 
       clearTimeout(debounceTimer.current);
       abortControllerRef.current?.abort();
 
-      const allowEmpty = Boolean(filter.allowEmptySearchPreload);
-
-      if (!allowEmpty && q.length < MIN_AUTOCOMPLETE_QUERY_LENGTH) {
+      if (!allowEmptySearchPreload && q.length < minQueryLength) {
         setOptions([]);
         setLoading(false);
+        setHasSearched(false);
         return;
       }
 
-      if (allowEmpty && q.length === 0) {
+      if (allowEmptySearchPreload && q.length === 0) {
         const controller = new AbortController();
         abortControllerRef.current = controller;
+        setHasSearched(true);
 
         fetchAutocompleteOptions({
           api,
@@ -179,6 +210,7 @@ const FilterPanel = memo(function FilterPanel({
       debounceTimer.current = setTimeout(() => {
         const controller = new AbortController();
         abortControllerRef.current = controller;
+        setHasSearched(true);
 
         fetchAutocompleteOptions({
           api,
@@ -190,7 +222,7 @@ const FilterPanel = memo(function FilterPanel({
         });
       }, 300);
     },
-    [api, filter]
+    [allowEmptySearchPreload, allowFreeText, api, filter, minQueryLength]
   );
 
   const handleValueChange = useCallback((val, text = val) => {
@@ -239,19 +271,22 @@ const FilterPanel = memo(function FilterPanel({
           loading={loading}
           placeholder={placeholder}
           enumChoices={enumChoices}
+          hasSearched={hasSearched}
+          allowEmptySearchPreload={allowEmptySearchPreload}
+          noSuggestionsText={noSuggestionsText}
           onChange={handleValueChange}
           onSearch={handleSearch}
         />
 
         <InlineStack gap="200" align="end">
           <Button onClick={onCancel}>
-            {t("cancel", "Cancel")}
+            {cancelLabel || t("cancel", "Cancel")}
           </Button>
           <Button
             variant="primary"
             disabled={
               operatorRequiresValue(draft.operator)
-                ? !String(draft.value || "").trim()
+                ? !hasDraftValue(draft.value)
                 : false
             }
             onClick={handleApply}

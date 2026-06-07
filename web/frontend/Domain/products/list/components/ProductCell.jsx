@@ -3,57 +3,36 @@
 import React, { memo } from "react";
 import { InlineStack, Box, Thumbnail, Text } from "@shopify/polaris";
 
-function ProductCellComponent({
+const ProductCell = memo(function ProductCell({
   title = "",
   handle = "",
   imageUrl = "",
 }) {
+  const thumbnailAlt = title ? `Product image for ${title}` : "";
+
   return (
-    <InlineStack
-      gap="300"
-      blockAlign="center"
-      wrap={false}
-    >
-      {/* Thumbnail — fixed width */}
+    <InlineStack gap="300" blockAlign="center" wrap={false}>
       <Box minWidth="40px">
         <Thumbnail
-          source={imageUrl}
-          alt="" // decorative image
+          source={imageUrl || undefined}
+          alt={thumbnailAlt}
           size="small"
         />
       </Box>
 
-      {/* Text container — CRITICAL FIX */}
-      <Box
-        maxWidth="320px"
-        minWidth="0"   // ✅ REQUIRED for truncation
-      >
-        <Text
-          as="p"
-          fontWeight="medium"
-          truncate
-        >
+      <Box minWidth="0">
+        <Text as="p" fontWeight="medium" truncate>
           {title}
         </Text>
 
         {handle && (
-          <Text
-            as="p"
-            tone="subdued"
-            variant="bodySm"
-            truncate
-          >
+          <Text as="p" tone="subdued" variant="bodySm" truncate>
             {handle}
           </Text>
         )}
       </Box>
     </InlineStack>
   );
-}
-
-/**
- * Memoized component
- */
-const ProductCell = memo(ProductCellComponent);
+});
 
 export default ProductCell;

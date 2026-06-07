@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useState, useCallback, useEffect, useDeferredValue, useRef } from "react";
+import React, { memo, useMemo, useState, useCallback, useEffect, useRef } from "react";
 import {
   BlockStack,
   Text,
@@ -21,15 +21,15 @@ const ProductsFilters = memo(function ProductsFilters({
   onClearAll,
   availableFilters = [],
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [activeFilterKey, setActiveFilterKey] = useState(null);
   const [searchDraft, setSearchDraft] = useState("");
-  const deferredSearchDraft = useDeferredValue(searchDraft);
 
   const onCommitSearchRef = useRef(onCommitSearch);
   const hasMountedRef = useRef(false);
+  const previousSearchResetSignalRef = useRef(searchResetSignal);
   const lastCommittedSearchRef = useRef("");
   useEffect(() => {
     onCommitSearchRef.current = onCommitSearch;
@@ -38,38 +38,46 @@ const ProductsFilters = memo(function ProductsFilters({
   useEffect(() => {
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
-      lastCommittedSearchRef.current = deferredSearchDraft;
+      lastCommittedSearchRef.current = searchDraft;
       return;
     }
 
-    if (lastCommittedSearchRef.current === deferredSearchDraft) {
+    if (lastCommittedSearchRef.current === searchDraft) {
       return;
     }
 
     const timer = window.setTimeout(() => {
-      lastCommittedSearchRef.current = deferredSearchDraft;
-      onCommitSearchRef.current?.(deferredSearchDraft);
+      lastCommittedSearchRef.current = searchDraft;
+      onCommitSearchRef.current?.(searchDraft);
     }, 300);
 
     return () => {
       window.clearTimeout(timer);
     };
-  }, [deferredSearchDraft]);
+  }, [searchDraft]);
 
   useEffect(() => {
+    if (previousSearchResetSignalRef.current === searchResetSignal) {
+      return;
+    }
+
+    previousSearchResetSignalRef.current = searchResetSignal;
     setSearchDraft("");
+    lastCommittedSearchRef.current = "";
+    onCommitSearchRef.current?.("");
   }, [searchResetSignal]);
 
   const translatedText = useMemo(
     () => ({
-      filtersHeading: t("filters"),
-      filtersDescription: t("filtersDescription"),
-      searchPlaceholder: t("searchPlaceholder"),
-      addFilter: t("addFilter"),
+      filtersHeading: t("filters", "Filters"),
+      filtersDescription: t("filtersDescription", ""),
+      searchPlaceholder: t("searchPlaceholder", "Search products"),
+      searchLabel: t("searchLabel", "Search products"),
+      addFilter: t("addFilter", "Add filter"),
       clearAll: t("clearFilters", "Clear Filters"),
-      cancel: t("cancel", "Cancel"),
+      back: t("back", "Back"),
     }),
-    [t, i18n.language]
+    [t]
   );
 
   const translatedFilters = useMemo(
@@ -78,7 +86,7 @@ const ProductsFilters = memo(function ProductsFilters({
         ...filter,
         translatedLabel: t(`fieldLabels.${filter.key}`, filter.label),
       })),
-    [availableFilters, t, i18n.language]
+    [availableFilters, t]
   );
 
   const activeFilter = useMemo(
@@ -89,7 +97,8 @@ const ProductsFilters = memo(function ProductsFilters({
 
   const appliedFilterMap = useMemo(() => {
     return appliedFilters.reduce((acc, item) => {
-      acc[item.key] = item;
+      const key = item.key ?? item.field;
+      if (key) acc[key] = item;
       return acc;
     }, {});
   }, [appliedFilters]);
@@ -106,6 +115,21 @@ const ProductsFilters = memo(function ProductsFilters({
 
   const handleSelectFilter = useCallback((filterKey) => {
     setActiveFilterKey(filterKey);
+  }, []);
+
+  const filterActionHandlers = useMemo(
+    () =>
+      Object.fromEntries(
+        translatedFilters.map((filter) => [
+          filter.key,
+          () => handleSelectFilter(filter.key),
+        ])
+      ),
+    [translatedFilters, handleSelectFilter]
+  );
+
+  const handleClearSearch = useCallback(() => {
+    setSearchDraft("");
   }, []);
 
   const handleBackToList = useCallback(() => {
@@ -127,9 +151,9 @@ const ProductsFilters = memo(function ProductsFilters({
     () =>
       translatedFilters.map((filter) => ({
         content: filter.translatedLabel,
-        onAction: () => handleSelectFilter(filter.key),
+        onAction: filterActionHandlers[filter.key],
       })),
-    [translatedFilters, handleSelectFilter]
+    [translatedFilters, filterActionHandlers]
   );
 
   return (
@@ -142,12 +166,13 @@ const ProductsFilters = memo(function ProductsFilters({
       <InlineStack gap="200" wrap blockAlign="center">
         <Box minWidth="320px">
           <TextField
+            label={translatedText.searchLabel}
             labelHidden
             value={searchDraft}
             placeholder={translatedText.searchPlaceholder}
             onChange={setSearchDraft}
             clearButton
-            onClearButtonClick={() => setSearchDraft("")}
+            onClearButtonClick={handleClearSearch}
             autoComplete="off"
           />
         </Box>
@@ -170,6 +195,7 @@ const ProductsFilters = memo(function ProductsFilters({
               initialFilter={appliedFilterMap[activeFilter.key]}
               onApply={handleApplyFilter}
               onCancel={handleBackToList}
+              cancelLabel={translatedText.back}
               t={t}
             />
           )}
@@ -184,8 +210,11 @@ const ProductsFilters = memo(function ProductsFilters({
 
       {appliedFilters.length > 0 && (
         <InlineStack gap="200" wrap>
-          {appliedFilters.map((item) => (
-            <Tag key={item.key} onRemove={item.onRemove}>
+          {appliedFilters.map((item, index) => (
+            <Tag
+              key={item.key ?? item.field ?? index}
+              onRemove={typeof item.onRemove === "function" ? item.onRemove : undefined}
+            >
               {item.label}
             </Tag>
           ))}
@@ -201,9 +230,11 @@ const InlineHeader = memo(function InlineHeader({ heading, description }) {
       <Text as="h3" variant="headingSm">
         {heading}
       </Text>
-      <Text as="p" variant="bodySm" tone="subdued">
-        {description}
-      </Text>
+      {description && (
+        <Text as="p" variant="bodySm" tone="subdued">
+          {description}
+        </Text>
+      )}
     </BlockStack>
   );
 });

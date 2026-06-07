@@ -31,7 +31,6 @@ import {
   setProducts,
   selectFilters,
   selectCursor,
-  selectFilterHash,
   selectCursorFilterHash,
   selectProductIds,
   applyFilterHashAndResetCursor,
@@ -40,6 +39,17 @@ import {
 import { buildCanonicalFilterHash } from "../hooks/useProducts";
 const MIN_PRODUCT_SEARCH_LENGTH = 2;
 const STATUS_RAIL_MIN_HEIGHT = "84px";
+
+function getStableProductId(product) {
+  const id =
+    product?.shopifyProductId ||
+    product?.adminGraphqlApiId ||
+    product?.gid ||
+    product?.id ||
+    product?.__rowId;
+
+  return typeof id === "string" && id.trim() ? id.trim() : "";
+}
 
 export default function ProductsPage() {
   const dispatch = useDispatch();
@@ -50,14 +60,13 @@ export default function ProductsPage() {
   const filterState = useSelector(selectFilters);
   const productIds = useSelector(selectProductIds);
   const cursor = useSelector(selectCursor);
-  const filterHash = useSelector(selectFilterHash);
   const cursorFilterHash = useSelector(selectCursorFilterHash);
   const { t } = useTranslation();
 
   const bootstrapQuery = useQuery({
     queryKey: ["bootstrap-products"],
     queryFn: async ({ signal }) =>
-      api.get("/api/bootstrap/products?limit=20", { signal }),
+      api.get("/api/bootstrap/products?limit=50", { signal }),
     staleTime: 10_000,
     retry: 1,
   });
@@ -70,9 +79,13 @@ export default function ProductsPage() {
   const {
     filters: availableFilters,
     getFilterByKey,
+    fallbackReason: filterRegistryFallbackReason,
   } = useFilterRegistry({
     initialData: bootstrapFilterRegistry || undefined,
   });
+  const isFilterRegistryDegraded =
+    filterRegistryFallbackReason === "error" ||
+    filterRegistryFallbackReason === "malformed";
 
   const [committedSearch, setCommittedSearch] = useState("");
   const [searchResetSignal, setSearchResetSignal] = useState(0);
@@ -107,9 +120,14 @@ export default function ProductsPage() {
     ];
   }, [filterState, committedSearch]);
 
+  const effectiveFilterHash = useMemo(
+    () => buildCanonicalFilterHash(effectiveFilters),
+    [effectiveFilters],
+  );
+
   const bootstrapProductInitialData =
     cursor == null &&
-      String(filterHash || "[]") === "[]" &&
+      effectiveFilterHash === "[]" &&
       bootstrapProductList
       ? {
         products: Array.isArray(bootstrapProductList.products)
@@ -117,6 +135,8 @@ export default function ProductsPage() {
           : [],
         pagination: bootstrapProductList.pagination || null,
         count: Number(bootstrapProductList.count || 0),
+        unavailableReason: bootstrapProductList.unavailableReason || null,
+        mirrorHealth: bootstrapProductList.mirrorHealth || null,
       }
       : undefined;
 
@@ -130,11 +150,11 @@ export default function ProductsPage() {
     error,
     hasFetched,
     refetch,
+    filterHash: productsFilterHash,
   } =
     useProducts({
       cursor,
       filterParams: effectiveFilters,
-      filterHash,
       cursorFilterHash,
       initialData: bootstrapProductInitialData,
     });
@@ -152,7 +172,7 @@ export default function ProductsPage() {
   const productIdsCsv = useMemo(
     () =>
       products
-        .map((product) => String(product?.id || "").trim())
+        .map(getStableProductId)
         .filter(Boolean)
         .join(","),
     [products],
@@ -245,7 +265,7 @@ export default function ProductsPage() {
     const safeProducts = Array.isArray(products) ? products : [];
 
     const nextSignature = safeProducts
-      .map((product) => String(product?.id || ""))
+      .map(getStableProductId)
       .filter(Boolean)
       .join("|");
 
@@ -430,6 +450,24 @@ export default function ProductsPage() {
     return null;
   }, [isSyncInProgress, shouldShowEmptyState, shouldShowLoadingState, totalCount, t]);
 
+  const handleNextPage = useCallback(() => {
+    dispatch(
+      setCursorForFilterHash({
+        cursor: pagination?.nextCursor || null,
+        filterHash: productsFilterHash,
+      }),
+    );
+  }, [dispatch, pagination?.nextCursor, productsFilterHash]);
+
+  const handlePreviousPage = useCallback(() => {
+    dispatch(
+      setCursorForFilterHash({
+        cursor: pagination?.prevCursor || null,
+        filterHash: productsFilterHash,
+      }),
+    );
+  }, [dispatch, pagination?.prevCursor, productsFilterHash]);
+
   return (
     <Page
       title={t("pageTitle")}
@@ -495,6 +533,24 @@ export default function ProductsPage() {
         <Layout.Section>
           <Card>
             <Box padding="400">
+              {isFilterRegistryDegraded && (
+                <Box paddingBlockEnd="300">
+                  <Banner
+                    tone="warning"
+                    title={t("filterRegistryLoadErrorTitle", {
+                      defaultValue: "Filter definitions could not be loaded",
+                    })}
+                  >
+                    <p>
+                      {t("filterRegistryLoadErrorMessage", {
+                        reason: filterRegistryFallbackReason,
+                        defaultValue:
+                          "Refresh the page before creating or changing filters.",
+                      })}
+                    </p>
+                  </Banner>
+                </Box>
+              )}
               <ProductsFilters
                 appliedFilters={appliedFilters}
                 onFilterChange={onFilterChange}
@@ -525,22 +581,8 @@ export default function ProductsPage() {
               productIds={productIds}
               loading={shouldShowLoadingState}
               pagination={pagination}
-              onNext={() =>
-                dispatch(
-                  setCursorForFilterHash({
-                    cursor: pagination?.nextCursor || null,
-                    filterHash,
-                  }),
-                )
-              }
-              onPrev={() =>
-                dispatch(
-                  setCursorForFilterHash({
-                    cursor: pagination?.prevCursor || null,
-                    filterHash,
-                  }),
-                )
-              }
+              onNext={handleNextPage}
+              onPrev={handlePreviousPage}
               emptyHeading={
                 isProductMirrorUnavailable
                   ? "Sync products to show rows"

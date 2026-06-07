@@ -25,6 +25,28 @@ export const InputType = {
   API_AUTOCOMPLETE: "apiAutocomplete",
 };
 
+export const OperationKind = {
+  SET: "SET",
+  INCREASE: "INCREASE",
+  DECREASE: "DECREASE",
+  CHANGE: "CHANGE",
+  APPEND: "APPEND",
+  PREPEND: "PREPEND",
+  REMOVE: "REMOVE",
+  SEARCH_REPLACE: "SEARCH_REPLACE",
+  DELETE: "DELETE",
+};
+
+export const ValueKind = {
+  FIXED_AMOUNT: "FIXED_AMOUNT",
+  PERCENTAGE: "PERCENTAGE",
+  TEXT: "TEXT",
+  ARRAY: "ARRAY",
+  ENUM: "ENUM",
+  LOCATION: "LOCATION",
+  NONE: "NONE",
+};
+
 /**
  * Action factory function
  */
@@ -56,7 +78,13 @@ const ActionTemplates = {
         "Enter the percentage",
         FieldType.NUMERIC,
         InputType.SINGLE,
-        { max: 100, suffix: "%" }
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.DECREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
       ),
 
     increaseByPercent: () =>
@@ -66,7 +94,13 @@ const ActionTemplates = {
         "Enter the percentage",
         FieldType.NUMERIC,
         InputType.SINGLE,
-        { max: 100, suffix: "%" }
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.INCREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
       ),
 
     changeByAmount: () =>
@@ -74,7 +108,12 @@ const ActionTemplates = {
         "Changed by fixed amount",
         "Changed by fixed amount",
         "numeric.enterAmount", 
-        FieldType.NUMERIC
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.CHANGE,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
       ),
       
 
@@ -83,7 +122,12 @@ const ActionTemplates = {
         "Set to fixed value",
         "Set to fixed value",
         "Enter the value",
-        FieldType.NUMERIC
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
       ),
 
     percentageOfCompareAtPrice: () =>
@@ -93,20 +137,29 @@ const ActionTemplates = {
         "Enter the percentage",
         FieldType.NUMERIC,
         InputType.SINGLE,
-        { max: 100, suffix: "%" }
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.PERCENTAGE,
+        }
       ),
   },
 
   danger: {
     deleteProducts: () =>
-     createAction(
-    "Delete products",
-    "DELETE_PRODUCTS",
--   "This action will permanently delete selected products. This cannot be undone.",
-+   "danger.deleteProductsWarning",
-    FieldType.DANGER,
-    InputType.NONE,
-    { requiresConfirmation: true }
+      createAction(
+        "Delete products",
+        "DELETE_PRODUCTS",
+        "danger.deleteProductsWarning",
+        FieldType.DANGER,
+        InputType.NONE,
+        {
+          requiresConfirmation: true,
+          operationKind: OperationKind.DELETE,
+          valueKind: ValueKind.NONE,
+        }
       ),
   },
 
@@ -116,7 +169,12 @@ const ActionTemplates = {
         "setTextToValue",
         "Set text to value",
         "textInput.enterText",
-        FieldType.TEXT
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.TEXT,
+        }
       ),
 
     append: () =>
@@ -124,7 +182,12 @@ const ActionTemplates = {
         "addTextToEnd",
         "Add text to end",
        "textInput.enterTextToAdd",
-        FieldType.TEXT
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.APPEND,
+          valueKind: ValueKind.TEXT,
+        }
       ),
 
     prepend: () =>
@@ -132,7 +195,12 @@ const ActionTemplates = {
         "addTextToBeginning",
         "Add text to beginning",
          "textInput.enterTextToAdd",
-        FieldType.TEXT
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.PREPEND,
+          valueKind: ValueKind.TEXT,
+        }
       ),
 
     removeFromEnd: () =>
@@ -140,7 +208,12 @@ const ActionTemplates = {
         "removeTextFromEnd",
         "Remove text from end",
          "textInput.enterTextToRemove",
-        FieldType.TEXT
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
       ),
 
     removeFromStart: () =>
@@ -148,7 +221,12 @@ const ActionTemplates = {
         "removeTextFromBeginning",
         "Remove text from beginning",
          "textInput.enterTextToRemove",
-        FieldType.TEXT
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
       ),
 
     limitLength: () =>
@@ -156,7 +234,12 @@ const ActionTemplates = {
         "limitTextLength",
         "Limit length of text",
          "textInput.enterMaxCharacterLength",
-        FieldType.NUMERIC
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
       ),
 
     searchReplace: () =>
@@ -165,7 +248,11 @@ const ActionTemplates = {
         "Search/Replace",
          "textInput.enterSearchAndReplaceValues",
         FieldType.TEXT,
-        InputType.SEARCH_REPLACE
+        InputType.SEARCH_REPLACE,
+        {
+          operationKind: OperationKind.SEARCH_REPLACE,
+          valueKind: ValueKind.TEXT,
+        }
       ),
 
     removeFromWord: () =>
@@ -173,7 +260,12 @@ const ActionTemplates = {
         "removeTextToEndFromWord",
         "Remove text from a word to the end",
        "textInput.enterWord",
-        FieldType.TEXT
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
       ),
 
     removeUpToWord: () =>
@@ -181,7 +273,12 @@ const ActionTemplates = {
         "removeTextUpToWord",
         "Remove text up to and including a word",
         "textInput.enterWord",
-        FieldType.TEXT
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
       ),
   },
 
@@ -193,7 +290,11 @@ const ActionTemplates = {
         "tagInput.commaSeparated",
         FieldType.ARRAY,
         InputType.SINGLE,
-        { placeholder }
+        {
+          placeholder,
+          operationKind: OperationKind.APPEND,
+          valueKind: ValueKind.ARRAY,
+        }
       ),
 
     remove: (placeholder = "item1, item2, item3") =>
@@ -203,7 +304,11 @@ const ActionTemplates = {
         "tagInput.commaSeparated",
         FieldType.ARRAY,
         InputType.SINGLE,
-        { placeholder }
+        {
+          placeholder,
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.ARRAY,
+        }
       ),
 
     rename: () =>
@@ -216,6 +321,8 @@ const ActionTemplates = {
         {
           searchLabel: "tagInput.old",
           replaceLabel: "tagInput.new",
+          operationKind: OperationKind.SEARCH_REPLACE,
+          valueKind: ValueKind.ARRAY,
         }
       ),
 
@@ -229,6 +336,8 @@ const ActionTemplates = {
         {
           searchLabel: "tagInput.search",
           replaceLabel: "tagInput.replace",
+          operationKind: OperationKind.SEARCH_REPLACE,
+          valueKind: ValueKind.ARRAY,
         }
       ),
 
@@ -239,7 +348,11 @@ const ActionTemplates = {
         "tagInput.commaSeparated",
         FieldType.ARRAY,
         InputType.SINGLE,
-        { placeholder }
+        {
+          placeholder,
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.ARRAY,
+        }
       ),
 
     addFromApi: (
@@ -260,6 +373,8 @@ const ActionTemplates = {
           valueKey,
           requiresApiData: true,
           allowMultiple: true,
+          operationKind: OperationKind.APPEND,
+          valueKind: ValueKind.ARRAY,
         }
       ),
 
@@ -281,6 +396,8 @@ const ActionTemplates = {
           valueKey,
           requiresApiData: true,
           allowMultiple: true,
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.ARRAY,
         }
       ),
   },
@@ -298,7 +415,11 @@ const ActionTemplates = {
         helperLabel,
         FieldType.ENUM,
         InputType.CHOICE_LIST,
-        { choices }
+        {
+          choices,
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.ENUM,
+        }
       ),
   },
 
@@ -310,7 +431,13 @@ const ActionTemplates = {
         "Enter the percentage",
         FieldType.NUMERIC,
         InputType.LOCATION_SELECT,
-        { max: 100, suffix: "%" }
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.DECREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
       ),
 
     increaseByPercent: () =>
@@ -320,7 +447,13 @@ const ActionTemplates = {
         "Enter the percentage",
         FieldType.NUMERIC,
         InputType.LOCATION_SELECT,
-        { max: 100, suffix: "%" }
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.INCREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
       ),
 
     changeByAmount: () =>
@@ -329,7 +462,11 @@ const ActionTemplates = {
         "Changed by fixed amount",
         "Enter the amount",
         FieldType.NUMERIC,
-        InputType.LOCATION_SELECT
+        InputType.LOCATION_SELECT,
+        {
+          operationKind: OperationKind.CHANGE,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
       ),
 
     setToValue: () =>
@@ -338,7 +475,11 @@ const ActionTemplates = {
         "Set to fixed value",
         "Enter the value",
         FieldType.NUMERIC,
-        InputType.LOCATION_SELECT
+        InputType.LOCATION_SELECT,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
       ),
   },
 
@@ -355,6 +496,8 @@ const ActionTemplates = {
           labelKey,
           valueKey,
           requiresApiData: true,
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.ENUM,
         }
       ),
   },
