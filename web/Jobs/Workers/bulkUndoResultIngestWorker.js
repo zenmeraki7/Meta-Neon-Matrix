@@ -29,6 +29,8 @@ const BULK_OPERATION_STATUS_QUERY = `#graphql
         id
         status
         type
+        url
+        partialDataUrl
       }
     }
   }
@@ -59,7 +61,11 @@ async function fetchAuthoritativeBulkStatus({ shop, bulkOperationId }) {
   if (!status) {
     throw new Error(`UNDO_BULK_OPERATION_STATUS_UNEXPECTED:${node.status || "UNKNOWN"}`);
   }
-  return status;
+  return {
+    status,
+    url: node.url || null,
+    partialDataUrl: node.partialDataUrl || null,
+  };
 }
 
 async function processBulkUndoResultIngest(job) {
@@ -124,15 +130,17 @@ async function processBulkUndoResultIngest(job) {
     };
   }
 
-  const authoritativeStatus = await fetchAuthoritativeBulkStatus({
+  const authoritative = await fetchAuthoritativeBulkStatus({
     shop,
     bulkOperationId,
   });
+  const authoritativeStatus = authoritative.status;
   const service = new UndoResultIngestionService();
   const result = await service.ingestUndoBulkOperationWebhook({
     shop,
     bulkOperationId,
     status: authoritativeStatus,
+    resultUrl: authoritative.url || authoritative.partialDataUrl,
   });
 
   return {

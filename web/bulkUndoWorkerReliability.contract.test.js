@@ -15,7 +15,19 @@ test("bulk undo fences accepted Shopify submissions for reconciliation", () => {
   assert.match(worker, /BULK_UNDO_RECONCILE_SUBMITTED_AFTER_TRANSITION_FAILURE/);
   assert.match(repository, /BULK_UNDO_STATES\.RECONCILE_SUBMITTED/);
   assert.match(repository, /reconcileReason: "SUBMITTED_BUT_LOCAL_TRANSITION_FAILED"/);
+  assert.match(repository, /BULK_UNDO_STATES\.RETRYABLE_FAILURE/);
   assert.match(ingestion, /BULK_UNDO_STATES\.RECONCILE_SUBMITTED/);
+});
+
+test("bulk undo conflict details live in chunks, not truncated undo JSON", () => {
+  const repository = read("web/repositories/bulkUndoExecutionRepository.js");
+  const projection = read("web/services/historyStatusProjectionService.js");
+
+  assert.doesNotMatch(repository, /conflicts: conflicts\.slice\(0, 200\)/);
+  assert.match(repository, /conflicts: \[\]/);
+  assert.match(repository, /conflictStorage/);
+  assert.match(repository, /source: "UndoOperationConflictChunk"/);
+  assert.match(projection, /undo\?\.conflictReport\?\.conflictCount/);
 });
 
 test("bulk undo checks all active Shopify mutation states and session token", () => {

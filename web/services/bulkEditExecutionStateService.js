@@ -13,6 +13,7 @@ export const BULK_EDIT_EXECUTION_STATES = {
 export const BULK_UNDO_STATES = {
   PLANNED: "planned",
   QUEUED: "queued",
+  CHANGE_RECORDS_PENDING: "change_records_pending",
   DISPATCHING: "dispatching",
   AWAITING_CONFIRMATION: "awaiting_confirmation",
   RECONCILE_SUBMITTED: "reconcile_submitted",

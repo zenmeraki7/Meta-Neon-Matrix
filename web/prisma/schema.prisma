@@ -235,6 +235,7 @@ model Shop {
 
   variantMetafields VariantMetafield[]
   bulkEditSessions  BulkEditSession[]
+  bulkEditChanges   BulkEditChange[]
   syncCursors       SyncCursor[]
 
   @@map("shops")
@@ -258,8 +259,6 @@ model VariantMetafield {
   lastSyncedAt       DateTime?   @map("last_synced_at")
 
   shop               Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  changes            BulkEditChange[]
-
   @@index([variantId, namespace, key])
   @@index([shopId, isDirty])
   @@unique([shopId, variantId, namespace, key])
@@ -280,11 +279,17 @@ model DeadLetterChange {
 }
 
 model BulkEditSession {
-  id        BigInt        @id @default(autoincrement())
-  shopId    String        @map("shop_id")
-  status    SessionStatus @default(DRAFT)
-  createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @updatedAt @map("updated_at")
+  id           String        @id @default(uuid()) @db.Uuid
+  shopId       String        @map("shop_id")
+  status       SessionStatus @default(DRAFT)
+  filterParams Json          @default("{}") @map("filter_params")
+  variantCount Int           @default(0) @map("variant_count")
+  changeCount  Int           @default(0) @map("change_count")
+  writtenCount Int           @default(0) @map("written_count")
+  errorCount   Int           @default(0) @map("error_count")
+  completedAt  DateTime?     @map("completed_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
 
   shop      Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
   changes   BulkEditChange[]
@@ -293,22 +298,34 @@ model BulkEditSession {
 }
 
 model BulkEditChange {
-  id                 BigInt         @id @default(autoincrement())
-  sessionId          BigInt         @map("session_id")
-  variantMetafieldId BigInt         @map("variant_metafield_id")
-  newValue           String         @map("new_value")
-  compareDigest      String         @map("compare_digest")
-  status             ChangeStatus   @default(PENDING)
-  errorCode          String?        @map("error_code")
-  retryable          Boolean        @default(true)
-  createdAt          DateTime       @default(now()) @map("created_at")
-  updatedAt          DateTime       @updatedAt @map("updated_at")
+  id                 String           @id @default(uuid()) @db.Uuid
+  sessionId          String           @map("session_id") @db.Uuid
+  shopId             String           @map("shop_id")
+  variantId          BigInt           @map("variant_id")
+  definitionId       String?          @map("definition_id") @db.Uuid
+  shopifyOwnerId     String           @map("shopify_owner_id")
+  fieldName          String           @map("field_name")
+  namespace          String
+  key                String
+  type               String?
+  oldValue           String?          @map("old_value")
+  newValue           String?          @map("new_value")
+  compareDigest      String?          @map("compare_digest")
+  status             ChangeStatus     @default(PENDING)
+  attemptCount       Int              @default(0) @map("attempt_count")
+  shopifyError       String?          @map("shopify_error")
+  retryable          Boolean          @default(true)
+  writingStartedAt   DateTime?        @map("writing_started_at")
+  appliedAt          DateTime?        @map("applied_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
 
-  session            BulkEditSession  @relation(fields: [sessionId], references: [id])
-  variantMetafield   VariantMetafield @relation(fields: [variantMetafieldId], references: [id])
+  session            BulkEditSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  shop               Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
-  @@unique([sessionId, variantMetafieldId])
-  @@index([sessionId, status])
+  @@unique([sessionId, variantId, namespace, key])
+  @@index([shopId, sessionId, status])
+  @@index([shopId, status, writingStartedAt])
   @@map("bulk_edit_changes")
 }
 
@@ -552,6 +569,7 @@ model EditHistory {
   snapshotSetId             String?
   automaticProductRuleId    String?
   automaticProductRuleRunId String?                @unique
+  sourceEditHistoryId       String?
   triggerType               EditHistoryTriggerType @default(MANUAL)
   error                     Json?
   createdAt                 DateTime               @default(now())
@@ -581,7 +599,10 @@ model EditHistory {
   resumedAt                 DateTime?
   changeRecords             ChangeRecord[]
   ingestionCheckpoints      EditHistoryIngestionCheckpoint[]
-  undoOperations            UndoOperation[]
+  undoOperations            UndoOperation[]        @relation("UndoSourceHistory")
+  undoJobOperation          UndoOperation?          @relation("UndoJobHistory")
+  sourceEditHistory         EditHistory?            @relation("EditHistoryUndoChain", fields: [sourceEditHistoryId], references: [id], onDelete: SetNull)
+  derivedUndoJobs           EditHistory[]           @relation("EditHistoryUndoChain")
   recoveryAudits            BulkEditRecoveryAudit[]
   snapshotSet               TargetSnapshotSet?     @relation(fields: [snapshotSetId], references: [id])
 
@@ -598,6 +619,7 @@ model EditHistory {
   @@index([automaticProductRuleId])
   @@index([automaticProductRuleRunId])
   @@index([shop, canonicalFilterKey])
+  @@index([shop, sourceEditHistoryId])
 }
 
 model UndoOperation {
@@ -609,16 +631,19 @@ model UndoOperation {
   status             String   @default("pending")
   state              String   @default("queued")
   bulkOperationId    String?
+  undoEditHistoryId  String?  @unique
   processedCount     Int      @default(0)
   totalEligibleCount Int      @default(0)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  editHistory        EditHistory @relation(fields: [sourceEditHistoryId], references: [id], onDelete: Cascade)
+  editHistory        EditHistory  @relation("UndoSourceHistory", fields: [sourceEditHistoryId], references: [id], onDelete: Cascade)
+  undoEditHistory    EditHistory? @relation("UndoJobHistory", fields: [undoEditHistoryId], references: [id], onDelete: SetNull)
   conflictChunks     UndoOperationConflictChunk[]
 
   @@unique([shop, sourceEditHistoryId])
   @@index([shop, status, updatedAt])
+  @@index([shop, undoEditHistoryId])
 }
 
 model UndoOperationConflictChunk {
@@ -1238,6 +1263,12 @@ model ChangeRecord {
   title               String?
   scope               String
   status              String      @default("pending")
+  attemptCount        Int         @default(0)
+  retryable           Boolean     @default(true)
+  writingStartedAt    DateTime?
+  appliedAt           DateTime?
+  mirrorStatus        String      @default("NOT_PENDING")
+  mirrorAppliedAt     DateTime?
   batchId             String?
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
@@ -1251,6 +1282,9 @@ model ChangeRecord {
   @@index([shop, variantId])
   @@index([shop])
   @@index([status])
+  @@index([shop, status, retryable])
+  @@index([shop, status, writingStartedAt])
+  @@index([shop, editHistoryId, mirrorStatus])
   @@index([batchId])
   @@unique([shop, editHistoryId, batchId, targetIdentity], map: "uniq_change_record_shop_history_batch_target")
 }

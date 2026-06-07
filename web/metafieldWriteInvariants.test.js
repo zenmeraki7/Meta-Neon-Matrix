@@ -27,7 +27,9 @@ function walkFiles(dir, out = []) {
 }
 
 function loadCorpus() {
-  const files = walkFiles(ROOT);
+  const files = walkFiles(ROOT).filter(
+    (file) => path.resolve(file) !== path.resolve(import.meta.filename),
+  );
   return files.map((file) => ({
     file,
     source: fs.readFileSync(file, "utf8"),

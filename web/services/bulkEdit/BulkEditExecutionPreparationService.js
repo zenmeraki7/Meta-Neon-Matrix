@@ -203,6 +203,99 @@ function extractCsvFieldsFromRecord(record) {
   return fields;
 }
 
+function isNonEmptyObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length > 0;
+}
+
+function buildReversibleChangeRecord({
+  history,
+  batchId,
+  row,
+  beforeValues,
+  afterValues,
+  productFieldChanges = [],
+  variantFieldChanges = [],
+  options = {},
+}) {
+  const targetIdentity = String(row?.targetIdentity || row?.targetKey || "").trim();
+  const productId = String(row?.productId || "").trim();
+  if (!targetIdentity) throw new Error("REVERSIBLE_LOG_TARGET_IDENTITY_REQUIRED");
+  if (!productId) throw new Error(`REVERSIBLE_LOG_PRODUCT_ID_REQUIRED:${targetIdentity}`);
+  if (!isNonEmptyObject(beforeValues)) {
+    throw new Error(`REVERSIBLE_LOG_BEFORE_VALUES_REQUIRED:${targetIdentity}`);
+  }
+  if (!isNonEmptyObject(afterValues)) {
+    throw new Error(`REVERSIBLE_LOG_AFTER_VALUES_REQUIRED:${targetIdentity}`);
+  }
+
+  return {
+    editHistoryId: history.id,
+    targetType: String(row?.targetType || "PRODUCT").toUpperCase(),
+    targetIdentity,
+    productId,
+    variantId: row?.variantId ? String(row.variantId).trim() : null,
+    shop: history.shop,
+    mirrorBatchId: history.targetMirrorBatchId,
+    beforeValues,
+    afterValues,
+    options: {
+      ...(options && typeof options === "object" && !Array.isArray(options) ? options : {}),
+      reversibleOperationLog: true,
+      snapshotSetId: history.snapshotSetId,
+      snapshotItemId: row?.id || null,
+    },
+    productFieldChanges,
+    variantFieldChanges,
+    scope: String(row?.targetType || "PRODUCT").toLowerCase(),
+    status: "pending",
+    batchId,
+  };
+}
+
+async function persistAndVerifyReversibleOperationLog({
+  history,
+  batchId,
+  records,
+}) {
+  if (!batchId || !Array.isArray(records) || records.length === 0) {
+    throw new Error("REVERSIBLE_OPERATION_LOG_REQUIRES_BATCH_RECORDS");
+  }
+
+  await db.changeRecord.createMany({
+    data: records,
+    skipDuplicates: true,
+  });
+
+  const persisted = await db.changeRecord.findMany({
+    where: {
+      shop: history.shop,
+      editHistoryId: history.id,
+      batchId,
+      targetIdentity: { in: records.map((record) => record.targetIdentity) },
+    },
+    select: {
+      targetIdentity: true,
+      beforeValues: true,
+      afterValues: true,
+      status: true,
+    },
+  });
+  const persistedByIdentity = new Map(
+    persisted.map((record) => [String(record.targetIdentity), record]),
+  );
+  const missing = records.filter((record) => {
+    const saved = persistedByIdentity.get(record.targetIdentity);
+    return !saved
+      || !isNonEmptyObject(saved.beforeValues)
+      || !isNonEmptyObject(saved.afterValues)
+      || !["pending", "failed"].includes(String(saved.status || "").toLowerCase());
+  });
+  if (missing.length > 0) {
+    throw new Error(`REVERSIBLE_OPERATION_LOG_INCOMPLETE:${missing.length}`);
+  }
+}
+
 async function markSnapshotItemsSkipped({ shop, snapshotSetId, rows, reasonCode, reasonMessage }) {
   const rowIds = rows.map((row) => row?.id).filter(Boolean);
   if (!rowIds.length) return;
@@ -259,6 +352,7 @@ export class BulkEditExecutionPreparationService {
         executionState: true,
         targetMirrorBatchId: true,
         targetSnapshotCount: true,
+        targetMirrorBatchId: true,
         executionIdentity: true,
         cancelRequestedAt: true,
       },
@@ -326,6 +420,7 @@ export class BulkEditExecutionPreparationService {
           variantId: row.variantId,
           targetType: row.targetType,
           targetIdentity: row.targetKey,
+          beforeValues: row.beforeValues,
           plannedMutation: row.plannedMutation,
         }));
         lastProductId = retryPage.cursorTargetKey;
@@ -346,6 +441,7 @@ export class BulkEditExecutionPreparationService {
         variantId: row.variantId,
         targetType: row.targetType,
         targetIdentity: row.targetKey,
+        beforeValues: row.beforeValues,
         plannedMutation: row.plannedMutation,
       }));
       lastProductId = frozenTargetPage.cursorTargetKey;
@@ -387,6 +483,13 @@ export class BulkEditExecutionPreparationService {
         },
         select: {
           productId: true,
+          variantId: true,
+          targetType: true,
+          targetIdentity: true,
+          beforeValues: true,
+          afterValues: true,
+          batchId: true,
+          status: true,
           scope: true,
           options: true,
           productFieldChanges: true,
@@ -417,14 +520,47 @@ export class BulkEditExecutionPreparationService {
       }
 
       const formattedRows = rows
-        .map((row) => csvRowByProductId.get(row.productId))
-        .filter(Boolean);
+        .map((row) => ({
+          row,
+          mutationRow: csvRowByProductId.get(row.productId),
+          record: csvRecords.find((record) => record.productId === row.productId),
+        }))
+        .filter((item) => Boolean(item.mutationRow && item.record));
+      const reversibleRecords = formattedRows.map(({ row, mutationRow, record }) =>
+        buildReversibleChangeRecord({
+          history,
+          batchId,
+          row: {
+            ...row,
+            targetIdentity: record.targetIdentity || row.targetIdentity,
+            targetType: record.targetType || row.targetType,
+            variantId: record.variantId || row.variantId,
+          },
+          beforeValues: record.beforeValues,
+          afterValues: isNonEmptyObject(record.afterValues)
+            ? record.afterValues
+            : {
+              productFieldChanges: record.productFieldChanges || [],
+              variantFieldChanges: record.variantFieldChanges || [],
+              jsonlRow: mutationRow,
+            },
+          productFieldChanges: record.productFieldChanges || [],
+          variantFieldChanges: record.variantFieldChanges || [],
+          options: record.options || {},
+        }));
+      if (reversibleRecords.length > 0) {
+        await persistAndVerifyReversibleOperationLog({
+          history,
+          batchId,
+          records: reversibleRecords,
+        });
+      }
 
       return {
-        formattedProducts: formattedRows.join("\n"),
-        changes: csvRecords,
+        formattedProducts: formattedRows.map((item) => item.mutationRow).join("\n"),
+        changes: reversibleRecords,
         batchId,
-        batchTargetCount: formattedRows.length,
+        batchTargetCount: reversibleRecords.length,
         lastProductId,
         hasMore,
         nextRetryCursorIndex,
@@ -435,6 +571,7 @@ export class BulkEditExecutionPreparationService {
     assertFrozenTargetTypes({ rows, targetGranularity });
 
     const formattedRows = [];
+    const reversibleRecords = [];
     const skippedRows = [];
     for (const row of rows) {
       const mutationRow = extractPlannedMutationJsonlRow(row.plannedMutation);
@@ -443,6 +580,15 @@ export class BulkEditExecutionPreparationService {
         continue;
       }
       formattedRows.push(mutationRow);
+      reversibleRecords.push(buildReversibleChangeRecord({
+        history,
+        batchId,
+        row,
+        beforeValues: row.beforeValues,
+        afterValues: row.plannedMutation,
+        productFieldChanges: row.plannedMutation?.productFieldChanges || [],
+        variantFieldChanges: row.plannedMutation?.variantFieldChanges || [],
+      }));
     }
 
     if (skippedRows.length) {
@@ -455,9 +601,17 @@ export class BulkEditExecutionPreparationService {
       });
     }
 
+    if (reversibleRecords.length > 0) {
+      await persistAndVerifyReversibleOperationLog({
+        history,
+        batchId,
+        records: reversibleRecords,
+      });
+    }
+
     return {
       formattedProducts: formattedRows.join("\n"),
-      changes: rows,
+      changes: reversibleRecords,
       batchId,
       batchTargetCount: formattedRows.length,
       lastProductId,

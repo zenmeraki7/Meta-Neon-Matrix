@@ -1,4 +1,4 @@
-import { getCache, setCache } from "../utils/cacheUtils.js";
+import { clearKeyCaches, getCache, setCache } from "../utils/cacheUtils.js";
 import { db } from "../repositories/repositoryDb.js";
 import {
   getStoreSyncDetailsByShop,
@@ -10,6 +10,35 @@ import {
   getLatestProductSyncByShop,
   getLatestProductSyncSummaryByShop,
 } from "../repositories/syncRepository.js";
+
+const SYNC_STATUS_CACHE_TTL_SECONDS = 60;
+const RECOVERY_COOLDOWN_MS = 60_000;
+const ACTIVE_PRODUCT_COUNT_TTL_SECONDS = 20;
+const recoveryLastRanByShop = new Map();
+
+async function clearSyncStatusCaches(shop) {
+  await Promise.all([
+    clearKeyCaches(`${shop}:sync_details`),
+    clearKeyCaches(`${shop}:sync_summary`),
+    clearKeyCaches(`${shop}:sync_summary:v2`),
+    clearKeyCaches(`${shop}:sync_active_product_count`),
+  ]);
+}
+
+async function maybeRecoverStaleSync(shop) {
+  const now = Date.now();
+  const lastRanAt = recoveryLastRanByShop.get(shop) || 0;
+  if (now - lastRanAt < RECOVERY_COOLDOWN_MS) {
+    return { recovered: false, skippedByCooldown: true };
+  }
+
+  recoveryLastRanByShop.set(shop, now);
+  const recovery = await recoverStaleProductSyncStateByShop(shop);
+  if (recovery.recovered) {
+    await clearSyncStatusCaches(shop);
+  }
+  return recovery;
+}
 
 function toSyncStatusDetailDto(store, latestSync) {
   return {
@@ -95,6 +124,7 @@ function buildMissingStoreSyncSummary() {
 function isSyncRunning(store) {
   return (
     store?.isProductSyncing === true ||
+    // Legacy schema spelling: the DB column is isProductInitialySyning.
     store?.isProductInitialySyning === true ||
     store?.syncProgressStage === "SHOPIFY_BULK_RUNNING" ||
     store?.syncProgressStage === "MIRROR_STAGING"
@@ -104,12 +134,26 @@ function isSyncRunning(store) {
 async function countActiveProductRows(shop, store) {
   if (!store?.activeMirrorBatchId) return 0;
 
-  return db.product.count({
+  const cacheKey = `${shop}:sync_active_product_count:${store.activeMirrorBatchId}`;
+  const cached = await getCache(cacheKey);
+  if (cached !== null && cached !== undefined) {
+    return Number(cached || 0);
+  }
+
+  const count = await db.product.count({
     where: {
       shop,
       mirrorBatchId: store.activeMirrorBatchId,
     },
   });
+  await setCache(cacheKey, count, ACTIVE_PRODUCT_COUNT_TTL_SECONDS);
+  return count;
+}
+
+function syncingProgressMessage(totalProducts) {
+  return totalProducts > 0
+    ? "Product Sync in progress..."
+    : "Product Sync in progress. Total product count is still being prepared.";
 }
 
 function canPreviewProductsFromSummary(store, activeProductRowCount) {
@@ -177,7 +221,7 @@ function toSyncStatusSummaryDto(store, latestSync, activeProductRowCount = 0) {
 }
 
 export async function getSyncStatusDetailForShop(shop) {
-  const recovery = await recoverStaleProductSyncStateByShop(shop);
+  const recovery = await maybeRecoverStaleSync(shop);
   const cacheKey = `${shop}:sync_details`;
   const cached = recovery.recovered ? null : await getCache(cacheKey);
   if (cached) {
@@ -201,7 +245,7 @@ export async function getSyncStatusDetailForShop(shop) {
   const latestSync = await getLatestProductSyncByShop(shop);
 
   const syncDetails = toSyncStatusDetailDto(store, latestSync);
-  await setCache(cacheKey, syncDetails, 300);
+  await setCache(cacheKey, syncDetails, SYNC_STATUS_CACHE_TTL_SECONDS);
 
   return {
     success: true,
@@ -211,7 +255,7 @@ export async function getSyncStatusDetailForShop(shop) {
 }
 
 export async function getSyncStatusSummaryForShop(shop) {
-  const recovery = await recoverStaleProductSyncStateByShop(shop);
+  const recovery = await maybeRecoverStaleSync(shop);
   const cacheKey = `${shop}:sync_summary:v2`;
   const cached = recovery.recovered ? null : await getCache(cacheKey);
   if (cached) {
@@ -237,7 +281,7 @@ export async function getSyncStatusSummaryForShop(shop) {
 
   const activeProductRowCount = await countActiveProductRows(shop, store);
   const syncSummary = toSyncStatusSummaryDto(store, latestSync, activeProductRowCount);
-  await setCache(cacheKey, syncSummary, 60);
+  await setCache(cacheKey, syncSummary, SYNC_STATUS_CACHE_TTL_SECONDS);
 
   return {
     success: true,
@@ -250,7 +294,7 @@ export async function getTrackedProductSyncStatus({
   shop,
   bulkOperationStatusReader = null,
 }) {
-  await recoverStaleProductSyncStateByShop(shop);
+  await maybeRecoverStaleSync(shop);
   const storeDetails = await getStoreTrackedProductSyncByShop(shop);
 
   if (!storeDetails) {
@@ -326,7 +370,7 @@ export async function getTrackedProductSyncStatus({
 
     return {
       success: true,
-      message: "Product Sync in progress...",
+      message: syncingProgressMessage(totalProducts),
       status: "syncing",
       stage: storeDetails.syncProgressStage || latestSync.stage || "SHOPIFY_BULK_RUNNING",
       totalProducts,
@@ -341,7 +385,7 @@ export async function getTrackedProductSyncStatus({
   const processedProducts = storeDetails.productInitialSyncProgress || 0;
   return {
     success: true,
-    message: "Product Sync in progress...",
+    message: syncingProgressMessage(totalProducts),
     status: "syncing",
     stage: storeDetails.syncProgressStage || latestSync?.stage || "MIRROR_STAGING",
     totalProducts,

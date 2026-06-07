@@ -11,7 +11,7 @@ test("result ingestion uses lease plus CAS guard before terminal counter write",
   const source = read("web/services/bulkEdit/BulkEditResultIngestionService.js");
   assert.ok(source.includes('acquireOperationLease'));
   assert.ok(source.includes('namespace: "BULK_EDIT_RESULT_INGEST"'));
-  assert.ok(source.includes('path: ["resultIngestion", "ingestedAt"]'));
+  assert.ok(source.includes('path: ["resultIngestion", "rowsIngestedAt"]'));
   assert.ok(source.includes('equals: null'));
   assert.ok(source.includes('processedCount: {'));
   assert.ok(source.includes('increment: successCount'));
@@ -113,7 +113,8 @@ test("execute submit persists submission intent and reconciles from existing sub
   assert.ok(source.includes("SUBMIT_FENCE_MISMATCH"));
   assert.ok(source.includes("reconciled: true"));
   assert.ok(source.includes("pendingIntent: true"));
-  assert.equal(source.includes("PENDING_SUBMIT_INTENT_REQUIRES_RECONCILIATION"), false);
+  assert.ok(source.includes("PENDING_SUBMIT_INTENT_REQUIRES_RECONCILIATION"));
+  assert.ok(source.includes('submissionStage: "SUBMITTING"'));
   assert.ok(source.includes("const slot = await this.assertNoActiveMutationOperation();"));
 });
 
@@ -145,6 +146,21 @@ test("shopify bulk mutation submission keeps deterministic and bounded submissio
   assert.ok(source.includes("ADAPTIVE_BATCH_SIZE_MAX"));
   assert.ok(source.includes("if (bulkErrors.length && !bulkOperation.id)"));
   assert.ok(source.includes("const stagedUploadPathHash = hashValue(stagedUploadPath);"));
+});
+
+test("primary ChangeRecord ledger tracks write attempts and applied lifecycle", () => {
+  const schema = read("web/prisma/schema.prisma");
+  const submit = read("web/services/bulkEdit/ShopifyBulkMutationService.js");
+  const ingest = read("web/services/bulkEdit/BulkEditResultIngestionService.js");
+
+  assert.match(schema, /attemptCount\s+Int\s+@default\(0\)/);
+  assert.match(schema, /retryable\s+Boolean\s+@default\(true\)/);
+  assert.match(schema, /writingStartedAt\s+DateTime\?/);
+  assert.match(schema, /appliedAt\s+DateTime\?/);
+  assert.match(submit, /attemptCount: \{ increment: 1 \}/);
+  assert.match(submit, /writingStartedAt: new Date\(\)/);
+  assert.match(ingest, /"appliedAt" = CASE/);
+  assert.match(ingest, /"retryable" = CASE/);
 });
 
 test("bulk operation mutation worker routes all mutation statuses through ingest orchestrator only", () => {

@@ -15,8 +15,6 @@ export async function persistUndoConflictChunks({
 }) {
   if (!undoOperationId) return;
 
-  await prisma.undoOperationConflictChunk.deleteMany({ where: { shop, undoOperationId } });
-
   const safeTargetIdentities = safeProducts
     .map((row) => row?.targetIdentity)
     .filter(Boolean);
@@ -48,13 +46,16 @@ export async function persistUndoConflictChunks({
   const all = [...safeChunks, ...conflictChunks];
   if (!all.length) return;
 
-  for (let i = 0; i < all.length; i += 250) {
-    // eslint-disable-next-line no-await-in-loop
-    await prisma.undoOperationConflictChunk.createMany({
-      data: all.slice(i, i + 250),
-      skipDuplicates: true,
-    });
-  }
+  await prisma.$transaction(async (tx) => {
+    await tx.undoOperationConflictChunk.deleteMany({ where: { shop, undoOperationId } });
+    for (let i = 0; i < all.length; i += 250) {
+      // eslint-disable-next-line no-await-in-loop
+      await tx.undoOperationConflictChunk.createMany({
+        data: all.slice(i, i + 250),
+        skipDuplicates: true,
+      });
+    }
+  });
 }
 
 export async function claimUndoExecution({ historyId, shop, executionId, jobId, attempt }) {
@@ -103,6 +104,8 @@ export async function claimUndoExecution({ historyId, shop, executionId, jobId, 
         : {}),
       OR: [
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.QUEUED } },
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.CHANGE_RECORDS_PENDING } },
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.RETRYABLE_FAILURE } },
       ],
     },
@@ -110,7 +113,9 @@ export async function claimUndoExecution({ historyId, shop, executionId, jobId, 
       undo: {
         ...undo,
         status: "processing",
-        state: BULK_UNDO_STATES.DISPATCHING,
+        state: undo.state === BULK_UNDO_STATES.DISPATCHING
+          ? BULK_UNDO_STATES.DISPATCHING
+          : BULK_UNDO_STATES.CHANGE_RECORDS_PENDING,
         startedAt: undo.startedAt || new Date(),
         dispatchStartedAt: new Date(),
         dispatchJobId: jobId,
@@ -131,16 +136,25 @@ export async function findUndoHistoryForExecution(historyId, shop) {
       rules: true,
       undo: true,
       executionIdentity: true,
+      type: true,
     },
   });
 }
 
-export async function findSuccessfulChangeRecords({ historyId, shop, limit, cursorId = null }) {
+export async function findSuccessfulChangeRecords({
+  historyId,
+  shop,
+  limit,
+  cursorId = null,
+  targetIdentities = [],
+}) {
+  const identities = [...new Set(targetIdentities.map((value) => String(value || "").trim()).filter(Boolean))];
   return prisma.changeRecord.findMany({
     where: {
       editHistoryId: historyId,
       shop,
-      status: { in: ["SUCCESS", "VERIFIED"] },
+      status: { in: ["SUCCESS", "VERIFIED", "APPLIED"] },
+      ...(identities.length ? { targetIdentity: { in: identities } } : {}),
     },
     orderBy: { id: "asc" },
     take: limit,
@@ -150,6 +164,24 @@ export async function findSuccessfulChangeRecords({ historyId, shop, limit, curs
         cursor: { id: cursorId },
       }
       : {}),
+  });
+}
+
+export async function findPendingUndoChangeRecords({
+  undoEditHistoryId,
+  shop,
+  limit,
+}) {
+  if (!undoEditHistoryId || !shop) return [];
+  return prisma.changeRecord.findMany({
+    where: {
+      editHistoryId: undoEditHistoryId,
+      shop,
+      status: "PENDING",
+    },
+    orderBy: { id: "asc" },
+    take: limit,
+    select: { id: true, targetIdentity: true, status: true, failureCode: true },
   });
 }
 
@@ -174,6 +206,24 @@ export async function findUndoSnapshotRows({ shop, snapshotSetId, targetKeys }) 
       executionStatus: true,
       shopifyResultId: true,
     },
+  });
+}
+
+export async function findExistingUndoChangeRecords({
+  undoEditHistoryId,
+  shop,
+  targetIdentities = [],
+}) {
+  const identities = [...new Set(targetIdentities.map((value) => String(value || "").trim()).filter(Boolean))];
+  if (!undoEditHistoryId || !shop || !identities.length) return [];
+  return prisma.changeRecord.findMany({
+    where: {
+      editHistoryId: undoEditHistoryId,
+      shop,
+      targetIdentity: { in: identities },
+      status: { in: ["PENDING", "FAILED"] },
+    },
+    select: { targetIdentity: true, status: true, failureCode: true },
   });
 }
 
@@ -222,6 +272,42 @@ export async function persistUndoConflictReport({
   });
 }
 
+export async function markUndoChangeRecordsPrepared({
+  historyId,
+  shop,
+  undo,
+  expectedExecutionId = null,
+}) {
+  return prisma.editHistory.updateMany({
+    where: {
+      id: historyId,
+      shop,
+      ...(expectedExecutionId
+        ? {
+          undo: {
+            path: ["executionIdentity"],
+            equals: expectedExecutionId,
+          },
+        }
+        : {}),
+      OR: [
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.CHANGE_RECORDS_PENDING } },
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.QUEUED } },
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.RETRYABLE_FAILURE } },
+      ],
+    },
+    data: {
+      undo: {
+        ...undo,
+        status: "processing",
+        state: BULK_UNDO_STATES.DISPATCHING,
+        changeRecordsPreparedAt: new Date().toISOString(),
+      },
+    },
+  });
+}
+
 export async function updateUndoOperationState({ undoOperationId, shop, data }) {
   if (!undoOperationId) return;
   await prisma.undoOperation.updateMany({
@@ -248,6 +334,7 @@ export async function moveUndoToAwaitingShopify({
   count,
   limit,
   conflicts,
+  undoOperationId = null,
 }) {
   return prisma.editHistory.updateMany({
     where: {
@@ -263,6 +350,7 @@ export async function moveUndoToAwaitingShopify({
         : {}),
       OR: [
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.CHANGE_RECORDS_PENDING } },
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.QUEUED } },
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.RETRYABLE_FAILURE } },
       ],
@@ -281,7 +369,13 @@ export async function moveUndoToAwaitingShopify({
         status: "processing",
         state: BULK_UNDO_STATES.AWAITING_SHOPIFY,
         bulkOperationId,
-        conflicts: conflicts.slice(0, 200),
+        conflicts: [],
+        conflictStorage: {
+          source: "UndoOperationConflictChunk",
+          undoOperationId,
+          safeTotal: count,
+          conflictTotal: conflicts.length,
+        },
       },
     },
   });
@@ -307,7 +401,12 @@ export async function markUndoReconcileSubmitted({
         ...(expectedExecutionId
           ? [{ undo: { path: ["executionIdentity"], equals: expectedExecutionId } }]
           : []),
-        { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
+        {
+          OR: [
+            { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
+            { undo: { path: ["state"], equals: BULK_UNDO_STATES.RETRYABLE_FAILURE } },
+          ],
+        },
       ],
     },
     data: {
@@ -392,6 +491,7 @@ export async function transitionUndoFailureOrRequeue({
         : {}),
       OR: [
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.QUEUED } },
+        { undo: { path: ["state"], equals: BULK_UNDO_STATES.CHANGE_RECORDS_PENDING } },
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.DISPATCHING } },
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.AWAITING_SHOPIFY } },
         { undo: { path: ["state"], equals: BULK_UNDO_STATES.RETRYABLE_FAILURE } },

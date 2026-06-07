@@ -29,6 +29,7 @@ test("crash after submit response reconciles on restart without second mutation 
       shop,
       executionIdentity,
       cancelRequestedAt: null,
+      undo: { allowed: true },
       batch: batchState,
     },
     submissions: [],
@@ -60,6 +61,16 @@ test("crash after submit response reconciles on restart without second mutation 
         state.submissions.push({ ...data });
         return data;
       },
+    },
+    changeRecord: {
+      findMany: async () => [
+        {
+          targetIdentity: "PRODUCT:gid://shopify/Product/1",
+          beforeValues: { productFieldChanges: [{ field: "title", oldValue: "Before" }] },
+          afterValues: { productFieldChanges: [{ field: "title", newValue: "After" }] },
+          status: "pending",
+        },
+      ],
     },
     $transaction: async (callback) => {
       state.txCalls += 1;

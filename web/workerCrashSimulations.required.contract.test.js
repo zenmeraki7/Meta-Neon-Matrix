@@ -67,7 +67,7 @@ test("6) webhook never arrives has dedicated polling fallback", () => {
 test("7) duplicate webhook x10 guarded by ingest lease/CAS", () => {
   const src = read(SRC.ingestService);
   assert.ok(src.includes("BULK_EDIT_RESULT_INGEST"));
-  assert.ok(src.includes('path: ["resultIngestion", "ingestedAt"]'));
+  assert.ok(src.includes('path: ["resultIngestion", "rowsIngestedAt"]'));
   assert.ok(src.includes("equals: null"));
 });
 

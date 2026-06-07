@@ -163,6 +163,47 @@ function countJsonlLines(payload) {
   return text.split(/\r?\n/).filter((line) => String(line || "").trim().length > 0).length;
 }
 
+function isNonEmptyObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length > 0;
+}
+
+async function assertReversibleOperationLog({
+  db,
+  shop,
+  historyId,
+  batchId,
+  expectedCount,
+}) {
+  if (!batchId) throw new Error("SHOPIFY_WRITE_REQUIRES_REVERSIBLE_LOG_BATCH_ID");
+  const records = await db.changeRecord.findMany({
+    where: {
+      shop,
+      editHistoryId: historyId,
+      batchId,
+    },
+    select: {
+      targetIdentity: true,
+      beforeValues: true,
+      afterValues: true,
+      status: true,
+    },
+  });
+  const validRecords = records.filter((record) =>
+    String(record?.targetIdentity || "").trim()
+    && isNonEmptyObject(record?.beforeValues)
+    && isNonEmptyObject(record?.afterValues)
+    && ["pending", "failed"].includes(String(record?.status || "").toLowerCase()));
+  if (
+    validRecords.length !== records.length
+    || validRecords.length !== Number(expectedCount || 0)
+  ) {
+    throw new Error(
+      `SHOPIFY_WRITE_BLOCKED_REVERSIBLE_LOG_INCOMPLETE:${validRecords.length}:${expectedCount}`,
+    );
+  }
+}
+
 function clampBatchSize(value, min, max) {
   const num = Number.parseInt(String(value || 0), 10);
   if (!Number.isFinite(num)) return min;
@@ -332,6 +373,7 @@ export class ShopifyBulkMutationService {
         id: true,
         shop: true,
         batch: true,
+        undo: true,
         executionIdentity: true,
         cancelRequestedAt: true,
       },
@@ -371,6 +413,16 @@ export class ShopifyBulkMutationService {
     if (alreadySubmitted) {
       throw new Error("SHOPIFY_BULK_OPERATION_ALREADY_SUBMITTED");
     }
+    if (history.undo?.allowed === false) {
+      throw new Error("SHOPIFY_WRITE_BLOCKED_OPERATION_NOT_REVERSIBLE");
+    }
+    await assertReversibleOperationLog({
+      db,
+      shop: this.session.shop,
+      historyId,
+      batchId,
+      expectedCount: batchTargetCount,
+    });
     let batchState = history.batch && typeof history.batch === "object" ? history.batch : {};
     const mergeCurrentBatch = (patch) => mergeBatch(batchState, patch);
     const rememberBatch = (nextBatch) => {
@@ -538,6 +590,10 @@ export class ShopifyBulkMutationService {
         && String(pendingIntent.stagedUploadPath || "").trim()
       ) {
         replayUploadIntent = pendingIntent;
+      } else if (
+        String(pendingIntent.submissionStage || "").toUpperCase() === "SUBMITTING"
+      ) {
+        throw new Error("PENDING_SUBMIT_INTENT_REQUIRES_RECONCILIATION");
       }
     }
 
@@ -734,6 +790,41 @@ export class ShopifyBulkMutationService {
         },
       });
     }
+
+    const submittingSet = await db.editHistory.updateMany({
+      where: {
+        id: historyId,
+        shop: this.session.shop,
+        executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
+      },
+      data: {
+        batch: rememberBatch(mergeCurrentBatch({
+          shopifySubmissionIntent: {
+            ...submissionIntent,
+            submissionStage: "SUBMITTING",
+            stagedUploadPath,
+            stagedUploadPathHash: hashValue(stagedUploadPath),
+          },
+        })),
+      },
+    });
+    if (submittingSet.count !== 1) {
+      throw new Error("SHOPIFY_SUBMISSION_SUBMITTING_TRANSITION_REJECTED");
+    }
+
+    await db.changeRecord.updateMany({
+      where: {
+        shop: this.session.shop,
+        editHistoryId: historyId,
+        batchId,
+        status: { in: ["pending", "PENDING", "failed", "FAILED"] },
+      },
+      data: {
+        attemptCount: { increment: 1 },
+        retryable: true,
+        writingStartedAt: new Date(),
+      },
+    });
 
     const bulkRes = await this.client.query({
       data: {

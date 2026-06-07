@@ -7,11 +7,11 @@ const read = (p) => fs.readFileSync(path.resolve(p), "utf8");
 
 test("bulk edit execute schema requires preview fingerprint + registry versions", () => {
   const src = read("web/validations/controllerRequestSchemas.js");
-  assert.ok(src.includes("previewId: Joi.string().required()"));
-  assert.ok(src.includes("previewFilterHash: Joi.string().required()"));
-  assert.ok(src.includes("previewMirrorBatchId: Joi.string().required()"));
-  assert.ok(src.includes("previewFieldRegistryVersion: Joi.string().required()"));
-  assert.ok(src.includes("previewOperatorRegistryVersion: Joi.string().required()"));
+  assert.match(src, /previewId: previewIdSchema\.required\(\)/);
+  assert.match(src, /previewFilterHash: previewFilterHashSchema\.required\(\)/);
+  assert.match(src, /previewMirrorBatchId: previewMirrorBatchIdSchema\.required\(\)/);
+  assert.match(src, /previewFieldRegistryVersion: Joi\.string\(\)\.trim\(\)\.min\(1\)\.max\(120\)\.required\(\)/);
+  assert.match(src, /previewOperatorRegistryVersion: Joi\.string\(\)\.trim\(\)\.min\(1\)\.max\(120\)\.required\(\)/);
 });
 
 test("undo endpoint is subscription-gated and requires idempotency key in controller", () => {

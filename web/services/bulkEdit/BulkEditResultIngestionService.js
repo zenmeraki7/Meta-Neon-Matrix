@@ -180,6 +180,7 @@ async function mergeChangeRecordIngestionOptions({
   const failureMessage = status === "FAILED"
     ? JSON.stringify(group.shopifyUserErrors || [])
     : null;
+  const appliedAt = status === "SUCCESS" ? new Date() : null;
   const ingestionOptions = {
     resultIngestion: {
       attempt,
@@ -190,7 +191,20 @@ async function mergeChangeRecordIngestionOptions({
   const rows = await db.$executeRaw`
     UPDATE "ChangeRecord"
        SET "status" = ${status},
-           "failureCode" = ${failureCode},
+           "mirrorStatus" = CASE
+             WHEN ${status} = 'SUCCESS' THEN 'MIRROR_PENDING'
+             ELSE 'MIRROR_FAILED'
+           END,
+            "mirrorAppliedAt" = NULL,
+            "appliedAt" = CASE
+              WHEN ${status} = 'SUCCESS' THEN ${appliedAt}
+              ELSE "appliedAt"
+            END,
+            "retryable" = CASE
+              WHEN ${status} = 'SUCCESS' THEN false
+              ELSE false
+            END,
+            "failureCode" = ${failureCode},
            "failureMessage" = ${failureMessage},
            "options" = COALESCE("options", '{}'::jsonb) || ${JSON.stringify(ingestionOptions)}::jsonb
      WHERE "shop" = ${shop}
@@ -579,7 +593,7 @@ export class BulkEditResultIngestionService {
       expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS],
       extraWhere: {
         batch: {
-          path: ["resultIngestion", "ingestedAt"],
+          path: ["resultIngestion", "rowsIngestedAt"],
           equals: null,
         },
       },
@@ -587,13 +601,9 @@ export class BulkEditResultIngestionService {
         processedCount: {
           increment: successCount,
         },
-        status: (failureCount > 0 || malformedRowCount > 0 || unmappedRowCount > 0) ? "partial" : "completed",
-        statusNormalized: normalizeEditHistoryStatus(
-          (failureCount > 0 || malformedRowCount > 0 || unmappedRowCount > 0) ? "partial" : "completed",
-        ),
         batch: mergeBatch(latestBeforeCompletion?.batch || history.batch, {
           resultIngestion: {
-            ingestedAt: new Date().toISOString(),
+            rowsIngestedAt: new Date().toISOString(),
             batchId,
             ingestionRunId,
             successCount,
@@ -609,23 +619,34 @@ export class BulkEditResultIngestionService {
       db: db,
     });
     if (!completedUpdate) {
-      return {
-        skipped: true,
-        reason: "already_ingested",
-        historyId,
-        shop,
-        batchId,
-        successCount: 0,
-        failureCount: 0,
-        unmappedRowCount: 0,
-        malformedRowCount: 0,
-        rowCount: 0,
-      };
+      const priorIngestion = latestBeforeCompletion?.batch?.resultIngestion;
+      if (!priorIngestion?.rowsIngestedAt || priorIngestion?.ingestedAt) {
+        return {
+          skipped: true,
+          reason: "already_ingested",
+          historyId,
+          shop,
+          batchId,
+          successCount: 0,
+          failureCount: 0,
+          unmappedRowCount: 0,
+          malformedRowCount: 0,
+          rowCount: 0,
+        };
+      }
     }
 
     const mirrorApplyResult = await applyMirrorFromSuccessfulChangeRecords({
       shop,
       historyId,
+      finalStatus: (failureCount > 0 || malformedRowCount > 0 || unmappedRowCount > 0)
+        ? "partial"
+        : "completed",
+      finalStatusNormalized: normalizeEditHistoryStatus(
+        (failureCount > 0 || malformedRowCount > 0 || unmappedRowCount > 0)
+          ? "partial"
+          : "completed",
+      ),
     });
 
     const latestHistory = await db.editHistory.findFirst({
@@ -637,6 +658,10 @@ export class BulkEditResultIngestionService {
       where: { id: historyId, shop },
       data: {
         batch: mergeBatch(latestHistory?.batch || history.batch, {
+          resultIngestion: {
+            ...(latestHistory?.batch?.resultIngestion || {}),
+            ingestedAt: new Date().toISOString(),
+          },
           mirrorApply: {
             status: "APPLIED_PENDING_RECONCILE",
             attemptedRows: Number(mirrorApplyResult?.attemptedRows || 0),

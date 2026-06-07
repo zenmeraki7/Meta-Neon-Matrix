@@ -155,7 +155,11 @@ function buildMerchantSafetyState(record, undo, primaryStatus) {
   const batch = record.batch && typeof record.batch === "object" ? record.batch : {};
   const verificationStatus = String(batch.verificationStatus || "").toUpperCase();
   const conflictCount = Number(batch.conflictDetectedCount || 0);
-  const undoConflicts = Array.isArray(undo?.conflicts) ? undo.conflicts.length : 0;
+  const undoConflicts = Number(
+    undo?.conflictReport?.conflictCount
+    || undo?.conflictStorage?.conflictTotal
+    || 0,
+  );
 
   if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING) return "Preparing targets";
   if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN) return "Targets frozen";
@@ -299,6 +303,7 @@ function mapBulkUndoSummary(undoValue) {
 
   switch (state) {
     case BULK_UNDO_STATES.QUEUED:
+    case BULK_UNDO_STATES.CHANGE_RECORDS_PENDING:
       return buildStatusSummary({
         key: "undo_queued",
         label: "Undo queued",

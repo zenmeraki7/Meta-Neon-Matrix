@@ -48,6 +48,7 @@ export async function stageChanges(sessionId, shop, cells) {
           key,
           type,
           shopify_owner_id,
+          field_name,
           old_value,
           new_value,
           compare_digest,
@@ -59,11 +60,12 @@ export async function stageChanges(sessionId, shop, cells) {
           ${resolvedSessionId}::uuid,
           vm.shop_id,
           vm.variant_id,
-          COALESCE(${definitionId}::uuid, vm.definition_id),
+          ${definitionId}::uuid,
           vm.namespace,
           vm.key,
           COALESCE(NULLIF(${type}, ''), vm.type),
           ${shopifyOwnerId},
+          vm.namespace || '.' || vm.key,
           vm.value,
           ${newValue},
           COALESCE(${compareDigest}, vm.compare_digest),
@@ -80,7 +82,8 @@ export async function stageChanges(sessionId, shop, cells) {
           new_value = EXCLUDED.new_value,
           compare_digest = EXCLUDED.compare_digest,
           status = 'PENDING',
-          shopify_error = NULL
+          shopify_error = NULL,
+          updated_at = now()
       `;
 
       // Pending projection for UI only, guarded so sync-safe states are not clobbered.
@@ -146,6 +149,7 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
         key,
         type,
         shopify_owner_id,
+        field_name,
         old_value,
         new_value,
         compare_digest,
@@ -157,11 +161,12 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
         ${resolvedSessionId}::uuid,
         vm.shop_id,
         vm.variant_id,
-        vm.definition_id,
+        NULL::uuid,
         vm.namespace,
         vm.key,
         vm.type,
         'gid://shopify/ProductVariant/' || vm.variant_id::text,
+        vm.namespace || '.' || vm.key,
         vm.value,
         ${newValue},
         vm.compare_digest,
@@ -178,7 +183,8 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
         new_value = EXCLUDED.new_value,
         compare_digest = EXCLUDED.compare_digest,
         status = 'PENDING',
-        shopify_error = NULL
+        shopify_error = NULL,
+        updated_at = now()
       RETURNING id
     `;
     return rows.length;
@@ -218,6 +224,10 @@ export async function listPendingLedgerRows(sessionId, shop) {
       bec.shopify_error,
       bec.created_at,
       bec.applied_at,
+      CASE
+        WHEN bec.status = 'WRITING' THEN true
+        ELSE false
+      END AS requires_reconciliation,
       vm.shopify_metafield_id
     FROM bulk_edit_changes bec
     LEFT JOIN variant_metafields vm

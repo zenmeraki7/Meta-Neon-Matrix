@@ -38,9 +38,12 @@ import { toWorkerOperationStatusDto } from "../../dtos/workerOperationStatusDto.
 import {
   claimUndoExecution,
   findSuccessfulChangeRecords,
+  findExistingUndoChangeRecords,
+  findPendingUndoChangeRecords,
   findUndoHistoryForExecution,
   findUndoSnapshotRows,
   findUndoStateOnly,
+  markUndoChangeRecordsPrepared,
   moveUndoToAwaitingShopify,
   markUndoReconcileSubmitted,
   moveUndoToAwaitingConfirmation,
@@ -184,21 +187,6 @@ const bulkUndoWorker = new Worker(
           historyId,
         });
       }
-      const undoStage = await beginEditHistoryStage({
-        historyId,
-        shop,
-        stage: "undo",
-        executionId,
-      });
-      if (undoStage.state === "completed" || undoStage.state === "running") {
-        return toWorkerOperationStatusDto({
-          skipped: true,
-          reason: `undo_stage_${undoStage.state}`,
-          shop,
-          historyId,
-        });
-      }
-
       const history = await findUndoHistoryForExecution(historyId, shop);
 
       const rule = Array.isArray(history?.rules) ? history.rules[0] || {} : {};
@@ -207,33 +195,54 @@ const bulkUndoWorker = new Worker(
       const undoOperationId = String(undo?.undoOperationId || "").trim() || null;
       const limit = batch.size || 75;
       const cursorId = batch.lastProductId || null;
+      const undoEditHistoryId = String(undo?.undoEditHistoryId || "").trim();
+      if (!undoEditHistoryId) {
+        throw new Error("UNDO_EDIT_HISTORY_ID_REQUIRED");
+      }
+      const pendingUndoRecords = await findPendingUndoChangeRecords({
+        undoEditHistoryId,
+        shop,
+        limit,
+      });
 
       const products = await findSuccessfulChangeRecords({
         historyId,
         shop,
         limit,
-        cursorId,
+        cursorId: pendingUndoRecords.length ? null : cursorId,
+        targetIdentities: pendingUndoRecords.map((record) => record.targetIdentity),
       });
 
       if (!products.length) {
         throw new Error("No original products found to undo changes");
       }
       const snapshotSetId = String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
-      if (!snapshotSetId) {
+      const sourceIsUndo = String(history?.type || "").toUpperCase() === "UNDO";
+      if (!snapshotSetId && !sourceIsUndo) {
         throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED_FOR_UNDO");
       }
-      const snapshotSet = await getFrozenSnapshotSetForExecution({
-        shop,
-        snapshotSetId,
-        operationId:
-          String(history?.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "").trim()
-          || undefined,
-      });
-      const snapshotRows = await findUndoSnapshotRows({
-        shop,
-        snapshotSetId: snapshotSet.id,
-        targetKeys: products.map((record) => record.targetIdentity).filter(Boolean),
-      });
+      const snapshotSet = sourceIsUndo
+        ? null
+        : await getFrozenSnapshotSetForExecution({
+          shop,
+          snapshotSetId,
+          operationId:
+            String(history?.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "").trim()
+            || undefined,
+        });
+      const snapshotRows = sourceIsUndo
+        ? products.map((record) => ({
+          id: record.id,
+          targetKey: record.targetIdentity,
+          plannedMutation: record.afterValues,
+          beforeValues: record.beforeValues,
+          executionStatus: "VERIFIED",
+        }))
+        : await findUndoSnapshotRows({
+          shop,
+          snapshotSetId: snapshotSet.id,
+          targetKeys: products.map((record) => record.targetIdentity).filter(Boolean),
+        });
       assertSnapshotItemsFullyIngested(snapshotRows, "undo_worker");
       const snapshotByIdentity = new Map(
         snapshotRows.map((row) => [String(row.targetKey), row]),
@@ -252,9 +261,64 @@ const bulkUndoWorker = new Worker(
         err.code = "UNDO_TARGET_IDENTITY_MISMATCH";
         throw err;
       }
+      let undoChangeRecords = pendingUndoRecords.length ? pendingUndoRecords : await findExistingUndoChangeRecords({
+        undoEditHistoryId,
+        shop,
+        targetIdentities: replayableProducts.map((record) => record.targetIdentity),
+      });
+      if (!undoChangeRecords.length) {
+        undoChangeRecords = await service.prepareUndoChangeRecords({
+          undoEditHistoryId,
+          sourceEditHistoryId: historyId,
+          products: replayableProducts,
+        });
+      }
+      const pendingUndoTargets = new Set(
+        undoChangeRecords
+          .filter((record) => String(record.status).toUpperCase() === "PENDING")
+          .map((record) => String(record.targetIdentity)),
+      );
+      const pendingReplayableProducts = replayableProducts.filter((record) =>
+        pendingUndoTargets.has(String(record.targetIdentity)));
+      if (!pendingReplayableProducts.length) {
+        const error = new Error("UNDO_HAS_NO_PENDING_CHANGE_RECORDS");
+        error.nonRetryable = true;
+        throw error;
+      }
+
+      const changeRecordsPrepared = await markUndoChangeRecordsPrepared({
+        historyId,
+        shop,
+        undo,
+        expectedExecutionId: executionId || undo.executionIdentity || null,
+      });
+      if (changeRecordsPrepared.count !== 1) {
+        throw new Error("UNDO_CHANGE_RECORDS_PREPARED_TRANSITION_REJECTED");
+      }
+
+      const undoStage = await beginEditHistoryStage({
+        historyId,
+        shop,
+        stage: "undo",
+        executionId: executionId || undo.executionIdentity || null,
+      });
+      if (undoStage.state === "completed") {
+        return toWorkerOperationStatusDto({
+          skipped: true,
+          reason: "undo_stage_completed",
+          shop,
+          historyId,
+        });
+      }
+      if (undoStage.state === "running") {
+        throw new RetryableBulkUndoError(
+          "Bulk undo stage is already running",
+          "undo_stage_running",
+        );
+      }
 
       await clearKeyCaches(`${shop}:fetchHistories`);
-      const { safeProducts, conflicts } = await service.verifyUndoConflicts(replayableProducts);
+      const { safeProducts, conflicts } = await service.verifyUndoConflicts(pendingReplayableProducts);
       const conflictReport = {
         generatedAt: new Date().toISOString(),
         totalReplayable: replayableProducts.length,
@@ -328,6 +392,7 @@ const bulkUndoWorker = new Worker(
       const { bulkOperationId, lastProductId, count } = await service.undoEditBulkOperation(
         safeProducts,
         rule.field,
+        { undoEditHistoryId },
       );
 
       const movedAwaitingShopify = await moveUndoToAwaitingShopify({
@@ -342,6 +407,7 @@ const bulkUndoWorker = new Worker(
         count,
         limit,
         conflicts,
+        undoOperationId,
       });
       if (movedAwaitingShopify.count !== 1) {
         await markUndoReconcileSubmitted({

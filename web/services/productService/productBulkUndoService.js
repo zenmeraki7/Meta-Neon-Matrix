@@ -28,6 +28,25 @@ const OPTION_NAME_FIELDS = new Set([
   "option3Name",
 ]);
 
+function mirrorFieldValue(row, field) {
+  const normalized = String(field || "").replace(/[\s_-]+/g, "").toLowerCase();
+  const aliases = {
+    description: "descriptionHtml",
+    descriptionhtml: "descriptionHtml",
+    metatitle: "seoTitle",
+    seotitle: "seoTitle",
+    metadescription: "seoDescription",
+    seodescription: "seoDescription",
+    inventory: "inventoryQuantity",
+  };
+  const key = aliases[normalized] || field;
+  return row?.[key] ?? null;
+}
+
+function restoredValue(change) {
+  return change?.revertValue ?? change?.oldValue ?? change?.newValue ?? null;
+}
+
 class UndoEditService {
   constructor(session) {
     this.client = new shopify.api.clients.Graphql({ session });
@@ -66,6 +85,8 @@ class UndoEditService {
         undo: true,
         batch: true,
         executionState: true,
+        targetMirrorBatchId: true,
+        type: true,
       },
     });
 
@@ -95,6 +116,7 @@ class UndoEditService {
     if (
       [
         BULK_UNDO_STATES.QUEUED,
+        BULK_UNDO_STATES.CHANGE_RECORDS_PENDING,
         BULK_UNDO_STATES.DISPATCHING,
         BULK_UNDO_STATES.AWAITING_CONFIRMATION,
         BULK_UNDO_STATES.RECONCILE_SUBMITTED,
@@ -106,29 +128,40 @@ class UndoEditService {
       throw new Error("Undo is already queued or completed");
     }
 
+    const sourceIsUndo = String(editedHistory.type || "").toUpperCase() === "UNDO";
     const snapshotSetId = String(
       editedHistory?.batch?.targetSnapshotRef?.snapshotSetId || "",
     ).trim();
     const snapshotOperationId = String(
       editedHistory?.batch?.targetSnapshotRef?.operationId || "",
     ).trim();
-    if (!snapshotSetId) {
+    if (!snapshotSetId && !sourceIsUndo) {
       throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED_FOR_UNDO");
     }
-    const snapshotSet = await getFrozenSnapshotSetForExecution({
-      shop: this.session.shop,
-      snapshotSetId,
-      operationId: snapshotOperationId || undefined,
-      db: db,
-    });
-    const eligibleCount = await db.targetSnapshotItem.count({
-      where: {
+    const snapshotSet = sourceIsUndo
+      ? null
+      : await getFrozenSnapshotSetForExecution({
         shop: this.session.shop,
-        snapshotSetId: snapshotSet.id,
-        executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
-        undoStatus: "PENDING",
-      },
-    });
+        snapshotSetId,
+        operationId: snapshotOperationId || undefined,
+        db: db,
+      });
+    const eligibleCount = sourceIsUndo
+      ? await db.changeRecord.count({
+        where: {
+          shop: this.session.shop,
+          editHistoryId: historyId,
+          status: { in: ["SUCCESS", "VERIFIED", "APPLIED"] },
+        },
+      })
+      : await db.targetSnapshotItem.count({
+        where: {
+          shop: this.session.shop,
+          snapshotSetId: snapshotSet.id,
+          executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
+          undoStatus: "PENDING",
+        },
+      });
     if (eligibleCount <= 0) {
       throw new Error("UNDO_ELIGIBLE_TARGETS_NOT_FOUND");
     }
@@ -139,23 +172,49 @@ class UndoEditService {
       .update(idempotencyKey)
       .digest("hex");
 
-    const undoOperation = await db.undoOperation.upsert({
-      where: {
-        shop_sourceEditHistoryId: {
+    const { undoOperation, undoEditHistory } = await db.$transaction(async (tx) => {
+      const createdUndoHistory = await tx.editHistory.upsert({
+        where: { executionIdentity },
+        create: {
+          shop: this.session.shop,
+          executionIdentity,
+          sourceEditHistoryId: historyId,
+          targetMirrorBatchId: editedHistory.targetMirrorBatchId,
+          type: "UNDO",
+          status: "pending",
+          queryFilter: "",
+          startedAt: new Date(),
+          totalItems: Number(eligibleCount || 0),
+          batch: {
+            sourceEditHistoryId: historyId,
+            reversibleUndo: true,
+          },
+          undo: buildPlannedUndoState({ allowed: true }),
+        },
+        update: {},
+      });
+      const operation = await tx.undoOperation.upsert({
+        where: {
+          shop_sourceEditHistoryId: {
+            shop: this.session.shop,
+            sourceEditHistoryId: historyId,
+          },
+        },
+        create: {
           shop: this.session.shop,
           sourceEditHistoryId: historyId,
+          undoEditHistoryId: createdUndoHistory.id,
+          executionIdentity,
+          idempotencyKeyHash,
+          status: "pending",
+          state: "queued",
+          totalEligibleCount: Number(eligibleCount || 0),
         },
-      },
-      create: {
-        shop: this.session.shop,
-        sourceEditHistoryId: historyId,
-        executionIdentity,
-        idempotencyKeyHash,
-        status: "pending",
-        state: "queued",
-        totalEligibleCount: Number(eligibleCount || 0),
-      },
-      update: {},
+        update: {
+          undoEditHistoryId: createdUndoHistory.id,
+        },
+      });
+      return { undoOperation: operation, undoEditHistory: createdUndoHistory };
     });
 
     const updatedHistory = await db.editHistory.updateMany({
@@ -168,7 +227,7 @@ class UndoEditService {
         undo: {
           ...undoData,
           status: "pending",
-          state: BULK_UNDO_STATES.QUEUED,
+          state: BULK_UNDO_STATES.CHANGE_RECORDS_PENDING,
           queuedAt: new Date(),
           startedAt: null,
           completedAt: null,
@@ -177,6 +236,7 @@ class UndoEditService {
           bulkOperationId: null,
           executionIdentity,
           undoOperationId: undoOperation.id,
+          undoEditHistoryId: undoEditHistory.id,
           error: null,
           eligibility: {
             sourceStatuses: ["SUCCESS", "VERIFIED"],
@@ -207,13 +267,136 @@ class UndoEditService {
     };
     await this.idempotencyStore.complete({
       recordId: begin.recordId,
-      shop,
+      shop: this.session.shop,
       response,
     });
     return response;
   }
 
-  async undoEditBulkOperation(products, field = "") {
+  async prepareUndoChangeRecords({ undoEditHistoryId, sourceEditHistoryId, products }) {
+    const undoHistory = await db.editHistory.findFirst({
+      where: { id: undoEditHistoryId, shop: this.session.shop, type: "UNDO" },
+      select: { id: true, targetMirrorBatchId: true },
+    });
+    if (!undoHistory) throw new Error("UNDO_EDIT_HISTORY_NOT_FOUND");
+    const mirrorBatchId = String(undoHistory.targetMirrorBatchId || "").trim();
+    if (!mirrorBatchId) throw new Error("UNDO_MIRROR_BATCH_REQUIRED");
+
+    const productIds = [...new Set(products.map((record) => String(record.productId || "")).filter(Boolean))];
+    const variantIds = [...new Set(products.flatMap((record) =>
+      (Array.isArray(record.variantFieldChanges) ? record.variantFieldChanges : [])
+        .map((change) => String(change.variantId || ""))
+        .filter(Boolean)))];
+    const [mirrorProducts, mirrorVariants] = await Promise.all([
+      db.product.findMany({ where: { shop: this.session.shop, mirrorBatchId, id: { in: productIds } } }),
+      db.variant.findMany({ where: { shop: this.session.shop, mirrorBatchId, id: { in: variantIds } } }),
+    ]);
+    const productById = new Map(mirrorProducts.map((row) => [String(row.id), row]));
+    const variantById = new Map(mirrorVariants.map((row) => [String(row.id), row]));
+    const batchId = `undo:${undoEditHistoryId}`;
+    const records = products.map((record) => {
+      const productMirror = productById.get(String(record.productId || "")) || null;
+      const sourceProductChanges = Array.isArray(record.productFieldChanges)
+        ? record.productFieldChanges
+        : [];
+      const sourceVariantChanges = Array.isArray(record.variantFieldChanges)
+        ? record.variantFieldChanges
+        : [];
+      const sourceRecordFailed = String(record?.status || "").toUpperCase() === "FAILED";
+      const missingMirror = (sourceProductChanges.length > 0 && !productMirror)
+        || sourceVariantChanges.some((change) => !variantById.has(String(change.variantId || "")));
+      const hasNoChanges = sourceProductChanges.length === 0 && sourceVariantChanges.length === 0;
+      const failureCode = record?.failureCode
+        || (missingMirror ? "MIRROR_MISSING" : null)
+        || (hasNoChanges ? "UNDO_BEFORE_VALUES_REQUIRED" : null);
+      // Phase 1 source-of-truth: undo value_before/beforeValues must come only
+      // from the local mirror batch, never from a live Shopify read.
+      const beforeProductFieldChanges = sourceProductChanges.map((change) => ({
+        field: change.field,
+        oldValue: mirrorFieldValue(productMirror, change.field),
+        newValue: mirrorFieldValue(productMirror, change.field),
+      }));
+      const afterProductFieldChanges = sourceProductChanges.map((change) => ({
+        field: change.field,
+        oldValue: mirrorFieldValue(productMirror, change.field),
+        newValue: restoredValue(change),
+      }));
+      const beforeVariantFieldChanges = sourceVariantChanges.map((change) => {
+        const mirror = variantById.get(String(change.variantId || "")) || null;
+        return {
+          variantId: change.variantId,
+          changes: (Array.isArray(change.changes) ? change.changes : [change]).map((entry) => ({
+            field: entry.field,
+            oldValue: mirrorFieldValue(mirror, entry.field),
+            newValue: mirrorFieldValue(mirror, entry.field),
+          })),
+        };
+      });
+      const afterVariantFieldChanges = sourceVariantChanges.map((change) => {
+        const mirror = variantById.get(String(change.variantId || "")) || null;
+        return {
+          variantId: change.variantId,
+          changes: (Array.isArray(change.changes) ? change.changes : [change]).map((entry) => ({
+            field: entry.field,
+            oldValue: mirrorFieldValue(mirror, entry.field),
+            newValue: restoredValue(entry),
+          })),
+        };
+      });
+      return {
+        editHistoryId: undoEditHistoryId,
+        targetType: String(record.targetType || "PRODUCT").toUpperCase(),
+        targetIdentity: String(record.targetIdentity),
+        productId: String(record.productId),
+        variantId: record.variantId ? String(record.variantId) : null,
+        shop: this.session.shop,
+        mirrorBatchId,
+        beforeValues: {
+          productFieldChanges: beforeProductFieldChanges,
+          variantFieldChanges: beforeVariantFieldChanges,
+        },
+        afterValues: {
+          productFieldChanges: afterProductFieldChanges,
+          variantFieldChanges: afterVariantFieldChanges,
+        },
+        productFieldChanges: afterProductFieldChanges,
+        variantFieldChanges: afterVariantFieldChanges,
+        scope: String(record.scope || record.targetType || "product").toLowerCase(),
+        status: sourceRecordFailed || missingMirror || hasNoChanges ? "FAILED" : "PENDING",
+        failureCode,
+        failureMessage: record?.failureMessage
+          || (failureCode === "MIRROR_MISSING" ? "Current mirror value required for undo was not found" : null)
+          || (failureCode === "UNDO_BEFORE_VALUES_REQUIRED" ? "Undo before-values were missing for this target" : null),
+        batchId,
+        options: {
+          reversibleOperationLog: true,
+          operationType: "UNDO",
+          sourceEditHistoryId,
+        },
+      };
+    });
+    await db.changeRecord.createMany({ data: records, skipDuplicates: true });
+    await db.editHistory.updateMany({
+      where: { id: undoEditHistoryId, shop: this.session.shop, status: "pending" },
+      data: {
+        status: "processing",
+        statusNormalized: "PROCESSING",
+        executionState: "dispatching",
+        executionStateNormalized: "DISPATCHING",
+      },
+    });
+    return db.changeRecord.findMany({
+      where: {
+        shop: this.session.shop,
+        editHistoryId: undoEditHistoryId,
+        batchId,
+        status: { in: ["PENDING", "FAILED"] },
+      },
+      select: { targetIdentity: true, status: true, failureCode: true },
+    });
+  }
+
+  async undoEditBulkOperation(products, field = "", options = {}) {
     const operationName = `bulkEditUndoProducts_${Date.now()}`;
     const formattedProducts = [];
     let lastId = null;
@@ -310,6 +493,26 @@ class UndoEditService {
       count += 1;
     }
 
+    const undoEditHistoryId = String(options?.undoEditHistoryId || "").trim();
+    const targetIdentities = [...new Set(
+      products.map((product) => String(product?.targetIdentity || "").trim()).filter(Boolean),
+    )];
+    if (undoEditHistoryId && targetIdentities.length) {
+      await db.changeRecord.updateMany({
+        where: {
+          shop: this.session.shop,
+          editHistoryId: undoEditHistoryId,
+          targetIdentity: { in: targetIdentities },
+          status: "PENDING",
+        },
+        data: {
+          attemptCount: { increment: 1 },
+          retryable: true,
+          writingStartedAt: new Date(),
+        },
+      });
+    }
+
     const stagedRes = await this.client.query({
       data: {
         query: `
@@ -388,6 +591,9 @@ class UndoEditService {
     const ids = [...new Set([...productIds, ...variantIds])];
     if (!ids.length) return { safeProducts: products, conflicts };
 
+    // Post-original-write drift check only. This live Shopify read verifies
+    // the target still matches the Phase 1 mirror value_before before undoing;
+    // it must never populate undo value_before/beforeValues.
     const response = await this.client.query({
       data: {
         query: `#graphql
@@ -426,14 +632,14 @@ class UndoEditService {
         const node = nodeMap.get(String(record.productId));
         if (!node || node.__typename !== "Product") continue;
         const field = String(fieldChange?.field || "");
-        const expectedAfter = fieldChange?.newValue;
+        const expectedBefore = fieldChange?.oldValue ?? fieldChange?.newValue;
         const current = node[field] ?? null;
-        if (expectedAfter !== undefined && expectedAfter !== null && String(current) !== String(expectedAfter)) {
+        if (expectedBefore !== undefined && expectedBefore !== null && String(current) !== String(expectedBefore)) {
           hasConflict = true;
           conflicts.push({
             targetIdentity: record.targetIdentity,
             field,
-            expectedAfter,
+            expectedBefore,
             current,
           });
         }
@@ -441,16 +647,19 @@ class UndoEditService {
       for (const variantChange of Array.isArray(record?.variantFieldChanges) ? record.variantFieldChanges : []) {
         const node = nodeMap.get(String(variantChange?.variantId));
         if (!node || node.__typename !== "ProductVariant") continue;
-        const field = String(variantChange?.field || "");
-        const expectedAfter = variantChange?.newValue;
-        const mapField = field === "inventory" ? "inventoryQuantity" : field;
-        const current = node[mapField] ?? null;
-        if (expectedAfter !== undefined && expectedAfter !== null && String(current) !== String(expectedAfter)) {
+        for (const fieldChange of Array.isArray(variantChange?.changes) ? variantChange.changes : [variantChange]) {
+          const field = String(fieldChange?.field || "");
+          const expectedBefore = fieldChange?.oldValue ?? fieldChange?.newValue;
+          const mapField = field === "inventory" ? "inventoryQuantity" : field;
+          const current = node[mapField] ?? null;
+          if (expectedBefore === undefined || expectedBefore === null || String(current) === String(expectedBefore)) {
+            continue;
+          }
           hasConflict = true;
           conflicts.push({
             targetIdentity: record.targetIdentity,
             field,
-            expectedAfter,
+            expectedBefore,
             current,
           });
         }
@@ -478,15 +687,7 @@ class UndoEditService {
         snapshot?.beforeValues && typeof snapshot.beforeValues === "object"
           ? snapshot.beforeValues
           : null;
-      if (!snapshotBeforeValues || Object.keys(snapshotBeforeValues).length === 0) {
-        const error = new Error("UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED");
-        error.code = "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED";
-        error.details = {
-          changeRecordId: record?.id || null,
-          targetIdentity,
-        };
-        throw error;
-      }
+      const snapshotMissing = !snapshotBeforeValues || Object.keys(snapshotBeforeValues).length === 0;
 
       const beforeValues =
         record?.beforeValues && typeof record.beforeValues === "object"
@@ -502,13 +703,25 @@ class UndoEditService {
       const hasBeforeValues =
         beforeProductFieldChanges.length > 0 || beforeVariantFieldChanges.length > 0;
       if (!hasBeforeValues) {
-        const error = new Error("UNDO_BEFORE_VALUES_REQUIRED");
-        error.code = "UNDO_BEFORE_VALUES_REQUIRED";
-        error.details = {
-          changeRecordId: record?.id || null,
-          targetIdentity: record?.targetIdentity || null,
+        return {
+          ...record,
+          status: "FAILED",
+          failureCode: "UNDO_BEFORE_VALUES_REQUIRED",
+          failureMessage: "Undo before-values were missing for this target",
+          productFieldChanges: [],
+          variantFieldChanges: [],
         };
-        throw error;
+      }
+
+      if (snapshotMissing) {
+        return {
+          ...record,
+          status: "FAILED",
+          failureCode: "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED",
+          failureMessage: "Undo snapshot before-values were missing for this target",
+          productFieldChanges: [],
+          variantFieldChanges: [],
+        };
       }
 
       return {

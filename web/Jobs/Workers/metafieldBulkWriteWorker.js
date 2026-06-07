@@ -58,6 +58,25 @@ const METAFIELD_DIGEST_PREFLIGHT_QUERY = `#graphql
   }
 `;
 
+const METAFIELD_RECONCILIATION_QUERY = `#graphql
+  query MetafieldReconciliation($ownerId: ID!, $namespace: String!, $key: String!) {
+    node(id: $ownerId) {
+      ... on ProductVariant {
+        metafield(namespace: $namespace, key: $key) {
+          value
+          compareDigest
+        }
+      }
+      ... on Product {
+        metafield(namespace: $namespace, key: $key) {
+          value
+          compareDigest
+        }
+      }
+    }
+  }
+`;
+
 function chunk(list, size) {
   const out = [];
   for (let i = 0; i < list.length; i += size) {
@@ -78,6 +97,7 @@ function normalizeRow(row) {
     oldValue: row.old_value == null ? null : String(row.old_value),
     newValue: row.new_value == null ? null : String(row.new_value),
     compareDigest: row.compare_digest == null ? null : String(row.compare_digest),
+    status: String(row.status || "").toUpperCase(),
     attemptCount: Number(row.attempt_count || 0),
     shopifyOwnerId: String(row.shopify_owner_id),
     shopifyMetafieldId:
@@ -196,9 +216,16 @@ export function assertMetafieldWriteInput(row) {
 
 function parseErrorIndex(field) {
   const asArray = Array.isArray(field) ? field : [];
-  for (const token of asArray) {
+  for (let index = 0; index < asArray.length; index += 1) {
+    const token = asArray[index];
     const match = String(token || "").match(/^metafields\[(\d+)\]$/i);
     if (match) return Number.parseInt(match[1], 10);
+    if (
+      String(token || "").toLowerCase() === "metafields"
+      && /^\d+$/.test(String(asArray[index + 1] || ""))
+    ) {
+      return Number.parseInt(String(asArray[index + 1]), 10);
+    }
   }
   return -1;
 }
@@ -266,15 +293,156 @@ async function callMetafieldsSet(client, rows) {
   return payload;
 }
 
+function errorCodeOf(error, fallback = "SHOPIFY_REQUEST_FAILED") {
+  return String(
+    error?.code
+      || error?.body?.errors?.[0]?.extensions?.code
+      || error?.response?.body?.errors?.[0]?.extensions?.code
+      || fallback,
+  ).toUpperCase();
+}
+
+function isStaleObject(errorCode) {
+  return String(errorCode || "").toUpperCase() === STALE_OBJECT_CODE;
+}
+
+function formatWriteResults(outcomes) {
+  const successes = outcomes.filter((outcome) => outcome.status === "WRITTEN");
+  const failures = outcomes.filter((outcome) => outcome.status !== "WRITTEN");
+  return { outcomes, successes, failures };
+}
+
+/**
+ * Applies one Shopify-sized metafield batch and returns one explicit outcome per row.
+ *
+ * @param {object} client
+ * @param {Array<ReturnType<typeof normalizeRow>>} rows
+ * @returns {Promise<{outcomes:Array<object>,successes:Array<object>,failures:Array<object>}>}
+ */
+export async function writeMetafields(client, rows) {
+  let payload;
+  try {
+    payload = await callMetafieldsSet(client, rows);
+  } catch (error) {
+    const errorCode = errorCodeOf(error, "METAFIELDS_SET_OUTCOME_UNKNOWN");
+    return formatWriteResults(rows.map((row) => ({
+      id: row.id,
+      status: "FAILED",
+      error: errorCode,
+    })));
+  }
+
+  const userErrors = Array.isArray(payload.userErrors) ? payload.userErrors : [];
+  const perIndexErrors = buildErrorBuckets(userErrors, rows.length);
+  const successLookup = buildSuccessLookup(payload.metafields);
+  const outcomes = [];
+
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = rows[idx];
+    const errors = perIndexErrors[idx];
+    const tupleKey = `${row.shopifyOwnerId}::${row.namespace}::${row.key}`;
+    const success = successLookup.get(tupleKey) || null;
+
+    if (errors.length > 0) {
+      const errorCode = String(errors[0]?.code || "SHOPIFY_USER_ERROR").toUpperCase();
+      outcomes.push({
+        id: row.id,
+        status: isStaleObject(errorCode) ? "FAILED" : "RETRYING",
+        error: errorCode,
+      });
+      continue;
+    }
+
+    if (!success) {
+      outcomes.push({
+        id: row.id,
+        status: "FAILED",
+        error: "METAFIELD_RESULT_OUTCOME_UNKNOWN",
+      });
+      continue;
+    }
+
+    outcomes.push({
+      id: row.id,
+      status: "WRITTEN",
+      confirmedValue: success.value,
+      digest: success.compareDigest,
+    });
+  }
+
+  return formatWriteResults(outcomes);
+}
+
+async function fetchCurrentMetafield(client, row) {
+  const response = await client.query({
+    data: {
+      query: METAFIELD_RECONCILIATION_QUERY,
+      variables: {
+        ownerId: row.shopifyOwnerId,
+        namespace: row.namespace,
+        key: row.key,
+      },
+    },
+  });
+  const errors = Array.isArray(response?.body?.errors) ? response.body.errors : [];
+  if (errors.length) {
+    const error = new Error(errors[0]?.message || "METAFIELD_RECONCILIATION_FAILED");
+    error.code = errors[0]?.extensions?.code || "METAFIELD_RECONCILIATION_FAILED";
+    throw error;
+  }
+  return response?.body?.data?.node?.metafield || null;
+}
+
+/**
+ * Resolves stale WRITING rows before they are eligible for another mutation.
+ *
+ * @param {object} client
+ * @param {Array<ReturnType<typeof normalizeRow>>} rows
+ * @returns {Promise<{retryRows:Array<object>,outcomes:Array<object>}>}
+ */
+export async function reconcileWritingRows(client, rows) {
+  const retryRows = [];
+  const outcomes = [];
+  for (const row of rows) {
+    if (row.status !== "WRITING") {
+      retryRows.push(row);
+      continue;
+    }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const current = await fetchCurrentMetafield(client, row);
+      if (String(current?.value ?? "") === String(row.newValue ?? "")) {
+        outcomes.push({
+          id: row.id,
+          status: "WRITTEN",
+          confirmedValue: current?.value == null ? null : String(current.value),
+          digest: current?.compareDigest == null ? null : String(current.compareDigest),
+        });
+      } else {
+        retryRows.push(row);
+        outcomes.push({ id: row.id, status: "RETRYING" });
+      }
+    } catch (error) {
+      const errorCode = errorCodeOf(error, "METAFIELD_RECONCILIATION_FAILED");
+      outcomes.push({
+        id: row.id,
+        status: "FAILED",
+        error: errorCode,
+      });
+    }
+  }
+  return { retryRows, outcomes };
+}
+
 /**
  * Dedicated metafield bulk write execution contract.
  * - source: bulk_edit_changes only
  * - compareDigest required per row
  * - chunk size 25
- * - STALE_OBJECT terminal, no retry
+ * - stale compare-digest conflicts are terminal
  *
  * @param {{ sessionId: string, shop: string }} input
- * @returns {Promise<{processed:number,written:number,errored:number}>}
+ * @returns {Promise<Array<{id:string,status:"WRITTEN"|"FAILED"|"RETRYING",error?:string}>>}
  */
 async function runMetafieldBulkWrite({ sessionId, shop }) {
   const resolvedSessionId = String(sessionId || "").trim();
@@ -292,9 +460,7 @@ async function runMetafieldBulkWrite({ sessionId, shop }) {
       throw error;
     }
     return {
-      processed: 0,
-      written: 0,
-      errored: 0,
+      outcomes: [],
       reason: "all_rows_already_processed",
     };
   }
@@ -305,95 +471,76 @@ async function runMetafieldBulkWrite({ sessionId, shop }) {
   }
 
   const session = await loadOfflineSession(resolvedShop);
-  await runDigestPreflight(session, rows);
   const client = new shopify.api.clients.Graphql({ session });
+  const allOutcomes = [];
+  const { retryRows, outcomes: reconciliationOutcomes } = await reconcileWritingRows(client, rows);
+  const reconciledWritten = reconciliationOutcomes.filter((outcome) => outcome.status === "WRITTEN");
+  const reconciledFailed = reconciliationOutcomes.filter((outcome) => outcome.status === "FAILED");
+  const reconciledRetrying = reconciliationOutcomes.filter((outcome) => outcome.status === "RETRYING");
+  if (reconciledWritten.length) {
+    await markRowsWritten(reconciledWritten, resolvedShop);
+  }
+  if (reconciledFailed.length) {
+    await persistErrorResults(reconciledFailed.map((outcome) => ({
+      id: outcome.id,
+      errorCode: outcome.error,
+      retryable: false,
+    })), resolvedShop);
+  }
+  if (reconciledRetrying.length) {
+    await markRowsError(reconciledRetrying.map((outcome) => ({
+      id: outcome.id,
+      errorCode: "RECONCILED_NOT_APPLIED",
+      retryable: true,
+    })), resolvedShop);
+  }
+  allOutcomes.push(...reconciliationOutcomes.filter((outcome) => outcome.status !== "RETRYING"));
+  await runDigestPreflight(session, retryRows);
 
-  let processed = 0;
-  let written = 0;
-  let errored = 0;
-
-  for (const batch of chunk(rows, METAFIELDS_SET_BATCH_SIZE)) {
+  for (const batch of chunk(retryRows, METAFIELDS_SET_BATCH_SIZE)) {
     // eslint-disable-next-line no-await-in-loop
     const claimedIds = await markRowsWriting(batch.map((row) => row.id), resolvedShop);
     const claimedIdSet = new Set(claimedIds);
     const claimedBatch = batch.filter((row) => claimedIdSet.has(row.id));
+    const unclaimedBatch = batch.filter((row) => !claimedIdSet.has(row.id));
+    allOutcomes.push(...unclaimedBatch.map((row) => ({
+      id: row.id,
+      status: "RETRYING",
+      error: "ROW_CLAIMED_BY_ANOTHER_WORKER",
+    })));
     if (!claimedBatch.length) {
       continue;
     }
 
-    let payload;
-    try {
+    // eslint-disable-next-line no-await-in-loop
+    const { outcomes } = await writeMetafields(client, claimedBatch);
+    const writtenOutcomes = outcomes.filter((outcome) => outcome.status === "WRITTEN");
+    const failedOutcomes = outcomes.filter((outcome) => outcome.status === "FAILED");
+    const retryingOutcomes = outcomes.filter((outcome) => outcome.status === "RETRYING");
+
+    if (writtenOutcomes.length) {
       // eslint-disable-next-line no-await-in-loop
-      payload = await callMetafieldsSet(client, claimedBatch);
-    } catch (error) {
-      const failures = claimedBatch.map((row) => ({
-        ...row,
-        errorCode: error?.code || "METAFIELDS_SET_REQUEST_FAILED",
-        retryable: true,
-      }));
-      // eslint-disable-next-line no-await-in-loop
-      await persistErrorResults(failures, resolvedShop);
-      errored += failures.length;
-      processed += failures.length;
-      continue;
+      await markRowsWritten(writtenOutcomes, resolvedShop);
     }
-
-    const userErrors = Array.isArray(payload.userErrors) ? payload.userErrors : [];
-    const perIndexErrors = buildErrorBuckets(userErrors, claimedBatch.length);
-    const successLookup = buildSuccessLookup(payload.metafields);
-
-    const writtenResults = [];
-    const errorResults = [];
-    for (let idx = 0; idx < claimedBatch.length; idx += 1) {
-      const row = claimedBatch[idx];
-      const errors = perIndexErrors[idx];
-      const tupleKey = `${row.shopifyOwnerId}::${row.namespace}::${row.key}`;
-      const success = successLookup.get(tupleKey) || null;
-
-      if (errors.length > 0) {
-        const stale = errors.some((e) => String(e?.code || "").toUpperCase() === "STALE_OBJECT");
-        const firstCode = String(errors[0]?.code || "SHOPIFY_USER_ERROR");
-        errorResults.push({
-          ...row,
-          errorCode: stale ? "STALE_OBJECT" : firstCode,
-          retryable: !stale,
-        });
-        errored += 1;
-        processed += 1;
-        continue;
-      }
-
-      if (!success) {
-        // Ambiguous response row: treat as retryable error.
-        errorResults.push({
-          ...row,
-          errorCode: "METAFIELD_RESULT_MISSING",
+    if (failedOutcomes.length || retryingOutcomes.length) {
+      // eslint-disable-next-line no-await-in-loop
+      await persistErrorResults([
+        ...failedOutcomes.map((outcome) => ({
+          id: outcome.id,
+          errorCode: outcome.error,
+          retryable: false,
+        })),
+        ...retryingOutcomes.map((outcome) => ({
+          id: outcome.id,
+          errorCode: outcome.error,
           retryable: true,
-        });
-        errored += 1;
-        processed += 1;
-        continue;
-      }
-
-      writtenResults.push({
-        id: row.id,
-        confirmedValue: success.value,
-        digest: success.compareDigest,
-      });
-      written += 1;
-      processed += 1;
+        })),
+      ], resolvedShop);
     }
-    if (writtenResults.length) {
-      // eslint-disable-next-line no-await-in-loop
-      await markRowsWritten(writtenResults, resolvedShop);
-    }
-    if (errorResults.length) {
-      // eslint-disable-next-line no-await-in-loop
-      await persistErrorResults(errorResults, resolvedShop);
-    }
+    allOutcomes.push(...outcomes);
   }
 
-  return { processed, written, errored };
+  return allOutcomes;
 }
 
 export const metafieldBulkWriteWorker = new Worker(
@@ -496,5 +643,7 @@ async function shutdown(signal) {
 
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
+
+const STALE_OBJECT_CODE = "STALE_OBJECT";
 
 export default metafieldBulkWriteWorker;
