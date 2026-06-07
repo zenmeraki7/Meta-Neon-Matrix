@@ -6,7 +6,11 @@ import { adminGraphqlWithRetry } from "../../utils/shopifyAdminApi.js";
 import { getSyncCursor, setSyncCursor } from "../../db/syncCursors.js";
 import { upsertFromSync } from "../../db/variantMetafields.js";
 import logger from "../../utils/loggerUtils.js";
-import { acquireRedisLock, releaseRedisLock } from "../../utils/redisLockUtils.js";
+import {
+  acquireRedisLock,
+  releaseRedisLock,
+  renewRedisLock,
+} from "../../utils/redisLockUtils.js";
 import { enqueueCatalogMissedUpdatesPollingTick } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
 
 const QUEUE_NAME = process.env.CATALOG_MISSED_UPDATES_POLL_QUEUE || "catalog-missed-updates-polling";
@@ -16,6 +20,42 @@ const LEADER_LOCK_TTL_MS = 45_000;
 const CURSOR_RESOURCE = "products";
 const PAGE_SIZE = 250;
 const REQUIRED_TABLES = ["sync_cursors", "variant_metafields"];
+const POLL_LOCK_TTL_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.CATALOG_POLL_LOCK_TTL_MS || `${10 * 60 * 1000}`, 10)
+    || 10 * 60 * 1000,
+);
+const POLL_LOCK_RENEW_MS = Math.max(10_000, Math.floor(POLL_LOCK_TTL_MS / 3));
+const POLL_CONCURRENCY = Math.max(
+  1,
+  Number.parseInt(process.env.CATALOG_POLL_CONCURRENCY || "5", 10) || 5,
+);
+const THROTTLE_RESERVE = Math.max(
+  1,
+  Number.parseInt(process.env.CATALOG_POLL_THROTTLE_RESERVE || "100", 10) || 100,
+);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function paceForThrottle(response) {
+  const throttle = response?.body?.extensions?.cost?.throttleStatus;
+  const currentlyAvailable = Number(throttle?.currentlyAvailable);
+  const restoreRate = Number(throttle?.restoreRate);
+  if (
+    !Number.isFinite(currentlyAvailable)
+    || currentlyAvailable >= THROTTLE_RESERVE
+    || !(restoreRate > 0)
+  ) {
+    return;
+  }
+  const waitMs = Math.min(
+    10_000,
+    Math.max(250, Math.ceil(((THROTTLE_RESERVE - currentlyAvailable) / restoreRate) * 1000)),
+  );
+  await sleep(waitMs);
+}
 
 const PRODUCTS_UPDATED_QUERY = `#graphql
   query ProductsUpdatedSince($first: Int!, $after: String, $query: String!) {
@@ -141,6 +181,11 @@ async function pollMissedUpdatesForShop(shop) {
 
     hasNext = Boolean(pageInfo?.hasNextPage);
     after = pageInfo?.endCursor || null;
+    if (hasNext) {
+      // adminGraphqlWithRetry handles throttled responses; this preserves budget
+      // before proactively requesting the next catalog page.
+      await paceForThrottle(response);
+    }
   }
 
   await setSyncCursor(shop, CURSOR_RESOURCE, maxUpdatedAt || new Date().toISOString());
@@ -184,12 +229,43 @@ async function pollMissedUpdates({ shop }) {
     return { scanned: 0, synced: 0, failed: 0, failures: [], skipped: true };
   }
 
+  const pollLock = await acquireRedisLock({
+    connection,
+    key: `catalog-missed-updates-poll:${scopedShop}`,
+    ttlMs: POLL_LOCK_TTL_MS,
+  });
+  if (!pollLock.acquired) {
+    return {
+      scanned: 0,
+      synced: 0,
+      failed: 0,
+      failures: [],
+      skipped: true,
+      reason: "shop_poll_already_running",
+    };
+  }
+  const renewTimer = setInterval(() => {
+    void renewRedisLock({
+      connection,
+      key: pollLock.key,
+      token: pollLock.token,
+      ttlMs: POLL_LOCK_TTL_MS,
+    }).catch((error) => {
+      logger.error("Catalog missed-updates polling lock renewal failed", {
+        worker: "catalogMissedUpdatesPollingWorker",
+        shop: scopedShop,
+        message: error?.message || String(error),
+      });
+    });
+  }, POLL_LOCK_RENEW_MS);
+  renewTimer.unref?.();
+
   let scanned = 0;
   let synced = 0;
   const failures = [];
 
-  scanned += 1;
   try {
+    scanned += 1;
     await pollMissedUpdatesForShop(scopedShop);
     synced += 1;
   } catch (error) {
@@ -202,22 +278,26 @@ async function pollMissedUpdates({ shop }) {
       shop: scopedShop,
       message: error?.message || String(error),
     });
+  } finally {
+    clearInterval(renewTimer);
+    await releaseRedisLock({
+      connection,
+      key: pollLock.key,
+      token: pollLock.token,
+    }).catch(() => {});
   }
 
   return { scanned, synced, failed: failures.length, failures };
 }
 
 async function getPollingReadiness() {
-  const missingTables = [];
-  for (const table of REQUIRED_TABLES) {
-    // eslint-disable-next-line no-await-in-loop
+  const checks = await Promise.all(REQUIRED_TABLES.map(async (table) => {
     const rows = await db.$queryRaw`
       SELECT to_regclass(${`public.${table}`})::text AS regclass
     `;
-    if (!rows?.[0]?.regclass) {
-      missingTables.push(table);
-    }
-  }
+    return { table, ready: Boolean(rows?.[0]?.regclass) };
+  }));
+  const missingTables = checks.filter((check) => !check.ready).map((check) => check.table);
   return {
     ready: missingTables.length === 0,
     missingTables,
@@ -229,7 +309,7 @@ export const catalogMissedUpdatesPollingWorker = new Worker(
   async (job) => pollMissedUpdates({ shop: job?.data?.shop }),
   {
     connection,
-    concurrency: 1,
+    concurrency: POLL_CONCURRENCY,
   },
 );
 
@@ -246,6 +326,13 @@ catalogMissedUpdatesPollingWorker.on("failed", (job, error) => {
     worker: "catalogMissedUpdatesPollingWorker",
     jobId: job?.id,
     message: error?.message || String(error),
+  });
+});
+
+catalogMissedUpdatesPollingWorker.on("stalled", (jobId) => {
+  logger.warn("Catalog missed-updates polling job stalled", {
+    worker: "catalogMissedUpdatesPollingWorker",
+    jobId,
   });
 });
 
@@ -294,5 +381,23 @@ export async function registerCatalogMissedUpdatesPollingTick({ shop }) {
     }).catch(() => {});
   }
 }
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await catalogMissedUpdatesPollingWorker.close();
+  } catch (error) {
+    logger.error("Catalog missed-updates polling worker shutdown failed", {
+      worker: "catalogMissedUpdatesPollingWorker",
+      signal,
+      message: error?.message || String(error),
+    });
+  }
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default catalogMissedUpdatesPollingWorker;

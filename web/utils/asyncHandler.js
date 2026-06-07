@@ -1,7 +1,22 @@
-// web/utils/asyncHandler.js
-import { generateErrorId } from './errorUtils.js';
-import logger from './loggerUtils.js';
-import { errorResponse } from './responseUtils.js';
+import { generateErrorId } from "./errorUtils.js";
+import logger from "./loggerUtils.js";
+import { errorResponse } from "./responseUtils.js";
+
+const ERROR_TYPE_BY_STATUS = Object.freeze({
+  400: "VALIDATION",
+  401: "AUTH",
+  403: "PERMISSION",
+  404: "NOT_FOUND",
+  409: "CONFLICT",
+  422: "VALIDATION",
+  429: "RATE_LIMIT",
+  503: "UNAVAILABLE",
+});
+
+export function errorTypeForStatus(statusCode) {
+  return ERROR_TYPE_BY_STATUS[statusCode]
+    || (statusCode >= 500 ? "SERVER_ERROR" : "UNKNOWN");
+}
 
 /**
  * Wraps controller functions to handle async errors uniformly
@@ -15,12 +30,18 @@ export const asyncHandler = (fn) => {
     } catch (err) {
       const errorId = generateErrorId();
 
-      const statusCode = err.statusCode || 500;
+      const requestedStatusCode = Number(err?.statusCode);
+      const statusCode =
+        Number.isInteger(requestedStatusCode)
+        && requestedStatusCode >= 400
+        && requestedStatusCode <= 599
+          ? requestedStatusCode
+          : 500;
       const userMessage = err.userMessage || "An unexpected error occurred. Please try again later.";
-      const errorData = process.env.NODE_ENV === 'development' 
-        ? { details: err.message, id: errorId } 
+      const errorData = process.env.NODE_ENV === "development"
+        ? { details: err.message, id: errorId }
         : { id: errorId };
-  // Log the error details using Winston
+
       logger.error({
         errorId,
         message: err.message,
@@ -28,16 +49,13 @@ export const asyncHandler = (fn) => {
         statusCode,
         path: req.originalUrl,
         method: req.method,
-        shop: res.locals?.shopify?.session?.shop || 'unknown-shop',
+        shop: res.locals?.shopify?.session?.shop || "unknown-shop",
       });
-      // Create the standard error response
+
       const response = errorResponse(userMessage, errorData);
-      
-      // Add the type field that your frontend expects
-      if (err.type) {
-        response.type = err.type;
-      } else {
-        response.type = 'FETCH'; // Default error type
+      response.type = err.type || errorTypeForStatus(statusCode);
+      if (err.retryable !== undefined) {
+        response.retryable = Boolean(err.retryable);
       }
 
       res.status(statusCode).json(response);

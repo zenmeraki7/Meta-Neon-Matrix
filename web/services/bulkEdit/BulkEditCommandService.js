@@ -11,7 +11,6 @@ import {
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
 import { computeBlastRadiusRisk } from "../targeting/validate/mutationIntentPreflightValidator.js";
 import { buildImmutableEditCommand } from "./immutableEditCommand.js";
-import { enqueueBulkEditTargetFreezeJob } from "../../Jobs/Queues/bulkEditPipelineJob.js";
 import {
   buildEditIntentFromRules,
   buildHistoryTitle,
@@ -30,11 +29,10 @@ import {
 } from "../idempotency/IdempotencyStoreService.js";
 import { createIdempotencyStore } from "../../repositories/idempotencyRepository.js";
 import {
-  createManualEditHistoryWithImmutableCommand,
   findPreviewContractRecord,
-  markManualEditHistoryEnqueueFailed,
 } from "../../repositories/bulkEditCommandRepository.js";
 import { runBulkEditPreflight } from "./BulkEditPreflightService.js";
+import { JobCreationService } from "../JobCreationService.js";
 
 const BULK_EDIT_HISTORY_CACHE_KEYS = [
   "fetchHistories",
@@ -113,9 +111,15 @@ export class BulkEditCommandService {
       return begin.response;
     }
 
-    const { historyId, historyShop, executionIdentity } =
-      await createManualEditHistoryWithImmutableCommand({
+    const created = await JobCreationService.createAndEnqueue({
+      shopId: this.session.shop,
+      operationType: "MANUAL_BULK_EDIT",
+      queueName: process.env.BULK_EDIT_PIPELINE_QUEUE || "bulk-edit-pipeline",
+      workerClass: "target.freeze",
+      idempotencyKey,
+      payload: {
         historyData,
+        source: "manual_bulk_edit_pipeline",
         buildImmutableEditCommandForHistory: (history) =>
           buildImmutableEditCommand({
             operationType: "BULK_PRODUCT_EDIT",
@@ -124,29 +128,10 @@ export class BulkEditCommandService {
             edit: buildEditIntentFromRules(history.rules),
             targetSnapshotSetId: `EDIT_HISTORY:${history.id}`,
           }),
-      });
-
-    try {
-      await enqueueBulkEditTargetFreezeJob({
-        historyId,
-        shop: historyShop,
-        source: "manual_bulk_edit_pipeline",
-        executionId: executionIdentity,
-      });
-    } catch (error) {
-      await markManualEditHistoryEnqueueFailed({
-        historyId,
-        shop: historyShop,
-        executionIdentity,
-        errorMessage: error?.message,
-      });
-      await this.idempotencyStore.abort({
-        recordId: begin.recordId,
-        shop: this.session.shop,
-      });
-      await clearBulkEditHistoryCaches(historyShop);
-      throw error;
-    }
+      },
+    });
+    const historyId = created.jobRecord.id;
+    const historyShop = created.jobRecord.shop;
 
     await clearBulkEditHistoryCaches(historyShop);
 
@@ -155,7 +140,9 @@ export class BulkEditCommandService {
       id: historyId,
       operationId: historyId,
       status: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
-      message: "Bulk edit has been queued.",
+      message: created.dispatched
+        ? "Bulk edit has been queued."
+        : "Bulk edit is awaiting queue recovery.",
     };
     await this.idempotencyStore.complete({
       recordId: begin.recordId,

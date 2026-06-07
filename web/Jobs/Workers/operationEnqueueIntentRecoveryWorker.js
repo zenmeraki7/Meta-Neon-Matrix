@@ -6,7 +6,6 @@ import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { enqueueOperationEnqueueIntentRecoveryTick } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
 import {
   dispatchPendingEnqueueIntents,
-  ENQUEUE_QUEUE_KEYS,
 } from "../../services/operationEnqueueIntentService.js";
 import {
   acquireRedisLock,
@@ -19,10 +18,9 @@ const LIMIT = 100;
 const LEADER_LOCK_KEY = "leader:operation-enqueue-intent-recovery:scheduler";
 const LEADER_LOCK_TTL_MS = 45_000;
 
-async function runIntentDispatch({ shop, queueKey }) {
+async function runIntentDispatch({ shop }) {
   const result = await dispatchPendingEnqueueIntents({
     shop,
-    queueKey,
     limit: LIMIT,
   });
   return Number(result.dispatched || 0);
@@ -52,18 +50,16 @@ async function runTick(job) {
     throw new Error("operation enqueue intent recovery tick requires shop");
   }
   try {
-    const [scheduledDispatched, pipelineDispatched, productSyncsReconciled] = await Promise.all([
-      runIntentDispatch({ shop, queueKey: ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT }),
-      runIntentDispatch({ shop, queueKey: ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE }),
+    const [intentDispatched, productSyncsReconciled] = await Promise.all([
+      runIntentDispatch({ shop }),
       reconcileSubmittedProductSyncs(shop),
     ]);
 
-    if (scheduledDispatched > 0 || pipelineDispatched > 0 || productSyncsReconciled > 0) {
+    if (intentDispatched > 0 || productSyncsReconciled > 0) {
       logger.info("Operation enqueue intent recovery dispatched pending intents", {
         worker: "operationEnqueueIntentRecoveryWorker",
         shop,
-        scheduledDispatched,
-        pipelineDispatched,
+        intentDispatched,
         productSyncsReconciled,
       });
     }

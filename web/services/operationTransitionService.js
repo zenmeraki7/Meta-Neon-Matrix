@@ -15,6 +15,8 @@ import {
 
 const TERMINAL_STATES = new Set([
   OPERATION_LIFECYCLE_STATES.COMPLETED,
+  OPERATION_LIFECYCLE_STATES.ROLLED_BACK,
+  OPERATION_LIFECYCLE_STATES.ROLLBACK_FAILED,
   OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED,
   OPERATION_LIFECYCLE_STATES.FAILED,
   OPERATION_LIFECYCLE_STATES.CANCELLED,
@@ -44,6 +46,9 @@ function inferTerminalizedAt(nextState) {
 function deriveStatusFromExecutionState(nextState, fallbackStatus) {
   const next = String(nextState || "").toUpperCase();
   if (next === OPERATION_LIFECYCLE_STATES.COMPLETED) return "completed";
+  if (next === OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT) return "failed";
+  if (next === OPERATION_LIFECYCLE_STATES.ROLLED_BACK) return "completed";
+  if (next === OPERATION_LIFECYCLE_STATES.ROLLBACK_FAILED) return "failed";
   if (next === OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED) return "partial";
   if (next === OPERATION_LIFECYCLE_STATES.FAILED) return "failed";
   if (next === OPERATION_LIFECYCLE_STATES.CANCELLED) return "cancelled";
@@ -125,9 +130,10 @@ export async function transitionOperation({
 
   const inTerminal = TERMINAL_STATES.has(currentState);
   if (inTerminal) {
+    const declaredTransitionAllowed = canTransitionOperationState(currentState, nextState);
     const recoveryAllowed = allowTerminalOverride
       && RECOVERY_ALLOWED_TERMINAL_OVERRIDES.has(nextState);
-    if (!recoveryAllowed) {
+    if (!declaredTransitionAllowed && !recoveryAllowed) {
       return { ok: false, reason: "TERMINAL_STATE_MUTATION_REJECTED", currentState };
     }
   }

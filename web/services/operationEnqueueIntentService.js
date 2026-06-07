@@ -1,24 +1,18 @@
 import { db } from "../repositories/repositoryDb.js";
-import { scheduledEditQueue } from "../Jobs/Queues/scheduledEditQueue.js";
-import { enqueueBulkEditTargetFreezeJob } from "../Jobs/Queues/bulkEditPipelineJob.js";
+import { JobCreationService } from "./JobCreationService.js";
 
 export const ENQUEUE_INTENT_STATUS = Object.freeze({
   PENDING: "PENDING",
   DISPATCHING: "DISPATCHING",
   DISPATCHED: "DISPATCHED",
-  FAILED: "FAILED",
+  DISPATCH_FAILED: "DISPATCH_FAILED",
 });
 
 export const ENQUEUE_QUEUE_KEYS = Object.freeze({
   SCHEDULED_EDIT: "SCHEDULED_EDIT",
   BULK_EDIT_PIPELINE: "BULK_EDIT_PIPELINE",
+  BULK_EDIT_VERIFICATION: "bulk-edit-verification",
 });
-
-function toObject(value, fallback = {}) {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value
-    : fallback;
-}
 
 export async function createEnqueueIntent({
   tx = db,
@@ -44,35 +38,29 @@ export async function createEnqueueIntent({
   });
 }
 
-async function dispatchIntent(intent) {
-  const payload = toObject(intent.payload, {});
-  const options = toObject(intent.options, {});
-  if (!options.jobId || String(options.jobId).trim().length === 0) {
-    throw new Error(`Missing deterministic jobId for enqueue intent ${intent.id}`);
-  }
-
-  if (intent.queueKey === ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT) {
-    await scheduledEditQueue.add(intent.jobName, payload, options);
-    return;
-  }
-
-  if (intent.queueKey === ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE) {
-    await enqueueBulkEditTargetFreezeJob(payload, options);
-    return;
-  }
-
-  throw new Error(`Unsupported enqueue queue key: ${intent.queueKey}`);
-}
-
 export async function dispatchPendingEnqueueIntents({
   shop,
   queueKey = null,
   limit = 50,
 }) {
+  await db.operationEnqueueIntent.updateMany({
+    where: {
+      shop,
+      status: ENQUEUE_INTENT_STATUS.DISPATCHING,
+      updatedAt: { lt: new Date(Date.now() - 10 * 60 * 1000) },
+      ...(queueKey ? { queueKey } : {}),
+    },
+    data: {
+      status: ENQUEUE_INTENT_STATUS.DISPATCH_FAILED,
+      lastError: "STALE_DISPATCH_CLAIM_RECOVERED",
+      runAt: new Date(),
+    },
+  });
+
   const intents = await db.operationEnqueueIntent.findMany({
     where: {
       shop,
-      status: ENQUEUE_INTENT_STATUS.PENDING,
+      status: { in: [ENQUEUE_INTENT_STATUS.PENDING, ENQUEUE_INTENT_STATUS.DISPATCH_FAILED] },
       runAt: { lte: new Date() },
       ...(queueKey ? { queueKey } : {}),
     },
@@ -84,52 +72,14 @@ export async function dispatchPendingEnqueueIntents({
   let failed = 0;
 
   for (const intent of intents) {
-    const claimed = await db.operationEnqueueIntent.updateMany({
-      where: {
-        id: intent.id,
-        shop,
-        status: ENQUEUE_INTENT_STATUS.PENDING,
-      },
-      data: {
-        status: ENQUEUE_INTENT_STATUS.DISPATCHING,
-        attempts: { increment: 1 },
-      },
-    });
-
-    if (claimed.count !== 1) {
-      continue;
-    }
-
     try {
       // eslint-disable-next-line no-await-in-loop
-      await dispatchIntent(intent);
-      // eslint-disable-next-line no-await-in-loop
-      await db.operationEnqueueIntent.updateMany({
-        where: {
-          id: intent.id,
-          shop,
-          status: ENQUEUE_INTENT_STATUS.DISPATCHING,
-        },
-        data: {
-          status: ENQUEUE_INTENT_STATUS.DISPATCHED,
-          dispatchedAt: new Date(),
-          lastError: null,
-        },
+      const didDispatch = await JobCreationService.dispatchIntent({
+        ...intent,
       });
-      dispatched += 1;
-    } catch (error) {
-      // eslint-disable-next-line no-await-in-loop
-      await db.operationEnqueueIntent.updateMany({
-        where: {
-          id: intent.id,
-          shop,
-          status: ENQUEUE_INTENT_STATUS.DISPATCHING,
-        },
-        data: {
-          status: ENQUEUE_INTENT_STATUS.PENDING,
-          lastError: error?.message || String(error),
-        },
-      });
+      if (didDispatch) dispatched += 1;
+      else failed += 1;
+    } catch {
       failed += 1;
     }
   }
@@ -140,4 +90,3 @@ export async function dispatchPendingEnqueueIntents({
     failed,
   };
 }
-

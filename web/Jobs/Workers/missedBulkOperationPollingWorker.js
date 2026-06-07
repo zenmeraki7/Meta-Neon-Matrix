@@ -12,12 +12,15 @@ import {
   releaseRedisLock,
 } from "../../utils/redisLockUtils.js";
 import {
-  enqueueMissedBulkOperationPollingJob,
   enqueueMissedBulkOperationPollingTick,
 } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
 
 const QUEUE_NAME = "missed-bulk-operation-polling";
 const POLL_COOLDOWN_MS = 2 * 60 * 1000;
+const RUNNING_STALE_AFTER_MS = 2 * 60 * 1000;
+const INGESTING_STALE_AFTER_MS = 10 * 60 * 1000;
+const CANDIDATE_SCAN_LIMIT = 250;
+const POLL_LIMIT = 50;
 const POLL_INTERVAL_MS = 60_000;
 const LEADER_LOCK_KEY = "leader:missed-bulk-operation-polling:scheduler";
 const LEADER_LOCK_TTL_MS = 45_000;
@@ -75,20 +78,24 @@ async function pollMissedBulkOperations({ shop }) {
   if (!scopedShop) {
     throw new Error("missed bulk operation polling requires shop");
   }
-  const cutoff = new Date(Date.now() - 2 * 60 * 1000);
+  const runningCutoff = new Date(Date.now() - RUNNING_STALE_AFTER_MS);
+  const ingestingCutoff = new Date(Date.now() - INGESTING_STALE_AFTER_MS);
 
   const candidates = await db.editHistory.findMany({
     where: {
       shop: scopedShop,
       OR: [
         {
-          executionState: {
-            in: [
-              OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
-              OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-            ],
+          executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
+          updatedAt: { lt: runningCutoff },
+          batch: {
+            path: ["resultIngestion", "ingestedAt"],
+            equals: null,
           },
-          updatedAt: { lt: cutoff },
+        },
+        {
+          executionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+          updatedAt: { lt: ingestingCutoff },
           batch: {
             path: ["resultIngestion", "ingestedAt"],
             equals: null,
@@ -99,7 +106,7 @@ async function pollMissedBulkOperations({ shop }) {
             path: ["status"],
             equals: "processing",
           },
-          updatedAt: { lt: cutoff },
+          updatedAt: { lt: runningCutoff },
         },
       ],
     },
@@ -107,25 +114,33 @@ async function pollMissedBulkOperations({ shop }) {
       id: true,
       shop: true,
       executionIdentity: true,
+      executionState: true,
       bulkOperationId: true,
       batch: true,
       undo: true,
+      type: true,
     },
-    take: 50,
+    take: CANDIDATE_SCAN_LIMIT,
     orderBy: { updatedAt: "asc" },
   });
 
   let scanned = 0;
+  let polled = 0;
   let enqueued = 0;
   let skipped = 0;
 
   for (const history of candidates) {
+    if (polled >= POLL_LIMIT) break;
     scanned += 1;
     const undo = history.undo || {};
+    const undoStatus = String(undo?.status || "").trim().toLowerCase();
+    const undoState = String(undo?.state || "").trim().toLowerCase();
     const isUndo =
-      undo?.status === "processing"
-      && undo?.state === "awaiting_shopify"
-      && undo?.bulkOperationId;
+      Boolean(undo?.bulkOperationId)
+      && (
+        String(history.type || "").trim().toUpperCase() === "UNDO"
+        || (undoStatus === "processing" && undoState === "awaiting_shopify")
+      );
 
     const bulkOperationId = isUndo
       ? String(undo.bulkOperationId)
@@ -147,6 +162,7 @@ async function pollMissedBulkOperations({ shop }) {
       skipped += 1;
       continue;
     }
+    polled += 1;
 
     try {
       const op = await fetchBulkOperationStatus({
@@ -186,7 +202,7 @@ async function pollMissedBulkOperations({ shop }) {
     }
   }
 
-  return { scanned, enqueued, skipped };
+  return { scanned, polled, enqueued, skipped };
 }
 
 export const missedBulkOperationPollingWorker = new Worker(
@@ -214,16 +230,12 @@ missedBulkOperationPollingWorker.on("failed", (job, error) => {
   });
 });
 
-async function enqueuePollingJob({ shop }) {
-  try {
-    await enqueueMissedBulkOperationPollingJob({ shop });
-  } catch (error) {
-    logger.error("Failed to enqueue missed bulk operation polling job", {
-      worker: "missedBulkOperationPollingWorker",
-      message: error?.message || String(error),
-    });
-  }
-}
+missedBulkOperationPollingWorker.on("stalled", (jobId) => {
+  logger.warn("Missed bulk operation polling job stalled", {
+    worker: "missedBulkOperationPollingWorker",
+    jobId,
+  });
+});
 
 export async function registerMissedBulkOperationPollingTick({ shop }) {
   const scopedShop = String(shop || "").trim();
@@ -250,3 +262,23 @@ export async function registerMissedBulkOperationPollingTick({ shop }) {
     }).catch(() => {});
   }
 }
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await missedBulkOperationPollingWorker.close();
+  } catch (error) {
+    logger.error("Missed bulk operation polling worker shutdown failed", {
+      worker: "missedBulkOperationPollingWorker",
+      signal,
+      message: error?.message || String(error),
+    });
+  }
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
+
+export default missedBulkOperationPollingWorker;

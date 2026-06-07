@@ -28,6 +28,7 @@ const TIMELINE_STAGE_KEYS = Object.freeze([
   "INGESTING_RESULTS",
   "VERIFYING",
   "MIRROR_UPDATING",
+  "ROLLING_BACK",
   "COMPLETED",
 ]);
 const TIMELINE_STATE_ALIASES = Object.freeze({
@@ -36,7 +37,7 @@ const TIMELINE_STATE_ALIASES = Object.freeze({
   AWAITING_SHOPIFY: "SHOPIFY_RUNNING",
   FINALIZING: "VERIFYING",
 });
-const TERMINAL_TIMELINE_KEYS = new Set(["FAILED", "PARTIAL_FAILED", "CANCELLED"]);
+const TERMINAL_TIMELINE_KEYS = new Set(["FAILED", "ROLLED_BACK", "ROLLBACK_FAILED", "PARTIAL_FAILED", "CANCELLED"]);
 
 function normalizeTimelineState(value) {
   const raw = String(value || "").trim().toUpperCase();

@@ -35,7 +35,7 @@ function buildStage(executionStateRaw) {
   if (state === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING) return "BEFORE_FREEZE";
   if (state === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN || state === OPERATION_LIFECYCLE_STATES.QUEUED) return "AFTER_FREEZE_BEFORE_EXECUTION";
   if (state === "EXECUTING" || state === "SHOPIFY_BULK_SUBMITTED" || state === "SHOPIFY_RUNNING") return "DURING_EXECUTION";
-  if (state === "SHOPIFY_COMPLETED" || state === "INGESTING_RESULTS" || state === "VERIFYING" || state === "MIRROR_UPDATING") return "DURING_VERIFICATION";
+  if (state === "SHOPIFY_COMPLETED" || state === "INGESTING_RESULTS" || state === "VERIFYING" || state === "MIRROR_UPDATING" || state === "ROLLING_BACK") return "DURING_VERIFICATION";
   if (state === BULK_EDIT_EXECUTION_STATES.FINALIZING || state === EXPORT_EXECUTION_STATES.FINALIZING) {
     return "DURING_VERIFICATION";
   }
@@ -50,6 +50,9 @@ function buildStage(executionStateRaw) {
     state === BULK_EDIT_EXECUTION_STATES.COMPLETED
     || state === BULK_EDIT_EXECUTION_STATES.PARTIAL
     || state === "COMPLETED"
+    || state === OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT
+    || state === OPERATION_LIFECYCLE_STATES.ROLLED_BACK
+    || state === OPERATION_LIFECYCLE_STATES.ROLLBACK_FAILED
     || state === "PARTIAL_FAILED"
     || state === EXPORT_EXECUTION_STATES.COMPLETED
   ) {

@@ -34,6 +34,7 @@ test("crash after submit response reconciles on restart without second mutation 
     },
     submissions: [],
     txCalls: 0,
+    attemptCount: 0,
   };
 
   const db = {
@@ -78,7 +79,20 @@ test("crash after submit response reconciles on restart without second mutation 
         throw new Error("SIMULATED_CRASH_AFTER_RESPONSE");
       }
       const tx = {
+        changeRecord: {
+          updateMany: async ({ data }) => {
+            if (data.attemptCount?.increment) {
+              state.attemptCount += Number(data.attemptCount.increment);
+            }
+            return { count: 1 };
+          },
+        },
         bulkSubmission: {
+          upsert: async ({ create }) => {
+            const existing = state.submissions.find((s) => s.shopifyBulkOperationId === create.shopifyBulkOperationId);
+            if (!existing) state.submissions.push({ ...create, submittedAt: create.submittedAt || new Date() });
+            return existing || create;
+          },
           create: async ({ data }) => {
             state.submissions.push({ ...data });
             return data;
@@ -162,6 +176,7 @@ test("crash after submit response reconciles on restart without second mutation 
   );
 
   assert.equal(mutationSubmitCalls, 1);
+  assert.equal(state.attemptCount, 0, "failed finalize must roll back attempt accounting");
   assert.equal(
     state.history.batch?.shopifySubmissionIntent?.submissionStage,
     "SUBMIT_RESPONSE_RECEIVED",
@@ -185,5 +200,6 @@ test("crash after submit response reconciles on restart without second mutation 
   assert.equal(resumed.pendingIntent, true);
   assert.equal(resumed.bulkOperationId, "gid://shopify/BulkOperation/123");
   assert.equal(mutationSubmitCalls, 1, "must not submit mutation twice");
+  assert.equal(state.attemptCount, 1, "pending-intent reconciliation accounts for the accepted submit once");
   assert.ok(state.submissions.length >= 1, "reconcile must restore durable submission record");
 });

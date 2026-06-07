@@ -95,4 +95,18 @@ test("lifecycle transition contract blocks invalid jumps and allows expected pip
   assert.equal(canTransitionOperationState(S.TARGET_FREEZING, S.EXECUTING), false);
   assert.equal(canTransitionOperationState(S.CANCELLED, S.EXECUTING), false);
   assert.equal(canTransitionOperationState(S.COMPLETED, S.EXECUTING), false);
+  assert.equal(canTransitionOperationState(S.QUEUED, S.UNDO_QUEUED), false);
+});
+
+test("rollback and timeout recovery transitions are explicit", () => {
+  const S = OPERATION_LIFECYCLE_STATES;
+  assert.equal(canTransitionOperationState(S.COMPLETED, S.ROLLING_BACK), true);
+  assert.equal(canTransitionOperationState(S.PARTIAL_FAILED, S.ROLLING_BACK), true);
+  assert.equal(canTransitionOperationState(S.FAILED, S.ROLLING_BACK), true);
+  assert.equal(canTransitionOperationState(S.VERIFICATION_TIMEOUT, S.VERIFYING), true);
+  assert.equal(canTransitionOperationState(S.VERIFICATION_TIMEOUT, S.ROLLING_BACK), true);
+  assert.equal(canTransitionOperationState(S.ROLLING_BACK, S.ROLLED_BACK), true);
+  assert.equal(canTransitionOperationState(S.ROLLING_BACK, S.ROLLBACK_FAILED), true);
+  assert.equal(canTransitionOperationState(S.ROLLED_BACK, S.QUEUED), false);
+  assert.equal(canTransitionOperationState(S.ROLLBACK_FAILED, S.QUEUED), false);
 });

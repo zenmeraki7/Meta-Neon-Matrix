@@ -30,7 +30,7 @@ test("reversible operation log is completed before Shopify submission", () => {
     "await preparationService.prepareNextExecutionBatch",
   );
   const submitIndex = executeWorker.indexOf(
-    "await mutationService.submitProductSetBulkMutation",
+    "mutationService.submitProductSetBulkMutation",
   );
   assert.ok(prepareIndex > -1);
   assert.ok(submitIndex > prepareIndex);

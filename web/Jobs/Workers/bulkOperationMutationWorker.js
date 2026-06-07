@@ -17,8 +17,21 @@ const DLQ_NAME =
   process.env.BULK_OPERATION_MUTATION_DLQ_QUEUE || "bulk-operation-mutation-dlq";
 const WORKER_NAME = "bulkOperationMutationWorker";
 
+function resolveDeliveredAt(job) {
+  const parsed = new Date(job?.data?.createdAt || job?.timestamp || Date.now()).getTime();
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
 async function completeMutationFinishProcessing(shop, result) {
-  await releaseShopifyBulkMutationSlot(shop);
+  await releaseShopifyBulkMutationSlot(shop).catch((error) => {
+    logger.error("Bulk operation mutation slot release failed", {
+      worker: WORKER_NAME,
+      queue: QUEUE_NAME,
+      shop,
+      bulkOperationId: result?.bulkOperationId || null,
+      message: error?.message,
+    });
+  });
   return result;
 }
 
@@ -142,7 +155,7 @@ const bulkOperationMutationWorker = new Worker(
     const bulkOperationId = String(job.data?.admin_graphql_api_id || "").trim();
     const status = String(job.data?.status || "").toUpperCase();
     const type = String(job.data?.type || "").toUpperCase();
-    const deliveredAt = new Date(job.data?.createdAt || job.timestamp || Date.now()).getTime();
+    const deliveredAt = resolveDeliveredAt(job);
     webhookProcessingLagMs.observe({
       shop: shop || "unknown",
       topic: "bulk_operations/finish",
@@ -160,13 +173,13 @@ const bulkOperationMutationWorker = new Worker(
         select: { isUnInstalled: true },
       });
       if (!store || store.isUnInstalled) {
-        return {
+        return completeMutationFinishProcessing(shop, {
           success: true,
           skipped: true,
           reason: "shop_not_installed",
           shop,
           bulkOperationId,
-        };
+        });
       }
 
       // Single path: all mutation webhook statuses are delegated to the

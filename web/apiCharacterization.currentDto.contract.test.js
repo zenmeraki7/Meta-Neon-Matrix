@@ -76,11 +76,11 @@ test("characterization: session change staging DTO remains stable", () => {
 test("characterization: session commit flow DTO remains stable", () => {
   const routeSrc = read("web/routes/commit.js");
   const useCaseSrc = read("web/useCases/commitBulkEditSessionUseCase.js");
-  const queueAdapterSrc = read("web/queues/adapters/bulkEditQueueAdapter.js");
+  const jobCreationSrc = read("web/services/JobCreationService.js");
   assert.ok(routeSrc.includes("router.post(\"/:id/commit\", commitSessionHandler);"));
   assert.ok(routeSrc.includes("jsonResponse(res, result);"));
   assert.ok(useCaseSrc.includes("jobId:"));
   assert.ok(useCaseSrc.includes("sessionId:"));
   assert.ok(useCaseSrc.includes("changeCount:"));
-  assert.ok(queueAdapterSrc.includes('type: "BULK_WRITE"'));
+  assert.ok(jobCreationSrc.includes('"BULK_WRITE"'));
 });

@@ -41,11 +41,11 @@ test("verification worker has operational telemetry and bounded execution settin
   assert.match(worker, /process\.once\("SIGINT"/);
 });
 
-test("verification retry exhaustion records a terminal state and dead-letter job", () => {
+test("verification retry exhaustion remains resumable and records a dead-letter job", () => {
   assert.match(worker, /isRetryExhausted\(job\)/);
   assert.match(worker, /recordRetryExhausted\(\{/);
   assert.match(worker, /bulkEditVerificationDlqQueue\.add/);
-  assert.match(worker, /executionState: OPERATION_LIFECYCLE_STATES\.FAILED/);
-  assert.match(worker, /statusNormalized: "FAILED"/);
+  assert.equal(worker.includes("executionState: OPERATION_LIFECYCLE_STATES.FAILED"), false);
+  assert.match(worker, /remains resumable/);
   assert.match(queues, /export const bulkEditVerificationDlqQueue = new Queue/);
 });

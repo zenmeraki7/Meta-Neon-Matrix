@@ -13,7 +13,7 @@ test("bulk edit ledger schema, migration, and runtime SQL share the canonical co
   );
   const ledger = read("web/db/bulkEditChanges.js");
   const sessions = read("web/db/bulkEditSessions.js");
-  const commitRepository = read("web/repositories/sessionCommitRepository.js");
+  const jobCreationService = read("web/services/JobCreationService.js");
 
   for (const source of [schema, migration]) {
     assert.match(source, /session_id/);
@@ -33,7 +33,7 @@ test("bulk edit ledger schema, migration, and runtime SQL share the canonical co
   assert.match(migration, /"id" UUID NOT NULL DEFAULT gen_random_uuid\(\)/);
   assert.match(migration, /"session_id" UUID NOT NULL/);
 
-  for (const source of [ledger, sessions, commitRepository]) {
+  for (const source of [ledger, sessions, jobCreationService]) {
     assert.match(source, /::uuid/);
   }
   assert.doesNotMatch(ledger, /vm\.definition_id/);

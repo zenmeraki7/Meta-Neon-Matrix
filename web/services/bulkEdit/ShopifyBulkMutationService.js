@@ -49,6 +49,12 @@ const CAS_MUTABLE_EXECUTION_STATES = [
   OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
 ];
 
+function clampBatchSize(value, min, max) {
+  const num = Number.parseInt(String(value || 0), 10);
+  if (!Number.isFinite(num)) return min;
+  return Math.min(max, Math.max(min, num));
+}
+
 const ADAPTIVE_BATCH_SIZE_MIN = clampBatchSize(
   process.env.BULK_EDIT_DYNAMIC_BATCH_SIZE_MIN || "25",
   1,
@@ -204,12 +210,6 @@ async function assertReversibleOperationLog({
   }
 }
 
-function clampBatchSize(value, min, max) {
-  const num = Number.parseInt(String(value || 0), 10);
-  if (!Number.isFinite(num)) return min;
-  return Math.min(max, Math.max(min, num));
-}
-
 function deriveAdaptiveBatchSize({
   throttleStatus,
   actualQueryCost,
@@ -265,6 +265,27 @@ function deriveAdaptiveBatchSize({
     restoreRate,
     reason: "ADAPTIVE_COST_FEEDBACK",
   };
+}
+
+function extractUserErrorTargetIds(userErrors = []) {
+  const ids = new Set();
+  const visit = (value) => {
+    if (typeof value === "string") {
+      for (const match of value.matchAll(/gid:\/\/shopify\/[A-Za-z]+\/[^"',\s}\]]+/g)) {
+        ids.add(match[0]);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit(userErrors);
+  return [...ids];
 }
 
 export class ShopifyBulkMutationService {
@@ -511,70 +532,126 @@ export class ShopifyBulkMutationService {
       const intentBulkOperationId = String(pendingIntent.bulkOperationId || "").trim();
       const intentOperationName = String(pendingIntent.operationName || "").trim() || buildOperationName({ historyId, batchId });
       if (intentBulkOperationId) {
-        await db.bulkSubmission.upsert({
-          where: {
-            shop_shopifyBulkOperationId: {
+        const intentUserErrors = Array.isArray(pendingIntent.userErrors)
+          ? pendingIntent.userErrors
+          : [];
+        const intentUserErrorTargetIds = extractUserErrorTargetIds(intentUserErrors);
+        const intentFailureMessage = intentUserErrors.length > 0
+          ? JSON.stringify(intentUserErrors).slice(0, 10_000)
+          : null;
+        const reconciledAt = new Date();
+        const reconcileResult = await db.$transaction(async (tx) => {
+          await tx.changeRecord.updateMany({
+            where: {
               shop: this.session.shop,
-              shopifyBulkOperationId: intentBulkOperationId,
+              editHistoryId: historyId,
+              batchId,
+              status: { in: ["PENDING", "FAILED"] },
             },
-          },
-          create: {
-            shop: this.session.shop,
-            editHistoryId: historyId,
-            executionIdentity: history.executionIdentity || executionId || null,
-            batchId: batchId || null,
-            operationName: intentOperationName,
-            mutationMode: "UNKNOWN",
-            stagedUploadPath: pendingIntent.stagedUploadPath || null,
-            shopifyBulkOperationId: intentBulkOperationId,
-            shopifyStatus: null,
-            submittedAt: new Date(),
-          },
-          update: {
-            editHistoryId: historyId,
-            executionIdentity: history.executionIdentity || executionId || null,
-            batchId: batchId || null,
-            operationName: intentOperationName,
-            stagedUploadPath: pendingIntent.stagedUploadPath || null,
-          },
-        });
-        const movedRunningFromIntent = await db.editHistory.updateMany({
-          where: {
-            id: historyId,
-            shop: this.session.shop,
-            executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-            batch: {
-              path: ["shopifyBulkOperation", "id"],
-              equals: null,
+            data: {
+              attemptCount: { increment: 1 },
+              retryable: true,
+              writingStartedAt: reconciledAt,
             },
-          },
-          data: {
-            executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
-            executionStateNormalized: normalizeEditHistoryExecutionState(
-              OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
-            ),
-            batch: rememberBatch(mergeCurrentBatch({
-              shopifySubmissionIntent: null,
-              shopifyBulkOperation: {
-                id: intentBulkOperationId,
-                status: null,
-                submittedAt: new Date().toISOString(),
-                operationName: intentOperationName,
-                mutationMode: "UNKNOWN",
-                batchId: batchId || null,
-                batchTargetCount,
-                lastProductId,
-                hasMore,
-                nextRetryCursorIndex,
-                stagedUploadPath: pendingIntent.stagedUploadPath || null,
+          });
+
+          let submissionFailedCount = 0;
+          if (intentUserErrorTargetIds.length > 0) {
+            const failedRecords = await tx.changeRecord.updateMany({
+              where: {
+                shop: this.session.shop,
+                editHistoryId: historyId,
+                batchId,
+                status: "PENDING",
+                OR: [
+                  { targetIdentity: { in: intentUserErrorTargetIds } },
+                  { productId: { in: intentUserErrorTargetIds } },
+                  { variantId: { in: intentUserErrorTargetIds } },
+                ],
               },
+              data: {
+                status: "FAILED",
+                retryable: false,
+                failureCode: "SHOPIFY_USER_ERROR",
+                failureMessage: intentFailureMessage,
+              },
+            });
+            submissionFailedCount = Number(failedRecords.count || 0);
+          }
+
+          await tx.bulkSubmission.upsert({
+            where: {
+              shop_shopifyBulkOperationId: {
+                shop: this.session.shop,
+                shopifyBulkOperationId: intentBulkOperationId,
+              },
+            },
+            create: {
+              shop: this.session.shop,
+              editHistoryId: historyId,
+              executionIdentity: history.executionIdentity || executionId || null,
+              batchId: batchId || null,
+              operationName: intentOperationName,
+              mutationMode: "UNKNOWN",
+              stagedUploadPath: pendingIntent.stagedUploadPath || null,
               shopifyBulkOperationId: intentBulkOperationId,
-              submittedBatchId: batchId || null,
-              lastSubmittedAt: new Date().toISOString(),
-            })),
-          },
+              shopifyStatus: null,
+              submittedAt: reconciledAt,
+            },
+            update: {
+              editHistoryId: historyId,
+              executionIdentity: history.executionIdentity || executionId || null,
+              batchId: batchId || null,
+              operationName: intentOperationName,
+              stagedUploadPath: pendingIntent.stagedUploadPath || null,
+            },
+          });
+          const movedRunningFromIntent = await tx.editHistory.updateMany({
+            where: {
+              id: historyId,
+              shop: this.session.shop,
+              executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
+              batch: {
+                path: ["shopifyBulkOperation", "id"],
+                equals: null,
+              },
+            },
+            data: {
+              executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
+              executionStateNormalized: normalizeEditHistoryExecutionState(
+                OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
+              ),
+              failedItems: { increment: submissionFailedCount },
+              batch: rememberBatch(mergeCurrentBatch({
+                shopifySubmissionIntent: null,
+                shopifyBulkOperation: {
+                  id: intentBulkOperationId,
+                  status: null,
+                  submittedAt: reconciledAt.toISOString(),
+                  operationName: intentOperationName,
+                  mutationMode: "UNKNOWN",
+                  batchId: batchId || null,
+                  batchTargetCount,
+                  lastProductId,
+                  hasMore,
+                  nextRetryCursorIndex,
+                  stagedUploadPath: pendingIntent.stagedUploadPath || null,
+                  userErrors: intentUserErrors,
+                  userErrorTargetIds: intentUserErrorTargetIds,
+                  submissionFailedCount,
+                },
+                shopifyBulkOperationId: intentBulkOperationId,
+                submittedBatchId: batchId || null,
+                lastSubmittedAt: reconciledAt.toISOString(),
+              })),
+            },
+          });
+          return {
+            count: movedRunningFromIntent.count,
+            submissionFailedCount,
+          };
         });
-        if (movedRunningFromIntent.count !== 1) {
+        if (Number(reconcileResult?.count || 0) !== 1) {
           throw new Error("SHOPIFY_SUBMISSION_RECONCILE_TRANSITION_REJECTED");
         }
         return {
@@ -583,6 +660,8 @@ export class ShopifyBulkMutationService {
           pendingIntent: true,
           historyId,
           bulkOperationId: intentBulkOperationId,
+          submissionWarnings: intentUserErrors,
+          submissionFailedCount: Number(reconcileResult?.submissionFailedCount || 0),
         };
       }
       if (
@@ -791,6 +870,19 @@ export class ShopifyBulkMutationService {
       });
     }
 
+    const freshCancellation = await db.editHistory.findFirst({
+      where: {
+        id: historyId,
+        shop: this.session.shop,
+      },
+      select: {
+        cancelRequestedAt: true,
+      },
+    });
+    if (freshCancellation?.cancelRequestedAt) {
+      throw new Error("OPERATION_CANCEL_REQUESTED");
+    }
+
     const submittingSet = await db.editHistory.updateMany({
       where: {
         id: historyId,
@@ -812,20 +904,6 @@ export class ShopifyBulkMutationService {
       throw new Error("SHOPIFY_SUBMISSION_SUBMITTING_TRANSITION_REJECTED");
     }
 
-    await db.changeRecord.updateMany({
-      where: {
-        shop: this.session.shop,
-        editHistoryId: historyId,
-        batchId,
-        status: { in: ["PENDING", "FAILED"] },
-      },
-      data: {
-        attemptCount: { increment: 1 },
-        retryable: true,
-        writingStartedAt: new Date(),
-      },
-    });
-
     const bulkRes = await this.client.query({
       data: {
         query: bulkOperationMutation,
@@ -839,6 +917,7 @@ export class ShopifyBulkMutationService {
     const result = bulkRes?.body?.data?.bulkOperationRunMutation;
     const bulkOperation = normalizeBulkOperationResponse(result);
     const bulkErrors = Array.isArray(result?.userErrors) ? result.userErrors : [];
+    const userErrorTargetIds = extractUserErrorTargetIds(bulkErrors);
     if (bulkErrors.length && !bulkOperation.id) {
       throw new Error(
         `Bulk operation returned errors: ${JSON.stringify(bulkErrors)}`,
@@ -901,8 +980,49 @@ export class ShopifyBulkMutationService {
     });
 
     const submittedAt = new Date();
+    const submissionFailureMessage = bulkErrors.length > 0
+      ? JSON.stringify(bulkErrors).slice(0, 10_000)
+      : null;
 
     const finalizeResult = await db.$transaction(async (tx) => {
+      await tx.changeRecord.updateMany({
+        where: {
+          shop: this.session.shop,
+          editHistoryId: historyId,
+          batchId,
+          status: { in: ["PENDING", "FAILED"] },
+        },
+        data: {
+          attemptCount: { increment: 1 },
+          retryable: true,
+          writingStartedAt: submittedAt,
+        },
+      });
+
+      let submissionFailedCount = 0;
+      if (userErrorTargetIds.length > 0) {
+        const failedRecords = await tx.changeRecord.updateMany({
+          where: {
+            shop: this.session.shop,
+            editHistoryId: historyId,
+            batchId,
+            status: "PENDING",
+            OR: [
+              { targetIdentity: { in: userErrorTargetIds } },
+              { productId: { in: userErrorTargetIds } },
+              { variantId: { in: userErrorTargetIds } },
+            ],
+          },
+          data: {
+            status: "FAILED",
+            retryable: false,
+            failureCode: "SHOPIFY_USER_ERROR",
+            failureMessage: submissionFailureMessage,
+          },
+        });
+        submissionFailedCount = Number(failedRecords.count || 0);
+      }
+
       await tx.bulkSubmission.create({
         data: {
           shop: this.session.shop,
@@ -934,6 +1054,9 @@ export class ShopifyBulkMutationService {
           executionStateNormalized: normalizeEditHistoryExecutionState(
             OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
           ),
+          failedItems: {
+            increment: submissionFailedCount,
+          },
           batch: rememberBatch(mergeCurrentBatch({
             shopifySubmissionIntent: null,
             waitingForShopifySlot: false,
@@ -952,6 +1075,8 @@ export class ShopifyBulkMutationService {
               nextRetryCursorIndex,
               stagedUploadPath,
               userErrors: bulkErrors,
+              userErrorTargetIds,
+              submissionFailedCount,
             },
             shopifyBulkOperationId: bulkOperation.id,
             submittedBatchId: batchId,
@@ -967,7 +1092,10 @@ export class ShopifyBulkMutationService {
           })),
         },
       });
-      return updated;
+      return {
+        count: updated.count,
+        submissionFailedCount,
+      };
     });
     if (Number(finalizeResult?.count || 0) !== 1) {
       throw new Error("SHOPIFY_SUBMISSION_FINALIZE_CONFLICT");
@@ -990,6 +1118,8 @@ export class ShopifyBulkMutationService {
         status: bulkOperation.status,
         batchId: batchId || null,
         adaptiveSizing,
+        userErrors: bulkErrors,
+        submissionFailedCount: Number(finalizeResult?.submissionFailedCount || 0),
       },
       completed: true,
     });
@@ -1006,6 +1136,8 @@ export class ShopifyBulkMutationService {
       lastProductId,
       hasMore,
       nextRetryCursorIndex,
+      submissionWarnings: bulkErrors,
+      submissionFailedCount: Number(finalizeResult?.submissionFailedCount || 0),
     };
   }
 }

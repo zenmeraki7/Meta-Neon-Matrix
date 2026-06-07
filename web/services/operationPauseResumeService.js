@@ -74,7 +74,7 @@ export async function requestPauseEditOperation({
   if (!history) throw new Error("Edit history not found");
   const state = normalizeToLifecycleState(history.executionState);
   const now = new Date();
-  if ([BULK_EDIT_EXECUTION_STATES.COMPLETED, BULK_EDIT_EXECUTION_STATES.CANCELLED, BULK_EDIT_EXECUTION_STATES.FAILED, BULK_EDIT_EXECUTION_STATES.PARTIAL, "COMPLETED", "CANCELLED", "FAILED", "PARTIAL_FAILED"].includes(state)) {
+  if ([BULK_EDIT_EXECUTION_STATES.COMPLETED, BULK_EDIT_EXECUTION_STATES.CANCELLED, BULK_EDIT_EXECUTION_STATES.FAILED, BULK_EDIT_EXECUTION_STATES.PARTIAL, "COMPLETED", "VERIFICATION_TIMEOUT", "ROLLED_BACK", "ROLLBACK_FAILED", "CANCELLED", "FAILED", "PARTIAL_FAILED"].includes(state)) {
     throw new Error("Cannot pause a completed/cancelled/failed operation.");
   }
   const immediate = [

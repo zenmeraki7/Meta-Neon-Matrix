@@ -22,17 +22,14 @@ test("result ingestion uses lease plus CAS guard before terminal counter write",
   assert.equal(normalizeBlock.includes("|| row?.product?.id"), false);
 });
 
-test("verification bounds high-risk verification and validates tuple semantics", () => {
+test("verification fully covers applied records and validates tuple semantics", () => {
   const source = read("web/services/bulkEdit/BulkEditVerificationService.js");
-  assert.ok(source.includes("function requiresFullVerification(history)"));
-  const configuredIndex = source.indexOf("const configured = String(history?.batch?.verificationMode");
-  const fullIndex = source.indexOf("if (requiresFullVerification(history)) return VERIFY_MODES.FULL");
-  assert.ok(configuredIndex > -1 && fullIndex > -1 && configuredIndex < fullIndex);
-  assert.ok(source.includes("MAX_VERIFICATION_ROWS_PER_RUN"));
+  assert.ok(source.includes('const VERIFY_MODE = "FULL"'));
+  assert.ok(source.includes("const VERIFY_PAGE_SIZE = 500"));
   assert.equal(source.includes("verifyRows.push(row)"), false);
-  assert.ok(source.includes("completionBlockedByCoverage"));
   assert.ok(source.includes("fullCoverageAchieved"));
   assert.ok(source.includes("verificationTargetCount"));
+  assert.ok(source.includes("verifiedItems + failedVerifications === Number(appliedItems || 0)"));
   assert.ok(source.includes('inventoryLevelChanges'));
   assert.ok(source.includes('metafieldChanges'));
   assert.ok(source.includes('tupleKey = `${variantId}::${locationId}`'));
@@ -148,6 +145,32 @@ test("shopify bulk mutation submission keeps deterministic and bounded submissio
   assert.ok(source.includes("const stagedUploadPathHash = hashValue(stagedUploadPath);"));
 });
 
+test("shopify bulk mutation atomically accounts for attempts and targeted submission errors", () => {
+  const source = read("web/services/bulkEdit/ShopifyBulkMutationService.js");
+  const finalizeStart = source.indexOf("const finalizeResult = await db.$transaction");
+  const attemptUpdate = source.indexOf("await tx.changeRecord.updateMany", finalizeStart);
+  const submissionCreate = source.indexOf("await tx.bulkSubmission.create", finalizeStart);
+  assert.ok(finalizeStart >= 0);
+  assert.ok(attemptUpdate > finalizeStart);
+  assert.ok(submissionCreate > attemptUpdate);
+  assert.ok(source.includes('failureCode: "SHOPIFY_USER_ERROR"'));
+  assert.ok(source.includes("failedItems: {"));
+  assert.ok(source.includes("increment: submissionFailedCount"));
+  assert.ok(source.includes("submissionWarnings: bulkErrors"));
+  assert.equal(source.includes("await db.changeRecord.updateMany({"), false);
+});
+
+test("shopify bulk mutation rechecks cancellation after upload and before submit", () => {
+  const source = read("web/services/bulkEdit/ShopifyBulkMutationService.js");
+  const freshCancel = source.indexOf("const freshCancellation = await db.editHistory.findFirst");
+  const submitting = source.indexOf("const submittingSet = await db.editHistory.updateMany");
+  const mutationCall = source.indexOf("const bulkRes = await this.client.query");
+  assert.ok(freshCancel >= 0);
+  assert.ok(submitting > freshCancel);
+  assert.ok(mutationCall > submitting);
+  assert.ok(source.includes('if (freshCancellation?.cancelRequestedAt)'));
+});
+
 test("primary ChangeRecord ledger tracks write attempts and applied lifecycle", () => {
   const schema = read("web/prisma/schema.prisma");
   const submit = read("web/services/bulkEdit/ShopifyBulkMutationService.js");
@@ -161,7 +184,7 @@ test("primary ChangeRecord ledger tracks write attempts and applied lifecycle", 
   assert.match(schema, /enum ChangeStatus \{[\s\S]*SUCCESS[\s\S]*VERIFIED[\s\S]*APPLIED[\s\S]*ROLLED_BACK[\s\S]*VERIFICATION_FAILED/);
   assert.match(submit, /attemptCount: \{ increment: 1 \}/);
   assert.match(submit, /status: \{ in: \["PENDING", "FAILED"\] \}/);
-  assert.match(submit, /writingStartedAt: new Date\(\)/);
+  assert.match(submit, /writingStartedAt: (submittedAt|reconciledAt)/);
   assert.match(ingest, /SET "status" = \(\$\{status\}\)::"ChangeStatus"/);
   assert.match(ingest, /"appliedAt" = CASE/);
   assert.match(ingest, /"retryable" = CASE/);

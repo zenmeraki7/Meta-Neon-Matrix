@@ -17,6 +17,8 @@ const TERMINAL_RECOVERY_BLOCKED_STATES = new Set([
   OPERATION_LIFECYCLE_STATES.FAILED,
   OPERATION_LIFECYCLE_STATES.CANCELLED,
   OPERATION_LIFECYCLE_STATES.UNDO_COMPLETED,
+  OPERATION_LIFECYCLE_STATES.ROLLED_BACK,
+  OPERATION_LIFECYCLE_STATES.ROLLBACK_FAILED,
 ]);
 
 const VERIFY_RECOVERY_STATES = new Set([
@@ -24,6 +26,7 @@ const VERIFY_RECOVERY_STATES = new Set([
   OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
   OPERATION_LIFECYCLE_STATES.VERIFYING,
   OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
+  OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT,
 ]);
 
 const INGEST_RECOVERY_STATES = new Set([
@@ -172,11 +175,15 @@ export class BulkEditRecoveryService {
         ? [...VERIFY_RECOVERY_STATES]
         : [...INGEST_RECOVERY_STATES];
 
+    const recoveryNextState =
+      mode === "verify" && currentState === OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT
+        ? OPERATION_LIFECYCLE_STATES.VERIFYING
+        : currentState;
     const moved = await this.transitionOperation({
       shop,
       operationId: history.id,
       expectedExecutionStates,
-      nextExecutionState: currentState,
+      nextExecutionState: recoveryNextState,
       transitionKey: `admin_recovery_${mode}`,
       reasonCode: `ADMIN_RECOVERY_${mode.toUpperCase()}`,
       actor,
@@ -185,6 +192,13 @@ export class BulkEditRecoveryService {
         reason,
         ...(bulkOperationId ? { bulkOperationId } : {}),
       },
+      dataPatch: currentState === OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT
+        ? {
+          status: "processing",
+          statusNormalized: "PROCESSING",
+          completedAt: null,
+        }
+        : {},
       db: this.db,
     });
     if (!moved?.ok) {

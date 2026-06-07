@@ -28,24 +28,31 @@ test("session change use cases validate staged and column-applied changes", () =
   assert.equal(source.includes("error.statusCode"), false);
 });
 
-test("session commit is CAS guarded and replayable after commit", () => {
-  const repositorySource = read("web/repositories/sessionCommitRepository.js");
+test("session commit atomically creates a recoverable dispatch intent", () => {
+  const serviceSource = read("web/services/JobCreationService.js");
   const useCaseSource = read("web/useCases/commitBulkEditSessionUseCase.js");
-  assert.ok(repositorySource.includes("AND status = 'DRAFT'"));
-  assert.ok(repositorySource.includes('status === "COMMITTED"'));
-  assert.ok(repositorySource.includes("alreadyCommitted: true"));
-  assert.ok(useCaseSource.includes("changeCount: committed.changeCount"));
-  assert.equal(repositorySource.includes("error.statusCode"), false);
+  assert.ok(serviceSource.includes("await db.$transaction(async (tx) =>"));
+  assert.ok(serviceSource.includes("tx.operationEnqueueIntent.upsert"));
+  assert.ok(serviceSource.includes('status: "PENDING"'));
+  assert.ok(serviceSource.includes('status: "DISPATCH_FAILED"'));
+  assert.ok(useCaseSource.includes("JobCreationService.createAndEnqueue"));
+  assert.ok(useCaseSource.includes("idempotencyKey:"));
+  assert.ok(useCaseSource.includes("command.idempotencyKey || `bulk-write:"));
+  assert.ok(useCaseSource.includes("sessionId: command.sessionId"));
+  assert.ok(useCaseSource.includes('wrapped.code = "BULK_WRITE_JOB_CREATION_FAILED"'));
+  assert.ok(useCaseSource.includes("wrapped.statusCode = 503"));
+  assert.ok(useCaseSource.includes("wrapped.retryable = true"));
 });
 
 test("bulk edit write enqueue is idempotent by shop and session", () => {
-  const source = read("web/queues/adapters/bulkEditQueueAdapter.js");
-  assert.ok(source.includes("pg_advisory_xact_lock"));
-  assert.ok(source.includes("findBulkEditWriteJobBySession"));
+  const source = read("web/services/JobCreationService.js");
   assert.ok(source.includes("meta->>'sessionId'"));
+  assert.ok(source.includes("FOR UPDATE"));
   assert.ok(source.includes("INSERT INTO sync_jobs"));
-  assert.equal(source.includes("../../../db/syncJobs.js"), false);
-  assert.equal(source.includes("createJob"), false);
+  assert.ok(source.includes("shop_queueKey_dedupeKey"));
+  assert.ok(source.includes('`${type}:${shop}:${jobRecord.sessionId}`'));
+  assert.ok(source.includes("idempotencyKey: safeIdempotencyKey"));
+  assert.ok(source.includes("metafield-bulk-write") === false);
 });
 
 test("session workflow controller maps service error codes to HTTP at the boundary", () => {
@@ -54,4 +61,7 @@ test("session workflow controller maps service error codes to HTTP at the bounda
   assert.ok(source.includes('case "SESSION_NOT_FOUND"'));
   assert.ok(source.includes('case "NO_PENDING_CHANGES"'));
   assert.ok(source.includes('case "VALIDATION_FAILED"'));
+  assert.ok(source.includes('case "BULK_WRITE_JOB_CREATION_FAILED"'));
+  assert.ok(source.includes("return 503"));
+  assert.ok(source.includes("retryable: Boolean(error.retryable)"));
 });

@@ -602,6 +602,9 @@ export class BulkEditResultIngestionService {
         processedCount: {
           increment: successCount,
         },
+        failedItems: {
+          increment: failureCount,
+        },
         batch: mergeBatch(latestBeforeCompletion?.batch || history.batch, {
           resultIngestion: {
             rowsIngestedAt: new Date().toISOString(),

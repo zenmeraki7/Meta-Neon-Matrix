@@ -10,7 +10,6 @@ import { getSession } from "../../utils/sessionHandler.js";
 import shopify from "../../shopify.js";
 import { deleteAllShopData } from "../../services/shopDataDeletionService.js";
 import { removeDataRetentionPurgeSchedule } from "../../queues/adapters/dataRetentionQueueAdapter.js";
-import { verificationQueue } from "../../queues/adapters/bulkEditVerificationQueueAdapter.js";
 import {
   appInstallationQueue,
   bulkEditExecuteQueue,

@@ -9,6 +9,7 @@ const LIFECYCLE_STAGE_KEYS = Object.freeze([
   "INGESTING_RESULTS",
   "VERIFYING",
   "MIRROR_UPDATING",
+  "ROLLING_BACK",
   "COMPLETED",
 ]);
 
@@ -22,6 +23,10 @@ const STAGE_LABELS = Object.freeze({
   SHOPIFY_COMPLETED: "Shopify operation completed",
   INGESTING_RESULTS: "Ingesting results",
   VERIFYING: "Verifying changes",
+  VERIFICATION_TIMEOUT: "Verification timed out",
+  ROLLING_BACK: "Rolling back",
+  ROLLED_BACK: "Rolled back",
+  ROLLBACK_FAILED: "Rollback failed",
   MIRROR_UPDATING: "Updating mirror",
   COMPLETED: "Completed",
   FAILED: "Failed",
@@ -30,13 +35,14 @@ const STAGE_LABELS = Object.freeze({
   UNKNOWN: "Unknown",
 });
 
-const TERMINAL_KEYS = new Set(["FAILED", "PARTIAL_FAILED", "CANCELLED"]);
+const TERMINAL_KEYS = new Set(["FAILED", "ROLLED_BACK", "ROLLBACK_FAILED", "PARTIAL_FAILED", "CANCELLED"]);
 
 const STATE_ALIASES = Object.freeze({
   PLANNED: "QUEUED",
   DISPATCHING: "EXECUTING",
   AWAITING_SHOPIFY: "SHOPIFY_RUNNING",
   FINALIZING: "VERIFYING",
+  ROLLING_BACK: "ROLLING_BACK",
 });
 
 function normalizeStateKey(value) {

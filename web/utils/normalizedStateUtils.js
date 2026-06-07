@@ -25,6 +25,9 @@ export function normalizeEditHistoryExecutionState(value) {
     case "DISPATCHING":
     case "AWAITING_SHOPIFY":
     case "FINALIZING":
+    case "VERIFICATION_TIMEOUT":
+    case "ROLLED_BACK":
+    case "ROLLBACK_FAILED":
     case "COMPLETED":
     case "FAILED":
     case "PARTIAL":

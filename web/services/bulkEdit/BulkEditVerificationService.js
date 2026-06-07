@@ -8,103 +8,16 @@ import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js
 import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
 import { upsertOperationStageProgress } from "../operationStageProgressService.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
+import { enqueueBulkEditVerification } from "../../queues/adapters/bulkEditVerificationQueueAdapter.js";
 
-const VERIFY_MODES = Object.freeze({
-  NONE: "NONE",
-  SAMPLE_ONLY: "SAMPLE_ONLY",
-  SAMPLE_PLUS_FAILURES: "SAMPLE_PLUS_FAILURES",
-  FULL_FOR_SMALL_BATCH: "FULL_FOR_SMALL_BATCH",
-  FULL: "FULL",
-});
-
-const VERIFY_PAGE_SIZE = Number.parseInt(process.env.BULK_EDIT_VERIFY_PAGE_SIZE || "500", 10);
-const MAX_VERIFICATION_ROWS_PER_RUN = Number.parseInt(
-  process.env.BULK_EDIT_MAX_VERIFICATION_ROWS_PER_RUN || "1000",
+const VERIFY_MODE = "FULL";
+const VERIFY_PAGE_SIZE = 500;
+const VERIFICATION_TIMEOUT_MS =
+  Math.max(1, Number.parseInt(process.env.VERIFICATION_TIMEOUT_MINUTES || "30", 10)) * 60 * 1000;
+const NEXT_PAGE_DELAY_MS = Number.parseInt(
+  process.env.BULK_EDIT_VERIFY_NEXT_PAGE_DELAY_MS || "1000",
   10,
 );
-const SAMPLE_RATIO = Number.parseFloat(process.env.BULK_EDIT_VERIFY_SAMPLE_RATIO || "0.1");
-const SAMPLE_LIMIT_CAP = Number.parseInt(process.env.BULK_EDIT_VERIFY_SAMPLE_LIMIT_CAP || "1000", 10);
-const PROGRESS_PAGE_INTERVAL = Number.parseInt(
-  process.env.BULK_EDIT_VERIFY_PROGRESS_PAGE_INTERVAL || "10",
-  10,
-);
-const MAX_INVENTORY_VARIANTS_PER_RUN = Number.parseInt(
-  process.env.BULK_EDIT_VERIFY_MAX_INVENTORY_VARIANTS || "100",
-  10,
-);
-const MAX_METAFIELD_REQUESTS_PER_RUN = Number.parseInt(
-  process.env.BULK_EDIT_VERIFY_MAX_METAFIELD_REQUESTS || "100",
-  10,
-);
-
-function includesAnyToken(value, tokens = []) {
-  const normalized = String(value || "").toLowerCase();
-  return tokens.some((token) => normalized.includes(String(token || "").toLowerCase()));
-}
-
-function requiresFullVerification(history) {
-  const targetGranularity = String(history?.batch?.targetGranularity || "").toUpperCase();
-  if (targetGranularity === "VARIANT") return true;
-  const rules = Array.isArray(history?.rules) ? history.rules : [];
-  return rules.some((rule) => includesAnyToken(rule?.field, ["inventory", "metafield", "variant"]));
-}
-
-function pickVerificationMode(history) {
-  const configured = String(history?.batch?.verificationMode || "").toUpperCase();
-  if (Object.values(VERIFY_MODES).includes(configured)) return configured;
-  if (requiresFullVerification(history)) return VERIFY_MODES.FULL;
-
-  const count = Number(history?.batch?.currentBatchTargetCount || history?.targetSnapshotCount || 0);
-  const destructive = Array.isArray(history?.rules)
-    && history.rules.some((rule) => String(rule?.field || "") === "deleteProducts");
-  const risk = String(history?.batch?.blastRadiusAssessment?.riskLevel || "").toUpperCase();
-
-  if (destructive || risk === "CRITICAL") return VERIFY_MODES.FULL;
-  if (count > 0 && count <= 100) return VERIFY_MODES.FULL_FOR_SMALL_BATCH;
-  return VERIFY_MODES.SAMPLE_PLUS_FAILURES;
-}
-
-function resolveSampleLimit(history) {
-  const targetCount = Number(history?.targetSnapshotCount || history?.batch?.currentBatchTargetCount || 0);
-  const ratio = Number.isFinite(SAMPLE_RATIO) && SAMPLE_RATIO > 0 ? SAMPLE_RATIO : 0.1;
-  const cap = Number.isFinite(SAMPLE_LIMIT_CAP) && SAMPLE_LIMIT_CAP > 0 ? SAMPLE_LIMIT_CAP : 1000;
-  return Math.max(1, Math.min(cap, Math.ceil(targetCount * ratio)));
-}
-
-function stableScore(seed, value) {
-  const key = `${seed}:${value}`;
-  let hash = 2166136261;
-  for (let i = 0; i < key.length; i += 1) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function deterministicSample(rows, limit, seed) {
-  const list = Array.isArray(rows) ? [...rows] : [];
-  if (list.length <= limit) return list;
-  return list
-    .map((row) => ({
-      row,
-      score: stableScore(seed, row.targetIdentity || row.id),
-    }))
-    .sort((a, b) => a.score - b.score)
-    .slice(0, limit)
-    .map((item) => item.row);
-}
-
-function pushDeterministicSample(sampleRows, row, limit, seed) {
-  if (limit <= 0) return sampleRows;
-  const scored = {
-    row,
-    score: stableScore(seed, row.targetIdentity || row.id),
-  };
-  sampleRows.push(scored);
-  sampleRows.sort((a, b) => a.score - b.score);
-  if (sampleRows.length > limit) sampleRows.length = limit;
-  return sampleRows;
-}
 
 function toNodeId(raw) {
   if (!raw) return null;
@@ -313,12 +226,13 @@ async function fetchMetafieldsByTupleFromShopify({
   return map;
 }
 
-async function markVerificationFailures({ shop, failedRows = [], chunkSize = 500 }) {
+async function markVerificationFailures({ client = db, shop, failedRows = [], chunkSize = 500 }) {
+  let updatedCount = 0;
   for (let i = 0; i < failedRows.length; i += chunkSize) {
     const batch = failedRows.slice(i, i + chunkSize);
     const ids = batch.map((item) => String(item.id));
     const caseClauses = batch
-      .map((item, index) => `WHEN id = $${index + 2}::uuid THEN $${index + 2 + batch.length}`)
+      .map((item, index) => `WHEN id = $${index + 2} THEN $${index + 2 + batch.length}`)
       .join(" ");
     const params = [
       shop,
@@ -326,7 +240,7 @@ async function markVerificationFailures({ shop, failedRows = [], chunkSize = 500
       ...batch.map((item) => String(item.message || "")),
     ];
     // eslint-disable-next-line no-await-in-loop
-    await db.$executeRawUnsafe(
+    const updated = await client.$executeRawUnsafe(
       `
       UPDATE "ChangeRecord"
       SET
@@ -334,11 +248,14 @@ async function markVerificationFailures({ shop, failedRows = [], chunkSize = 500
         "failureCode" = 'VERIFICATION_MISMATCH',
         "failureMessage" = CASE ${caseClauses} ELSE "failureMessage" END
       WHERE "shop" = $1
-        AND "id" IN (${ids.map((_, index) => `$${index + 2}::uuid`).join(", ")})
+        AND "status" = 'SUCCESS'::"ChangeStatus"
+        AND "id" IN (${ids.map((_, index) => `$${index + 2}`).join(", ")})
       `,
       ...params,
     );
+    updatedCount += Number(updated || 0);
   }
+  return updatedCount;
 }
 
 function readExpectedFromAfterValues(afterValues = {}) {
@@ -506,10 +423,13 @@ export class BulkEditVerificationService {
       select: {
         id: true,
         shop: true,
+        executionState: true,
         executionIdentity: true,
-        rules: true,
         batch: true,
-        targetSnapshotCount: true,
+        verificationCursor: true,
+        verifiedItems: true,
+        failedVerifications: true,
+        startedAt: true,
       },
     });
 
@@ -518,99 +438,89 @@ export class BulkEditVerificationService {
       throw new Error("STALE_EXECUTION_JOB");
     }
 
-    const mode = pickVerificationMode(history);
-    await upsertOperationStageProgress({
-      shop,
-      operationType: "BULK_EDIT",
-      operationId: historyId,
-      executionId: executionId || history.executionIdentity || null,
-      stageKey: "VERIFICATION",
-      stageStatus: mode === VERIFY_MODES.NONE ? "SKIPPED" : "RUNNING",
-      detail: { mode },
-      completed: mode === VERIFY_MODES.NONE,
-    });
-    if (mode === VERIFY_MODES.NONE) {
-      return { historyId, shop, mode, skipped: true };
-    }
-
-    const batchId =
-      history.batch?.submittedBatchId
-      || history.batch?.shopifyBulkOperation?.batchId
-      || history.batch?.currentBatchId
-      || null;
-    if (!batchId) {
-      const error = new Error("VERIFICATION_REQUIRES_BATCH_ID");
-      error.code = "VERIFICATION_REQUIRES_BATCH_ID";
-      throw error;
-    }
-
-    const highRiskVerification = requiresFullVerification(history);
-    const seed = `${historyId}:${batchId}`;
-    const sampleLimit = mode === VERIFY_MODES.FULL || mode === VERIFY_MODES.FULL_FOR_SMALL_BATCH
-      ? Math.max(1, MAX_VERIFICATION_ROWS_PER_RUN)
-      : resolveSampleLimit(history);
-    const sampleRows = [];
-    const failures = [];
-    let successesLength = 0;
-    let cursorId = null;
-    let pageCount = 0;
-
-    while (true) {
-      const page = await db.changeRecord.findMany({
-        where: {
-          editHistoryId: historyId,
-          shop,
-          batchId,
-          ...(cursorId ? { id: { gt: cursorId } } : {}),
-        },
-        orderBy: { id: "asc" },
-        take: VERIFY_PAGE_SIZE,
-        select: {
-          id: true,
-          targetIdentity: true,
-          productId: true,
-          variantId: true,
-          afterValues: true,
-          status: true,
+    if (
+      history.executionState === OPERATION_LIFECYCLE_STATES.VERIFYING
+      && history.startedAt
+      && Date.now() - new Date(history.startedAt).getTime() > VERIFICATION_TIMEOUT_MS
+    ) {
+      const timedOut = await guardedEditHistoryUpdate({
+        id: historyId,
+        shop,
+        expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.VERIFYING],
+        data: {
+          status: "failed",
+          statusNormalized: normalizeEditHistoryStatus("failed"),
+          executionState: OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT,
+          ),
+          completedAt: new Date(),
+          error: {
+            code: "VERIFICATION_TIMEOUT",
+            message: `Verification exceeded ${VERIFICATION_TIMEOUT_MS}ms`,
+          },
         },
       });
-      if (!page.length) break;
-      pageCount += 1;
-
-      for (const row of page) {
-        const status = String(row.status || "").toUpperCase();
-        if (status === "SUCCESS") {
-          successesLength += 1;
-          pushDeterministicSample(sampleRows, row, sampleLimit, seed);
-        } else if (status === "FAILED") {
-          pushDeterministicSample(failures, row, sampleLimit, `${seed}:failed`);
-        }
-      }
-
-      cursorId = page[page.length - 1].id;
-      if (pageCount % Math.max(1, PROGRESS_PAGE_INTERVAL) === 0 || page.length < VERIFY_PAGE_SIZE) {
-        // eslint-disable-next-line no-await-in-loop
+      if (timedOut) {
         await upsertOperationStageProgress({
           shop,
           operationType: "BULK_EDIT",
           operationId: historyId,
           executionId: executionId || history.executionIdentity || null,
           stageKey: "VERIFICATION",
-          stageStatus: "SCANNING_CHANGE_RECORDS",
-          counterA: successesLength,
-          counterB: failures.length,
-          detail: { mode, batchId, cursorId, pageCount },
+          stageStatus: "FAILED",
+          detail: {
+            reason: "VERIFICATION_TIMEOUT",
+            timeoutMs: VERIFICATION_TIMEOUT_MS,
+          },
         });
       }
-      if (page.length < VERIFY_PAGE_SIZE) break;
+      return { historyId, timedOut: true };
     }
 
-    const verifyRows = mode === VERIFY_MODES.SAMPLE_PLUS_FAILURES
-      ? [
-          ...sampleRows.map((item) => item.row),
-          ...failures.map((item) => item.row),
-        ]
-      : sampleRows.map((item) => item.row);
+    await upsertOperationStageProgress({
+      shop,
+      operationType: "BULK_EDIT",
+      operationId: historyId,
+      executionId: executionId || history.executionIdentity || null,
+      stageKey: "VERIFICATION",
+      stageStatus: "RUNNING",
+      detail: {
+        mode: VERIFY_MODE,
+        verificationCursor: Number(history.verificationCursor || 0),
+      },
+    });
+
+    const batchId =
+      history.batch?.submittedBatchId
+      || history.batch?.shopifyBulkOperation?.batchId
+      || history.batch?.currentBatchId
+      || null;
+
+    const verificationCursor = Math.max(0, Number(history.verificationCursor || 0));
+    // Keep the offset stable as rows transition away from SUCCESS. Already-terminal
+    // rows may be replayed after a crash, but are never re-fetched from Shopify.
+    const page = await db.changeRecord.findMany({
+      where: {
+        editHistoryId: historyId,
+        shop,
+        status: { in: ["SUCCESS", "VERIFIED", "VERIFICATION_FAILED"] },
+      },
+      orderBy: { id: "asc" },
+      skip: verificationCursor,
+      take: VERIFY_PAGE_SIZE,
+      select: {
+        id: true,
+        targetIdentity: true,
+        productId: true,
+        variantId: true,
+        afterValues: true,
+        status: true,
+      },
+    });
+    const verifyRows = page.filter(
+      (row) => String(row.status || "").toUpperCase() === "SUCCESS",
+    );
 
     const productIds = [...new Set(verifyRows.map((row) => row.productId).filter(Boolean))];
     const variantIds = [...new Set(verifyRows.map((row) => row.variantId).filter(Boolean))];
@@ -632,51 +542,24 @@ export class BulkEditVerificationService {
 
     const inventoryRequests = new Map();
     const metafieldRequestMap = new Map();
-    const budgetSkippedRowIds = new Set();
     for (const row of verifyRows) {
       const expected = readExpectedFromAfterValues(row.afterValues || {});
-      const rowInventoryRequests = new Map();
-      const rowMetafieldRequests = new Map();
 
       for (const change of expected.inventoryLevelChanges) {
         const { variantId, locationId } = normalizeInventoryTuple(change, row);
         if (!variantId || !locationId) continue;
-        if (!rowInventoryRequests.has(variantId)) rowInventoryRequests.set(variantId, new Set());
-        rowInventoryRequests.get(variantId).add(locationId);
+        if (!inventoryRequests.has(variantId)) inventoryRequests.set(variantId, new Set());
+        inventoryRequests.get(variantId).add(locationId);
       }
       for (const change of expected.metafieldChanges) {
         const { ownerId, namespace, key, type } = normalizeMetafieldTuple(change, row);
         if (!ownerId || !namespace || !key || !type) continue;
-        rowMetafieldRequests.set(`${ownerId}::${namespace}::${key}::${type}`, {
+        metafieldRequestMap.set(`${ownerId}::${namespace}::${key}::${type}`, {
           ownerId,
           namespace,
           key,
           type,
         });
-      }
-
-      const newInventoryVariantCount = [...rowInventoryRequests.keys()]
-        .filter((variantId) => !inventoryRequests.has(variantId))
-        .length;
-      const newMetafieldRequestCount = [...rowMetafieldRequests.keys()]
-        .filter((requestKey) => !metafieldRequestMap.has(requestKey))
-        .length;
-      if (
-        inventoryRequests.size + newInventoryVariantCount > Math.max(0, MAX_INVENTORY_VARIANTS_PER_RUN)
-        || metafieldRequestMap.size + newMetafieldRequestCount > Math.max(0, MAX_METAFIELD_REQUESTS_PER_RUN)
-      ) {
-        budgetSkippedRowIds.add(row.id);
-        continue;
-      }
-
-      for (const [variantId, locationIds] of rowInventoryRequests.entries()) {
-        if (!inventoryRequests.has(variantId)) inventoryRequests.set(variantId, new Set());
-        for (const locationId of locationIds) {
-          inventoryRequests.get(variantId).add(locationId);
-        }
-      }
-      for (const [requestKey, request] of rowMetafieldRequests.entries()) {
-        metafieldRequestMap.set(requestKey, request);
       }
     }
 
@@ -692,15 +575,11 @@ export class BulkEditVerificationService {
       session: this.session,
     });
 
-    const verificationTargetCount = successesLength;
     let verified = 0;
     let failed = 0;
     const verifiedIds = [];
     const failedRows = [];
     for (const row of verifyRows) {
-      if (budgetSkippedRowIds.has(row.id)) {
-        continue;
-      }
       const product = productsById.get(row.productId);
       const expected = readExpectedFromAfterValues(row.afterValues || {});
       const mismatches = compareSimpleExpected({
@@ -724,85 +603,122 @@ export class BulkEditVerificationService {
       }
     }
 
-    const chunkSize = 500;
-    for (let i = 0; i < verifiedIds.length; i += chunkSize) {
-      const idChunk = verifiedIds.slice(i, i + chunkSize);
-      // eslint-disable-next-line no-await-in-loop
-      await db.changeRecord.updateMany({
+    const nextCursor = verificationCursor + page.length;
+    await db.$transaction(async (tx) => {
+      if (verifiedIds.length > 0) {
+        const updatedVerified = await tx.changeRecord.updateMany({
+          where: {
+            shop,
+            id: { in: verifiedIds },
+            status: "SUCCESS",
+          },
+          data: {
+            status: "VERIFIED",
+            failureCode: null,
+            failureMessage: null,
+          },
+        });
+        verified = Number(updatedVerified.count || 0);
+      }
+      failed = await markVerificationFailures({ client: tx, shop, failedRows });
+      const updated = await tx.editHistory.updateMany({
         where: {
+          id: historyId,
           shop,
-          id: { in: idChunk },
+          executionState: OPERATION_LIFECYCLE_STATES.VERIFYING,
+          verificationCursor,
         },
         data: {
-          status: "VERIFIED",
-          failureCode: null,
-          failureMessage: null,
+          verificationCursor: nextCursor,
+          verifiedItems: { increment: verified },
+          failedVerifications: { increment: failed },
         },
       });
-    }
-    await markVerificationFailures({ shop, failedRows, chunkSize });
+      if (updated.count !== 1) {
+        throw new Error("VERIFICATION_CURSOR_ADVANCE_CONFLICT");
+      }
+    });
 
-    const evaluatedCount = verified + failed;
-    const fullCoverageAchieved = evaluatedCount === verificationTargetCount;
-    const completionBlockedByCoverage = highRiskVerification && !fullCoverageAchieved;
-
-    const verificationStatus = failed > 0 ? "FAILED" : "SUCCESS";
-    const finalState = failed > 0 || completionBlockedByCoverage
-      ? OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED
-      : OPERATION_LIFECYCLE_STATES.COMPLETED;
-    const finalStatus = failed > 0 || completionBlockedByCoverage ? "partial" : "completed";
-
-    const historyUpdate = await guardedEditHistoryUpdate({
-      id: historyId,
-      shop,
-      expectedExecutionStates: [
-        OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
-        OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-        OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
-        OPERATION_LIFECYCLE_STATES.VERIFYING,
-      ],
-      extraWhere: {
-        batch: {
-          path: ["verification", "verifiedAt"],
-          equals: null,
+    const [progress, appliedItems] = await Promise.all([
+      db.editHistory.findFirst({
+        where: { id: historyId, shop },
+        select: {
+          verificationCursor: true,
+          verifiedItems: true,
+          failedVerifications: true,
+          batch: true,
         },
-      },
-      data: {
-        status: finalStatus,
-        statusNormalized: normalizeEditHistoryStatus(finalStatus),
-        executionState: finalState,
-        executionStateNormalized: normalizeEditHistoryExecutionState(finalState),
-        completedAt: new Date(),
-        batch: {
-          ...(history.batch && typeof history.batch === "object" ? history.batch : {}),
-          verification: {
-            mode,
-            highRiskVerification,
-            fullCoverageAchieved,
-            verifiedAt: new Date().toISOString(),
-            verifiedCount: verified,
-            verificationFailedCount: failed,
-            sampledCount: verifyRows.length,
-            evaluatedCount,
-            budgetSkippedCount: budgetSkippedRowIds.size,
-            verificationTargetCount,
-            completionBlockedByCoverage,
+      }),
+      db.changeRecord.count({
+        where: {
+          editHistoryId: historyId,
+          shop,
+          status: { in: ["SUCCESS", "VERIFIED", "VERIFICATION_FAILED"] },
+        },
+      }),
+    ]);
+    if (!progress) throw new Error("EDIT_HISTORY_NOT_FOUND_AFTER_VERIFICATION_PAGE");
+
+    const verifiedItems = Number(progress.verifiedItems || 0);
+    const failedVerifications = Number(progress.failedVerifications || 0);
+    const fullCoverageAchieved =
+      verifiedItems + failedVerifications === Number(appliedItems || 0);
+    const hasRemainingPage = page.length === VERIFY_PAGE_SIZE;
+
+    if (fullCoverageAchieved) {
+      const historyUpdate = await guardedEditHistoryUpdate({
+        id: historyId,
+        shop,
+        expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.VERIFYING],
+        data: {
+          status: "completed",
+          statusNormalized: normalizeEditHistoryStatus("completed"),
+          executionState: OPERATION_LIFECYCLE_STATES.COMPLETED,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            OPERATION_LIFECYCLE_STATES.COMPLETED,
+          ),
+          completedAt: new Date(),
+          batch: {
+            ...(progress.batch && typeof progress.batch === "object" ? progress.batch : {}),
+            verification: {
+              mode: VERIFY_MODE,
+              fullCoverageAchieved: true,
+              verifiedAt: new Date().toISOString(),
+              verifiedCount: verifiedItems,
+              verificationFailedCount: failedVerifications,
+              verificationTargetCount: appliedItems,
+              verificationCursor: Number(progress.verificationCursor || 0),
+              lastSubmittedBatchId: batchId,
+            },
           },
         },
-      },
-    });
-    if (!historyUpdate) {
-      throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFICATION_RESULT");
-    }
+      });
+      if (!historyUpdate) {
+        throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFICATION_RESULT");
+      }
 
-    await schedulePostMutationMirrorReconciliation({
-      shop,
-      ownerType: "EDIT_HISTORY",
-      ownerId: historyId,
-      mirrorBatchId: history.batch?.previewFingerprint?.mirrorBatchId || null,
-      source: "BULK_EDIT_VERIFICATION",
-      verificationStatus,
-    });
+      await schedulePostMutationMirrorReconciliation({
+        shop,
+        ownerType: "EDIT_HISTORY",
+        ownerId: historyId,
+        mirrorBatchId: progress.batch?.previewFingerprint?.mirrorBatchId || null,
+        source: "BULK_EDIT_VERIFICATION",
+        verificationStatus: failedVerifications > 0 ? "FAILED" : "SUCCESS",
+      });
+    } else {
+      await enqueueBulkEditVerification(
+        {
+          historyId,
+          shop,
+          executionId: executionId || history.executionIdentity || null,
+          source: "bulk_edit_verification_next_page",
+        },
+        {
+          delay: NEXT_PAGE_DELAY_MS,
+          jobId: `bulk-edit-verify:${shop}:${historyId}:${executionId || history.executionIdentity || "default"}:cursor:${nextCursor}`,
+        },
+      );
+    }
 
     await upsertOperationStageProgress({
       shop,
@@ -810,35 +726,35 @@ export class BulkEditVerificationService {
       operationId: historyId,
       executionId: executionId || history.executionIdentity || null,
       stageKey: "VERIFICATION",
-      stageStatus: failed > 0 || completionBlockedByCoverage ? "PARTIAL_FAILED" : "COMPLETED",
-      counterA: verified,
-      counterB: failed,
-      counterC: verifyRows.length,
+      stageStatus: fullCoverageAchieved ? "COMPLETED" : "RUNNING",
+      counterA: verifiedItems,
+      counterB: failedVerifications,
+      counterC: appliedItems,
       detail: {
-        mode,
-        highRiskVerification,
+        mode: VERIFY_MODE,
         fullCoverageAchieved,
-        evaluatedCount,
-        budgetSkippedCount: budgetSkippedRowIds.size,
+        verificationCursor: Number(progress.verificationCursor || 0),
+        pageSize: page.length,
+        pageVerified: verified,
+        pageFailed: failed,
+        hasRemainingPage,
         inventoryRequestCount: inventoryRequests.size,
         metafieldRequestCount: metafieldRequestMap.size,
-        verificationTargetCount,
-        completionBlockedByCoverage,
+        verificationTargetCount: appliedItems,
       },
-      completed: true,
+      completed: fullCoverageAchieved,
     });
 
     return {
       historyId,
       shop,
-      mode,
-      highRiskVerification,
+      mode: VERIFY_MODE,
       fullCoverageAchieved,
-      verified,
-      verificationFailed: failed,
-      sampledCount: verifyRows.length,
-      evaluatedCount,
-      budgetSkippedCount: budgetSkippedRowIds.size,
+      verificationCursor: Number(progress.verificationCursor || 0),
+      verified: verifiedItems,
+      verificationFailed: failedVerifications,
+      appliedItems,
+      nextPageEnqueued: !fullCoverageAchieved,
     };
   }
 }

@@ -566,6 +566,10 @@ model EditHistory {
   scheduledUndoAt           DateTime?
   processedCount            Int                    @default(0)
   totalItems                Int                    @default(0)
+  verificationCursor        Int                    @default(0)
+  verifiedItems             Int                    @default(0)
+  failedVerifications       Int                    @default(0)
+  failedItems               Int                    @default(0)
   totalRows                 Int                    @default(0)
   durationMs                Int                    @default(0)
   editTime                  DateTime               @default(now())
@@ -625,6 +629,7 @@ model EditHistory {
   @@index([shop, status, type, updatedAt], map: "shop_status_type_recent")
   @@index([shop])
   @@index([shop, executionState])
+  @@index([executionState, updatedAt])
   @@index([shop, executionStateNormalized])
   @@unique([shop, executionIdentity])
   @@index([shop, statusNormalized, type, updatedAt], map: "shop_status_norm_type_recent")
@@ -1959,6 +1964,9 @@ enum EditHistoryExecutionState {
   DISPATCHING
   AWAITING_SHOPIFY
   FINALIZING
+  VERIFICATION_TIMEOUT
+  ROLLED_BACK
+  ROLLBACK_FAILED
   COMPLETED
   FAILED
   PARTIAL

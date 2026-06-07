@@ -82,6 +82,7 @@ const workerModulePaths = [
   "./Jobs/Workers/dataRetentionPurgeWorker.js",
   "./Jobs/Workers/bulkEditResultIngestWorker.js",
   "./Jobs/Workers/bulkEditVerificationWorker.js",
+  "./Jobs/Workers/verificationResumeWorker.js",
   "./Jobs/Workers/subscriptionBillingWorker.js",
   "./Jobs/Workers/reconciliationWorker.js",
 ];

@@ -28,6 +28,9 @@ const WORKER_NAME = "bulkEditVerificationWorker";
 const TERMINAL_STATES = new Set([
   OPERATION_LIFECYCLE_STATES.CANCELLED,
   OPERATION_LIFECYCLE_STATES.COMPLETED,
+  OPERATION_LIFECYCLE_STATES.VERIFICATION_TIMEOUT,
+  OPERATION_LIFECYCLE_STATES.ROLLED_BACK,
+  OPERATION_LIFECYCLE_STATES.ROLLBACK_FAILED,
   OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED,
   OPERATION_LIFECYCLE_STATES.FAILED,
 ]);
@@ -228,21 +231,6 @@ bulkEditVerificationWorker.on("failed", (job, error) => {
   });
 
   if (isRetryExhausted(job) || error?.name === "UnrecoverableError") {
-    void db.editHistory.updateMany({
-      where: {
-        id: job?.data?.historyId,
-        shop: job?.data?.shop,
-        executionState: OPERATION_LIFECYCLE_STATES.VERIFYING,
-      },
-      data: {
-        status: "failed",
-        statusNormalized: "FAILED",
-        executionState: OPERATION_LIFECYCLE_STATES.FAILED,
-        executionStateNormalized: normalizeEditHistoryExecutionState(
-          OPERATION_LIFECYCLE_STATES.FAILED,
-        ),
-      },
-    }).catch(() => {});
     void recordRetryExhausted({
       job,
       shop: job?.data?.shop,
@@ -251,7 +239,7 @@ bulkEditVerificationWorker.on("failed", (job, error) => {
       entityType: "editHistory",
       entityId: job?.data?.historyId,
       executionId: job?.data?.executionId || null,
-      message: "Bulk edit verification exhausted retries",
+      message: "Bulk edit verification exhausted retries and remains resumable",
     }).catch(() => {});
     void bulkEditVerificationDlqQueue.add(
       DLQ_NAME,

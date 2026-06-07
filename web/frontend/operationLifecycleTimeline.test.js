@@ -11,6 +11,7 @@ test("lifecycle timeline contains required states in canonical order", () => {
     "WAITING_FOR_SHOPIFY_SLOT",
     "VERIFYING",
     "MIRROR_UPDATING",
+    "ROLLING_BACK",
   ];
 
   for (const key of required) {
@@ -58,4 +59,3 @@ test("simulated lifecycle progression marks states in-order", () => {
     }
   }
 });
-

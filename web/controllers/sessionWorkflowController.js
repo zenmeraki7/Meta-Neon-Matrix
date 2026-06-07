@@ -19,6 +19,8 @@ function statusCodeForSessionError(error) {
       return 409;
     case "NO_PENDING_CHANGES":
       return 422;
+    case "BULK_WRITE_JOB_CREATION_FAILED":
+      return 503;
     case "VALIDATION_FAILED":
     case "SHOP_SCOPE_REQUIRED":
       return 400;
@@ -72,9 +74,16 @@ export async function commitSessionController(req, res) {
     jsonResponse(res, result);
   } catch (error) {
     const statusCode = statusCodeForSessionError(error);
+    const body = {
+      error: error?.message || "Failed to commit session",
+      ...(error?.code ? { code: error.code } : {}),
+      ...(error?.retryable !== undefined
+        ? { retryable: Boolean(error.retryable) }
+        : {}),
+    };
     jsonResponse(
       res,
-      { error: error?.message || "Failed to commit session", ...(error?.code ? { code: error.code } : {}) },
+      body,
       statusCode,
     );
   }
