@@ -185,6 +185,16 @@ export class CollectionService {
 
     try {
       const client = new this.shopify.api.clients.Graphql({ session });
+      const currentBulkOperation = await getCurrentBulkOperationStatus(session, "QUERY");
+      const currentStatus = String(currentBulkOperation?.status || "").toUpperCase();
+      if (BLOCKING_BULK_OPERATION_STATUSES.has(currentStatus)) {
+        const error = new Error(`BULK_OPERATION_IN_PROGRESS:${currentStatus}`);
+        error.code = "BULK_OPERATION_IN_PROGRESS";
+        error.retryable = true;
+        error.currentBulkOperation = currentBulkOperation;
+        throw error;
+      }
+
       const bulkResponse = await client.query({
         data: {
           query: StartCollectionBulkSyncMutation,

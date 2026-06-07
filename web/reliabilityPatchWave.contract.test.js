@@ -91,6 +91,79 @@ test("Prisma product webhook workers guard stale writes atomically", () => {
   assert.ok(createSrc.includes("stale_product_create_webhook"));
 });
 
+test("product webhook workers serialize delete/create/update around tombstones", () => {
+  const updateSrc = read("web/Jobs/Workers/productUpdateWorker.js");
+  const createSrc = read("web/Jobs/Workers/productCreateWorker.js");
+  const deleteSrc = read("web/Jobs/Workers/productDeleteWorker.js");
+
+  for (const src of [updateSrc, createSrc, deleteSrc]) {
+    assert.ok(src.includes("pg_advisory_xact_lock"));
+    assert.ok(src.includes("product-webhook:${shop}:${productId}"));
+  }
+
+  assert.ok(deleteSrc.includes("tx.productTombstone.upsert"));
+  assert.ok(deleteSrc.includes("SHOPIFY_WEBHOOK_DELETE"));
+  assert.ok(updateSrc.includes("tombstoned_product_update_webhook"));
+  assert.ok(createSrc.includes("tombstoned_product_create_webhook"));
+  assert.ok(updateSrc.includes("tx.productTombstone.findUnique"));
+  assert.ok(createSrc.includes("tx.productTombstone.findUnique"));
+});
+
+test("product sync activation does not preserve tombstoned rows and clears confirmed live tombstones", () => {
+  const src = read("web/repositories/productSyncRepository.js");
+
+  assert.ok(src.includes("LEFT JOIN \"ProductTombstone\" tombstone"));
+  assert.ok(src.includes("tombstone.\"productId\" IS NULL"));
+  assert.ok(src.includes("DELETE FROM \"ProductTombstone\" tombstone"));
+  assert.ok(src.includes("USING \"Product\" active_product"));
+  assert.ok(src.includes("active_product.\"mirrorBatchId\" = ${syncBatchId}"));
+});
+
+test("reconciliation signals advance by source timestamp instead of arrival time", () => {
+  const privacySrc = read("web/privacy.js");
+  const reconciliationSrc = read("web/services/mirrorReconciliationService.js");
+
+  assert.ok(privacySrc.includes("sourceUpdatedAt: payload?.updated_at"));
+  assert.ok(privacySrc.includes("const sourceTimestamp = parseOptionalDate(sourceUpdatedAt)"));
+  assert.ok(privacySrc.includes("latestSourceUpdatedAt: sourceTimestamp"));
+  assert.ok(privacySrc.includes("latestSourceUpdatedAt: { lt: sourceTimestamp }"));
+  assert.ok(reconciliationSrc.includes("latestSourceUpdatedAt: sourceEventAt"));
+  assert.ok(reconciliationSrc.includes("latestSourceUpdatedAt: { lt: sourceEventAt }"));
+});
+
+test("webhook delivery dedupe uses business keys for product updates and bulk finish", () => {
+  const privacySrc = read("web/privacy.js");
+
+  assert.ok(privacySrc.includes("businessDedupeKey = null"));
+  assert.ok(privacySrc.includes("buildBusinessWebhookDedupeKey"));
+  assert.ok(privacySrc.includes("topic === \"PRODUCTS_UPDATE\""));
+  assert.ok(privacySrc.includes("productId: String(entityId || \"\")"));
+  assert.ok(privacySrc.includes("updatedAt: payload?.updated_at || null"));
+  assert.ok(privacySrc.includes("topic: \"BULK_OPERATIONS_FINISH\""));
+  assert.ok(privacySrc.includes("bulkOperationId: String(bulkOperationId || \"\")"));
+});
+
+test("product type clear bulk query blocks created/running/canceling shop bulk operations", () => {
+  const src = read("web/Jobs/Workers/productSyncClearProductTypesWorker.js");
+
+  assert.ok(src.includes("ACTIVE_BULK_OPERATION_STATUSES"));
+  assert.ok(src.includes("\"CREATED\", \"RUNNING\", \"CANCELING\""));
+  assert.ok(src.includes("BULK_OPERATION_IN_PROGRESS"));
+  assert.ok(src.includes("error.retryable = true"));
+});
+
+test("direct collection and undo bulk submissions block active shop bulk operations", () => {
+  const collectionSrc = read("web/services/collectionService/CollectionService.js");
+  const undoSrc = read("web/services/productService/productBulkUndoService.js");
+
+  assert.ok(collectionSrc.includes("getCurrentBulkOperationStatus(session, \"QUERY\")"));
+  assert.ok(collectionSrc.includes("BLOCKING_BULK_OPERATION_STATUSES.has(currentStatus)"));
+  assert.ok(collectionSrc.includes("error.code = \"BULK_OPERATION_IN_PROGRESS\""));
+  assert.ok(undoSrc.includes("getCurrentBulkOperationStatus(this.session, \"MUTATION\")"));
+  assert.ok(undoSrc.includes("ACTIVE_BULK_OPERATION_STATUSES"));
+  assert.ok(undoSrc.includes("buildBulkOperationInProgressError"));
+});
+
 test("unresolved recovery worker is bootstrapped and scans unresolved webhook deliveries", () => {
   const workerSrc = read("web/Jobs/Workers/unresolvedBulkOperationRecoveryWorker.js");
   const bootstrapSrc = read("web/worker.js");

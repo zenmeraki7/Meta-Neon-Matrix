@@ -256,8 +256,12 @@ async function preserveNewerPreviousBatchProducts({
         ON staged_product."shop" = previous_product."shop"
        AND staged_product."id" = previous_product."id"
        AND staged_product."mirrorBatchId" = ${syncBatchId}
+      LEFT JOIN "ProductTombstone" tombstone
+        ON tombstone."shop" = previous_product."shop"
+       AND tombstone."productId" = previous_product."id"
       WHERE previous_product."shop" = ${shop}
         AND previous_product."mirrorBatchId" = ${previousBatchId}
+        AND tombstone."productId" IS NULL
         AND (
           staged_product."id" IS NULL
           OR (
@@ -903,6 +907,14 @@ export async function activateProductMirrorBatch({
 
     const finalProductCount = await tx.product.count({ where: { shop, mirrorBatchId: syncBatchId } });
     const finalVariantCount = await tx.variant.count({ where: { shop, mirrorBatchId: syncBatchId } });
+    await tx.$executeRaw`
+      DELETE FROM "ProductTombstone" tombstone
+      USING "Product" active_product
+      WHERE tombstone."shop" = ${shop}
+        AND active_product."shop" = tombstone."shop"
+        AND active_product."id" = tombstone."productId"
+        AND active_product."mirrorBatchId" = ${syncBatchId}
+    `;
 
     const storeActivated = await tx.store.updateMany({
       where: {

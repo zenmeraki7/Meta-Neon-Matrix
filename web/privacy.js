@@ -31,6 +31,12 @@ function createPayloadHash(payload) {
     .digest("hex");
 }
 
+function parseOptionalDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function normalizeWebhookEntityId(payload) {
   return (
     payload?.admin_graphql_api_id ||
@@ -83,15 +89,22 @@ function buildWebhookDedupeKey({ topic, shop, webhookId, entityId }) {
   )}`;
 }
 
+function buildBusinessWebhookDedupeKey(value) {
+  return `wh_dedupe_${hashStableId(value)}`;
+}
+
 async function reserveWebhookDelivery({
   topic,
   shop,
   webhookId,
   entityId,
   payload,
+  businessDedupeKey = null,
 }) {
   const id = buildWebhookDeliveryId({ topic, shop, webhookId, entityId });
-  const dedupeKey = buildWebhookDedupeKey({ topic, shop, webhookId, entityId });
+  const dedupeKey = businessDedupeKey
+    ? buildBusinessWebhookDedupeKey(businessDedupeKey)
+    : buildWebhookDedupeKey({ topic, shop, webhookId, entityId });
   const payloadHash = createPayloadHash(payload);
 
   try {
@@ -193,10 +206,13 @@ async function upsertReconcileSignal({
   topic,
   payloadHash,
   webhookId,
+  sourceUpdatedAt = null,
 }) {
   if (!shop || !entityType || !entityId) return;
 
   const normalizedEntityId = String(entityId);
+  const now = new Date();
+  const sourceTimestamp = parseOptionalDate(sourceUpdatedAt);
 
   const signalId = `mrs_${hashStableId(
     JSON.stringify({
@@ -206,37 +222,66 @@ async function upsertReconcileSignal({
     })
   )}`;
 
-  await db.mirrorReconcileSignal.upsert({
-    where: {
-      shop_entityType_entityId: {
-        shop,
-        entityType,
-        entityId: normalizedEntityId,
-      },
-    },
-    create: {
-      id: signalId,
+  const where = {
+    shop_entityType_entityId: {
       shop,
       entityType,
       entityId: normalizedEntityId,
-      topic,
-      status: "pending",
-      signalCount: 1,
-      latestWebhookId: webhookId || null,
-      latestPayloadHash: payloadHash || null,
-      latestEventAt: new Date(),
-      latestSourceKind: topic,
-      updatedAt: new Date(),
     },
-    update: {
-      topic,
+  };
+
+  try {
+    await db.mirrorReconcileSignal.create({
+      data: {
+        id: signalId,
+        shop,
+        entityType,
+        entityId: normalizedEntityId,
+        topic,
+        status: "pending",
+        signalCount: 1,
+        latestWebhookId: sourceTimestamp ? webhookId || null : null,
+        latestPayloadHash: sourceTimestamp ? payloadHash || null : null,
+        latestEventAt: sourceTimestamp,
+        latestSourceUpdatedAt: sourceTimestamp,
+        latestSourceKind: sourceTimestamp ? topic : null,
+        updatedAt: now,
+      },
+    });
+    return;
+  } catch (error) {
+    if (error?.code !== "P2002") throw error;
+  }
+
+  await db.mirrorReconcileSignal.update({
+    where,
+    data: {
       status: "pending",
       signalCount: { increment: 1 },
+      updatedAt: now,
+    },
+  });
+
+  if (!sourceTimestamp) return;
+
+  await db.mirrorReconcileSignal.updateMany({
+    where: {
+      shop,
+      entityType,
+      entityId: normalizedEntityId,
+      OR: [
+        { latestSourceUpdatedAt: null },
+        { latestSourceUpdatedAt: { lt: sourceTimestamp } },
+      ],
+    },
+    data: {
+      topic,
       latestWebhookId: webhookId || null,
       latestPayloadHash: payloadHash || null,
-      latestEventAt: new Date(),
+      latestEventAt: sourceTimestamp,
+      latestSourceUpdatedAt: sourceTimestamp,
       latestSourceKind: topic,
-      updatedAt: new Date(),
+      updatedAt: now,
     },
   });
 }
@@ -249,12 +294,22 @@ async function queueProductWebhook({
   producer,
   entityId,
 }) {
+  const businessDedupeKey = topic === "PRODUCTS_UPDATE"
+    ? JSON.stringify({
+      topic,
+      shop: requireShopScope(shop),
+      productId: String(entityId || ""),
+      updatedAt: payload?.updated_at || null,
+    })
+    : null;
+
   const reservation = await reserveWebhookDelivery({
     topic,
     shop,
     webhookId,
     entityId,
     payload,
+    businessDedupeKey,
   });
 
   if (!reservation.accepted) {
@@ -269,6 +324,7 @@ async function queueProductWebhook({
       topic,
       payloadHash: reservation.payloadHash,
       webhookId,
+      sourceUpdatedAt: payload?.updated_at,
     });
 
     await producer({
@@ -317,6 +373,7 @@ async function queueShopSyncWebhook({
       topic,
       payloadHash: reservation.payloadHash,
       webhookId,
+      sourceUpdatedAt: payload?.updated_at,
     });
 
     await addShopSyncJob({
@@ -487,6 +544,7 @@ export default {
           topic: "VARIANTS_UPDATE",
           payloadHash: reservation.payloadHash,
           webhookId,
+          sourceUpdatedAt: payload?.updated_at,
         });
 
         await addProductUpdateJob(
@@ -678,6 +736,11 @@ export default {
         webhookId,
         entityId: bulkOperationId,
         payload,
+        businessDedupeKey: JSON.stringify({
+          topic: "BULK_OPERATIONS_FINISH",
+          shop: requireShopScope(shop),
+          bulkOperationId: String(bulkOperationId || ""),
+        }),
       });
 
       if (!reservation.accepted) {
@@ -737,6 +800,7 @@ export default {
           topic,
           payloadHash: reservation.payloadHash,
           webhookId,
+          sourceUpdatedAt: payload?.updated_at,
         });
 
         await addAppUninstallJob({

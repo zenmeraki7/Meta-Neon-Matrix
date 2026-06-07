@@ -14,11 +14,12 @@ import {
 const service = new Services();
 
 export async function startProductSync(command = Object.freeze({})) {
-  const session = command?.session || null;
+  const shop = String(command?.shop || "").trim();
+  const accessToken = String(command?.accessToken || "").trim();
+  const session = shop && accessToken ? { shop, accessToken } : null;
   const force = Boolean(command?.force);
-  const shop = String(session?.shop || "").trim();
 
-  if (!shop) {
+  if (!shop || !accessToken) {
     const error = new Error("UNAUTHENTICATED");
     error.code = "UNAUTHENTICATED";
     throw error;

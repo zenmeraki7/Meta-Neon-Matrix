@@ -20,6 +20,7 @@ import {
   IdempotencyStoreService,
 } from "../idempotency/IdempotencyStoreService.js";
 import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
+import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 
 
 const OPTION_NAME_FIELDS = new Set([
@@ -27,6 +28,15 @@ const OPTION_NAME_FIELDS = new Set([
   "option2Name",
   "option3Name",
 ]);
+const ACTIVE_BULK_OPERATION_STATUSES = new Set(["CREATED", "RUNNING", "CANCELING"]);
+
+function buildBulkOperationInProgressError(currentBulkOperation) {
+  const status = String(currentBulkOperation?.status || "").toUpperCase();
+  const error = new Error(`BULK_OPERATION_IN_PROGRESS:${status || "UNKNOWN"}`);
+  error.retryable = true;
+  error.currentBulkOperation = currentBulkOperation || null;
+  return error;
+}
 
 function mirrorFieldValue(row, field) {
   const normalized = String(field || "").replace(/[\s_-]+/g, "").toLowerCase();
@@ -511,6 +521,15 @@ class UndoEditService {
           writingStartedAt: new Date(),
         },
       });
+    }
+
+    const currentBulkOperation = await getCurrentBulkOperationStatus(this.session, "MUTATION");
+    if (
+      ACTIVE_BULK_OPERATION_STATUSES.has(
+        String(currentBulkOperation?.status || "").toUpperCase(),
+      )
+    ) {
+      throw buildBulkOperationInProgressError(currentBulkOperation);
     }
 
     const stagedRes = await this.client.query({

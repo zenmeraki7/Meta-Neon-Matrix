@@ -20,11 +20,40 @@ import { PRODUCT_UPDATE_QUEUE_NAME } from "../../queues/productWebhookQueue.cons
 import { productUpdateDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 import { isRetryExhausted } from "../../utils/workerTelemetry.js";
 
+function normalizeProductId(id) {
+  if (
+    (typeof id !== "string" && typeof id !== "number") ||
+    String(id).trim() === ""
+  ) {
+    return null;
+  }
+
+  const normalizedId = String(id).trim();
+  const numericId = normalizedId.startsWith("gid://shopify/Product/")
+    ? normalizedId.slice("gid://shopify/Product/".length)
+    : normalizedId;
+  if (!/^\d+$/.test(numericId)) {
+    return null;
+  }
+
+  return `gid://shopify/Product/${numericId}`;
+}
+
+async function acquireProductWebhookLock(tx, shop, productId) {
+  await tx.$queryRaw`
+    SELECT pg_advisory_xact_lock(hashtext(${`product-webhook:${shop}:${productId}`}))
+  `;
+}
+
 const productUpdateWorker = new Worker(
   PRODUCT_UPDATE_QUEUE_NAME,
   async (job) => {
     try {
-      const { shop, id, ...payload } = job.data;
+      const { shop, id: rawId, ...payload } = job.data;
+      const id = normalizeProductId(rawId);
+      if (!shop || !id) {
+        throw new Error("product-update job requires shop and id");
+      }
       const store = await db.store.findUnique({
         where: { shopUrl: shop },
         select: {
@@ -133,7 +162,29 @@ const productUpdateWorker = new Worker(
       }
 
       let skippedStalePayload = false;
+      let skippedTombstonedPayload = false;
       await db.$transaction(async (tx) => {
+        await acquireProductWebhookLock(tx, shop, id);
+        const tombstone = await tx.productTombstone.findUnique({
+          where: {
+            shop_productId: {
+              shop,
+              productId: id,
+            },
+          },
+          select: { sourceUpdatedAt: true },
+        });
+        if (
+          tombstone
+          && (
+            !tombstone.sourceUpdatedAt
+            || incomingUpdatedAt <= new Date(tombstone.sourceUpdatedAt)
+          )
+        ) {
+          skippedTombstonedPayload = true;
+          return;
+        }
+
         const updated = await tx.product.updateMany({
           where: {
             shop,
@@ -214,6 +265,23 @@ const productUpdateWorker = new Worker(
           });
         }
       });
+
+      if (skippedTombstonedPayload) {
+        await recordMirrorAnomaly({
+          shop,
+          severity: "medium",
+          type: "webhook_after_delete",
+          entityType: "product",
+          entityId: id,
+          message: "Ignored product update webhook for tombstoned product",
+          details: {
+            incomingUpdatedAt,
+            activeBatchId,
+          },
+        }).catch(() => {});
+
+        return { skipped: true, reason: "tombstoned_product_update_webhook" };
+      }
 
       if (skippedStalePayload) {
         await recordMirrorAnomaly({

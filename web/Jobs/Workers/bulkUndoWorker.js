@@ -19,6 +19,11 @@ import {
   releaseOperationLease,
 } from "../../services/operationLeaseService.js";
 import {
+  SHOPIFY_BULK_MUTATION_SLOT,
+  SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+  shopifyBulkMutationSlotResourceId,
+} from "../../services/shopifyBulkMutationSlotLease.js";
+import {
   getJobAttempt,
   isRetryExhausted,
   recordRetryExhausted,
@@ -107,6 +112,8 @@ const bulkUndoWorker = new Worker(
     let shopLockKey = null;
     const leaseOwnerId = buildLeaseOwnerId("bulk-undo-worker");
     let leaseHeartbeat = null;
+    let bulkMutationSlotOwnerId = null;
+    let bulkMutationSlotHeartbeat = null;
 
     try {
       assertNoRawTargetingPayload(job.data || {});
@@ -136,6 +143,30 @@ const bulkUndoWorker = new Worker(
       }
 
       shopLockKey = lock.lockKey;
+      bulkMutationSlotOwnerId = buildLeaseOwnerId("shopify-bulk-mutation-slot");
+      const bulkMutationSlot = await acquireOperationLease({
+        shop,
+        namespace: SHOPIFY_BULK_MUTATION_SLOT,
+        resourceId: shopifyBulkMutationSlotResourceId(shop),
+        ownerId: bulkMutationSlotOwnerId,
+        ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+      });
+      if (!bulkMutationSlot?.acquired) {
+        throw new RetryableBulkUndoError(
+          "Another Shopify bulk mutation is already running for this shop",
+          "BULK_MUTATION_SLOT_OCCUPIED",
+        );
+      }
+      bulkMutationSlotHeartbeat = setInterval(() => {
+        heartbeatOperationLease({
+          shop,
+          namespace: SHOPIFY_BULK_MUTATION_SLOT,
+          resourceId: shopifyBulkMutationSlotResourceId(shop),
+          ownerId: bulkMutationSlotOwnerId,
+          ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+        }).catch(() => {});
+      }, 60_000);
+
       const operationLease = await acquireOperationLease({
         shop,
         namespace: "bulk_undo_execution",
@@ -563,6 +594,7 @@ const bulkUndoWorker = new Worker(
       }
       throw error;
     } finally {
+      if (bulkMutationSlotHeartbeat) clearInterval(bulkMutationSlotHeartbeat);
       if (leaseHeartbeat) clearInterval(leaseHeartbeat);
       await releaseOperationLease({
         shop,

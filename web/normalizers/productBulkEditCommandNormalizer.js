@@ -3,6 +3,8 @@ const MAX_TEXT_LENGTH = 500;
 const MAX_LONG_TEXT_LENGTH = 5_000;
 const MAX_CURSOR_LENGTH = 500;
 const MAX_LIMIT = 250;
+const MAX_PAGE = 10_000;
+const MIN_FUTURE_SCHEDULE_BUFFER_MS = 60_000;
 
 const MAX_FILTER_PARAMS = 500;
 const MAX_FILTER_PARAM_ARRAY_VALUES = 250;
@@ -199,7 +201,7 @@ function normalizeRequiredText(value, fieldName, maxLength = MAX_TEXT_LENGTH) {
 function normalizeId(value, fieldName = "id") {
   const normalized = normalizeRequiredText(value, fieldName, MAX_ID_LENGTH);
 
-  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+  if (!/^[A-Za-z0-9._:/?-]+$/.test(normalized)) {
     throw buildRequestError(`Invalid ${fieldName}`);
   }
 
@@ -213,7 +215,7 @@ function normalizeOptionalId(value, fieldName = "id") {
     return null;
   }
 
-  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+  if (!/^[A-Za-z0-9._:/?-]+$/.test(normalized)) {
     throw buildRequestError(`Invalid ${fieldName}`);
   }
 
@@ -232,6 +234,20 @@ function normalizeLimit(value) {
   }
 
   return limit;
+}
+
+function normalizePage(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const page = Number(value);
+
+  if (!Number.isInteger(page) || page < 1 || page > MAX_PAGE) {
+    throw buildRequestError(`Invalid page: must be 1-${MAX_PAGE}`);
+  }
+
+  return page;
 }
 
 function normalizeCursor(value) {
@@ -399,6 +415,23 @@ function normalizeEditValue(value, fieldName = "editValue") {
     return value;
   }
 
+  if (Array.isArray(value)) {
+    if (value.length > MAX_EDIT_VALUE_NODES) {
+      throw buildRequestError(`Invalid ${fieldName}: too many items`);
+    }
+
+    const normalized = value.map((item, index) =>
+      normalizeEditValue(item, `${fieldName}[${index}]`));
+
+    countJsonNodes(normalized, {
+      fieldName,
+      maxDepth: MAX_EDIT_VALUE_DEPTH,
+      maxNodes: MAX_EDIT_VALUE_NODES,
+    });
+
+    return deepFreeze(normalized);
+  }
+
   if (isPlainObject(value)) {
     assertNoPoisonKeys(value, fieldName);
 
@@ -447,8 +480,8 @@ function normalizeFutureDateString(value, fieldName, required = false) {
     return null;
   }
 
-  if (new Date(iso).getTime() <= Date.now()) {
-    throw buildRequestError(`Invalid ${fieldName}: must be in the future`);
+  if (new Date(iso).getTime() <= Date.now() + MIN_FUTURE_SCHEDULE_BUFFER_MS) {
+    throw buildRequestError(`Invalid ${fieldName}: must be at least 60 seconds in the future`);
   }
 
   return iso;
@@ -606,6 +639,23 @@ function requirePreviewContract(command) {
   }
 }
 
+function assertFingerprintCoherence(payload) {
+  const fields = [
+    payload.previewId,
+    payload.previewFilterHash,
+    payload.previewMirrorBatchId,
+    payload.previewFieldRegistryVersion,
+    payload.previewOperatorRegistryVersion,
+  ];
+  const present = fields.filter(Boolean).length;
+  if (present > 0 && present < fields.length) {
+    throw buildRequestError(
+      "Incomplete preview fingerprint: all fingerprint fields are required together",
+      "VALIDATION_FAILED",
+    );
+  }
+}
+
 function assertScheduledUndoAfterScheduledAt(scheduledAt, scheduledUndoAt) {
   if (!scheduledAt || !scheduledUndoAt) {
     return;
@@ -630,6 +680,7 @@ export function buildBulkEditPreviewCommand({
   const safeQuery = normalizeQueryObject(query);
   const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const payload = normalizeEditPayload({ body, query: safeQuery });
+  assertFingerprintCoherence(payload);
 
   return Object.freeze({
     ...safeContext,
@@ -650,6 +701,7 @@ export function buildBulkEditExecuteCommand({
 }) {
   const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const payload = normalizeEditPayload({ body, query });
+  assertFingerprintCoherence(payload);
 
   requirePreviewContract(payload);
 
@@ -673,6 +725,7 @@ export function buildScheduledEditCommand({
 }) {
   const safeContext = assertCommandContext({ shop, actor, subscription, entitlement, activePlan });
   const payload = normalizeEditPayload({ body, query });
+  assertFingerprintCoherence(payload);
 
   const safeBody = assertPlainObject(body, "body");
 
@@ -812,7 +865,7 @@ export function buildPreviewVariantDetailsCommand({
     ...safeContext,
     previewId: normalizeId(params.previewId, "previewId"),
     productId: normalizeId(params.productId, "productId"),
-    page: normalizeLimit(safeQuery.page) || 1,
+    page: normalizePage(safeQuery.page) || 1,
     limit: normalizeLimit(safeQuery.limit) || 50,
   });
 }

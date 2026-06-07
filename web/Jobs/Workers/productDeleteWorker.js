@@ -3,6 +3,7 @@ import { connection, createRedisConnection } from "../../config/redis.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
+import crypto from "crypto";
 import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { markWebhookProcessed } from "../../services/mirrorHealthService.js";
 import { recordMirrorAnomaly } from "../../services/mirrorAnomalyService.js";
@@ -33,6 +34,25 @@ function normalizeProductId(id) {
   return `gid://shopify/Product/${numericId}`;
 }
 
+function buildProductTombstoneId(shop, productId) {
+  return `pt_${crypto
+    .createHash("sha1")
+    .update(`${shop}:${productId}`)
+    .digest("hex")}`;
+}
+
+function parseOptionalDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+async function acquireProductWebhookLock(tx, shop, productId) {
+  await tx.$queryRaw`
+    SELECT pg_advisory_xact_lock(hashtext(${`product-webhook:${shop}:${productId}`}))
+  `;
+}
+
 const productDeleteWorker = new Worker(
   PRODUCT_DELETE_QUEUE_NAME,
   async (job) => {
@@ -53,6 +73,9 @@ const productDeleteWorker = new Worker(
       });
 
       const deletion = await db.$transaction(async (tx) => {
+        const deletedAt = new Date();
+        const sourceUpdatedAt = parseOptionalDate(job.data?.updated_at);
+        await acquireProductWebhookLock(tx, shop, productId);
         const store = await tx.store.findUnique({
           where: { shopUrl: shop },
           select: {
@@ -66,6 +89,32 @@ const productDeleteWorker = new Worker(
         }
 
         const activeMirrorBatchId = store.activeMirrorBatchId;
+
+        await tx.productTombstone.upsert({
+          where: {
+            shop_productId: {
+              shop,
+              productId,
+            },
+          },
+          create: {
+            id: buildProductTombstoneId(shop, productId),
+            shop,
+            productId,
+            sourceUpdatedAt,
+            sourceEventAt: deletedAt,
+            deletedAt,
+            sourceKind: "SHOPIFY_WEBHOOK_DELETE",
+          },
+          update: {
+            sourceUpdatedAt,
+            sourceEventAt: deletedAt,
+            deletedAt,
+            sourceKind: "SHOPIFY_WEBHOOK_DELETE",
+            updatedAt: deletedAt,
+          },
+        });
+
         if (!activeMirrorBatchId) {
           return { skipped: true, reason: "missing_active_mirror_batch" };
         }

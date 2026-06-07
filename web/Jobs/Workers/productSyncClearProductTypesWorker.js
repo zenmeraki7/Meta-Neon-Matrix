@@ -9,6 +9,7 @@ import { getProductSyncCacheKeys } from "../../utils/cacheKeyRegistry.js";
 
 const QUEUE_NAME =
   process.env.PRODUCT_SYNC_CLEAR_PRODUCT_TYPES_QUEUE || "product-sync-clear-product-types";
+const ACTIVE_BULK_OPERATION_STATUSES = new Set(["CREATED", "RUNNING", "CANCELING"]);
 
 const BULK_OPERATION_MUTATION = `mutation {
   bulkOperationRunQuery(
@@ -73,9 +74,13 @@ const productSyncClearProductTypesWorker = new Worker(
       throw new Error("SHOP_SESSION_NOT_AVAILABLE");
     }
 
-    const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
-    if (status === "RUNNING") {
-      throw new Error("SHOPIFY_QUERY_BULK_OPERATION_RUNNING");
+    const currentBulkOperation = await getCurrentBulkOperationStatus(session, "QUERY");
+    const status = String(currentBulkOperation?.status || "").toUpperCase();
+    if (ACTIVE_BULK_OPERATION_STATUSES.has(status)) {
+      const error = new Error(`BULK_OPERATION_IN_PROGRESS:${status}`);
+      error.retryable = true;
+      error.currentBulkOperation = currentBulkOperation;
+      throw error;
     }
 
     const client = new shopify.api.clients.Graphql({ session });

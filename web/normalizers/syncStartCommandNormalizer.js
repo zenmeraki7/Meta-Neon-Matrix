@@ -11,18 +11,23 @@ export function normalizeSyncStartCommand(req = {}, session = null) {
     throw buildError("Unauthenticated session", 401, "UNAUTHENTICATED");
   }
 
+  const accessToken = toTrimmedString(session?.accessToken);
+  if (!accessToken) {
+    throw buildError("Session missing access token", 401, "UNAUTHENTICATED");
+  }
+
   const forceRaw = String(req?.query?.force ?? req?.body?.force ?? "").trim().toLowerCase();
   const force = forceRaw === "true" || forceRaw === "1" || forceRaw === "yes";
 
   const idempotencyKey = validateIdempotencyKey(
     req?.headers?.["idempotency-key"] || req?.headers?.["Idempotency-Key"] || null,
     "idempotencyKey",
-    { required: false },
+    { required: true },
   );
 
   return deepFreeze({
-    session,
     shop,
+    accessToken,
     force,
     idempotencyKey,
   });

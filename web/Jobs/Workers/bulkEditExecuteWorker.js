@@ -26,6 +26,11 @@ import {
   heartbeatOperationLease,
   releaseOperationLease,
 } from "../../services/operationLeaseService.js";
+import {
+  SHOPIFY_BULK_MUTATION_SLOT,
+  SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+  shopifyBulkMutationSlotResourceId,
+} from "../../services/shopifyBulkMutationSlotLease.js";
 import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
 import {
   casMarkFailedNonTerminal,
@@ -471,6 +476,8 @@ async function processBulkEditExecuteJob(job) {
   let executeLeaseOwnerId = null;
   let executeLeaseHeartbeat = null;
   let executeLeaseHeartbeatLost = false;
+  let bulkMutationSlotOwnerId = null;
+  let bulkMutationSlotHeartbeat = null;
 
   try {
     await job.updateProgress({ stage: "loading_history", pct: 5 });
@@ -547,6 +554,49 @@ async function processBulkEditExecuteJob(job) {
       });
     }
     await job.updateProgress({ stage: "acquired_shop_lock", pct: 20 });
+
+    bulkMutationSlotOwnerId = buildLeaseOwnerId("shopify-bulk-mutation-slot");
+    const bulkMutationSlot = await acquireOperationLease({
+      shop,
+      namespace: SHOPIFY_BULK_MUTATION_SLOT,
+      resourceId: shopifyBulkMutationSlotResourceId(shop),
+      ownerId: bulkMutationSlotOwnerId,
+      ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+    });
+    if (!bulkMutationSlot?.acquired) {
+      const delayMs = DEFAULT_REQUEUE_DELAY_MS;
+      await addBulkEditExecuteJob(
+        {
+          historyId,
+          shop,
+          executionId,
+          source: `${source}:bulk_mutation_slot_occupied`,
+        },
+        {
+          delay: delayMs,
+          jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}:bulk-mutation-slot`,
+          attempts: 6,
+          backoff: { type: "exponential", delay: 5000 },
+          removeOnComplete: { age: 86400, count: 1000 },
+          removeOnFail: { age: 604800, count: 5000 },
+        },
+      );
+      return toWorkerOperationStatusDto({
+        success: true,
+        requeued: true,
+        reason: "BULK_MUTATION_SLOT_OCCUPIED",
+        delayMs,
+      });
+    }
+    bulkMutationSlotHeartbeat = setInterval(() => {
+      heartbeatOperationLease({
+        shop,
+        namespace: SHOPIFY_BULK_MUTATION_SLOT,
+        resourceId: shopifyBulkMutationSlotResourceId(shop),
+        ownerId: bulkMutationSlotOwnerId,
+        ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+      }).catch(() => {});
+    }, 60_000);
 
     executeLeaseOwnerId = buildLeaseOwnerId("bulk-edit-execute");
     const executeLease = await acquireOperationLease({
@@ -821,6 +871,9 @@ async function processBulkEditExecuteJob(job) {
 
     throw error;
   } finally {
+    if (bulkMutationSlotHeartbeat) {
+      clearInterval(bulkMutationSlotHeartbeat);
+    }
     if (executeLeaseHeartbeat) {
       clearInterval(executeLeaseHeartbeat);
     }

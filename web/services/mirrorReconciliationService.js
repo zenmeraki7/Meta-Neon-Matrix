@@ -11,6 +11,10 @@ const TARGETED_RECONCILIATION_LIMIT = Number.parseInt(
   10,
 );
 
+function buildSignalId(shop, productId) {
+  return `mrs_${crypto.createHash("sha1").update(`${shop}:${productId}`).digest("hex")}`;
+}
+
 export async function schedulePostMutationMirrorReconciliation({
   shop,
   ownerType,
@@ -19,6 +23,7 @@ export async function schedulePostMutationMirrorReconciliation({
   source = "BULK_EDIT",
   verificationStatus = "UNKNOWN",
 }) {
+  const sourceEventAt = new Date();
   const snapshots = await db.targetSnapshot.findMany({
     where: {
       shop,
@@ -61,30 +66,59 @@ export async function schedulePostMutationMirrorReconciliation({
 
   await db.$transaction(async (tx) => {
     for (const productId of productIds) {
-      await tx.mirrorReconcileSignal.upsert({
-        where: {
-          shop_entityType_entityId: {
-            shop,
-            entityType: "PRODUCT",
-            entityId: productId,
-          },
-        },
-        create: {
-          id: `mrs_${crypto.createHash("sha1").update(`${shop}:${productId}`).digest("hex")}`,
+      const where = {
+        shop_entityType_entityId: {
           shop,
           entityType: "PRODUCT",
           entityId: productId,
-          topic: source,
-          status: "pending",
-          signalCount: 1,
-          latestEventAt: new Date(),
         },
-        update: {
-          topic: source,
+      };
+
+      try {
+        await tx.mirrorReconcileSignal.create({
+          data: {
+            id: buildSignalId(shop, productId),
+            shop,
+            entityType: "PRODUCT",
+            entityId: productId,
+            topic: source,
+            status: "pending",
+            signalCount: 1,
+            latestEventAt: sourceEventAt,
+            latestSourceUpdatedAt: sourceEventAt,
+            latestSourceKind: source,
+          },
+        });
+        continue;
+      } catch (error) {
+        if (error?.code !== "P2002") throw error;
+      }
+
+      await tx.mirrorReconcileSignal.update({
+        where,
+        data: {
           status: "pending",
           signalCount: { increment: 1 },
-          latestEventAt: new Date(),
-          updatedAt: new Date(),
+          updatedAt: sourceEventAt,
+        },
+      });
+
+      await tx.mirrorReconcileSignal.updateMany({
+        where: {
+          shop,
+          entityType: "PRODUCT",
+          entityId: productId,
+          OR: [
+            { latestSourceUpdatedAt: null },
+            { latestSourceUpdatedAt: { lt: sourceEventAt } },
+          ],
+        },
+        data: {
+          topic: source,
+          latestEventAt: sourceEventAt,
+          latestSourceUpdatedAt: sourceEventAt,
+          latestSourceKind: source,
+          updatedAt: sourceEventAt,
         },
       });
     }
@@ -113,4 +147,3 @@ export async function schedulePostMutationMirrorReconciliation({
 
   return { mode: "targeted_signals", productCount: productIds.length };
 }
-

@@ -16,6 +16,10 @@ import {
   heartbeatOperationLease,
   releaseOperationLease,
 } from "../../services/operationLeaseService.js";
+import {
+  SHOPIFY_BULK_MUTATION_SLOT,
+  shopifyBulkMutationSlotResourceId,
+} from "../../services/shopifyBulkMutationSlotLease.js";
 import { bulkEditResultIngestDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 
 const QUEUE_NAME = process.env.BULK_EDIT_RESULT_INGEST_QUEUE || "bulk-edit-result-ingest";
@@ -223,6 +227,12 @@ async function processBulkEditResultIngest(job) {
       });
       ingestLeaseOwnerId = null;
     }
+    await releaseOperationLease({
+      shop,
+      namespace: SHOPIFY_BULK_MUTATION_SLOT,
+      resourceId: shopifyBulkMutationSlotResourceId(shop),
+      ownerId: "shopify-bulk-mutation-slot",
+    }).catch(() => {});
   };
 
   try {
