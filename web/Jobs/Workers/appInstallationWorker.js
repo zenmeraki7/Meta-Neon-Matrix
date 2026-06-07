@@ -23,6 +23,7 @@ import {
   enqueueMissedBulkOperationPollingTick,
   enqueueOperationEnqueueIntentRecoveryTick,
   enqueueOutboxDispatcherSchedulerTick,
+  enqueueResultFileExpiryCheckTick,
   enqueueRecurringEditSchedulerTick,
   enqueueScheduledEditRecoveryTick,
   enqueueScheduledExportSchedulerTick,
@@ -77,6 +78,10 @@ async function registerShopRepeatableJobs({ shop, jobId }) {
     enqueueUnresolvedBulkOperationRecoveryTick({
       shop,
       repeatEveryMs: 60_000,
+    }),
+    enqueueResultFileExpiryCheckTick({
+      shop,
+      repeatEveryMs: 60 * 60 * 1000,
     }),
     enqueueStuckBulkMutationRecoveryTick({
       shop,

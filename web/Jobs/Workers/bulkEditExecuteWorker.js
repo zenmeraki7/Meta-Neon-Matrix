@@ -29,6 +29,8 @@ import {
 import {
   SHOPIFY_BULK_MUTATION_SLOT,
   SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+  acquireShopifyBulkMutationSlot,
+  releaseShopifyBulkMutationSlot,
   shopifyBulkMutationSlotResourceId,
 } from "../../services/shopifyBulkMutationSlotLease.js";
 import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
@@ -42,6 +44,16 @@ import {
 } from "../../repositories/bulkEditExecutionRepository.js";
 import { toWorkerOperationStatusDto } from "../../dtos/workerOperationStatusDto.js";
 import { bulkEditExecuteDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { assertMirrorSafeForBulkExecution } from "../../services/mirrorHealthService.js";
+import { runBulkEditPreflight } from "../../services/bulkEdit/BulkEditPreflightService.js";
+import {
+  CircuitOpenError,
+  executeWithShopifyCircuit,
+} from "../../services/shopify/ShopifyCircuitBreaker.js";
+import {
+  suspendBulkEditForShopifyOutage,
+  suspensionDelayMs,
+} from "../../services/bulkEdit/bulkOperationSuspensionService.js";
 
 const WORKER_NAME = "bulkEditExecuteWorker";
 const OPERATION_QUEUE_NAMES = {
@@ -251,11 +263,13 @@ async function markExecuting({ historyId, shop, batchPatch = {} }) {
       OPERATION_LIFECYCLE_STATES.QUEUED,
       OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
       OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
+      OPERATION_LIFECYCLE_STATES.SUSPENDED,
     ],
     nextExecutionState: OPERATION_LIFECYCLE_STATES.EXECUTING,
     batchPatch: mergeBatch(existing?.batch, {
       executionWorker: WORKER_NAME,
       executionStartedAt: new Date().toISOString(),
+      suspension: null,
       ...batchPatch,
     }),
   });
@@ -478,6 +492,8 @@ async function processBulkEditExecuteJob(job) {
   let executeLeaseHeartbeatLost = false;
   let bulkMutationSlotOwnerId = null;
   let bulkMutationSlotHeartbeat = null;
+  let bulkMutationSlotAcquired = false;
+  let bulkMutationSlotHeldForShopify = false;
 
   try {
     await job.updateProgress({ stage: "loading_history", pct: 5 });
@@ -554,49 +570,6 @@ async function processBulkEditExecuteJob(job) {
       });
     }
     await job.updateProgress({ stage: "acquired_shop_lock", pct: 20 });
-
-    bulkMutationSlotOwnerId = buildLeaseOwnerId("shopify-bulk-mutation-slot");
-    const bulkMutationSlot = await acquireOperationLease({
-      shop,
-      namespace: SHOPIFY_BULK_MUTATION_SLOT,
-      resourceId: shopifyBulkMutationSlotResourceId(shop),
-      ownerId: bulkMutationSlotOwnerId,
-      ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
-    });
-    if (!bulkMutationSlot?.acquired) {
-      const delayMs = DEFAULT_REQUEUE_DELAY_MS;
-      await addBulkEditExecuteJob(
-        {
-          historyId,
-          shop,
-          executionId,
-          source: `${source}:bulk_mutation_slot_occupied`,
-        },
-        {
-          delay: delayMs,
-          jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}:bulk-mutation-slot`,
-          attempts: 6,
-          backoff: { type: "exponential", delay: 5000 },
-          removeOnComplete: { age: 86400, count: 1000 },
-          removeOnFail: { age: 604800, count: 5000 },
-        },
-      );
-      return toWorkerOperationStatusDto({
-        success: true,
-        requeued: true,
-        reason: "BULK_MUTATION_SLOT_OCCUPIED",
-        delayMs,
-      });
-    }
-    bulkMutationSlotHeartbeat = setInterval(() => {
-      heartbeatOperationLease({
-        shop,
-        namespace: SHOPIFY_BULK_MUTATION_SLOT,
-        resourceId: shopifyBulkMutationSlotResourceId(shop),
-        ownerId: bulkMutationSlotOwnerId,
-        ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
-      }).catch(() => {});
-    }, 60_000);
 
     executeLeaseOwnerId = buildLeaseOwnerId("bulk-edit-execute");
     const executeLease = await acquireOperationLease({
@@ -744,10 +717,73 @@ async function processBulkEditExecuteJob(job) {
       historyId,
       leaseOwnerId: executeLeaseOwnerId,
     });
+    const executionMirrorState = await assertMirrorSafeForBulkExecution(shop, { historyId });
+    if (
+      String(history.targetMirrorBatchId || "")
+      !== String(executionMirrorState.activeMirrorBatchId || "")
+    ) {
+      const error = new Error("PREVIEW_MIRROR_BATCH_STALE");
+      error.nonRetryable = true;
+      throw error;
+    }
+    runBulkEditPreflight({
+      command: {
+        confirmBroadTarget: history.batch?.confirmBroadTarget === true,
+        criticalConfirmationText: history.batch?.criticalConfirmationText || null,
+        scheduledAt: history.scheduledAt || null,
+      },
+      store: executionMirrorState,
+      rules: history.rules,
+      targetCount: history.targetSnapshotCount,
+      subscription: authoritativeSubscription,
+      requirePreview: false,
+    });
+
+    bulkMutationSlotOwnerId = buildLeaseOwnerId("shopify-bulk-mutation-slot");
+    const bulkMutationSlot = await acquireShopifyBulkMutationSlot({
+      shop,
+      ownerId: bulkMutationSlotOwnerId,
+    });
+    if (!bulkMutationSlot?.acquired) {
+      const delayMs = DEFAULT_REQUEUE_DELAY_MS;
+      await addBulkEditExecuteJob(
+        {
+          historyId,
+          shop,
+          executionId,
+          source: `${source}:bulk_mutation_slot_occupied`,
+        },
+        {
+          delay: delayMs,
+          jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}:bulk-mutation-slot`,
+          attempts: 6,
+          backoff: { type: "exponential", delay: 5000 },
+          removeOnComplete: { age: 86400, count: 1000 },
+          removeOnFail: { age: 604800, count: 5000 },
+        },
+      );
+      return toWorkerOperationStatusDto({
+        success: true,
+        requeued: true,
+        reason: "BULK_MUTATION_SLOT_OCCUPIED",
+        delayMs,
+      });
+    }
+    bulkMutationSlotAcquired = true;
+    bulkMutationSlotHeartbeat = setInterval(() => {
+      heartbeatOperationLease({
+        shop,
+        namespace: SHOPIFY_BULK_MUTATION_SLOT,
+        resourceId: shopifyBulkMutationSlotResourceId(shop),
+        ownerId: bulkMutationSlotOwnerId,
+        ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+      }).catch(() => {});
+    }, 60_000);
 
     let submission;
     try {
-      submission = await mutationService.submitProductSetBulkMutation({
+      submission = await executeWithShopifyCircuit(shop, () =>
+        mutationService.submitProductSetBulkMutation({
         historyId,
         executionId,
         submitFence: {
@@ -761,9 +797,40 @@ async function processBulkEditExecuteJob(job) {
         lastProductId: preparedBatch.lastProductId,
         hasMore: preparedBatch.hasMore,
         nextRetryCursorIndex: preparedBatch.nextRetryCursorIndex,
-      });
+        }));
     } catch (error) {
+      if (error instanceof CircuitOpenError) {
+        const delayMs = suspensionDelayMs(error);
+        const suspended = await suspendBulkEditForShopifyOutage({
+          historyId,
+          shop,
+          error,
+        });
+        if (suspended.count !== 1) {
+          throw new Error("BULK_EDIT_SUSPENSION_TRANSITION_REJECTED");
+        }
+        await addBulkEditExecuteJob(
+          {
+            historyId,
+            shop,
+            executionId,
+            source: `${source}:shopify_unavailable_resume`,
+          },
+          {
+            delay: delayMs,
+            jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}:shopify-resume:${error.retryAfter.getTime()}`,
+          },
+        );
+        return toWorkerOperationStatusDto({
+          success: true,
+          suspended: true,
+          reason: "SHOPIFY_UNAVAILABLE",
+          resumeAfter: error.retryAfter.toISOString(),
+          delayMs,
+        });
+      }
       if (error?.submittedToShopify && error?.bulkOperationId) {
+        bulkMutationSlotHeldForShopify = true;
         await casTransitionExecutionState({
           historyId,
           shop,
@@ -810,6 +877,7 @@ async function processBulkEditExecuteJob(job) {
       });
     }
     await job.updateProgress({ stage: "submitted", pct: 100 });
+    bulkMutationSlotHeldForShopify = true;
 
     return toWorkerOperationStatusDto({
       success: true,
@@ -873,6 +941,9 @@ async function processBulkEditExecuteJob(job) {
   } finally {
     if (bulkMutationSlotHeartbeat) {
       clearInterval(bulkMutationSlotHeartbeat);
+    }
+    if (bulkMutationSlotAcquired && !bulkMutationSlotHeldForShopify) {
+      await releaseShopifyBulkMutationSlot(shop).catch(() => {});
     }
     if (executeLeaseHeartbeat) {
       clearInterval(executeLeaseHeartbeat);

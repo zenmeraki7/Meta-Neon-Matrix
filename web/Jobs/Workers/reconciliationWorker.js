@@ -4,6 +4,12 @@ import logger from "../../utils/loggerUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
 import { addShopSyncJob } from "../Queues/shopSyncJob.js";
 import { RECONCILIATION_QUEUE_NAME } from "../Queues/reconciliationJob.js";
+import {
+  assessMirrorHealth,
+  repairMirror,
+} from "../../services/mirrorHealthService.js";
+import { checkExpiringResultFiles } from "../../services/bulkEdit/bulkSubmissionResultExpiryService.js";
+import { addbulkEditResultIngestJob } from "../Queues/bulkEditResultIngestJob.js";
 
 const RECONCILIATION_STALE_HOURS = Number(process.env.RECONCILIATION_STALE_HOURS || 23);
 const STALE_SIGNAL_THRESHOLD_MS = Number(
@@ -25,6 +31,13 @@ async function processReconciliationJob(job) {
     throw new Error("reconciliation job requires shop");
   }
 
+  const resultFileExpiry = await checkExpiringResultFiles({
+    db,
+    shop,
+    enqueueResultIngest: addbulkEditResultIngestJob,
+    logger,
+  });
+
   const store = await db.store.findUnique({
     where: {
       shopUrl: shop,
@@ -35,6 +48,10 @@ async function processReconciliationJob(job) {
       lastFullSyncAt: true,
     },
   });
+  const health = await assessMirrorHealth(shop);
+  if (health.repairRequired || ["UNSAFE", "REPAIR_REQUIRED"].includes(health.state)) {
+    await repairMirror(shop);
+  }
 
   let queued = 0;
   let skipped = 0;
@@ -94,7 +111,7 @@ async function processReconciliationJob(job) {
     }
   }
 
-  return { queued, skipped, shop };
+  return { queued, skipped, shop, resultFileExpiry };
 }
 
 export const reconciliationWorker = new Worker(

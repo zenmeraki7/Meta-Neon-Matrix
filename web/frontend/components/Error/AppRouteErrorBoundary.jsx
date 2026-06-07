@@ -1,6 +1,6 @@
 import React from "react";
-import { useNavigate } from "react-router-dom";
-import { Banner, BlockStack, Box, Button, Card, InlineStack, Page, Text } from "@shopify/polaris";
+import { BlockStack, Box, Card, Page, Text } from "@shopify/polaris";
+import DegradationBanner from "../DegradationBanner";
 
 class AppRouteErrorBoundaryInner extends React.Component {
   constructor(props) {
@@ -18,36 +18,29 @@ class AppRouteErrorBoundaryInner extends React.Component {
   componentDidCatch(error) {
     // Keep route-level failure isolated without crashing app shell.
     console.error("Route boundary error:", error);
+    this.retryTimer = window.setTimeout(this.handleRetry, 30_000);
   }
 
   handleRetry = () => {
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
     this.setState({ hasError: false, errorMessage: "" });
   };
+
+  componentWillUnmount() {
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
+  }
 
   render() {
     if (this.state.hasError) {
       const routeLabel = this.props.routePath || "this page";
       return (
-        <Page title="Something went wrong">
+        <Page title="Bulk edit paused">
           <Card>
             <Box padding="500">
               <BlockStack gap="300">
-                <Banner tone="critical">
-                  <p>Unable to render {routeLabel}. You can retry or go back safely.</p>
-                  {this.state.errorMessage ? (
-                    <p>{this.state.errorMessage}</p>
-                  ) : null}
-                </Banner>
-                <InlineStack gap="200">
-                  <Button variant="primary" onClick={this.handleRetry}>
-                    Retry
-                  </Button>
-                  <Button onClick={this.props.onBack}>
-                    Back
-                  </Button>
-                </InlineStack>
+                <DegradationBanner fallbackCode="JOB_SUSPENDED" tone="warning" />
                 <Text as="p" tone="subdued" variant="bodySm">
-                  The rest of the app shell is still active.
+                  {routeLabel} will retry automatically in 30 seconds. No action needed.
                 </Text>
               </BlockStack>
             </Box>
@@ -61,14 +54,9 @@ class AppRouteErrorBoundaryInner extends React.Component {
 }
 
 export default function AppRouteErrorBoundary({ children, routePath }) {
-  const navigate = useNavigate();
   return (
-    <AppRouteErrorBoundaryInner
-      routePath={routePath}
-      onBack={() => navigate(-1)}
-    >
+    <AppRouteErrorBoundaryInner routePath={routePath}>
       {children}
     </AppRouteErrorBoundaryInner>
   );
 }
-

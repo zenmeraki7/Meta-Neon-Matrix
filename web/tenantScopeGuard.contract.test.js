@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assertTenantScopedPrismaArgs } from "./config/tenantScopeGuard.js";
+import {
+  assertTenantScopedPrismaArgs,
+  assertTenantScopedRawPrismaArgs,
+} from "./config/tenantScopeGuard.js";
 
 test("tenant guard rejects missing tenant scope in where queries", () => {
   assert.throws(
@@ -86,4 +89,24 @@ test("tenant guard enforces tenant data on writes", () => {
       data: { shop: "shop-a.myshopify.com", editHistoryId: "h1" },
     }),
   );
+});
+
+test("tenant guard blocks raw SQL against tenant tables without a shop predicate", () => {
+  assert.throws(
+    () => assertTenantScopedRawPrismaArgs("$queryRawUnsafe", [
+      'SELECT * FROM "EditHistory" WHERE "status" = $1',
+    ]),
+    /TENANT_SCOPE_REQUIRED:RAW\.\$queryRawUnsafe:shop_predicate/,
+  );
+  assert.doesNotThrow(() =>
+    assertTenantScopedRawPrismaArgs("$queryRawUnsafe", [
+      'SELECT * FROM "EditHistory" WHERE "shop" = $1 AND "status" = $2',
+    ]));
+});
+
+test("tenant guard allows non-data raw statements", () => {
+  assert.doesNotThrow(() =>
+    assertTenantScopedRawPrismaArgs("$executeRaw", {
+      strings: ["SET LOCAL statement_timeout = ", ""],
+    }));
 });

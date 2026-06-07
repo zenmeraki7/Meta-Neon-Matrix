@@ -1,5 +1,6 @@
 import React from "react";
-import { Banner, Box, Button, InlineStack } from "@shopify/polaris";
+import { Box } from "@shopify/polaris";
+import DegradationBanner from "../DegradationBanner";
 
 class TableErrorBoundary extends React.Component {
   constructor(props) {
@@ -13,24 +14,23 @@ class TableErrorBoundary extends React.Component {
 
   componentDidCatch(error) {
     console.error("Table boundary error:", error);
+    this.retryTimer = window.setTimeout(this.handleRetry, 30_000);
   }
 
   handleRetry = () => {
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
     this.setState({ hasError: false });
   };
+
+  componentWillUnmount() {
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
+  }
 
   render() {
     if (this.state.hasError) {
       return (
         <Box padding="400">
-          <Banner tone="critical">
-            <p>Table render failed.</p>
-            <InlineStack gap="200">
-              <Button size="slim" onClick={this.handleRetry}>
-                Retry table
-              </Button>
-            </InlineStack>
-          </Banner>
+          <DegradationBanner fallbackCode="JOB_SUSPENDED" tone="warning" />
         </Box>
       );
     }
@@ -40,4 +40,3 @@ class TableErrorBoundary extends React.Component {
 }
 
 export default TableErrorBoundary;
-

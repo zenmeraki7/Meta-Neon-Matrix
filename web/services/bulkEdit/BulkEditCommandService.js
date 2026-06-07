@@ -34,6 +34,7 @@ import {
   findPreviewContractRecord,
   markManualEditHistoryEnqueueFailed,
 } from "../../repositories/bulkEditCommandRepository.js";
+import { runBulkEditPreflight } from "./BulkEditPreflightService.js";
 
 const BULK_EDIT_HISTORY_CACHE_KEYS = [
   "fetchHistories",
@@ -375,11 +376,20 @@ export class BulkEditCommandService {
     }
 
     const count = previewCount;
-    const maxBulkEditTargets = getPlanMaxBulkEditTargets(subscription);
-
-    if (count > maxBulkEditTargets) {
-      throw new Error("TARGET_COUNT_EXCEEDS_PLAN_LIMIT");
-    }
+    const preflight = runBulkEditPreflight({
+      command: {
+        ...body,
+        previewId: previewContractId,
+        confirmBroadTarget,
+        criticalConfirmationText,
+      },
+      previewRecord,
+      store: mirrorState,
+      rules,
+      targetCount: count,
+      subscription,
+    });
+    const maxBulkEditTargets = preflight.maxProducts;
 
     const title = explicitTitle || await buildHistoryTitle(rules);
 
@@ -405,20 +415,6 @@ export class BulkEditCommandService {
       undoAvailability: resolvedEditedField !== "deleteProducts",
       verificationMode: "SAMPLE_PLUS_FAILURES",
     });
-
-    const providedCriticalConfirmation = String(
-      criticalConfirmationText || "",
-    ).trim();
-
-    if (
-      blastRadiusAssessment.riskLevel === "CRITICAL" &&
-      providedCriticalConfirmation !==
-        blastRadiusAssessment.requiredCriticalConfirmation
-    ) {
-      throw new Error(
-        `CRITICAL blast radius confirmation required. Type exactly: ${blastRadiusAssessment.requiredCriticalConfirmation}`,
-      );
-    }
 
     return {
       shop: this.session.shop,
@@ -469,6 +465,7 @@ export class BulkEditCommandService {
           String(criticalConfirmationText || "").trim() || null,
         locationId: locationId || null,
         blastRadiusAssessment,
+        preflight,
       },
       ...(resolvedEditedField === "inventory" && { locationId }),
       entitlementSnapshot: operationContext.entitlementSnapshot || null,

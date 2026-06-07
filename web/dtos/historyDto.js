@@ -126,6 +126,42 @@ function toEditHistoryEmbeddedSummaryDto(summary) {
   };
 }
 
+function toStatusSummaryDto(value) {
+  const safe = asObject(value);
+  if (!safe) return null;
+  return {
+    key: toStringOrNull(safe.key, 80),
+    label: toSafeText(safe.label, 160),
+    tone: toStringOrNull(safe.tone, 40),
+    detail: toSafeText(safe.detail, 500),
+    isTerminal: safe.isTerminal === true,
+  };
+}
+
+function toDegradationDto(value) {
+  const safe = asObject(value);
+  if (!safe) return null;
+  return {
+    code: toStringOrNull(safe.code, 80),
+    title: toSafeText(safe.title, 200),
+    body: toSafeText(safe.body, 600),
+    showRetryAt: safe.showRetryAt === true,
+    retryAt: toIsoString(safe.retryAt),
+    recoveryWindow: toSafeText(safe.recoveryWindow, 200),
+  };
+}
+
+function toEditSupportStatusDto(value) {
+  const safe = asObject(value);
+  if (!safe) return null;
+  return {
+    executionState: toStringOrNull(safe.executionState, 80),
+    failureStage: toStringOrNull(safe.failureStage, 160),
+    undoState: toStringOrNull(safe.undoState, 80),
+    degradation: toDegradationDto(safe.degradation),
+  };
+}
+
 function toExportHistoryListItemDto(history) {
   const safe = asObject(history) || {};
 
@@ -206,6 +242,9 @@ function toEditHistoryListItemDto(edgeOrHistory) {
     successCount: toNumber(safe.successCount, 0),
     failedCount: toNumber(safe.failedCount, 0),
     undoStatus: toStringOrNull(safe.undoStatus, 120),
+    primaryStatus: toStatusSummaryDto(safe.primaryStatus),
+    undoStatusSummary: toStatusSummaryDto(safe.undoStatusSummary),
+    supportStatus: toEditSupportStatusDto(safe.supportStatus),
   };
 }
 
@@ -227,6 +266,10 @@ function toEditHistoryDetailDto(history) {
       ? toEditHistoryEmbeddedSummaryDto(safe.summary)
       : null,
     errors: toSafeErrorList(safe.errors),
+    primaryStatus: toStatusSummaryDto(safe.primaryStatus),
+    undoStatusSummary: toStatusSummaryDto(safe.undoStatusSummary),
+    supportStatus: toEditSupportStatusDto(safe.supportStatus),
+    progressSummary: asObject(safe.progressSummary),
   };
 }
 
@@ -245,6 +288,10 @@ function toEditHistorySummaryDto(summary) {
     failedCount: toNumber(safe.failedCount, 0),
     skippedCount: toNumber(safe.skippedCount, 0),
     undoStatus: toStringOrNull(safe.undoStatus, 120),
+    primaryStatus: toStatusSummaryDto(safe.primaryStatus),
+    undoStatusSummary: toStatusSummaryDto(safe.undoStatusSummary),
+    supportStatus: toEditSupportStatusDto(safe.supportStatus),
+    progressSummary: asObject(safe.progressSummary),
   };
 }
 

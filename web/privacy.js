@@ -14,6 +14,7 @@ import logger from "./utils/loggerUtils.js";
 import crypto from "crypto";
 import { normalizeWebhookDeliveryStatus } from "./utils/normalizedStateUtils.js";
 import { requireShopScope } from "./utils/shopScope.js";
+import { deleteAllShopData } from "./services/shopDataDeletionService.js";
 
 
 function safeParseJson(body) {
@@ -408,7 +409,11 @@ export default {
   SHOP_REDACT: {
     deliveryMethod: DeliveryMethod.Http,
     callbackUrl: "/api/webhooks",
-    callback: async () => ({ success: true }),
+    callback: async (_topic, shop) => {
+      await deleteAllShopData(requireShopScope(shop));
+      await clearKeyCaches(`${shop}`).catch(() => {});
+      return { success: true, deleted: true };
+    },
   },
 
   SHOP_UPDATE: {

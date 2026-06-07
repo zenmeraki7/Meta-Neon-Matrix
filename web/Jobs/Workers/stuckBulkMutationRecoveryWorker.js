@@ -13,6 +13,7 @@ import {
   enqueueStuckBulkMutationRecoveryJob,
   enqueueStuckBulkMutationRecoveryTick,
 } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
+import { recordOperationalHealthForShop } from "../../services/operationalHealthMonitorService.js";
 
 const QUEUE_NAME = "stuck-bulk-mutation-recovery";
 const RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
@@ -29,6 +30,7 @@ async function recoverStuckBulkMutations({ shop }) {
   if (!scopedShop) {
     throw new Error("stuck bulk mutation recovery requires shop");
   }
+  await recordOperationalHealthForShop(scopedShop);
   const cutoff = new Date(Date.now() - 3 * 60 * 1000);
 
   const stuck = await db.editHistory.findMany({

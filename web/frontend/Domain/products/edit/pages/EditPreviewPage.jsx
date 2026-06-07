@@ -47,6 +47,7 @@ import {
   useEditPreviewQuery,
   usePreviewQueryInput,
 } from "../hooks/useEditPreviewQuery";
+import DegradationBanner from "../../../../components/DegradationBanner";
 
 function normalizeSignatureValue(value) {
   if (value == null) return "";
@@ -76,7 +77,7 @@ export default function EditPreviewPage() {
   const search = useSelector(selectSearch);
   const navigate = useNavigate();
   const { i18n, t } = useTranslation();
-  const { isSyncInProgress } = useProductSyncStatus();
+  const { isSyncInProgress, syncStatus } = useProductSyncStatus();
   const { showSuccess, showError } = useAppToast();
   const { versions: filterRegistryVersions } = useFilterRegistry();
 
@@ -274,6 +275,28 @@ export default function EditPreviewPage() {
   const previewFingerprint = previewData?.previewFingerprint || null;
   const previewSignature = previewData?.previewSignature || null;
   const requiresBroadConfirmation = previewData?.requiresConfirmation === true;
+  const zeroPriceConfirmationRequired = Boolean(
+    ["price", "compareAtPrice"].includes(selectedField?.value) &&
+      editType?.value === "Set to fixed value" &&
+      Number(inputValue) === 0,
+  );
+  const massArchiveConfirmationRequired = Boolean(
+    selectedField?.value === "status" &&
+      String(inputValue || "").toUpperCase() === "ARCHIVED" &&
+      previewTotal > 1000,
+  );
+  const requiresExplicitConfirmation =
+    requiresBroadConfirmation ||
+    previewTotal > 1000 ||
+    zeroPriceConfirmationRequired ||
+    massArchiveConfirmationRequired;
+  const requiredConfirmationText =
+    previewTotal > 10000
+      ? (
+        previewData?.requiredCriticalConfirmation
+        || `EDIT ${previewTotal.toLocaleString("en-US")} PRODUCTS`
+      )
+      : "CONFIRM";
   const previewRegistryVersion = previewData?.previewFingerprint
     ? {
         fieldRegistryVersion:
@@ -327,9 +350,12 @@ export default function EditPreviewPage() {
   );
   const requiresLocationSelection = editType?.inputType === InputType.LOCATION_SELECT;
   const hasRequiredLocation = !requiresLocationSelection || Boolean(locationValue);
+  const mirrorHealthState = String(syncStatus?.mirrorHealthState || "UNSAFE").toUpperCase();
+  const mirrorExecutionBlocked =
+    mirrorHealthState !== "HEALTHY" || syncStatus?.repairRequired === true;
 
   const executeBulkEdit = useCallback(
-    async (confirmBroadTarget) => {
+    async (confirmBroadTarget, criticalConfirmationText = null) => {
       const json = await protectedApiPost(
         `/api/products/update?lang=${i18n.language}`,
         {
@@ -347,6 +373,7 @@ export default function EditPreviewPage() {
         previewOperatorRegistryVersion: previewRegistryVersion?.operatorRegistryVersion || null,
         previewSignature,
         confirmBroadTarget,
+        criticalConfirmationText,
         supportValue,
         },
         { idempotent: true },
@@ -378,7 +405,7 @@ export default function EditPreviewPage() {
   );
 
   const handleRunEdit = async () => {
-    if (isSyncInProgress || submitting) {
+    if (isSyncInProgress || mirrorExecutionBlocked || submitting) {
       return;
     }
 
@@ -415,12 +442,12 @@ export default function EditPreviewPage() {
     setLimitWarning(null);
 
     try {
-      if (requiresBroadConfirmation) {
+      if (requiresExplicitConfirmation) {
         setConfirmModalOpen(true);
         setSubmitting(false);
         return;
       }
-      await executeBulkEdit(false);
+      await executeBulkEdit(false, null);
     } catch (err) {
       const safeMessage = toSafeErrorMessage(
         t,
@@ -439,10 +466,13 @@ export default function EditPreviewPage() {
   };
 
   const handleConfirmAndRun = useCallback(async () => {
-    if (confirmText.trim().toUpperCase() !== "CONFIRM") return;
+    if (confirmText.trim() !== requiredConfirmationText) return;
     setPendingConfirmRun(true);
     try {
-      await executeBulkEdit(true);
+      await executeBulkEdit(
+        true,
+        previewTotal > 10000 ? requiredConfirmationText : null,
+      );
       setConfirmModalOpen(false);
       setConfirmText("");
     } catch (err) {
@@ -453,7 +483,12 @@ export default function EditPreviewPage() {
       setPendingConfirmRun(false);
       setSubmitting(false);
     }
-  }, [confirmText, executeBulkEdit]);
+  }, [
+    confirmText,
+    executeBulkEdit,
+    previewTotal,
+    requiredConfirmationText,
+  ]);
 
 const summaryText = useMemo(() => {
   if (loading) {
@@ -482,6 +517,7 @@ const summaryText = useMemo(() => {
         loading: submitting,
         disabled:
           isSyncInProgress ||
+          mirrorExecutionBlocked ||
           submitting ||
           Boolean(submitError) ||
           !canRunEdit ||
@@ -493,12 +529,12 @@ const summaryText = useMemo(() => {
         {
           content: t("ScheduleEdit"),
           onAction: () => setModalState((current) => ({ ...current, scheduleEdit: true })),
-          disabled: isSyncInProgress,
+          disabled: isSyncInProgress || mirrorExecutionBlocked,
         },
         {
           content: t("RecurringEdit"),
           onAction: () => setModalState((current) => ({ ...current, recurringEdit: true })),
-          disabled: isSyncInProgress,
+          disabled: isSyncInProgress || mirrorExecutionBlocked,
         },
       ]}
     >
@@ -513,6 +549,16 @@ const summaryText = useMemo(() => {
                 {t("bulkEditSyncBlockingMessage",)}
               </p>
             </Banner>
+          </Layout.Section>
+        )}
+        {mirrorExecutionBlocked && (
+          <Layout.Section>
+            <DegradationBanner fallbackCode="MIRROR_UNSAFE" />
+          </Layout.Section>
+        )}
+        {previewQuery.error && (
+          <Layout.Section>
+            <DegradationBanner degradation={previewQuery.error} />
           </Layout.Section>
         )}
 
@@ -706,7 +752,7 @@ const summaryText = useMemo(() => {
           content: t("bulkEditConfirmAndRun", { defaultValue: "Confirm and run" }),
           onAction: handleConfirmAndRun,
           loading: pendingConfirmRun,
-          disabled: confirmText.trim().toUpperCase() !== "CONFIRM",
+          disabled: confirmText.trim() !== requiredConfirmationText,
         }}
         secondaryActions={[
           {
@@ -725,12 +771,16 @@ const summaryText = useMemo(() => {
               {t("bulkEditConfirmBroadTargetMessage", {
                 count: previewTotal,
                 defaultValue:
-                  "This edit targets {{count}} items. Type CONFIRM to proceed.",
+                  "This edit targets {{count}} items. Type {{confirmation}} to proceed.",
+                confirmation: requiredConfirmationText,
               })}
             </Text>
             <TextField
               autoComplete="off"
-              label={t("bulkEditTypeConfirmLabel", { defaultValue: "Type CONFIRM" })}
+              label={t("bulkEditTypeConfirmLabel", {
+                defaultValue: "Type {{confirmation}}",
+                confirmation: requiredConfirmationText,
+              })}
               value={confirmText}
               onChange={setConfirmText}
             />

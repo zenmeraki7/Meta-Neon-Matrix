@@ -4,6 +4,10 @@ import {
   normalizeUndoState,
 } from "./bulkEditExecutionStateService.js";
 import {
+  DEGRADATION_MESSAGES,
+  degradationFromHistory,
+} from "./degradationContractService.js";
+import {
   EXPORT_EXECUTION_STATES,
   parseSerializedExportError,
 } from "./exportExecutionStateService.js";
@@ -582,8 +586,28 @@ export function projectEditHistoryStatus(record) {
   const executionState = record.executionStateNormalized
     ? String(record.executionStateNormalized).toLowerCase()
     : null;
-  const primaryStatus = mapBulkEditExecutionSummary(executionState);
-  const undoStatus = mapBulkUndoSummary(record.undo);
+  const rawExecutionState = String(record.executionState || "").toUpperCase();
+  const degradation = degradationFromHistory(record);
+  const primaryStatus = rawExecutionState === OPERATION_LIFECYCLE_STATES.SUSPENDED
+    ? buildStatusSummary({
+      key: "suspended",
+      label: "Paused",
+      labelKey: "historyStatus.suspended",
+      tone: "attention",
+      detail: degradation?.body || DEGRADATION_MESSAGES.JOB_SUSPENDED.body,
+      detailKey: "historyStatusDetail.suspended",
+    })
+    : mapBulkEditExecutionSummary(executionState);
+  const undoStatus = String(record?.undo?.state || "").toUpperCase() === "SUSPENDED"
+    ? buildStatusSummary({
+      key: "undo_suspended",
+      label: "Undo paused",
+      labelKey: "historyStatus.undo_suspended",
+      tone: "attention",
+      detail: degradation?.body || DEGRADATION_MESSAGES.JOB_SUSPENDED.body,
+      detailKey: "historyStatusDetail.undo_suspended",
+    })
+    : mapBulkUndoSummary(record.undo);
   const errors = parseHistoryErrors(record.error);
 
   const undo = normalizeUndoState(record.undo, {
@@ -626,6 +650,7 @@ export function projectEditHistoryStatus(record) {
       undoErrors,
       lastUndoError: undoErrors[undoErrors.length - 1] || null,
       idempotencyStages,
+      degradation,
     },
     timelineSummary: buildTimelineSummary(executionState, idempotencyStages),
   };

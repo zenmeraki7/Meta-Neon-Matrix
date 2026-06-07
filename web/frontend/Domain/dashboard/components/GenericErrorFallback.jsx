@@ -1,25 +1,24 @@
 // web/frontend/components/GenericErrorFallback.jsx
-import React from "react";
-import { Card, Box, Button, Text } from "@shopify/polaris";
-import { useTranslation } from "react-i18next";
+import React, { useEffect } from "react";
+import { Card, Box, Text } from "@shopify/polaris";
+import DegradationBanner from "../../../components/DegradationBanner";
 
 export default function GenericErrorFallback({ error, resetErrorBoundary }) {
-  const { t } = useTranslation();
+  useEffect(() => {
+    const timer = window.setTimeout(resetErrorBoundary, 30_000);
+    return () => window.clearTimeout(timer);
+  }, [resetErrorBoundary]);
+
   return (
     <Card sectioned>
-      <Text as="p" variant="bodyMd">
-        {t("common.somethingWentWrong", "Something went wrong.")}{" "}
-        {import.meta.env.DEV && error?.message && (
+      <DegradationBanner fallbackCode="JOB_SUSPENDED" tone="warning" />
+      {import.meta.env.DEV && error?.message && (
+        <Box paddingBlockStart="200">
           <Text as="span" color="subdued">
             ({error.message})
           </Text>
-        )}
-      </Text>
-      <Box paddingBlockStart="200">
-        <Button onClick={resetErrorBoundary} size="slim">
-          {t("common.retry", "Retry")}
-        </Button>
-      </Box>
+        </Box>
+      )}
     </Card>
   );
 }

@@ -1,4 +1,8 @@
 import { generateErrorId } from "./errorUtils.js";
+import {
+  buildDegradationContract,
+  degradationFromError,
+} from "../services/degradationContractService.js";
 
 const DEFAULT_MESSAGES = Object.freeze({
   UNAUTHENTICATED: "Authentication required.",
@@ -93,12 +97,21 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
 
 export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERROR") {
   const mapped = mapErrorToPublicContract(error, fallbackCode);
-  const statusCode = statusFromCode(mapped.code);
+  const baseStatusCode = statusFromCode(mapped.code);
+  const explicitDegradation = degradationFromError(error);
+  const degradation = explicitDegradation
+    || (baseStatusCode >= 500 ? buildDegradationContract("JOB_SUSPENDED") : null);
+  const statusCode = explicitDegradation?.code === "MIRROR_UNSAFE"
+    || explicitDegradation?.code === "SHOPIFY_UNAVAILABLE"
+    || explicitDegradation?.code === "JOB_SUSPENDED"
+    ? 503
+    : baseStatusCode;
   const body = {
     success: false,
-    code: mapped.code,
-    message: mapped.message,
+    code: explicitDegradation?.code || mapped.code,
+    message: degradation?.body || mapped.message,
     errorId: generateErrorId(),
+    ...(degradation ? { degradation } : {}),
   };
 
   if (

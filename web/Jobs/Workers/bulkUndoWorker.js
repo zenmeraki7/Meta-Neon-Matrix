@@ -21,6 +21,8 @@ import {
 import {
   SHOPIFY_BULK_MUTATION_SLOT,
   SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+  acquireShopifyBulkMutationSlot,
+  releaseShopifyBulkMutationSlot,
   shopifyBulkMutationSlotResourceId,
 } from "../../services/shopifyBulkMutationSlotLease.js";
 import {
@@ -58,6 +60,15 @@ import {
   updateUndoOperationState,
 } from "../../repositories/bulkUndoExecutionRepository.js";
 import { bulkUndoDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { addbulkUndoJob } from "../Queues/bulkUndoJob.js";
+import {
+  CircuitOpenError,
+  executeWithShopifyCircuit,
+} from "../../services/shopify/ShopifyCircuitBreaker.js";
+import {
+  suspendBulkUndoForShopifyOutage,
+  suspensionDelayMs,
+} from "../../services/bulkEdit/bulkOperationSuspensionService.js";
 
 const QUEUE_NAME = process.env.UNDO_QUEUE || "bulk-undo";
 const DLQ_NAME = process.env.BULK_UNDO_DLQ_QUEUE || "bulk-undo-dlq";
@@ -114,6 +125,8 @@ const bulkUndoWorker = new Worker(
     let leaseHeartbeat = null;
     let bulkMutationSlotOwnerId = null;
     let bulkMutationSlotHeartbeat = null;
+    let bulkMutationSlotAcquired = false;
+    let bulkMutationSlotHeldForShopify = false;
 
     try {
       assertNoRawTargetingPayload(job.data || {});
@@ -143,30 +156,6 @@ const bulkUndoWorker = new Worker(
       }
 
       shopLockKey = lock.lockKey;
-      bulkMutationSlotOwnerId = buildLeaseOwnerId("shopify-bulk-mutation-slot");
-      const bulkMutationSlot = await acquireOperationLease({
-        shop,
-        namespace: SHOPIFY_BULK_MUTATION_SLOT,
-        resourceId: shopifyBulkMutationSlotResourceId(shop),
-        ownerId: bulkMutationSlotOwnerId,
-        ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
-      });
-      if (!bulkMutationSlot?.acquired) {
-        throw new RetryableBulkUndoError(
-          "Another Shopify bulk mutation is already running for this shop",
-          "BULK_MUTATION_SLOT_OCCUPIED",
-        );
-      }
-      bulkMutationSlotHeartbeat = setInterval(() => {
-        heartbeatOperationLease({
-          shop,
-          namespace: SHOPIFY_BULK_MUTATION_SLOT,
-          resourceId: shopifyBulkMutationSlotResourceId(shop),
-          ownerId: bulkMutationSlotOwnerId,
-          ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
-        }).catch(() => {});
-      }, 60_000);
-
       const operationLease = await acquireOperationLease({
         shop,
         namespace: "bulk_undo_execution",
@@ -420,11 +409,75 @@ const bulkUndoWorker = new Worker(
         resourceId: historyId,
         ownerId: leaseOwnerId,
       });
-      const { bulkOperationId, lastProductId, count } = await service.undoEditBulkOperation(
-        safeProducts,
-        rule.field,
-        { undoEditHistoryId },
-      );
+      bulkMutationSlotOwnerId = buildLeaseOwnerId("shopify-bulk-mutation-slot");
+      const bulkMutationSlot = await acquireShopifyBulkMutationSlot({
+        shop,
+        ownerId: bulkMutationSlotOwnerId,
+      });
+      if (!bulkMutationSlot?.acquired) {
+        throw new RetryableBulkUndoError(
+          "Another Shopify bulk mutation is already running for this shop",
+          "BULK_MUTATION_SLOT_OCCUPIED",
+        );
+      }
+      bulkMutationSlotAcquired = true;
+      bulkMutationSlotHeartbeat = setInterval(() => {
+        heartbeatOperationLease({
+          shop,
+          namespace: SHOPIFY_BULK_MUTATION_SLOT,
+          resourceId: shopifyBulkMutationSlotResourceId(shop),
+          ownerId: bulkMutationSlotOwnerId,
+          ttlMs: SHOPIFY_BULK_MUTATION_SLOT_TTL_MS,
+        }).catch(() => {});
+      }, 60_000);
+      let undoSubmission;
+      try {
+        undoSubmission = await executeWithShopifyCircuit(shop, () =>
+          service.undoEditBulkOperation(
+            safeProducts,
+            rule.field,
+            { undoEditHistoryId },
+          ));
+      } catch (error) {
+        if (!(error instanceof CircuitOpenError)) throw error;
+        const delayMs = suspensionDelayMs(error);
+        const resumeExecutionId = executionId || undo.executionIdentity || historyId;
+        await failEditHistoryStage({
+          historyId,
+          shop,
+          stage: "undo",
+          executionId: resumeExecutionId,
+          retryable: true,
+          error: "SHOPIFY_UNAVAILABLE",
+        });
+        const suspended = await suspendBulkUndoForShopifyOutage({ historyId, shop, error });
+        if (suspended.count !== 1) {
+          throw new Error("BULK_UNDO_SUSPENSION_TRANSITION_REJECTED");
+        }
+        await addbulkUndoJob(
+          {
+            historyId,
+            shop,
+            source: `${source}:shopify_unavailable_resume`,
+            executionId: resumeExecutionId,
+          },
+          {
+            delay: delayMs,
+            jobId: `bulk-undo:${shop}:${historyId}:${resumeExecutionId}:shopify-resume:${error.retryAfter.getTime()}`,
+          },
+        );
+        return toWorkerOperationStatusDto({
+          success: true,
+          suspended: true,
+          reason: "SHOPIFY_UNAVAILABLE",
+          resumeAfter: error.retryAfter.toISOString(),
+          delayMs,
+        });
+      }
+      const { bulkOperationId, lastProductId, count } = undoSubmission;
+      if (bulkOperationId) {
+        bulkMutationSlotHeldForShopify = true;
+      }
 
       const movedAwaitingShopify = await moveUndoToAwaitingShopify({
         historyId,
@@ -595,6 +648,9 @@ const bulkUndoWorker = new Worker(
       throw error;
     } finally {
       if (bulkMutationSlotHeartbeat) clearInterval(bulkMutationSlotHeartbeat);
+      if (bulkMutationSlotAcquired && !bulkMutationSlotHeldForShopify) {
+        await releaseShopifyBulkMutationSlot(shop).catch(() => {});
+      }
       if (leaseHeartbeat) clearInterval(leaseHeartbeat);
       await releaseOperationLease({
         shop,

@@ -52,3 +52,17 @@ test("metafield worker has structured lifecycle logging and DLQ", () => {
   assert.match(worker, /metafieldBulkWriteDlqQueue\.add/);
   assert.match(worker, /SIGTERM/);
 });
+
+test("metafieldsSet uses the shared shop budget and returns throttled rows to pending", () => {
+  const worker = read("web/Jobs/Workers/metafieldBulkWriteWorker.js");
+  const ledger = read("web/db/bulkEditChanges.js");
+
+  assert.match(worker, /getBudgetManager\(resolvedShop\)/);
+  assert.match(worker, /budget\.executeWithBudget\(50/);
+  assert.match(worker, /isThrottleError\(error\)/);
+  assert.match(worker, /await markRowsRetryable/);
+  assert.match(ledger, /export async function markRowsRetryable/);
+  assert.match(ledger, /status = 'PENDING'/);
+  assert.match(ledger, /SET edit_status = 'PENDING'/);
+  assert.match(worker, /const METAFIELDS_SET_BATCH_SIZE = 25/);
+});

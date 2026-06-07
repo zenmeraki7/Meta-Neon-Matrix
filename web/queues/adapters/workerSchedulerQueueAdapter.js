@@ -94,6 +94,16 @@ const unresolvedBulkOperationRecoveryQueue = new Queue("unresolved-bulk-operatio
   },
 });
 
+const resultFileExpiryCheckQueue = new Queue("result-file-expiry-check", {
+  connection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: { age: ONE_DAY, count: 200 },
+    removeOnFail: { age: ONE_DAY, count: 500 },
+  },
+});
+
 const stuckBulkMutationRecoveryQueue = new Queue("stuck-bulk-mutation-recovery", {
   connection,
   defaultJobOptions: {
@@ -225,6 +235,17 @@ export async function enqueueUnresolvedBulkOperationRecoveryTick({ shop, repeatE
     "unresolved-bulk-operation-recovery-tick",
     { shop },
     { jobId: `unresolved-bulk-operation-recovery-tick:${shop}`, repeat: { every: repeatEveryMs } },
+  );
+}
+
+export async function enqueueResultFileExpiryCheckTick({ shop, repeatEveryMs }) {
+  if (!shop) {
+    throw new Error("result file expiry check tick requires shop");
+  }
+  return resultFileExpiryCheckQueue.add(
+    "result-file-expiry-check-tick",
+    { shop },
+    { jobId: `result-file-expiry-check-tick:${shop}`, repeat: { every: repeatEveryMs } },
   );
 }
 

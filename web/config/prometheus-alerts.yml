@@ -1,0 +1,42 @@
+groups:
+  - name: bulk-edit-launch-safety
+    rules:
+      - alert: BulkEditStuckJobs
+        expr: bulk_edit_stuck_jobs > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Bulk edit jobs are stuck for shop {{ $labels.shop }}"
+
+      - alert: BulkEditHighChangeRecordFailureRate
+        expr: bulk_edit_change_record_failure_rate > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "ChangeRecord failures exceed 5% for shop {{ $labels.shop }}"
+
+      - alert: ShopifyRateLimitNearExhaustion
+        expr: shopify_rate_limit_available_points < 100
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Shopify GraphQL budget is nearly exhausted for {{ $labels.shop }}"
+
+      - alert: ShopifyRateLimitExhaustionSustained
+        expr: shopify_rate_limit_available_points < 100
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Shopify GraphQL budget has remained low for {{ $labels.shop }}"
+
+      - alert: WebhookProcessingLagHigh
+        expr: histogram_quantile(0.95, sum by (le, shop, topic) (rate(webhook_processing_lag_ms_bucket[5m]))) > 60000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook p95 processing lag exceeds one minute for {{ $labels.shop }}"

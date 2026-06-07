@@ -1,3 +1,5 @@
+import { DEGRADATION_MESSAGES } from "./degradationContract";
+
 const DEFAULT_ERROR_KEY = "common.errors.generic";
 const ERROR_KEY_BY_CODE = Object.freeze({
   REAUTH_REQUIRED: "common.errors.code.REAUTH_REQUIRED",
@@ -72,6 +74,17 @@ export function toSafeErrorMessage(arg1, arg2, arg3 = DEFAULT_ERROR_KEY) {
     const error = arg2;
     const fallbackKey = arg3 || DEFAULT_ERROR_KEY;
     const normalized = normalizeApiError(error, fallbackKey);
+    const degradationBody =
+      error?.degradation?.body
+      || error?.payload?.degradation?.body
+      || error?.details?.degradation?.body;
+    if (degradationBody) return degradationBody;
+    if (normalized.statusClass === "429") {
+      return DEGRADATION_MESSAGES.RATE_LIMIT_SUSPENDED.body;
+    }
+    if (normalized.statusClass === "5xx") {
+      return DEGRADATION_MESSAGES.JOB_SUSPENDED.body;
+    }
     return t(normalized.translationKey, {
       defaultValue: t(fallbackKey, {
         defaultValue: "Request failed. Please try again.",
@@ -90,8 +103,8 @@ export function toSafeErrorMessage(arg1, arg2, arg3 = DEFAULT_ERROR_KEY) {
     "403": "You do not have permission to perform this action.",
     "409": "Conflict detected. Refresh and try again.",
     "422": "Some inputs are invalid. Review the form and try again.",
-    "429": "Too many requests. Please wait a moment and retry.",
-    "5xx": "Server error. Please try again shortly.",
+    "429": DEGRADATION_MESSAGES.RATE_LIMIT_SUSPENDED.body,
+    "5xx": DEGRADATION_MESSAGES.JOB_SUSPENDED.body,
     "4xx": fallbackMessage,
   };
   return fallbackByClass[normalized.statusClass] || fallbackMessage;

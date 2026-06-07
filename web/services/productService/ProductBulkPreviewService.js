@@ -249,6 +249,7 @@ export class ProductBulkPreviewService {
             filterHash: target.filterHash,
             mirrorBatchId: target.mirrorBatchId,
             targetCount: target.count,
+            broadTargetAssessment: target.broadTargetAssessment || null,
             compilerVersion: target.versions?.targetingCompilerVersion || null,
             registryVersion: {
               fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,
@@ -281,6 +282,7 @@ export class ProductBulkPreviewService {
             filterHash: target.filterHash,
             mirrorBatchId: target.mirrorBatchId,
             targetCount: target.count,
+            broadTargetAssessment: target.broadTargetAssessment || null,
             compilerVersion: target.versions?.targetingCompilerVersion || null,
             registryVersion: {
               fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,

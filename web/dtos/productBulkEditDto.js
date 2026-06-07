@@ -179,6 +179,9 @@ export function toBulkEditPreviewResponseDto(result) {
       previewSignature: safeString(data?.previewSignature, "") || null,
       previewFingerprint,
       requiresConfirmation: data?.requiresConfirmation === true,
+      riskLevel: safeString(data?.riskLevel, "") || null,
+      requiredCriticalConfirmation:
+        safeString(data?.requiredCriticalConfirmation, "") || null,
       pagination: {
         page,
         limit,

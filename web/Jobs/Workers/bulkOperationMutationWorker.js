@@ -8,12 +8,19 @@ import { getJobAttempt, isRetryExhausted, recordRetryExhausted } from "../../uti
 import crypto from "crypto";
 import { sha256Stable } from "../../utils/canonicalJson.js";
 import { bulkOperationMutationDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { releaseShopifyBulkMutationSlot } from "../../services/shopifyBulkMutationSlotLease.js";
+import { webhookProcessingLagMs } from "../../utils/metricsUtils.js";
 
 const QUEUE_NAME =
   process.env.BULK_OPERATION_MUTATION_QUEUE || "bulk-operation-mutation";
 const DLQ_NAME =
   process.env.BULK_OPERATION_MUTATION_DLQ_QUEUE || "bulk-operation-mutation-dlq";
 const WORKER_NAME = "bulkOperationMutationWorker";
+
+async function completeMutationFinishProcessing(shop, result) {
+  await releaseShopifyBulkMutationSlot(shop);
+  return result;
+}
 
 async function resolveOperationKindByLedger(shop, bulkOperationId) {
   const ledgerMatch = await db.bulkSubmission.findUnique({
@@ -135,6 +142,11 @@ const bulkOperationMutationWorker = new Worker(
     const bulkOperationId = String(job.data?.admin_graphql_api_id || "").trim();
     const status = String(job.data?.status || "").toUpperCase();
     const type = String(job.data?.type || "").toUpperCase();
+    const deliveredAt = new Date(job.data?.createdAt || job.timestamp || Date.now()).getTime();
+    webhookProcessingLagMs.observe({
+      shop: shop || "unknown",
+      topic: "bulk_operations/finish",
+    }, Math.max(0, Date.now() - deliveredAt));
 
     if (!shop || !bulkOperationId) {
       throw new UnrecoverableError(
@@ -174,16 +186,15 @@ const bulkOperationMutationWorker = new Worker(
             type,
             url: job.data?.url || null,
             partialDataUrl: job.data?.partialDataUrl || null,
-            payload: job.data || null,
           });
-          return {
+          return completeMutationFinishProcessing(shop, {
             success: true,
             shop,
             bulkOperationId,
             enqueued: "bulk-edit-result-ingest",
             status,
             routedBy: ledgerResolution.source,
-          };
+          });
         }
 
         const isUndoBulkOperation = await hasUndoOwnerForBulkOperation(
@@ -200,29 +211,33 @@ const bulkOperationMutationWorker = new Worker(
             type,
             url: job.data?.url || null,
             partialDataUrl: job.data?.partialDataUrl || null,
-            payload: job.data || null,
           });
-          return {
+          return completeMutationFinishProcessing(shop, {
             success: true,
             shop,
             bulkOperationId,
             enqueued: "bulk-undo-result-ingest",
             status,
-          };
+          });
         }
 
         await persistUnresolvedBulkMutationDelivery({
           shop,
           bulkOperationId,
-          payload: job.data || {},
+          payload: {
+            webhookId: job.data?.webhookId || null,
+            status,
+            type,
+            createdAt: job.data?.createdAt || null,
+          },
         });
-        return {
+        return completeMutationFinishProcessing(shop, {
           success: true,
           skipped: true,
           shop,
           bulkOperationId,
           reason: "unresolved_bulk_operation_owner_persisted",
-        };
+        });
       }
 
       return {

@@ -891,6 +891,66 @@ export async function activateProductMirrorBatch({
       select: { activeMirrorBatchId: true },
     });
     previousBatchId = store?.activeMirrorBatchId || null;
+    const [batch, stagedProductCount, integritySample, activeBulkEdit] = await Promise.all([
+      prisma.mirrorBatch.findFirst({
+        where: { id: syncBatchId, shop },
+        select: { expectedProducts: true },
+      }),
+      prisma.product.count({ where: { shop, mirrorBatchId: syncBatchId } }),
+      prisma.product.findMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+        select: { id: true, shop: true, mirrorBatchId: true },
+        take: 5,
+      }),
+      previousBatchId
+        ? prisma.editHistory.findFirst({
+          where: {
+            shop,
+            targetMirrorBatchId: previousBatchId,
+            status: { in: ["processing", "pending"] },
+          },
+          select: { id: true },
+        })
+        : null,
+    ]);
+    const expectedProducts = Number(batch?.expectedProducts || 0);
+    if (
+      expectedProducts > 0
+      && stagedProductCount < Math.floor(expectedProducts * 0.99)
+    ) {
+      const failureReason =
+        `INCOMPLETE: expected ${expectedProducts}, got ${stagedProductCount}`;
+      await prisma.mirrorBatch.updateMany({
+        where: { id: syncBatchId, shop },
+        data: {
+          status: "FAILED",
+          failedAt: new Date(),
+          failureReason,
+        },
+      });
+      throw new Error(`MIRROR_BATCH_INCOMPLETE:${failureReason}`);
+    }
+    if (
+      stagedProductCount === 0
+      || !integritySample.length
+      || integritySample.some((row) =>
+        row.shop !== shop || row.mirrorBatchId !== syncBatchId || !row.id)
+    ) {
+      await prisma.mirrorBatch.updateMany({
+        where: { id: syncBatchId, shop },
+        data: {
+          status: "FAILED",
+          failedAt: new Date(),
+          failureReason: "MIRROR_BATCH_INTEGRITY_CHECK_FAILED",
+        },
+      });
+      throw new Error("MIRROR_BATCH_INTEGRITY_CHECK_FAILED");
+    }
+    if (activeBulkEdit) {
+      const error = new Error("MIRROR_BATCH_ACTIVATION_DEFERRED_BULK_EDIT_IN_PROGRESS");
+      error.retryable = true;
+      throw error;
+    }
     if (previousBatchId && previousBatchId !== syncBatchId) {
       await preserveNewerPreviousBatchProducts({
         shop,

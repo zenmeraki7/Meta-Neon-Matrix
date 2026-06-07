@@ -7,6 +7,7 @@ import {
   markRowsWriting,
   markRowsWritten,
   markRowsError,
+  markRowsRetryable,
 } from "../../db/bulkEditChanges.js";
 import {
   markDeadLettersNotified,
@@ -16,6 +17,10 @@ import { addShopSyncJob } from "../Queues/shopSyncJob.js";
 import logger from "../../utils/loggerUtils.js";
 import { metafieldBulkWriteDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 import { isRetryExhausted } from "../../utils/workerTelemetry.js";
+import {
+  getBudgetManager,
+  isThrottleError,
+} from "../../services/shopify/ShopifyBudgetManager.js";
 
 const QUEUE_NAME = process.env.METAFIELD_BULK_WRITE_QUEUE || "metafield-bulk-write";
 const DLQ_NAME = process.env.METAFIELD_BULK_WRITE_DLQ_QUEUE || "metafield-bulk-write-dlq";
@@ -267,7 +272,7 @@ async function loadOfflineSession(shop) {
   return session;
 }
 
-async function callMetafieldsSet(client, rows) {
+async function callMetafieldsSet(client, rows, budget) {
   const metafields = rows.map((row) => ({
     ownerId: row.shopifyOwnerId,
     namespace: row.namespace,
@@ -277,12 +282,13 @@ async function callMetafieldsSet(client, rows) {
     compareDigest: row.compareDigest,
   }));
 
-  const response = await client.query({
-    data: {
-      query: METAFIELDS_SET_MUTATION,
-      variables: { metafields },
-    },
-  });
+  const response = await budget.executeWithBudget(50, () =>
+    client.query({
+      data: {
+        query: METAFIELDS_SET_MUTATION,
+        variables: { metafields },
+      },
+    }));
 
   const payload = response?.body?.data?.metafieldsSet;
   if (!payload) {
@@ -319,16 +325,18 @@ function formatWriteResults(outcomes) {
  * @param {Array<ReturnType<typeof normalizeRow>>} rows
  * @returns {Promise<{outcomes:Array<object>,successes:Array<object>,failures:Array<object>}>}
  */
-export async function writeMetafields(client, rows) {
+export async function writeMetafields(client, rows, budget = null) {
   let payload;
   try {
-    payload = await callMetafieldsSet(client, rows);
+    const resolvedBudget = budget || getBudgetManager(rows[0]?.shop);
+    payload = await callMetafieldsSet(client, rows, resolvedBudget);
   } catch (error) {
+    const throttled = isThrottleError(error);
     const errorCode = errorCodeOf(error, "METAFIELDS_SET_OUTCOME_UNKNOWN");
     return formatWriteResults(rows.map((row) => ({
       id: row.id,
-      status: "FAILED",
-      error: errorCode,
+      status: throttled ? "RETRYING" : "FAILED",
+      error: throttled ? "THROTTLED" : errorCode,
     })));
   }
 
@@ -472,6 +480,7 @@ async function runMetafieldBulkWrite({ sessionId, shop }) {
 
   const session = await loadOfflineSession(resolvedShop);
   const client = new shopify.api.clients.Graphql({ session });
+  const budget = getBudgetManager(resolvedShop);
   const allOutcomes = [];
   const { retryRows, outcomes: reconciliationOutcomes } = await reconcileWritingRows(client, rows);
   const reconciledWritten = reconciliationOutcomes.filter((outcome) => outcome.status === "WRITTEN");
@@ -513,16 +522,29 @@ async function runMetafieldBulkWrite({ sessionId, shop }) {
     }
 
     // eslint-disable-next-line no-await-in-loop
-    const { outcomes } = await writeMetafields(client, claimedBatch);
+    const { outcomes } = await writeMetafields(client, claimedBatch, budget);
     const writtenOutcomes = outcomes.filter((outcome) => outcome.status === "WRITTEN");
     const failedOutcomes = outcomes.filter((outcome) => outcome.status === "FAILED");
     const retryingOutcomes = outcomes.filter((outcome) => outcome.status === "RETRYING");
+    const throttledOutcomes = retryingOutcomes.filter(
+      (outcome) => outcome.error === "THROTTLED",
+    );
+    const otherRetryingOutcomes = retryingOutcomes.filter(
+      (outcome) => outcome.error !== "THROTTLED",
+    );
 
     if (writtenOutcomes.length) {
       // eslint-disable-next-line no-await-in-loop
       await markRowsWritten(writtenOutcomes, resolvedShop);
     }
-    if (failedOutcomes.length || retryingOutcomes.length) {
+    if (throttledOutcomes.length) {
+      // eslint-disable-next-line no-await-in-loop
+      await markRowsRetryable(
+        throttledOutcomes.map((outcome) => outcome.id),
+        resolvedShop,
+      );
+    }
+    if (failedOutcomes.length || otherRetryingOutcomes.length) {
       // eslint-disable-next-line no-await-in-loop
       await persistErrorResults([
         ...failedOutcomes.map((outcome) => ({
@@ -530,7 +552,7 @@ async function runMetafieldBulkWrite({ sessionId, shop }) {
           errorCode: outcome.error,
           retryable: false,
         })),
-        ...retryingOutcomes.map((outcome) => ({
+        ...otherRetryingOutcomes.map((outcome) => ({
           id: outcome.id,
           errorCode: outcome.error,
           retryable: true,

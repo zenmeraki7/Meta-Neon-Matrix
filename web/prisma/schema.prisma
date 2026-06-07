@@ -1300,6 +1300,11 @@ model BulkSubmission {
   stagedUploadPath   String?
   shopifyBulkOperationId String
   shopifyStatus      String?
+  status             String   @default("SUBMITTED")
+  resultUrl          String?
+  resultUrlExpiresAt DateTime?
+  processedAt        DateTime?
+  lastError          String?
   submittedAt        DateTime @default(now())
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -1307,6 +1312,7 @@ model BulkSubmission {
   @@unique([shop, shopifyBulkOperationId])
   @@index([shop, editHistoryId, submittedAt])
   @@index([shop, executionIdentity])
+  @@index([shop, processedAt, resultUrlExpiresAt])
 }
 
 model OperationStageProgress {

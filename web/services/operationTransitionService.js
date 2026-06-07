@@ -7,6 +7,11 @@ import {
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
 } from "../utils/normalizedStateUtils.js";
+import logger from "../utils/loggerUtils.js";
+import {
+  bulkEditJobDurationMs,
+  bulkEditJobTransitions,
+} from "../utils/metricsUtils.js";
 
 const TERMINAL_STATES = new Set([
   OPERATION_LIFECYCLE_STATES.COMPLETED,
@@ -91,6 +96,8 @@ export async function transitionOperation({
       status: true,
       executionState: true,
       executionIdentity: true,
+      type: true,
+      startedAt: true,
       completedAt: true,
       batch: true,
     },
@@ -193,5 +200,34 @@ export async function transitionOperation({
   });
 
   if (!moved) return { ok: false, reason: "STALE_STATE_OR_FENCE", currentState, nextState };
+  const operationType = String(row.type || "EDIT").toUpperCase();
+  const field = String(metadata?.field || metadata?.editedField || "unknown");
+  bulkEditJobTransitions.inc({
+    shop,
+    from_status: currentState || "UNKNOWN",
+    to_status: nextState,
+    type: operationType,
+    field,
+  });
+  const durationMs = row.startedAt
+    ? Math.max(0, Date.now() - new Date(row.startedAt).getTime())
+    : 0;
+  if (TERMINAL_STATES.has(nextState)) {
+    bulkEditJobDurationMs.observe({
+      shop,
+      status: nextState,
+      type: operationType,
+    }, durationMs);
+  }
+  logger.info("bulk_edit.job.transition", {
+    shop,
+    historyId: operationId,
+    fromStatus: currentState,
+    toStatus: nextState,
+    type: operationType,
+    field,
+    durationMs,
+    timestamp: new Date().toISOString(),
+  });
   return { ok: true, currentState, nextState };
 }

@@ -19,6 +19,7 @@ import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
 import { transitionOperation } from "../operationTransitionService.js";
 import { applyMirrorFromSuccessfulChangeRecords } from "./BulkEditMirrorApplyService.js";
 import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
+import { bulkEditChangeRecordOutcomes } from "../../utils/metricsUtils.js";
 
 const require = createRequire(import.meta.url);
 const prismaGenerated = require("../../generated/prisma/index.js");
@@ -705,6 +706,27 @@ export class BulkEditResultIngestionService {
     });
     if (!completedTransition?.ok) {
       throw new Error(`BULK_RESULT_INGEST_COMPLETION_TRANSITION_REJECTED:${completedTransition?.reason || "UNKNOWN"}`);
+    }
+    if (successCount > 0) {
+      bulkEditChangeRecordOutcomes.inc({
+        shop,
+        status: "APPLIED",
+        failure_code: "none",
+      }, successCount);
+    }
+    if (failureCount > 0) {
+      bulkEditChangeRecordOutcomes.inc({
+        shop,
+        status: "FAILED",
+        failure_code: "SHOPIFY_USER_ERRORS",
+      }, failureCount);
+    }
+    if (unmappedRowCount > 0) {
+      bulkEditChangeRecordOutcomes.inc({
+        shop,
+        status: "MIRROR_MISSING",
+        failure_code: "UNMAPPED_RESULT_ROWS",
+      }, unmappedRowCount);
     }
 
     await db.editHistoryIngestionCheckpoint.updateMany({

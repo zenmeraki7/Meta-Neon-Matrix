@@ -8,6 +8,7 @@ import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import shopify from "../../shopify.js";
+import { deleteAllShopData } from "../../services/shopDataDeletionService.js";
 import { verificationQueue } from "../../queues/adapters/bulkEditVerificationQueueAdapter.js";
 import {
   appInstallationQueue,
@@ -211,16 +212,18 @@ const appUninstallWorker = new Worker(
       });
 
       if (!store) {
+        await deleteAllShopData(shop);
         return {
-          skipped: true,
+          success: true,
           reason: "store_not_found",
           shop,
         };
       }
 
       if (store.isUnInstalled) {
+        await deleteAllShopData(shop);
         return {
-          skipped: true,
+          success: true,
           reason: "already_uninstalled",
           shop,
         };
@@ -233,71 +236,7 @@ const appUninstallWorker = new Worker(
       await releaseShopRedisKeys(shop);
       await cancelActiveShopifyBulkOps(shop).catch(() => {});
 
-      const editHistoryIds = await db.editHistory.findMany({
-        where: { shop },
-        select: { id: true },
-      });
-
-      const historyIdList = editHistoryIds.map((record) => record.id);
-
-      await db.$transaction(async (tx) => {
-        if (historyIdList.length) {
-          await tx.changeRecord.deleteMany({
-            where: {
-              editHistoryId: { in: historyIdList },
-              shop,
-            },
-          });
-        }
-
-        await tx.variant.deleteMany({ where: { shop } });
-        await tx.product.deleteMany({ where: { shop } });
-        await tx.productCollection.deleteMany({ where: { shop } });
-        await tx.metafieldMirror.deleteMany({ where: { shop } });
-        await tx.inventoryLevelMirror.deleteMany({ where: { shop } });
-        await tx.inventoryItemMirror.deleteMany({ where: { shop } });
-        await tx.productMediaMirror.deleteMany({ where: { shop } });
-        await tx.location.deleteMany({ where: { shop } });
-        await tx.productTombstone.deleteMany({ where: { shop } });
-        await tx.exportHistory.deleteMany({ where: { shop } });
-        await tx.collection.deleteMany({ where: { shop } });
-        await tx.mirrorBatch.deleteMany({ where: { shop } });
-        await tx.mirrorAnomaly.deleteMany({ where: { shop } });
-        await tx.mirrorReconcileSignal.deleteMany({ where: { shop } });
-        await tx.operationLease.deleteMany({ where: { shop } });
-        await tx.operationFingerprint.deleteMany({ where: { shop } });
-        await tx.errorLog.deleteMany({ where: { shop } });
-        await tx.webhookDelivery.deleteMany({ where: { shop } });
-        await tx.billingEvent.deleteMany({ where: { shop } });
-        await tx.filterTrack.deleteMany({ where: { shop } });
-        await tx.idempotencyRecord.deleteMany({ where: { shop } });
-        await tx.syncHistory.deleteMany({ where: { shop } });
-        await tx.editHistory.deleteMany({ where: { shop } });
-        await tx.exportJob.deleteMany({ where: { shop } });
-        await tx.targetSnapshot.deleteMany({ where: { shop } });
-        await tx.automaticProductRuleProductState.deleteMany({ where: { shop } });
-        await tx.automaticProductRuleRun.deleteMany({ where: { shop } });
-        await tx.automaticProductRule.deleteMany({ where: { shop } });
-        await tx.recurringEditRun.deleteMany({ where: { shop } });
-        await tx.recurringEdit.deleteMany({ where: { shop } });
-        await tx.scheduledExportRun.deleteMany({ where: { shop } });
-        await tx.scheduledExport.deleteMany({ where: { shop } });
-        await tx.store.update({
-          where: { shopUrl: shop },
-          data: {
-            isUnInstalled: true,
-            unInstalledAt: new Date(),
-            isProductSyncing: false,
-            isCollectionSyncing: false,
-            isProductTypeSyncing: false,
-            isProductInitialySyning: false,
-            installationGeneration: null,
-            installationStatus: "pending",
-            installationProcessingStartedAt: null,
-            installationSetupCompletedAt: null,
-          },
-        });
-      });
+      await deleteAllShopData(shop);
 
       if (store.shopEmail) {
         await sendEmail(

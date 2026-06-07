@@ -530,6 +530,9 @@ export async function finalizeRecurringRunFromHistory({
   }
   const history = await findHistoryForRecurringFinalize(historyId, shop);
 
+  if (history?.shop && history.shop !== shop) {
+    throw new Error("CROSS_SHOP_RECURRING_FINALIZE_BLOCKED");
+  }
   if (!history?.recurringRunId || !history?.recurringEditId) {
     return null;
   }

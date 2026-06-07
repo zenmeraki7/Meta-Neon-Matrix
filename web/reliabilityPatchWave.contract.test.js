@@ -164,6 +164,21 @@ test("direct collection and undo bulk submissions block active shop bulk operati
   assert.ok(undoSrc.includes("buildBulkOperationInProgressError"));
 });
 
+test("bulk edit and undo share one Shopify bulk mutation slot until finish webhook processing", () => {
+  const slotSrc = read("web/services/shopifyBulkMutationSlotLease.js");
+  const editSrc = read("web/Jobs/Workers/bulkEditExecuteWorker.js");
+  const undoSrc = read("web/Jobs/Workers/bulkUndoWorker.js");
+  const finishWorkerSrc = read("web/Jobs/Workers/bulkOperationMutationWorker.js");
+
+  assert.ok(slotSrc.includes("SHOPIFY_BULK_MUTATION_SLOT"));
+  assert.ok(slotSrc.includes("SHOPIFY_BULK_MUTATION_SLOT_TTL_MS = 48 * 60 * 60 * 1000"));
+  assert.ok(editSrc.includes("acquireShopifyBulkMutationSlot"));
+  assert.ok(editSrc.includes("reason: \"BULK_MUTATION_SLOT_OCCUPIED\""));
+  assert.ok(undoSrc.includes("acquireShopifyBulkMutationSlot"));
+  assert.ok(undoSrc.includes("\"BULK_MUTATION_SLOT_OCCUPIED\""));
+  assert.ok(finishWorkerSrc.includes("releaseShopifyBulkMutationSlot(shop)"));
+});
+
 test("unresolved recovery worker is bootstrapped and scans unresolved webhook deliveries", () => {
   const workerSrc = read("web/Jobs/Workers/unresolvedBulkOperationRecoveryWorker.js");
   const bootstrapSrc = read("web/worker.js");

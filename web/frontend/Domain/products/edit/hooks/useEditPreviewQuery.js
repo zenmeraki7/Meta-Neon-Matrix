@@ -56,6 +56,9 @@ function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit) {
         safeString(previewFingerprint?.operatorRegistryVersion, "") || null,
     },
     requiresConfirmation: data?.requiresConfirmation === true,
+    riskLevel: safeString(data?.riskLevel, "") || null,
+    requiredCriticalConfirmation:
+      safeString(data?.requiredCriticalConfirmation, "") || null,
     pagination: {
       page,
       limit,

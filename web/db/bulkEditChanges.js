@@ -421,6 +421,43 @@ export async function markRowsError(entries, shop) {
   });
 }
 
+export async function markRowsRetryable(changeIds, shop) {
+  const ids = (Array.isArray(changeIds) ? changeIds : [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+  const resolvedShop = String(shop || "").trim();
+  if (!ids.length || !resolvedShop) {
+    throw new Error("markRowsRetryable requires changeIds and shop");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw`
+      UPDATE bulk_edit_changes
+      SET
+        status = 'PENDING',
+        writing_started_at = NULL,
+        shopify_error = NULL,
+        retryable = true,
+        updated_at = now()
+      WHERE id = ANY(${ids}::uuid[])
+        AND shop_id = ${resolvedShop}
+      RETURNING id
+    `;
+    await tx.$queryRaw`
+      UPDATE variant_metafields vm
+      SET edit_status = 'PENDING'
+      FROM bulk_edit_changes bec
+      WHERE bec.id = ANY(${ids}::uuid[])
+        AND bec.shop_id = ${resolvedShop}
+        AND vm.shop_id = bec.shop_id
+        AND vm.variant_id = bec.variant_id
+        AND vm.namespace = bec.namespace
+        AND vm.key = bec.key
+    `;
+    return rows.length;
+  });
+}
+
 /**
  * Counts ledger rows for one status in session scope.
  * @param {string} sessionId

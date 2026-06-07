@@ -1,6 +1,10 @@
 import { createRequire } from "node:module";
 import { db } from "../../repositories/repositoryDb.js";
 import { assertSnapshotItemsFullyIngested } from "../targetSnapshotItemIntegrityService.js";
+import {
+  mirrorFinalizationResults,
+  mirrorPendingRecords,
+} from "../../utils/metricsUtils.js";
 
 const require = createRequire(import.meta.url);
 const prismaGenerated = require("../../generated/prisma/index.js");
@@ -411,6 +415,9 @@ export async function applyMirrorFromSuccessfulChangeRecords({
     ? new Date(priorMirrorApply.lastAppliedChangeRecordCreatedAt)
     : null;
   const resumedFromChangeRecordId = cursorId;
+  let mirrorFinalizationResult = resumedFromChangeRecordId
+    ? "CRASH_RECOVERED"
+    : "ATOMIC_SUCCESS";
   let pageCount = 0;
 
   const flushMirrorApplyCheckpoint = async ({ status = "IN_PROGRESS" } = {}) => {
@@ -768,8 +775,11 @@ export async function applyMirrorFromSuccessfulChangeRecords({
         if (String(existing?.status || "").toLowerCase() !== String(finalStatus).toLowerCase()) {
           throw new Error("MIRROR_APPLY_JOB_FINALIZATION_REJECTED");
         }
+        mirrorFinalizationResult = "IDEMPOTENT_SKIP";
       }
     });
+    mirrorPendingRecords.set({ shop }, 0);
+    mirrorFinalizationResults.inc({ shop, result: mirrorFinalizationResult });
   }
 
   return {

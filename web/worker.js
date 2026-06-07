@@ -78,6 +78,7 @@ const workerModulePaths = [
   "./Jobs/Workers/missedBulkOperationPollingWorker.js",
   "./Jobs/Workers/catalogMissedUpdatesPollingWorker.js",
   "./Jobs/Workers/unresolvedBulkOperationRecoveryWorker.js",
+  "./Jobs/Workers/resultFileExpiryCheckWorker.js",
   "./Jobs/Workers/bulkEditResultIngestWorker.js",
   "./Jobs/Workers/bulkEditVerificationWorker.js",
   "./Jobs/Workers/subscriptionBillingWorker.js",

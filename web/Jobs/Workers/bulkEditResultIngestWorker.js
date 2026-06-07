@@ -4,6 +4,10 @@ import shopify from "../../shopify.js";
 import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
 import { BulkEditResultIngestionService } from "../../services/bulkEdit/BulkEditResultIngestionService.js";
+import {
+  markBulkSubmissionProcessed,
+  recordBulkSubmissionResultUrl,
+} from "../../services/bulkEdit/bulkSubmissionResultExpiryService.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 import { transitionOperation } from "../../services/operationTransitionService.js";
 import { getSession } from "../../utils/sessionHandler.js";
@@ -16,10 +20,6 @@ import {
   heartbeatOperationLease,
   releaseOperationLease,
 } from "../../services/operationLeaseService.js";
-import {
-  SHOPIFY_BULK_MUTATION_SLOT,
-  shopifyBulkMutationSlotResourceId,
-} from "../../services/shopifyBulkMutationSlotLease.js";
 import { bulkEditResultIngestDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 
 const QUEUE_NAME = process.env.BULK_EDIT_RESULT_INGEST_QUEUE || "bulk-edit-result-ingest";
@@ -227,12 +227,6 @@ async function processBulkEditResultIngest(job) {
       });
       ingestLeaseOwnerId = null;
     }
-    await releaseOperationLease({
-      shop,
-      namespace: SHOPIFY_BULK_MUTATION_SLOT,
-      resourceId: shopifyBulkMutationSlotResourceId(shop),
-      ownerId: "shopify-bulk-mutation-slot",
-    }).catch(() => {});
   };
 
   try {
@@ -414,11 +408,20 @@ async function processBulkEditResultIngest(job) {
 
     const fetched = await fetchBulkOperationResultUrl({ shop, bulkOperationId });
     const status = String(fetched.status || "").toUpperCase();
-    const resultUrl =
+  const resultUrl =
     fetched.url
     || fetched.partialDataUrl
     || resolveResultUrl(job.data || {})
     || null;
+
+  if (resultUrl) {
+    await recordBulkSubmissionResultUrl({
+      db,
+      shop,
+      bulkOperationId,
+      resultUrl,
+    });
+  }
 
   if (status && ["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(status)) {
     const cancelled = ["CANCELED", "CANCELLED"].includes(status);
@@ -578,6 +581,11 @@ async function processBulkEditResultIngest(job) {
       resultUrl,
       attempt: job.attemptsMade + 1,
       leaseOwnerId: ingestLeaseOwnerId,
+    });
+    await markBulkSubmissionProcessed({
+      db,
+      shop,
+      bulkOperationId,
     });
     await upsertOperationStageProgress({
       shop,

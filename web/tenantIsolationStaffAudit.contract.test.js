@@ -11,8 +11,11 @@ test("admin routes are mounted under authenticated /api namespace only", () => {
   const appSource = read("web/app.js");
   const indexSource = read("web/index.js");
 
-  assert.ok(appSource.includes('app.use("/api/admin", shopify.validateAuthenticatedSession(), AdminRoutes);'));
-  assert.ok(indexSource.includes('app.use("/api/admin", shopify.validateAuthenticatedSession(), AdminRoutes);'));
+  const authIndex = appSource.indexOf('app.use("/api/*", shopify.validateAuthenticatedSession());');
+  const adminIndex = appSource.indexOf('app.use("/api/admin", AdminRoutes);');
+  assert.ok(authIndex >= 0);
+  assert.ok(adminIndex > authIndex);
+  assert.ok(indexSource.includes('import "./server.js";'));
   assert.equal(appSource.includes('app.use("/admin", AdminRoutes);'), false);
   assert.equal(indexSource.includes('app.use("/admin", AdminRoutes);'), false);
 });

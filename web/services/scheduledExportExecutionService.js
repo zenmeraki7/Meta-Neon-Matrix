@@ -641,6 +641,9 @@ export async function finalizeScheduledExportRunFromExportJob({
   }
   const exportJob = await findExportJobForRunFinalize(exportJobId, shop);
 
+  if (exportJob?.shop && exportJob.shop !== shop) {
+    throw new Error("CROSS_SHOP_SCHEDULED_EXPORT_FINALIZE_BLOCKED");
+  }
   if (!exportJob?.scheduledExportId || !exportJob?.scheduledExportRunId) {
     return null;
   }

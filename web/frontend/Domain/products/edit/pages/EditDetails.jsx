@@ -36,6 +36,7 @@ import { useToast as useAppToast } from "../../../../components/providers/ToastP
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import TableErrorBoundary from "../../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../../components/Error/CellErrorBoundary";
+import DegradationBanner from "../../../../components/DegradationBanner";
 
 const FALLBACK_IMAGE = "https://www.otithee.com/img/fallback/fallback-2.png";
 
@@ -587,6 +588,14 @@ const undoBadge = undoStatus
       ]}
     >
       <Layout>
+        {historyItem?.supportStatus?.degradation ? (
+          <Layout.Section>
+            <DegradationBanner
+              degradation={historyItem.supportStatus.degradation}
+              tone="warning"
+            />
+          </Layout.Section>
+        ) : null}
         <Layout.Section>
           <Card>
             <Box padding="400">

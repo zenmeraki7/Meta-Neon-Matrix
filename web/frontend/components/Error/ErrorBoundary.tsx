@@ -1,8 +1,8 @@
 // web/frontend/components/ErrorBoundary.tsx
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { Banner, InlineStack, Text } from '@shopify/polaris';
 import { protectedApiPost } from '../../api/protectedApiClient';
 import styles from './ErrorBoundary.module.css';
+import DegradationBanner from '../DegradationBanner';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -17,9 +17,9 @@ interface ErrorBoundaryState {
   reported: boolean;
 }
 
-const MAX_RETRY = 3;
-
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  private retryTimer?: number;
+
   public state: ErrorBoundaryState = {
     hasError: false,
     error: undefined,
@@ -45,20 +45,13 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       this.reportError(error, errorInfo);
       this.setState({ reported: true });
     }
+    this.retryTimer = window.setTimeout(this.retry, 30_000);
   }
 
   // Retry button handler
   public retry = () => {
     this.setState((prev: ErrorBoundaryState): ErrorBoundaryState => {
       const nextCount = prev.retryCount + 1;
-      if (nextCount >= MAX_RETRY) {
-        // If they've hit the limit, keep hasError true so banner stays up with "Multiple attempts failed" text
-        return { 
-          ...prev,
-          retryCount: nextCount 
-        };
-      }
-      // Clear the error and keep going
       return { 
         hasError: false, 
         error: undefined, 
@@ -67,6 +60,10 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
       };
     });
   };
+
+  public componentWillUnmount() {
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
+  }
 
   // Report to your own logging endpoint
   private async reportError(error: Error, errorInfo: ErrorInfo) {
@@ -87,8 +84,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   public render() {
-    const { children, fallback, context } = this.props;
-    const { hasError, error, retryCount } = this.state;
+    const { children, fallback } = this.props;
+    const { hasError, error } = this.state;
     const isDev = import.meta.env.DEV;
 
     if (hasError) {
@@ -97,36 +94,9 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
         return <>{fallback}</>;
       }
 
-      // Determine if we can still retry
-      const canRetry = retryCount < MAX_RETRY;
-
-      // Build a clear context message
-      const contextMsg = context
-        ? `An error occurred in "${context}". Please try again.`
-        : 'An unexpected error occurred. Please try again.';
-
       return (
-        <Banner
-          tone="critical"
-          action={
-            canRetry
-              ? {
-                  content: `Try Again (${retryCount + 1}/${MAX_RETRY})`,
-                  onAction: this.retry,
-                }
-              : undefined
-          }
-        >
-          <InlineStack vertical spacing="tight">
-            <Text variant="bodyMd" as="p">{contextMsg}</Text>
-
-            {!canRetry && (
-              <Text variant="bodySm" as="p" color="subdued">
-                You've reached the maximum retry attempts. Please refresh the page or contact
-                support.
-              </Text>
-            )}
-
+        <>
+          <DegradationBanner fallbackCode="JOB_SUSPENDED" tone="warning" />
             {isDev && error && (
               <details>
                 <summary className={styles.errorSummary}>
@@ -137,8 +107,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
                 </pre>
               </details>
             )}
-          </InlineStack>
-        </Banner>
+        </>
       );
     }
 

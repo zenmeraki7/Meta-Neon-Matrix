@@ -16,11 +16,14 @@ class CellErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
-      return this.props.fallback || "[render error]";
+      return (
+        <span>
+          Temporarily unavailable. Expected recovery: within a few minutes. No action needed.
+        </span>
+      );
     }
     return this.props.children;
   }
 }
 
 export default CellErrorBoundary;
-
