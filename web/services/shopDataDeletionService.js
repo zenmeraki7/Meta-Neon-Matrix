@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { db as defaultDb } from "../repositories/repositoryDb.js";
 import logger from "../utils/loggerUtils.js";
 import {
   TENANT_MODELS_REQUIRING_DELETION,
@@ -108,7 +107,7 @@ export async function writeExternalDeletionAudit({
 export async function deleteAllShopData(
   shop,
   {
-    db = defaultDb,
+    db = null,
     serviceLogger = logger,
     auditWriter = writeExternalDeletionAudit,
   } = {},
@@ -116,16 +115,17 @@ export async function deleteAllShopData(
   const scopedShop = String(shop || "").trim();
   if (!scopedShop) throw new Error("deleteAllShopData requires shop");
   assertShopDeletionRegistryComplete();
+  const database = db || (await import("../repositories/repositoryDb.js")).db;
 
   serviceLogger.info("SHOP_DATA_DELETION_STARTED", { shop: scopedShop });
   const deletionLog = {};
-  const legacyShop = await db.shop.findFirst({
+  const legacyShop = await database.shop.findFirst({
     where: { shopifyDomain: scopedShop },
     select: { id: true },
   });
 
   for (const { model, client, field } of SHOP_DATA_DELETION_STEPS) {
-    const delegate = db[client];
+    const delegate = database[client];
     if (!delegate?.deleteMany) {
       throw new Error(`SHOP_DATA_DELETION_DELEGATE_MISSING:${model}`);
     }

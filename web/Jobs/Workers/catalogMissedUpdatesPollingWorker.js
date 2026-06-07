@@ -171,7 +171,6 @@ async function pollMissedUpdates({ shop }) {
     },
     select: {
       shopUrl: true,
-      accessToken: true,
       accessTokenEncrypted: true,
       isUnInstalled: true,
     },
@@ -180,7 +179,7 @@ async function pollMissedUpdates({ shop }) {
   const canPoll =
     store?.shopUrl
     && !store.isUnInstalled
-    && (store?.accessToken || store?.accessTokenEncrypted);
+    && store?.accessTokenEncrypted;
   if (!canPoll) {
     return { scanned: 0, synced: 0, failed: 0, failures: [], skipped: true };
   }

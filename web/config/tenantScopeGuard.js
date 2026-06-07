@@ -1,6 +1,7 @@
 export const TENANT_SCOPE_FIELDS_BY_MODEL = Object.freeze({
   Product: ["shop"],
   Variant: ["shop"],
+  Shop: ["shopifyDomain"],
   VariantMetafield: ["shopId"],
   DeadLetterChange: ["shopId"],
   BulkEditSession: ["shopId"],

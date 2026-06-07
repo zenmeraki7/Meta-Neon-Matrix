@@ -15,6 +15,7 @@ import crypto from "crypto";
 import { normalizeWebhookDeliveryStatus } from "./utils/normalizedStateUtils.js";
 import { requireShopScope } from "./utils/shopScope.js";
 import { deleteAllShopData } from "./services/shopDataDeletionService.js";
+import { removeDataRetentionPurgeSchedule } from "./queues/adapters/dataRetentionQueueAdapter.js";
 
 
 function safeParseJson(body) {
@@ -410,6 +411,7 @@ export default {
     deliveryMethod: DeliveryMethod.Http,
     callbackUrl: "/api/webhooks",
     callback: async (_topic, shop) => {
+      await removeDataRetentionPurgeSchedule({ shop }).catch(() => {});
       await deleteAllShopData(requireShopScope(shop));
       await clearKeyCaches(`${shop}`).catch(() => {});
       return { success: true, deleted: true };

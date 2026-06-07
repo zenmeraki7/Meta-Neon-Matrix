@@ -184,7 +184,12 @@ class UndoEditService {
 
     const { undoOperation, undoEditHistory } = await db.$transaction(async (tx) => {
       const createdUndoHistory = await tx.editHistory.upsert({
-        where: { executionIdentity },
+        where: {
+          shop_executionIdentity: {
+            shop: this.session.shop,
+            executionIdentity,
+          },
+        },
         create: {
           shop: this.session.shop,
           executionIdentity,

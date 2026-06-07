@@ -1,6 +1,6 @@
 import Joi from "joi";
 
-const supportedLanguages = [
+export const supportedLanguages = [
   "en",
   "es",
   "fr",
@@ -23,4 +23,4 @@ export const languageSchema = Joi.object({
       "any.required": "Language is required",
       "any.only": `Language must be one of: ${supportedLanguages.join(", ")}`,
     }),
-});
+}).unknown(false);

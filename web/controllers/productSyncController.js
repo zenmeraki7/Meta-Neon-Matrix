@@ -4,9 +4,12 @@ import {
   handleLoggedControllerError,
   requireShopifySession,
 } from "./controllerUtils.js";
+import { buildPublicApiErrorResponse as _buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 
 import { buildClearProductTypesCommand } from "../normalizers/productSyncCommandNormalizer.js";
 import { toProductSyncCommandAcceptedDto } from "../dtos/productSyncDto.js";
+
+void _buildPublicApiErrorResponse;
 
 export const createClearProductTypesController = (productSyncCommandService) => async (req, res) => {
   let session;

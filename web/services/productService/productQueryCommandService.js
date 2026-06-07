@@ -1,7 +1,7 @@
 import { Services } from "./productFilterService.js";
 import { db } from "../../repositories/repositoryDb.js";
 import { getStoreMirrorState } from "../mirrorHealthService.js";
-import { recoverStaleProductSyncStateByShop } from "../../repositories/storeRepository.js";
+import { maybeRecoverStaleSync } from "../syncStatusQueryService.js";
 import { getCache, setCache } from "../../utils/cacheUtils.js";
 import { fieldRegistry } from "../targeting/registry/fieldRegistry.js";
 import { getTargetingVersionBundle } from "../targeting/versioning.js";
@@ -97,7 +97,7 @@ async function trackFilterQueryIfPossible({ shop, filterParams, count }) {
 
 export async function executeProductQuery({ shop, query = {}, body = {} }) {
   const normalized = normalizeProductQueryRequest(query, body);
-  await recoverStaleProductSyncStateByShop(shop);
+  await maybeRecoverStaleSync(shop);
   const mirrorHealth = await getStoreMirrorState(shop);
 
   let result;

@@ -12,13 +12,21 @@ const schema = read("web/prisma/schema.prisma");
 const migration = read(
   "web/prisma/migrations/20260606170000_add_change_record_mirror_lifecycle/migration.sql",
 );
+const defaultFixMigration = read(
+  "web/prisma/migrations/20260607123000_fix_change_record_mirror_pending_default/migration.sql",
+);
 
 test("crash after Shopify result ingestion resumes persisted MIRROR_PENDING rows", () => {
-  assert.match(schema, /mirrorStatus\s+String\s+@default\("NOT_PENDING"\)/);
+  assert.match(schema, /mirrorStatus\s+String\s+@default\("MIRROR_PENDING"\)/);
   assert.match(migration, /ADD COLUMN IF NOT EXISTS "mirrorStatus"/);
+  assert.match(migration, /DEFAULT 'MIRROR_PENDING'/);
+  assert.match(defaultFixMigration, /ALTER COLUMN "mirrorStatus" SET DEFAULT 'MIRROR_PENDING'/);
+  assert.match(defaultFixMigration, /"status" IN \('SUCCESS', 'VERIFIED', 'APPLIED'\)/);
+  assert.match(defaultFixMigration, /"mirrorAppliedAt" IS NULL/);
   assert.match(ingestion, /WHEN \$\{status\} = 'SUCCESS' THEN 'MIRROR_PENDING'/);
   assert.match(ingestion, /rowsIngestedAt/);
   assert.match(mirror, /mirrorStatus: "MIRROR_PENDING"/);
+  assert.match(mirror, /MIRROR_ELIGIBLE_CHANGE_RECORD_STATUSES = \["SUCCESS", "VERIFIED", "APPLIED"\]/);
 });
 
 test("mirror rows and ledger finalization share one Postgres transaction", () => {

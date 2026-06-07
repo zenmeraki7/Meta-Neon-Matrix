@@ -1,10 +1,14 @@
 import {
   buildError,
   deepFreeze,
+  isPlainObject,
+  normalizeIntInRange,
   toTrimmedString,
 } from "./normalizerPrimitives.js";
 
 const SCHEDULED_EXPORT_ID_MAX_LENGTH = 200;
+const SCHEDULED_EXPORT_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const SCHEDULED_EXPORT_CURSOR_MAX_LENGTH = 200;
 const VALID_STATUSES = new Set([
   "ACTIVE",
   "PAUSED",
@@ -31,10 +35,6 @@ const PAYLOAD_KEYS = Object.freeze([
   "endAt",
   "targetGranularity",
 ]);
-
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function clonePayloadValue(value, fieldName) {
   if (value === undefined) return undefined;
@@ -81,7 +81,32 @@ function normalizeScheduledExportId(params = {}) {
       { field: "id", error: "scheduled export id is required" },
     ]);
   }
+  if (!SCHEDULED_EXPORT_ID_PATTERN.test(scheduledExportId)) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
+      { field: "id", error: "invalid format" },
+    ]);
+  }
   return scheduledExportId;
+}
+
+function normalizeCursorId(params = {}) {
+  const cursorId = toTrimmedString(params.cursorId ?? params.cursor);
+  if (!cursorId) return null;
+  if (
+    cursorId.length > SCHEDULED_EXPORT_CURSOR_MAX_LENGTH ||
+    !SCHEDULED_EXPORT_ID_PATTERN.test(cursorId)
+  ) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
+      { field: "cursorId", error: "invalid format" },
+    ]);
+  }
+  return cursorId;
+}
+
+function normalizeEntitlementLimit(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const limit = Number(value);
+  return Number.isFinite(limit) && limit >= 0 ? limit : null;
 }
 
 function normalizeSubscription(locals = {}) {
@@ -92,7 +117,7 @@ function normalizeSubscription(locals = {}) {
     shop: toTrimmedString(entitlement.shop) || null,
     planKey: toTrimmedString(entitlement.planKey) || "FREE",
     planName: toTrimmedString(entitlement.planName) || "Free Plan",
-    limit: entitlement.limit,
+    limit: normalizeEntitlementLimit(entitlement.limit),
     isUnlimited: Boolean(entitlement.isUnlimited),
     status: toTrimmedString(entitlement.status) || "FREE",
     subscriptionId: entitlement.subscriptionId || null,
@@ -147,8 +172,17 @@ export function normalizeCreateScheduledExportCommand(params = {}, body = {}, lo
 }
 
 export function normalizeListScheduledExportsCommand(params = {}, body = {}, locals = {}) {
+  void body;
+  const safeQuery = isPlainObject(params) ? params : {};
   return deepFreeze({
     shop: normalizeShop(locals),
+    limit: normalizeIntInRange(safeQuery.limit, {
+      fallback: 100,
+      min: 1,
+      max: 250,
+      fieldName: "limit",
+    }),
+    cursorId: normalizeCursorId(safeQuery),
   });
 }
 

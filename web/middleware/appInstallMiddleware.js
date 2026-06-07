@@ -181,7 +181,7 @@ export const appInstallMiddleware = async (req, res, next) => {
       create: {
         shopUrl: shop,
         ...buildEncryptedTokenColumns(accessToken),
-        shopEmail: "",
+        shopEmail: null,
         isUnInstalled: false,
         unInstalledAt: null,
         scope: session.scope,

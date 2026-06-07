@@ -248,7 +248,7 @@ function buildReversibleChangeRecord({
     productFieldChanges,
     variantFieldChanges,
     scope: String(row?.targetType || "PRODUCT").toLowerCase(),
-    status: "pending",
+    status: "PENDING",
     batchId,
   };
 }

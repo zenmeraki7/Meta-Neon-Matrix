@@ -60,13 +60,10 @@ export function decryptAccessToken(payload) {
 export function buildEncryptedTokenColumns(accessToken) {
   const encrypted = encryptAccessToken(accessToken);
   if (!encrypted) {
-    return {
-      accessToken: accessToken || null,
-    };
+    throw new Error("ACCESS_TOKEN_ENCRYPTION_REQUIRED");
   }
 
   return {
-    accessToken: accessToken || null,
     accessTokenEncrypted: encrypted,
     accessTokenKeyVersion: DEFAULT_KEY_VERSION,
   };

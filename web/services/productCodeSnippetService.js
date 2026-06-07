@@ -83,6 +83,8 @@ export async function listProductCodeSnippets({
     shop,
     search: String(query.search || "").trim(),
     status: query.status ? normalizeStatus(query.status) : null,
+    limit: query.limit,
+    cursor: query.cursor,
   });
 
   return snippets.map(serializeSnippet);

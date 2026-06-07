@@ -1,10 +1,11 @@
 // web/normalizers/productExportCommandNormalizer.js
+import { fieldMappings } from "../utils/productExportUtils.js";
 
 const MAX_ID_LENGTH = 200;
 const MAX_TEXT_LENGTH = 500;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_FIELD_NAME_LENGTH = 160;
-const MAX_FIELDS = 300;
+const MAX_FIELDS = Math.min(300, Object.keys(fieldMappings || {}).length);
 
 const MAX_FILTER_PARAMS = 500;
 const MAX_FILTER_PARAM_ARRAY_VALUES = 250;
@@ -19,7 +20,7 @@ const MAX_CONTEXT_JSON_LENGTH = 50_000;
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_ARRAY = Object.freeze([]);
 
-const SAFE_FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._\- ()]*$/;
+const SAFE_FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\.csv$/;
 const SAFE_TOKEN_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 const CREATE_EXPORT_BODY_KEYS = new Set([

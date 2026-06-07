@@ -121,12 +121,51 @@ function buildCommand(req, res, normalizer) {
   });
 }
 
+function assertCursorPaginationOnly(query = {}) {
+  if (query?.page && String(query.page) !== "1") {
+    throw buildControllerError(
+      "Offset pagination is disabled. Use cursor pagination.",
+      "VALIDATION_ERROR",
+    );
+  }
+}
+
+function toImportHistoryListDto(history) {
+  return toImportHistoryListResponseDto({ histories: [history] }).data[0];
+}
+
+function toImportHistoryDetailDto(history) {
+  return toImportHistoryDetailResponseDto(history).data;
+}
+
+function toImportHistoryListControllerDto(result) {
+  const safe = result && typeof result === "object" ? result : {};
+  const historiesFromContract = Array.isArray(safe.histories) ? safe.histories : [];
+  const fallbackItems = Array.isArray(safe.items) ? safe.items : [];
+  const histories = historiesFromContract.length ? historiesFromContract : fallbackItems;
+  const response = toImportHistoryListResponseDto(result);
+
+  return {
+    ...response,
+    data: histories.map(toImportHistoryListDto),
+  };
+}
+
+function toImportHistoryDetailControllerDto(result) {
+  const history = result;
+  return {
+    ...toImportHistoryDetailResponseDto(result),
+    data: toImportHistoryDetailDto(history),
+  };
+}
+
 // Export histories
 export const getAllExportHistories = async (req, res) => {
   let session;
 
   try {
     setPrivateNoStore(res);
+    assertCursorPaginationOnly(req.query || {});
 
     const built = buildCommand(req, res, buildExportHistoryListCommand);
     session = built.session;
@@ -177,6 +216,7 @@ export const getAllEditHistories = async (req, res) => {
 
   try {
     setPrivateNoStore(res);
+    assertCursorPaginationOnly(req.query || {});
 
     const built = buildCommand(req, res, buildEditHistoryListCommand);
     session = built.session;
@@ -270,13 +310,14 @@ export const getAllImportHistories = async (req, res) => {
 
   try {
     setPrivateNoStore(res);
+    assertCursorPaginationOnly(req.query || {});
 
     const built = buildCommand(req, res, buildImportHistoryListCommand);
     session = built.session;
 
     const result = await historyUseCases.imports.list(built.command);
 
-    return res.status(200).json(toImportHistoryListResponseDto(result));
+    return res.status(200).json(toImportHistoryListControllerDto(result));
   } catch (error) {
     return logAndSendError({
       res,
@@ -299,7 +340,7 @@ export const getImportHistoryDetails = async (req, res) => {
 
     const result = await historyUseCases.imports.detail(built.command);
 
-    return res.status(200).json(toImportHistoryDetailResponseDto(result));
+    return res.status(200).json(toImportHistoryDetailControllerDto(result));
   } catch (error) {
     return logAndSendError({
       res,

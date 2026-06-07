@@ -223,6 +223,15 @@ model Variant {
   @@index([shop, mirrorBatchId, productId, position])
 }
 
+// Tenant-model split:
+// - Shop is the legacy bulk-edit/metafield tenant root. Models that store edit-session
+//   drafts or variant-metafield write buffers should continue to reference Shop by shopId.
+// - Store is the product mirror/sync tenant root. Models that store Shopify mirror state,
+//   mirror batches, products, variants, inventory, collections, or sync health should use
+//   the shop-domain string (`shop`/Store.shopUrl) and reference Store when a relation is needed.
+// - New features that need both ledger and mirror data should prefer carrying the canonical
+//   shop-domain string (`shop`) on operational rows and avoid adding new Shop<->Store joins.
+//   A future tenant-unification migration must collapse this split deliberately.
 model Shop {
   id              String   @id
   shopifyDomain   String   @unique @map("shopify_domain")
@@ -351,6 +360,7 @@ model SpreadsheetFile {
   status         String   @default("UPLOADED")
   originalFilename String?
   storageKey     String?
+  storageExpiresAt DateTime @default(dbgenerated("(now() + interval '30 days')"))
   checksum       String?
   rowParseErrorCount Int? @default(0)
   validatedAt    DateTime?
@@ -363,13 +373,14 @@ model SpreadsheetFile {
   @@index([shop])
   @@index([shop, editHistoryId])
   @@index([shop, operationType, operationId])
+  @@index([shop, storageExpiresAt])
 }
 
+// See the tenant-model split note above Shop before adding new tenant-scoped models.
 model Store {
   id                              String            @id @default(cuid())
   shopUrl                         String            @unique
-  shopEmail                       String
-  accessToken                     String?
+  shopEmail                       String?
   accessTokenEncrypted            String?
   accessTokenKeyVersion           String?
   activeMirrorBatchId             String?
@@ -534,7 +545,7 @@ model EditHistory {
   bulkOperationId           String?
   executionState            String                 @default("planned")
   executionStateNormalized  EditHistoryExecutionState @default(PLANNED)
-  executionIdentity         String?                @unique
+  executionIdentity         String?
   targetSnapshotCount       Int                    @default(0)
   targetMirrorBatchId       String?
   failureStage              String?
@@ -544,6 +555,11 @@ model EditHistory {
   rules                     Json?
   affectedFields            Json?
   locationId                String?
+  // Expand-contract migration note: `status` is the legacy display/string column and
+  // `statusNormalized` is the canonical enum. New logic should write/read the enum and
+  // keep the string only for backward-compatible API display until the planned contract
+  // migration removes legacy string status after all consumers read `statusNormalized`.
+  // Target: remove legacy string status after the Q3 2026 compatibility window.
   status                    String                 @default("pending")
   statusNormalized          EditHistoryStatus      @default(PENDING)
   scheduledAt               DateTime?
@@ -610,7 +626,7 @@ model EditHistory {
   @@index([shop])
   @@index([shop, executionState])
   @@index([shop, executionStateNormalized])
-  @@index([shop, executionIdentity])
+  @@unique([shop, executionIdentity])
   @@index([shop, statusNormalized, type, updatedAt], map: "shop_status_norm_type_recent")
   @@index([isSpreadsheetEdit])
   @@index([recurringEditId])
@@ -967,11 +983,13 @@ model OutboxEvent {
   payloadJson   Json?
   status        String
   dispatchedAt  DateTime?
+  purgeAfter    DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   @@index([status, createdAt])
   @@index([shop, aggregateType, aggregateId])
+  @@index([shop, status, purgeAfter])
 }
 
 model AutomaticProductRuleProductState {
@@ -1081,6 +1099,7 @@ model ExportHistory {
   exportedData  String?
   fileUrl       String?
   storageKey    String?
+  storageExpiresAt DateTime @default(dbgenerated("(now() + interval '30 days')"))
   checksum      String?
   sizeBytes     BigInt?
   status        String
@@ -1100,6 +1119,7 @@ model ExportHistory {
   @@index([shop, isFavourite])
   @@index([shop, type])
   @@index([shop, exportTime])
+  @@index([shop, storageExpiresAt])
 }
 
 model ScheduledExport {
@@ -1203,6 +1223,10 @@ model ExportJob {
   failureStage         String?
   filename             String
   fields               String[]
+  // Expand-contract migration note: `status` is the legacy string column and
+  // `statusNormalized` is the canonical enum. New logic should use the enum while
+  // preserving `status` for existing responses until the planned contract migration.
+  // Target: remove legacy string status after the Q3 2026 compatibility window.
   status               String               @default("PENDING")
   statusNormalized     ExportJobStatus      @default(PENDING)
   fileUrl              String?
@@ -1262,12 +1286,12 @@ model ChangeRecord {
   image               String?
   title               String?
   scope               String
-  status              String      @default("pending")
+  status              ChangeStatus @default(PENDING)
   attemptCount        Int         @default(0)
   retryable           Boolean     @default(true)
   writingStartedAt    DateTime?
   appliedAt           DateTime?
-  mirrorStatus        String      @default("NOT_PENDING")
+  mirrorStatus        String      @default("MIRROR_PENDING")
   mirrorAppliedAt     DateTime?
   batchId             String?
   createdAt           DateTime    @default(now())
@@ -1326,6 +1350,7 @@ model OperationStageProgress {
   startedAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   completedAt   DateTime?
+  purgeAfter    DateTime @default(dbgenerated("(now() + interval '30 days')"))
   counterA      Int?
   counterB      Int?
   counterC      Int?
@@ -1334,6 +1359,7 @@ model OperationStageProgress {
   @@unique([shop, operationType, operationId, stageKey], map: "uniq_operation_stage_progress")
   @@index([shop, operationType, operationId])
   @@index([shop, stageStatus, updatedAt])
+  @@index([shop, purgeAfter])
 }
 
 model FilterTrack {
@@ -1512,6 +1538,11 @@ model ErrorLog {
   @@index([createdAt])
 }
 
+// Active legacy-freeze table for pre-TargetSnapshotSet targeting paths.
+// TargetSnapshotItem is the newer TargetSnapshotSet child used by first-class bulk-edit
+// snapshots; TargetSnapshot remains in use by targeting/reconciliation/import flows that
+// address snapshots by ownerType/ownerId. Keep retention explicit because it is not linked
+// to TargetSnapshotSet cascade deletion.
 model TargetSnapshot {
   id            String   @id @default(cuid())
   ownerType     String
@@ -1532,6 +1563,7 @@ model TargetSnapshot {
   beforeValues  Json?
   filterHash    String?
   targetHash    String?
+  purgeAfter    DateTime @default(dbgenerated("(now() + interval '7 days')"))
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -1546,6 +1578,7 @@ model TargetSnapshot {
   @@index([shop, productId], map: "idx_targetsnapshot_shop_product")
   @@index([shop, variantId], map: "idx_targetsnapshot_shop_variant")
   @@index([shop, ownerType, createdAt], map: "idx_targetsnapshot_owner_created")
+  @@index([shop, purgeAfter])
 }
 
 model TargetSnapshotSet {
@@ -1705,12 +1738,14 @@ model MirrorAnomaly {
   entityId   String?
   message    String
   details    Json?
+  purgeAfter DateTime @default(dbgenerated("(now() + interval '30 days')"))
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   @@index([shop, createdAt])
   @@index([shop, severity, createdAt])
   @@index([shop, type, createdAt])
+  @@index([shop, purgeAfter])
 }
 
 model ShopifySession {
@@ -1811,10 +1846,12 @@ model BillingEvent {
   eventType String
   source    String
   payload   Json?
+  purgeAfter DateTime @default(dbgenerated("(now() + interval '365 days')"))
   createdAt DateTime @default(now())
 
   @@index([shop, createdAt])
   @@index([shop, eventType, createdAt])
+  @@index([shop, purgeAfter])
 }
 
 model OperationLease {
@@ -2048,6 +2085,12 @@ enum ChangeStatus {
   WRITING
   WRITTEN
   ERROR
+  FAILED
+  SUCCESS
+  VERIFIED
+  APPLIED
+  ROLLED_BACK
+  VERIFICATION_FAILED
 }
 
 enum RecurringEditStatus {

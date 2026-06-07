@@ -31,6 +31,7 @@ import {
   enqueueUnresolvedBulkOperationRecoveryTick,
 } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
 import { scheduleReconciliationJob } from "../Queues/reconciliationJob.js";
+import { enqueueDataRetentionPurgeSchedule } from "../../queues/adapters/dataRetentionQueueAdapter.js";
 
 const QUEUE_NAME = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 const INSTALLATION_LOCK_TTL_MS = 5 * 60 * 1000;
@@ -92,6 +93,7 @@ async function registerShopRepeatableJobs({ shop, jobId }) {
       shop,
       repeatEveryMs: Number.parseInt(process.env.OUTBOX_DISPATCHER_POLL_INTERVAL_MS || "5000", 10),
     }),
+    enqueueDataRetentionPurgeSchedule({ shop }),
     scheduleReconciliationJob({ shop }),
   ]);
   const failures = results

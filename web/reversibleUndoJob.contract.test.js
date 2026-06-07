@@ -15,6 +15,10 @@ const repository = read("web/repositories/bulkUndoExecutionRepository.js");
 test("undo creates a linked first-class EditHistory and per-record reversible ledger", () => {
   assert.match(schema, /sourceEditHistoryId\s+String\?/);
   assert.match(schema, /undoEditHistoryId\s+String\?\s+@unique/);
+  assert.match(schema, /executionIdentity\s+String\?\s*\n/);
+  assert.doesNotMatch(schema, /executionIdentity\s+String\?\s+@unique/);
+  assert.match(schema, /@@unique\(\[shop, executionIdentity\]\)/);
+  assert.match(service, /shop_executionIdentity: \{\s*shop: this\.session\.shop,\s*executionIdentity,/);
   assert.match(schema, /attemptCount\s+Int\s+@default\(0\)/);
   assert.match(schema, /retryable\s+Boolean\s+@default\(true\)/);
   assert.match(schema, /writingStartedAt\s+DateTime\?/);

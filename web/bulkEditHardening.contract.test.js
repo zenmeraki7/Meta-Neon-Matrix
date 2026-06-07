@@ -157,8 +157,12 @@ test("primary ChangeRecord ledger tracks write attempts and applied lifecycle", 
   assert.match(schema, /retryable\s+Boolean\s+@default\(true\)/);
   assert.match(schema, /writingStartedAt\s+DateTime\?/);
   assert.match(schema, /appliedAt\s+DateTime\?/);
+  assert.match(schema, /status\s+ChangeStatus\s+@default\(PENDING\)/);
+  assert.match(schema, /enum ChangeStatus \{[\s\S]*SUCCESS[\s\S]*VERIFIED[\s\S]*APPLIED[\s\S]*ROLLED_BACK[\s\S]*VERIFICATION_FAILED/);
   assert.match(submit, /attemptCount: \{ increment: 1 \}/);
+  assert.match(submit, /status: \{ in: \["PENDING", "FAILED"\] \}/);
   assert.match(submit, /writingStartedAt: new Date\(\)/);
+  assert.match(ingest, /SET "status" = \(\$\{status\}\)::"ChangeStatus"/);
   assert.match(ingest, /"appliedAt" = CASE/);
   assert.match(ingest, /"retryable" = CASE/);
 });

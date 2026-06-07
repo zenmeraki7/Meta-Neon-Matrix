@@ -1,9 +1,17 @@
-export function normalizeSearch(value) {
-  return String(value || "")
+export function normalizeSearch(value, maxLen = null) {
+  const search = String(value || "")
     .normalize("NFKC")
     .replace(/[\u0000-\u001F\u007F]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  if (maxLen !== null && search.length > maxLen) {
+    const error = new Error(`Invalid query: search must be <= ${maxLen} chars`);
+    error.code = "VALIDATION_ERROR";
+    throw error;
+  }
+
+  return search;
 }
 
 export function parseAndValidateLimit(limitRaw, min = 1, max = 50, fallback = 20) {

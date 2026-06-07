@@ -25,7 +25,7 @@ async function clearSyncStatusCaches(shop) {
   ]);
 }
 
-async function maybeRecoverStaleSync(shop) {
+export async function maybeRecoverStaleSync(shop) {
   const now = Date.now();
   const lastRanAt = recoveryLastRanByShop.get(shop) || 0;
   if (now - lastRanAt < RECOVERY_COOLDOWN_MS) {

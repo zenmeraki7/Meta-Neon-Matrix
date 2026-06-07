@@ -1,0 +1,46 @@
+name: Data Retention Enforcement
+
+on:
+  pull_request:
+    paths:
+      - "web/prisma/schema.prisma"
+      - "web/privacy.js"
+      - "web/worker.js"
+      - "web/config/tenantScopeGuard.js"
+      - "web/services/dataRetentionPolicy.js"
+      - "web/services/dataRetentionService.js"
+      - "web/services/shopDataDeletionService.js"
+      - "web/Jobs/Workers/appUninstallWorker.js"
+      - "web/Jobs/Workers/dataRetentionPurgeWorker.js"
+      - "web/queues/adapters/dataRetentionQueueAdapter.js"
+      - "web/*Retention*.test.js"
+      - "web/shopDataDeletionService.test.js"
+      - "package.json"
+      - ".github/workflows/data-retention-enforcement.yml"
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  enforce-data-retention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://user:pass@localhost:5432/testdb
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify retention and deletion coverage
+        run: npm run test:data-retention

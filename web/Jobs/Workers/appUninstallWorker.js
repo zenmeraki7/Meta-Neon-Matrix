@@ -9,6 +9,7 @@ import logger from "../../utils/loggerUtils.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import shopify from "../../shopify.js";
 import { deleteAllShopData } from "../../services/shopDataDeletionService.js";
+import { removeDataRetentionPurgeSchedule } from "../../queues/adapters/dataRetentionQueueAdapter.js";
 import { verificationQueue } from "../../queues/adapters/bulkEditVerificationQueueAdapter.js";
 import {
   appInstallationQueue,
@@ -207,27 +208,8 @@ const appUninstallWorker = new Worker(
         where: { shopUrl: shop },
         select: {
           shopEmail: true,
-          isUnInstalled: true,
         },
       });
-
-      if (!store) {
-        await deleteAllShopData(shop);
-        return {
-          success: true,
-          reason: "store_not_found",
-          shop,
-        };
-      }
-
-      if (store.isUnInstalled) {
-        await deleteAllShopData(shop);
-        return {
-          success: true,
-          reason: "already_uninstalled",
-          shop,
-        };
-      }
 
       await cancelPendingJobsForShop(shop);
       await removeQueuedProductSyncJobsForShop(shop);
@@ -235,19 +217,26 @@ const appUninstallWorker = new Worker(
       await waitForActiveJobsToDrain(shop);
       await releaseShopRedisKeys(shop);
       await cancelActiveShopifyBulkOps(shop).catch(() => {});
+      await removeDataRetentionPurgeSchedule({ shop }).catch(() => {});
 
-      await deleteAllShopData(shop);
-
-      if (store.shopEmail) {
+      if (store?.shopEmail) {
         await sendEmail(
           store.shopEmail,
           "Your feedback would mean the world to us",
           uninstallFeedbackHTML("Metamatrix User", shop, shop.split(".")[0]),
           true,
-        );
+        ).catch((error) => {
+          logger.warn("Uninstall feedback email failed", {
+            worker: "appUninstallWorker",
+            jobId: job.id,
+            shop,
+            message: error?.message || String(error),
+          });
+        });
       }
 
-      await clearKeyCaches(`${shop}`);
+      await deleteAllShopData(shop);
+      await clearKeyCaches(`${shop}`).catch(() => {});
 
       logger.info("App uninstall background job completed", {
         worker: "appUninstallWorker",

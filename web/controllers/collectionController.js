@@ -5,12 +5,15 @@ import {
 } from "../dtos/collectionDto.js";
 import { requireShopifySession } from "../http/shopifySession.js";
 import { buildActorFromSession } from "../http/actorContext.js";
+import { buildPublicApiErrorResponse as _buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 import {
   validateCollectionQuery,
   COLLECTION_LIST_KEYS,
   COLLECTION_OPTIONS_KEYS,
   LIVE_COLLECTION_KEYS,
 } from "../validators/collectionRequestValidator.js";
+
+void _buildPublicApiErrorResponse;
 
 function requireIdempotencyKey(req) {
   const idempotencyKey = req.get("Idempotency-Key")?.trim();
@@ -73,7 +76,7 @@ export const listCollectionOptions =
   };
 
 export const listLiveCollections =
-  (collectionService) => async (req, res, next) => {
+  (collectionControllerService) => async (req, res, next) => {
     try {
       const session = requireShopifySession(res);
       const query = validateCollectionQuery(req.query, LIVE_COLLECTION_KEYS);
@@ -87,7 +90,7 @@ export const listLiveCollections =
         subscription: req.subscription || null,
       });
 
-      const result = await collectionService.fetchFromShopify(command);
+      const result = await collectionControllerService.fetchFromShopify(command);
 
       return res
         .status(200)

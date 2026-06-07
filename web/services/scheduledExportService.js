@@ -270,8 +270,8 @@ console.log("🧪 Creating scheduled export:", {
   return getScheduledExportHydrated(created.id, shop);
 }
 
-export async function listScheduledExports({ shop }) {
-  const items = await scheduledExportRepository.listByShop(shop);
+export async function listScheduledExports({ shop, limit, cursorId }) {
+  const items = await scheduledExportRepository.listByShop(shop, { limit, cursorId });
   const ids = items.map((item) => item.id);
   const [statusCounts, latestRuns] = await Promise.all([
     scheduledExportRunRepository.groupStatusCounts(shop, ids),

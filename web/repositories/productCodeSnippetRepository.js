@@ -23,7 +23,7 @@ export const productCodeSnippetRepository = {
     });
   },
 
-  async listByShop({ shop, search = "", status = null }, db = prisma) {
+  async listByShop({ shop, search = "", status = null, limit = 20, cursor = null }, db = prisma) {
     return getClient(db).productCodeSnippet.findMany({
       where: {
         shop,
@@ -38,7 +38,9 @@ export const productCodeSnippetRepository = {
             }
           : {}),
       },
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      take: Math.min(Math.max(Number(limit) || 20, 1), 100),
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
   },
 

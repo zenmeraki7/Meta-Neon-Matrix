@@ -1,24 +1,38 @@
 import {
   buildError,
   deepFreeze,
+  isPlainObject,
   toTrimmedString,
   validateIdempotencyKey,
 } from "./normalizerPrimitives.js";
 
 const NUMERIC_STRING = /^\d+$/;
+const METAFIELD_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
+const MAX_SESSION_ID_LENGTH = 200;
+const MAX_CHANGE_ITEMS = 1000;
 const SAFE_CHANGE_FIELDS = new Set(["variantId", "namespace", "key", "value"]);
 
 function normalizeRouteContext(params = {}, locals = {}) {
   const shopId = toTrimmedString(locals.shopify?.session?.shop);
   const sessionId = toTrimmedString(params.id);
-  if (!shopId || !sessionId) {
-    throw buildError("Session not found", 404, "SESSION_NOT_FOUND");
+  if (!shopId) {
+    throw buildError("Authentication required", 401, "UNAUTHENTICATED");
+  }
+  if (!sessionId) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
+      { field: "id", error: "is required" },
+    ]);
+  }
+  if (sessionId.length > MAX_SESSION_ID_LENGTH) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
+      { field: "id", error: "invalid format" },
+    ]);
   }
   return { shopId, sessionId };
 }
 
 function assertSafePlainChangeItem(item) {
-  if (!item || typeof item !== "object" || Array.isArray(item)) {
+  if (!isPlainObject(item)) {
     throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
       { field: "changes", error: "each change must be an object" },
     ]);
@@ -33,11 +47,25 @@ function assertSafePlainChangeItem(item) {
   }
 
   for (const [k, v] of Object.entries(item)) {
+    // Rejects objects and arrays; arrays also report typeof value === "object".
     if (v != null && typeof v === "object") {
       throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
         { field: `changes.${k}`, error: "nested objects are not allowed" },
       ]);
     }
+  }
+}
+
+function assertValidMetafieldIdentifier(value, fieldName) {
+  if (!value || value.length > 80) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
+      { field: fieldName, error: "must be 1-80 characters" },
+    ]);
+  }
+  if (!METAFIELD_KEY_PATTERN.test(value)) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
+      { field: fieldName, error: "invalid format" },
+    ]);
   }
 }
 
@@ -55,9 +83,12 @@ function normalizeOneChange(item) {
     ]);
   }
 
-  if (namespace.length > 80 || key.length > 80 || value?.length > 5000) {
+  assertValidMetafieldIdentifier(namespace, "changes.namespace");
+  assertValidMetafieldIdentifier(key, "changes.key");
+
+  if (value?.length > 5000) {
     throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
-      { field: "changes", error: "namespace/key/value too long" },
+      { field: "changes.value", error: "must be 5000 characters or fewer" },
     ]);
   }
 
@@ -95,7 +126,7 @@ export function normalizeStageSessionChangesCommand(params = {}, body = {}, loca
 export function normalizeColumnApplySessionChangesCommand(params = {}, body = {}, locals = {}) {
   const context = normalizeRouteContext(params, locals);
 
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
+  if (!isPlainObject(body)) {
     throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
       { field: "body", error: "must be an object" },
     ]);
@@ -106,15 +137,18 @@ export function normalizeColumnApplySessionChangesCommand(params = {}, body = {}
   const value = body.value == null ? null : String(body.value);
   const variantIds = Array.isArray(body.variantIds) ? body.variantIds : [];
 
-  if (!namespace || !key || variantIds.length === 0) {
+  if (!namespace || !key || variantIds.length === 0 || variantIds.length > MAX_CHANGE_ITEMS) {
     throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
-      { field: "namespace/key/variantIds", error: "namespace, key and non-empty variantIds are required" },
+      { field: "variantIds", error: "must be a non-empty array with max 1000 items" },
     ]);
   }
 
-  if (namespace.length > 80 || key.length > 80 || value?.length > 5000) {
+  assertValidMetafieldIdentifier(namespace, "namespace");
+  assertValidMetafieldIdentifier(key, "key");
+
+  if (value?.length > 5000) {
     throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
-      { field: "namespace/key/value", error: "value too long" },
+      { field: "value", error: "must be 5000 characters or fewer" },
     ]);
   }
 

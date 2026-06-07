@@ -6,6 +6,7 @@ const OUTBOX_STATUS = Object.freeze({
   DISPATCHING: "DISPATCHING",
   DISPATCHED: "DISPATCHED",
 });
+const DISPATCHED_OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
   const scopedShop = String(shop || "").trim();
@@ -54,6 +55,7 @@ export async function dispatchPendingOutboxEvents({ shop, limit = 50 } = {}) {
         data: {
           status: OUTBOX_STATUS.DISPATCHED,
           dispatchedAt: new Date(),
+          purgeAfter: new Date(Date.now() + DISPATCHED_OUTBOX_RETENTION_MS),
           updatedAt: new Date(),
         },
       });

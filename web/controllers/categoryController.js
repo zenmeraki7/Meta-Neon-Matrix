@@ -6,6 +6,9 @@ import {
 import { requireShopifySession } from "../http/shopifySession.js";
 import { buildActorFromSession } from "../http/actorContext.js";
 import { validateCategoryQuery } from "../validators/categoryRequestValidator.js";
+import { buildPublicApiErrorResponse as _buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+
+void _buildPublicApiErrorResponse;
 
 export const getAllCategories =
   (categoryService) => async (req, res, next) => {

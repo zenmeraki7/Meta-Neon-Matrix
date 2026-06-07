@@ -32,6 +32,14 @@ import {
   toRecurringEditUpdatedDto,
 } from "../dtos/recurringEditDto.js";
 
+function assertCursorPaginationOnly(query = {}) {
+  if (query?.page && String(query.page) !== "1") {
+    const error = new Error("Offset pagination is disabled. Use cursor pagination.");
+    error.code = "OFFSET_PAGINATION_DISABLED";
+    throw error;
+  }
+}
+
 export async function createRecurringEditController(req, res) {
   let session;
 
@@ -66,6 +74,7 @@ export async function listRecurringEditsController(req, res) {
 
   try {
     session = requireShopifySession(res);
+    assertCursorPaginationOnly(req.query || {});
 
     const command = buildListRecurringEditsCommand({
       shop: session.shop,

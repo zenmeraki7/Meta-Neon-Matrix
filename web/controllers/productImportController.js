@@ -37,7 +37,7 @@ export const createImportCsvController = (productImportCommandService) => async 
     const command = buildCreateProductImportCommand({
       file: req.file,
       body: req.body || {},
-      idempotencyKey: getIdempotencyKey(req),
+      idempotencyKey: req.headers["idempotency-key"] || getIdempotencyKey(req),
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),
       subscription: req.subscription || null,

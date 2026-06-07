@@ -3,7 +3,6 @@ import shopify from "../shopify.js";
 
 import { db } from "../repositories/repositoryDb.js";
 import {
-  buildEncryptedTokenColumns,
   decryptAccessToken,
 } from "./tokenCrypto.js";
 
@@ -23,14 +22,10 @@ import {
 
 export const getSession = async (shop) => {
   try {
-    const requireEncrypted =
-      String(process.env.REQUIRE_ENCRYPTED_ACCESS_TOKEN || "").toLowerCase() === "true";
-
     const store = await db.store.findUnique({
       where: { shopUrl: shop },
       select: {
         shopUrl: true,
-        accessToken: true,
         accessTokenEncrypted: true,
         accessTokenKeyVersion: true,
       },
@@ -45,22 +40,11 @@ export const getSession = async (shop) => {
       }
     }
 
-    if (!resolvedToken && store?.accessToken && !requireEncrypted) {
-      resolvedToken = store.accessToken;
-      const encryptedColumns = buildEncryptedTokenColumns(resolvedToken);
-      if (encryptedColumns.accessTokenEncrypted) {
-        await db.store.update({
-          where: { shopUrl: shop },
-          data: encryptedColumns,
-        });
-      }
+    if (!resolvedToken) {
+      throw new Error(`Encrypted token missing or invalid for shop: ${shop}`);
     }
 
-    if (!resolvedToken && requireEncrypted) {
-      throw new Error(`Encrypted token required but missing for shop: ${shop}`);
-    }
-
-    if (!store || !resolvedToken) {
+    if (!store) {
       throw new Error(`No active session found for shop: ${shop}`);
     }
 

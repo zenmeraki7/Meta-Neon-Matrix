@@ -36,6 +36,7 @@
     "ci:preflight-runtime-parity": "node web/scripts/ciPreflightRuntimeParity.js",
     "test:undo-determinism-recovery": "node --test web/undoDeterminismAndRecovery.contract.test.js",
     "test:security-hardening": "node --test web/securityHardening.contract.test.js",
+    "test:data-retention": "node --test web/dataRetentionPolicy.contract.test.js web/shopDataDeletionService.test.js web/dataRetentionService.test.js web/workerManifest.contract.test.js",
     "migrate:deploy": "cd web && npm run migrate:deploy",
     "migrate:deploy:safe": "cd web && npm run migrate:deploy:safe"
   },

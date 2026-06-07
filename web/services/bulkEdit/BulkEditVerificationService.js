@@ -330,7 +330,7 @@ async function markVerificationFailures({ shop, failedRows = [], chunkSize = 500
       `
       UPDATE "ChangeRecord"
       SET
-        "status" = 'VERIFICATION_FAILED',
+        "status" = 'VERIFICATION_FAILED'::"ChangeStatus",
         "failureCode" = 'VERIFICATION_MISMATCH',
         "failureMessage" = CASE ${caseClauses} ELSE "failureMessage" END
       WHERE "shop" = $1

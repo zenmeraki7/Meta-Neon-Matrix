@@ -9,7 +9,12 @@ function buildError(message, statusCode = 400, code = "VALIDATION_FAILED", field
 }
 
 function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function deepFreeze(value) {
@@ -30,6 +35,8 @@ function toTrimmedString(value, fallback = "") {
 }
 
 function capLength(value, maxLength, fieldName) {
+  // Missing or blank values normalize to ""; callers that need null should use
+  // normalizeOptionalString, which converts this empty sentinel to null.
   const str = toTrimmedString(value);
   if (!str) return "";
   if (!Number.isInteger(maxLength) || maxLength <= 0) return str;
@@ -67,9 +74,16 @@ function normalizeEnum(value, allowed, fieldName, { required = false, caseMode =
 }
 
 function normalizeIntInRange(value, { fallback, min, max, fieldName }) {
-  const parsed = Number.parseInt(String(value ?? fallback), 10);
-  const safe = Number.isFinite(parsed) ? parsed : fallback;
-  return Math.max(min, Math.min(max, safe));
+  const raw = value === undefined || value === null || value === "" ? fallback : value;
+  const parsed = Number(raw);
+
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
+      { field: fieldName, error: `must be between ${min} and ${max}` },
+    ]);
+  }
+
+  return parsed;
 }
 
 function validateIdempotencyKey(value, fieldName = "idempotencyKey", { required = false } = {}) {
@@ -91,6 +105,8 @@ function validateIdempotencyKey(value, fieldName = "idempotencyKey", { required 
 }
 
 function validateNoUnsafeNestedObjects(value, fieldName, { allowedObjectPaths = new Set() } = {}) {
+  const violations = [];
+
   const walk = (node, path) => {
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i += 1) {
@@ -102,9 +118,7 @@ function validateNoUnsafeNestedObjects(value, fieldName, { allowedObjectPaths = 
     if (!isPlainObject(node)) return;
 
     if (path && !allowedObjectPaths.has(path)) {
-      throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
-        { field: fieldName, error: `unsafe nested object at ${path}` },
-      ]);
+      violations.push({ field: fieldName, error: `unsafe nested object at ${path}` });
     }
 
     for (const [key, child] of Object.entries(node)) {
@@ -114,12 +128,19 @@ function validateNoUnsafeNestedObjects(value, fieldName, { allowedObjectPaths = 
   };
 
   walk(value, "");
+
+  if (violations.length > 0) {
+    throw buildError("Validation failed", 400, "VALIDATION_FAILED", violations);
+  }
 }
 
 function validateProductCursor(cursor) {
   if (!cursor) return null;
   const raw = toTrimmedString(cursor);
   if (!raw) return null;
+  if (raw.length > 500) {
+    throw buildError("Invalid cursor", 400, "INVALID_CURSOR");
+  }
   let parsed;
   try {
     parsed = JSON.parse(Buffer.from(raw, "base64").toString("utf8"));
@@ -152,6 +173,7 @@ function validateVariantCursor(cursor) {
 export {
   buildError,
   deepFreeze,
+  isPlainObject,
   normalizeOptionalString,
   normalizeEnum,
   normalizeIntInRange,

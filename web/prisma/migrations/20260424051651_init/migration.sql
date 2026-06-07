@@ -1115,7 +1115,7 @@ CREATE INDEX "SyncHistory_shop_operationType_idx" ON "SyncHistory"("shop", "oper
 CREATE INDEX "SyncHistory_shop_executionState_idx" ON "SyncHistory"("shop", "executionState");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "EditHistory_executionIdentity_key" ON "EditHistory"("executionIdentity");
+CREATE UNIQUE INDEX "EditHistory_shop_executionIdentity_key" ON "EditHistory"("shop", "executionIdentity");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "EditHistory_automaticProductRuleRunId_key" ON "EditHistory"("automaticProductRuleRunId");

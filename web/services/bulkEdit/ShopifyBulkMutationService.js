@@ -817,7 +817,7 @@ export class ShopifyBulkMutationService {
         shop: this.session.shop,
         editHistoryId: historyId,
         batchId,
-        status: { in: ["pending", "PENDING", "failed", "FAILED"] },
+        status: { in: ["PENDING", "FAILED"] },
       },
       data: {
         attemptCount: { increment: 1 },

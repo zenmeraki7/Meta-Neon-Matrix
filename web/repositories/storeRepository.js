@@ -4,35 +4,19 @@ import { buildEncryptedTokenColumns } from "../utils/tokenCrypto.js";
 
 const PRODUCT_SYNC_STALE_MS = Number(process.env.PRODUCT_SYNC_STALE_MS || 2 * 60 * 60 * 1000);
 
-function isStaleDate(value, cutoff) {
-  if (!value) return false;
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isFinite(date.getTime()) && date < cutoff;
-}
-
-function isStaleProductSyncStore(store, cutoff) {
-  if (!store) return false;
-  const stage = String(store.syncProgressStage || "");
-  const runningStage = ["SHOPIFY_BULK_RUNNING", "MIRROR_STAGING"].includes(stage);
-
-  if (store.isProductSyncing === true && isStaleDate(store.productSyncStartedAt, cutoff)) {
-    return true;
-  }
-
-  if (
-    (store.isProductSyncing === true || store.isProductInitialySyning === true || runningStage) &&
-    (isStaleDate(store.mirrorUnsafeSince, cutoff) || isStaleDate(store.updatedAt, cutoff))
-  ) {
-    return true;
-  }
-
-  return false;
-}
+const PRODUCT_SYNC_RUNNING_STAGES = ["SHOPIFY_BULK_RUNNING", "MIRROR_STAGING"];
 
 export async function ensureStoreForSession(session) {
   const shop = requireShopScope(session?.shop);
   const tokenColumns = session?.accessToken
     ? buildEncryptedTokenColumns(session.accessToken)
+    : {};
+  const existingStore = await prisma.store.findUnique({
+    where: { shopUrl: shop },
+    select: { isUnInstalled: true },
+  });
+  const reinstallPatch = existingStore?.isUnInstalled
+    ? { installedAt: new Date() }
     : {};
 
   return prisma.store.upsert({
@@ -40,7 +24,7 @@ export async function ensureStoreForSession(session) {
     create: {
       shopUrl: shop,
       ...tokenColumns,
-      shopEmail: "",
+      shopEmail: session?.email || null,
       scope: session?.scope || "",
       isUnInstalled: false,
       unInstalledAt: null,
@@ -51,7 +35,7 @@ export async function ensureStoreForSession(session) {
       scope: session?.scope || undefined,
       isUnInstalled: false,
       unInstalledAt: null,
-      installedAt: new Date(),
+      ...reinstallPatch,
     },
     select: {
       shopUrl: true,
@@ -70,22 +54,37 @@ export async function recoverStaleProductSyncStateByShop(shop) {
     select: {
       shopUrl: true,
       activeMirrorBatchId: true,
-      isProductSyncing: true,
-      isProductInitialySyning: true,
-      shopifyBulkJobCompleted: true,
-      syncProgressStage: true,
-      productSyncStartedAt: true,
-      mirrorUnsafeSince: true,
-      updatedAt: true,
     },
   });
 
-  if (!isStaleProductSyncStore(store, cutoff)) {
+  if (!store) {
     return { recovered: false };
   }
 
-  await prisma.store.update({
-    where: { shopUrl: resolvedShop },
+  const recovered = await prisma.store.updateMany({
+    where: {
+      shopUrl: resolvedShop,
+      OR: [
+        {
+          isProductSyncing: true,
+          productSyncStartedAt: { lt: cutoff },
+        },
+        {
+          AND: [
+            {
+              OR: [
+                { isProductSyncing: true },
+                { isProductInitialySyning: true },
+                { syncProgressStage: { in: PRODUCT_SYNC_RUNNING_STAGES } },
+              ],
+            },
+            {
+              productSyncStartedAt: { lt: cutoff },
+            },
+          ],
+        },
+      ],
+    },
     data: {
       isProductSyncing: false,
       isProductInitialySyning: false,
@@ -101,7 +100,7 @@ export async function recoverStaleProductSyncStateByShop(shop) {
     },
   });
 
-  return { recovered: true };
+  return { recovered: recovered.count > 0 };
 }
 
 export async function getStoreSyncStateByShop(shop) {

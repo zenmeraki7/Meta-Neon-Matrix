@@ -24,11 +24,20 @@ import {
   toProductQueryResponseDto,
 } from "../dtos/productQueryDto.js";
 
+function assertCursorPaginationOnly(query = {}) {
+  if (query?.page && String(query.page) !== "1") {
+    const error = new Error("Use cursor pagination.");
+    error.code = "OFFSET_PAGINATION_DISABLED";
+    throw error;
+  }
+}
+
 export const getProductsWithQuery = async (req, res) => {
   let session;
 
   try {
     session = requireShopifySession(res);
+    assertCursorPaginationOnly(req.query || {});
     const command = buildProductQueryCommand({
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),

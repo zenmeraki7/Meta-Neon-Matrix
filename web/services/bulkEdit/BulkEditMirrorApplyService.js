@@ -13,6 +13,7 @@ const { Prisma } = prismaGenerated;
 const PAGE_SIZE = 1000;
 const CHECKPOINT_EVERY_PAGES = 10;
 const MAX_MIRROR_APPLY_PAGES = 10000;
+const MIRROR_ELIGIBLE_CHANGE_RECORD_STATUSES = ["SUCCESS", "VERIFIED", "APPLIED"];
 
 function normalizeFieldName(field) {
   return String(field || "").trim();
@@ -453,7 +454,7 @@ export async function applyMirrorFromSuccessfulChangeRecords({
       where: {
         shop,
         editHistoryId: historyId,
-        status: { in: ["SUCCESS", "APPLIED"] },
+        status: { in: MIRROR_ELIGIBLE_CHANGE_RECORD_STATUSES },
         mirrorStatus: "MIRROR_PENDING",
         ...(cursorId && cursorCreatedAt
           ? {
@@ -738,9 +739,9 @@ export async function applyMirrorFromSuccessfulChangeRecords({
           shop,
           editHistoryId: historyId,
           OR: [
-            { status: { in: ["pending", "PENDING"] } },
+            { status: "PENDING" },
             {
-              status: { in: ["SUCCESS", "APPLIED"] },
+              status: { in: MIRROR_ELIGIBLE_CHANGE_RECORD_STATUSES },
               mirrorStatus: "MIRROR_PENDING",
             },
           ],

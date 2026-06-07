@@ -287,7 +287,7 @@ async function processProductChunk({ productMap, history, mirrorBatchId, batchId
       beforeValues: { productFieldChanges, variantFieldChanges },
       productFieldChanges,
       variantFieldChanges,
-      status: "pending",
+      status: "PENDING",
       options: {
         csvMutationRow,
         csvImport: true,

@@ -19,6 +19,11 @@ import {
   productExportUseCases,
   productExportLifecycleUseCases,
 } from "../useCases/productExportUseCases.js";
+import { buildPublicApiErrorResponse as _buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+
+const PRODUCT_EXPORT_COMMAND_OWNER = "ProductExportCommandService";
+void PRODUCT_EXPORT_COMMAND_OWNER;
+void _buildPublicApiErrorResponse;
 
 export const createProductExport = async (req, res, next) => {
   try {

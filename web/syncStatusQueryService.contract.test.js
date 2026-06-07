@@ -8,7 +8,7 @@ const publicFunctions = source.slice(source.indexOf("export async function getSy
 test("sync status recovery is cooled down per shop", () => {
   assert.match(source, /const RECOVERY_COOLDOWN_MS = 60_000/);
   assert.match(source, /const recoveryLastRanByShop = new Map\(\)/);
-  assert.match(source, /async function maybeRecoverStaleSync\(shop\)/);
+  assert.match(source, /export async function maybeRecoverStaleSync\(shop\)/);
   assert.match(source, /now - lastRanAt < RECOVERY_COOLDOWN_MS/);
   assert.match(source, /const recovery = await recoverStaleProductSyncStateByShop\(shop\)/);
   assert.match(source, /return recovery/);

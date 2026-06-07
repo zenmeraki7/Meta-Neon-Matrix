@@ -191,7 +191,7 @@ async function mergeChangeRecordIngestionOptions({
 
   const rows = await db.$executeRaw`
     UPDATE "ChangeRecord"
-       SET "status" = ${status},
+       SET "status" = (${status})::"ChangeStatus",
            "mirrorStatus" = CASE
              WHEN ${status} = 'SUCCESS' THEN 'MIRROR_PENDING'
              ELSE 'MIRROR_FAILED'
@@ -212,7 +212,7 @@ async function mergeChangeRecordIngestionOptions({
        AND "editHistoryId" = ${historyId}
        ${batchId ? Prisma.sql`AND "batchId" = ${batchId}` : Prisma.empty}
        AND "targetIdentity" IN (${Prisma.join(targetIdentities)})
-       AND "status" IN ('pending', 'PENDING', 'failed', 'FAILED')
+       AND "status" IN ('PENDING'::"ChangeStatus", 'FAILED'::"ChangeStatus")
   `;
   return { count: Number(rows || 0) };
 }

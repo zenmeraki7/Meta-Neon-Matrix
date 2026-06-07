@@ -1,16 +1,17 @@
 import Joi from "joi";
 
-// Operators for numbers
+const MAX_FILTER_VALUE_LENGTH = 500;
+
 const numberOps = Joi.string()
   .valid("<", ">", "!=", "+", "=", "<=", ">=")
-  .allow("");
+  .allow("")
+  .optional();
 
-// Operators for dates
 const dateOps = Joi.string()
   .valid("is before", "is after", "is after x days ago", "is before x days ago")
-  .allow("");
+  .allow("")
+  .optional();
 
-// Operators for string fields
 const stringOps = Joi.string()
   .valid(
     "equals",
@@ -23,76 +24,71 @@ const stringOps = Joi.string()
     "ends with",
     "is empty/blank",
     "equals (case insensitive)",
-    "contains (case insensitive)"
+    "contains (case insensitive)",
   )
-  .allow("");
+  .allow("")
+  .optional();
 
-// Validation schema for your filter config
+const daysField = Joi.number().integer().min(1).max(3650)
+  .allow("", null)
+  .optional();
+
+const stringField = (maxLen = MAX_FILTER_VALUE_LENGTH) =>
+  Joi.string().max(maxLen).allow("").optional();
+
 const productQuerySchema = Joi.object({
-  // Date fields
-  created_at: Joi.string().allow(""),
+  created_at: stringField(),
   created_at_op: dateOps,
-  created_at_days: Joi.string().allow(""),
-  published_at: Joi.string().allow(""),
+  created_at_days: daysField,
+  published_at: stringField(),
   published_at_op: dateOps,
-  published_at_days: Joi.string().allow(""),
-  updated_at: Joi.string().allow(""),
+  published_at_days: daysField,
+  updated_at: stringField(),
   updated_at_op: dateOps,
-  updated_at_days: Joi.string().allow(""),
+  updated_at_days: daysField,
 
-  // String fields
-  collection_name: Joi.string().allow(""),
-  collection_options: Joi.string().valid("is", "is not").allow(""),
-  category: Joi.string().allow(""),
-  category_option: Joi.string().valid("is", "is not").allow(""),
-  status: Joi.string().valid("active", "draft", "archived").allow(""), // adjust if you have specific statuses
+  collection_name: stringField(),
+  collection_options: Joi.string().valid("is", "is not").allow("").optional(),
+  category: stringField(),
+  category_option: Joi.string().valid("is", "is not").allow("").optional(),
+  status: Joi.string().valid("active", "draft", "archived").allow("").optional(),
 
-  product_type: Joi.string().allow(""),
+  product_type: stringField(),
   product_type_options: stringOps,
-
-  product_id: Joi.string().allow(""),
-  product_id_options: Joi.string().valid("is", "is not").allow(""),
-
-  description: Joi.string().allow(""),
+  product_id: stringField(100),
+  product_id_options: Joi.string().valid("is", "is not").allow("").optional(),
+  description: stringField(5000),
   description_op: stringOps,
-
-  title: Joi.string().allow(""),
+  title: stringField(),
   title_op: stringOps,
-
-  vendor: Joi.string().allow(""),
+  vendor: stringField(),
   vendor_op: stringOps,
-
-  handle: Joi.string().allow(""),
+  handle: stringField(),
   handle_op: stringOps,
-
-  barcode: Joi.string().allow(""),
+  barcode: stringField(),
   barcode_op: stringOps,
-
-  fulfillmentService: Joi.string().allow(""),
+  fulfillmentService: stringField(),
   fulfillmentService_op: stringOps,
-
-  sku: Joi.string().allow(""),
+  sku: stringField(),
   sku_op: stringOps,
-
-  variant_title: Joi.string().allow(""),
+  variant_title: stringField(),
   variant_title_op: stringOps,
 
-  // Number fields
   vc: Joi.number().allow("", null).optional(),
-  vc_op: numberOps.optional(),
-
+  vc_op: numberOps,
   inventory_q: Joi.number().allow("", null).optional(),
-  inventory_q_op: numberOps.optional(),
-
+  inventory_q_op: numberOps,
   price: Joi.number().allow("", null).optional(),
-  price_op: numberOps.optional(),
+  price_op: numberOps,
 
-  // Others
-  search: Joi.string().allow(""),
-  sortKey: Joi.string().allow(""),
-  sortOrder: Joi.string().valid("asc", "desc").allow(""),
-  cursor: Joi.string().allow("", null),
-  limit: Joi.string(),
-});
+  search: stringField(),
+  sortKey: Joi.string()
+    .valid("title", "vendor", "productType", "createdAt", "updatedAt", "publishedAt", "price", "inventory")
+    .allow("")
+    .optional(),
+  sortOrder: Joi.string().valid("asc", "desc").allow("").optional(),
+  cursor: Joi.string().max(500).optional(),
+  limit: Joi.number().integer().min(1).max(250).optional(),
+}).unknown(false);
 
 export default productQuerySchema;
