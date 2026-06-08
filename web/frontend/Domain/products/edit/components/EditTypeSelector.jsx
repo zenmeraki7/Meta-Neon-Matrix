@@ -17,15 +17,32 @@ function normalizeActionOptions(rawOptions) {
 
   for (const option of rawOptions) {
     const value = safeString(option?.value);
-    const label = safeString(option?.label);
+    const defaultLabel = safeString(
+      option?.defaultLabel || option?.label,
+      value,
+    );
+    const labelKey = safeString(option?.labelKey);
 
-    if (!value || !label || seenValues.has(value)) continue;
+    if (!value || !defaultLabel || !labelKey) {
+      if (import.meta.env.DEV) {
+        console.warn("Invalid edit action definition.", option);
+      }
+      continue;
+    }
+
+    if (seenValues.has(value)) {
+      if (import.meta.env.DEV) {
+        console.warn(`Duplicate edit action value: ${value}`);
+      }
+      continue;
+    }
 
     seenValues.add(value);
     normalized.push({
       ...option,
       value,
-      label,
+      labelKey,
+      defaultLabel,
     });
   }
 
@@ -40,27 +57,28 @@ function resolveEditTypeValue(editType) {
 }
 
 function EditTypeSelector({
-  selectedField,
+  selectedFieldValue,
   editType,
   onEditTypeChange,
   disabled = false,
 }) {
   const { t } = useTranslation(["products", "common"]);
-
-  const selectedFieldValue = safeString(selectedField?.value);
+  const normalizedSelectedFieldValue = safeString(selectedFieldValue);
 
   const editOptions = useMemo(() => {
-    if (!selectedFieldValue) return [];
-    return normalizeActionOptions(getFieldActions(selectedFieldValue));
-  }, [selectedFieldValue]);
+    if (!normalizedSelectedFieldValue) return [];
+    return normalizeActionOptions(getFieldActions(normalizedSelectedFieldValue));
+  }, [normalizedSelectedFieldValue]);
 
-  const optionValues = useMemo(
-    () => new Set(editOptions.map((option) => option.value)),
+  const optionByValue = useMemo(
+    () => new Map(editOptions.map((option) => [option.value, option])),
     [editOptions],
   );
 
   const rawSelectedValue = resolveEditTypeValue(editType);
-  const selectedValue = optionValues.has(rawSelectedValue) ? rawSelectedValue : "";
+  const selectedValue = optionByValue.has(rawSelectedValue)
+    ? rawSelectedValue
+    : "";
 
   const options = useMemo(() => {
     const placeholder = {
@@ -73,7 +91,7 @@ function EditTypeSelector({
     return [
       placeholder,
       ...editOptions.map((option) => ({
-        label: t(option.label, { defaultValue: option.label }),
+        label: t(option.labelKey, { defaultValue: option.defaultLabel }),
         value: option.value,
       })),
     ];
@@ -82,27 +100,31 @@ function EditTypeSelector({
   const handleChange = useCallback(
     (value) => {
       if (typeof onEditTypeChange !== "function") return;
-
-      if (!value) {
-        onEditTypeChange(null);
-        return;
-      }
-
-      const selected = editOptions.find((option) => option.value === value);
-      onEditTypeChange(selected || null);
+      onEditTypeChange(value || null);
     },
-    [editOptions, onEditTypeChange],
+    [onEditTypeChange],
   );
 
-  const isDisabled = disabled || !selectedFieldValue || editOptions.length === 0;
+  const isDisabled =
+    disabled || !normalizedSelectedFieldValue || editOptions.length === 0;
+  const helpText = !normalizedSelectedFieldValue
+    ? t("products:selectFieldBeforeEditType", {
+        defaultValue: "Select a field before choosing how to edit.",
+      })
+    : editOptions.length === 0
+      ? t("products:noEditActionsAvailable", {
+          defaultValue: "No edit actions are available for this field.",
+        })
+      : undefined;
 
   return (
     <Select
-      label={t("products:HowToEdit", { defaultValue: "How to edit" })}
+      label={t("products:howToEdit", { defaultValue: "How to edit" })}
       options={options}
       value={selectedValue}
       onChange={handleChange}
       disabled={isDisabled}
+      helpText={helpText}
     />
   );
 }

@@ -8,7 +8,10 @@ import React, {
 import { Autocomplete, Icon, Text, BlockStack, Box } from "@shopify/polaris";
 import { SearchIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
-import { getAllFields } from "../constants";
+import {
+  COMMON_EDIT_FIELD_VALUES,
+  NORMALIZED_EDIT_FIELDS,
+} from "../constants";
 
 const FIELD_CATEGORIES = Object.freeze([
   {
@@ -28,7 +31,15 @@ const FIELD_CATEGORIES = Object.freeze([
   },
 ]);
 
-const MAX_OPTIONS_PER_CATEGORY = 50;
+const MAX_OPTIONS_PER_CATEGORY = 15;
+const MAX_TOTAL_OPTIONS = 40;
+const AUTOCOMPLETE_OFF = "off";
+const FIELD_HELPER_MIN_HEIGHT = "20px";
+const STACK_GAP = "150";
+const TEXT_PARAGRAPH = "p";
+const BODY_SMALL = "bodySm";
+const TONE_CRITICAL = "critical";
+const TONE_SUBDUED = "subdued";
 
 function safeString(value, fallback = "") {
   if (value === undefined || value === null) return fallback;
@@ -36,45 +47,6 @@ function safeString(value, fallback = "") {
   const stringValue = String(value).trim();
 
   return stringValue || fallback;
-}
-
-function normalizeSearchTerms(value) {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map((item) => safeString(item).toLowerCase())
-    .filter(Boolean);
-}
-
-function normalizeFieldDefinitions(rawFields) {
-  if (!Array.isArray(rawFields)) return [];
-
-  const seenValues = new Set();
-  const normalized = [];
-
-  for (const field of rawFields) {
-    const value = safeString(field?.value);
-    const label = safeString(field?.label);
-    const category = safeString(field?.category);
-
-    if (!value || !label || !category || seenValues.has(value)) {
-      continue;
-    }
-
-    seenValues.add(value);
-
-    normalized.push({
-      ...field,
-      value,
-      label,
-      category,
-      searchTerms: normalizeSearchTerms(field?.searchTerms || field?.aliases),
-      requiresConfirmation:
-        Boolean(field?.requiresConfirmation) || category === "danger",
-    });
-  }
-
-  return normalized;
 }
 
 function resolveSelectedFieldValue(selectedField) {
@@ -85,17 +57,52 @@ function resolveSelectedFieldValue(selectedField) {
   return safeString(selectedField?.value);
 }
 
-function buildSearchableText(field) {
-  return [
-    field.value,
-    field.label,
-    field.category,
-    field.translatedLabel,
-    ...(field.searchTerms || []),
-  ]
-    .map((part) => safeString(part).toLowerCase())
-    .filter(Boolean)
-    .join(" ");
+function normalizeForSearch(value) {
+  return safeString(value)
+    .toLowerCase()
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_./:-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenize(value) {
+  return normalizeForSearch(value).split(" ").filter(Boolean);
+}
+
+function buildSearchTokens(field) {
+  return tokenize(
+    [
+      field.value,
+      field.defaultLabel,
+      field.category,
+      field.translatedLabel,
+      ...(field.searchTerms || []),
+    ].join(" "),
+  );
+}
+
+function matchesQuery(field, queryTokens) {
+  if (queryTokens.length === 0) return true;
+
+  return queryTokens.every((token) => {
+    return (
+      field.searchTokens.includes(token) ||
+      field.searchableText.includes(token)
+    );
+  });
+}
+
+function toSelectedFieldPayload(field) {
+  if (!field) return null;
+
+  return {
+    value: field.value,
+    category: field.category,
+    requiresConfirmation: field.requiresConfirmation === true,
+    riskLevel: field.riskLevel,
+    confirmationPhrase: field.confirmationPhrase,
+  };
 }
 
 function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
@@ -105,14 +112,10 @@ function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
   const deferredInputValue = useDeferredValue(inputValue);
   const selectedFieldValue = resolveSelectedFieldValue(selectedField);
 
-  const allFields = useMemo(() => {
-    return normalizeFieldDefinitions(getAllFields());
-  }, []);
-
   const translatedFields = useMemo(() => {
-    return allFields.map((field) => {
-      const translatedLabel = t(field.label, {
-        defaultValue: field.label,
+    return NORMALIZED_EDIT_FIELDS.map((field) => {
+      const translatedLabel = t(field.labelKey, {
+        defaultValue: field.defaultLabel,
       });
 
       const translatedField = {
@@ -122,13 +125,34 @@ function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
 
       return {
         ...translatedField,
-        searchableText: buildSearchableText(translatedField),
+        searchTokens: buildSearchTokens(translatedField),
+        searchableText: normalizeForSearch(
+          [
+            translatedField.value,
+            translatedField.defaultLabel,
+            translatedField.category,
+            translatedField.translatedLabel,
+            ...(translatedField.searchTerms || []),
+          ].join(" "),
+        ),
       };
     });
-  }, [allFields, t]);
+  }, [t]);
 
   const fieldByValue = useMemo(() => {
     return new Map(translatedFields.map((field) => [field.value, field]));
+  }, [translatedFields]);
+
+  const fieldsByCategory = useMemo(() => {
+    const grouped = new Map();
+
+    for (const field of translatedFields) {
+      const current = grouped.get(field.category) || [];
+      current.push(field);
+      grouped.set(field.category, current);
+    }
+
+    return grouped;
   }, [translatedFields]);
 
   const selectedFieldDefinition = selectedFieldValue
@@ -141,17 +165,33 @@ function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
   );
 
   const options = useMemo(() => {
-    const query = safeString(deferredInputValue).toLowerCase();
+    const queryTokens = tokenize(deferredInputValue);
+    const commonFields = new Set(COMMON_EDIT_FIELD_VALUES);
+    let totalOptions = 0;
 
     return FIELD_CATEGORIES.map((category) => {
-      const categoryOptions = translatedFields
-        .filter((field) => field.category === category.value)
-        .filter((field) => (query ? field.searchableText.includes(query) : true))
-        .slice(0, MAX_OPTIONS_PER_CATEGORY)
-        .map((field) => ({
+      const fields = fieldsByCategory.get(category.value) || [];
+      const categoryOptions = [];
+
+      for (const field of fields) {
+        if (totalOptions >= MAX_TOTAL_OPTIONS) break;
+
+        if (queryTokens.length === 0 && !commonFields.has(field.value)) {
+          continue;
+        }
+
+        if (!matchesQuery(field, queryTokens)) {
+          continue;
+        }
+
+        categoryOptions.push({
           value: field.value,
           label: field.translatedLabel,
-        }));
+        });
+        totalOptions += 1;
+
+        if (categoryOptions.length >= MAX_OPTIONS_PER_CATEGORY) break;
+      }
 
       if (categoryOptions.length === 0) {
         return null;
@@ -164,7 +204,7 @@ function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
         options: categoryOptions,
       };
     }).filter(Boolean);
-  }, [deferredInputValue, translatedFields, t]);
+  }, [deferredInputValue, fieldsByCategory, t]);
 
   const handleInputChange = useCallback((value) => {
     setInputValue(value);
@@ -185,7 +225,7 @@ function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
         return;
       }
 
-      onFieldChange(fieldByValue.get(nextValue) || null);
+      onFieldChange(toSelectedFieldPayload(fieldByValue.get(nextValue)));
       setInputValue("");
     },
     [fieldByValue, onFieldChange]
@@ -203,17 +243,17 @@ function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
           defaultValue: "Search fields",
         })}
         prefix={<Icon source={SearchIcon} />}
-        autoComplete="off"
+        autoComplete={AUTOCOMPLETE_OFF}
         disabled={disabled}
       />
     ),
     [disabled, handleInputChange, inputValue, t]
   );
 
-  const isDisabled = disabled || allFields.length === 0;
+  const isDisabled = disabled || NORMALIZED_EDIT_FIELDS.length === 0;
 
   return (
-    <BlockStack gap="150">
+    <BlockStack gap={STACK_GAP}>
       <Autocomplete
         options={options}
         selected={selected}
@@ -222,15 +262,15 @@ function FieldSelector({ selectedField, onFieldChange, disabled = false }) {
         disabled={isDisabled}
       />
 
-      <Box minHeight="20px">
+      <Box minHeight={FIELD_HELPER_MIN_HEIGHT}>
         {selectedFieldDefinition ? (
           <Text
-            as="p"
-            variant="bodySm"
+            as={TEXT_PARAGRAPH}
+            variant={BODY_SMALL}
             tone={
               selectedFieldDefinition.requiresConfirmation
-                ? "critical"
-                : "subdued"
+                ? TONE_CRITICAL
+                : TONE_SUBDUED
             }
           >
             {selectedFieldDefinition.requiresConfirmation

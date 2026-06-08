@@ -80,6 +80,16 @@ function validateRules(rules = []) {
   return rule;
 }
 
+function assertCanonicalRecurringFilterSource({ filterAst, filterParams }) {
+  if (filterAst) return;
+
+  if (Array.isArray(filterParams) && filterParams.length > 0) {
+    throw new Error(
+      "Canonical filterAst is required for recurring edits; legacy filterParams cannot be used as the recurring target source",
+    );
+  }
+}
+
 function buildDefaultTitle(rule) {
   return getUpdatedProducts({
     field: rule.field,
@@ -291,6 +301,10 @@ export async function createRecurringEdit({ shop, body, subscription }) {
   await assertProRecurringEditAccess(subscription);
 
   const filterParams = Array.isArray(body.filterParams) ? body.filterParams : [];
+  assertCanonicalRecurringFilterSource({
+    filterAst: body.filterAst ?? null,
+    filterParams,
+  });
   const filterParamsToPersist = [];
   const rules = buildRulesFromBody(body);
   const rule = validateRules(rules);
@@ -307,7 +321,7 @@ export async function createRecurringEdit({ shop, body, subscription }) {
     : null;
   const targetingPayload = TargetingEngineService.prepareTargetingPayload({
     filterAst: body.filterAst ?? null,
-    legacyFilterParams: filterParams,
+    legacyFilterParams: [],
     targetGranularity: "PRODUCT",
     source: "RECURRING",
     applyMirrorScope: false,
@@ -337,8 +351,17 @@ export async function createRecurringEdit({ shop, body, subscription }) {
     targetGranularity: targetingPayload.targetGranularity,
     shop,
     mirrorBatchId: null,
+    approvedPreviewCount:
+      Number.isInteger(body.approvedPreviewCount) && body.approvedPreviewCount >= 0
+        ? body.approvedPreviewCount
+        : null,
     targetCount: null,
     filterHash: targetingPayload.filterHash,
+    filterFingerprint:
+      String(body.filterFingerprint || body.targetingFingerprint || "").trim() ||
+      targetingPayload.filterHash,
+    frontendTargetingFingerprint:
+      String(body.targetingFingerprint || "").trim() || null,
     normalizedAst: targetingPayload.normalizedFilterAst,
     source: "RECURRING",
     semantics: "DYNAMIC_AT_RUN",
@@ -520,6 +543,11 @@ export async function updateRecurringEdit({
   const rules = body.rules ? buildRulesFromBody(body) : existing.rules;
   const rule = validateRules(rules);
   const filterParams = Array.isArray(body.filterParams) ? body.filterParams : existing.filterParams;
+  const filterAst = body.filterAst ?? existing.filterAst ?? null;
+  assertCanonicalRecurringFilterSource({
+    filterAst,
+    filterParams,
+  });
   const filterParamsToPersist = [];
   const title = body.title !== undefined
     ? String(body.title || "").trim() || buildDefaultTitle(rule)
@@ -528,8 +556,8 @@ export async function updateRecurringEdit({
     ? computeRecurringEditNextRunAt({ ...existing, ...scheduleInput, status: nextStatus }, new Date())
     : null;
   const targetingPayload = TargetingEngineService.prepareTargetingPayload({
-    filterAst: body.filterAst ?? existing.filterAst ?? null,
-    legacyFilterParams: body.filterAst ? null : filterParams,
+    filterAst,
+    legacyFilterParams: [],
     targetGranularity: body.targetGranularity ?? existing.targetGranularity ?? "PRODUCT",
     source: "RECURRING",
     applyMirrorScope: false,
@@ -565,8 +593,19 @@ export async function updateRecurringEdit({
     targetGranularity: targetingPayload.targetGranularity,
     shop,
     mirrorBatchId: null,
+    approvedPreviewCount:
+      Number.isInteger(body.approvedPreviewCount) && body.approvedPreviewCount >= 0
+        ? body.approvedPreviewCount
+        : existing?.targetingSnapshotMeta?.approvedPreviewCount ?? null,
     targetCount: null,
     filterHash: targetingPayload.filterHash,
+    filterFingerprint:
+      String(body.filterFingerprint || body.targetingFingerprint || "").trim() ||
+      targetingPayload.filterHash,
+    frontendTargetingFingerprint:
+      String(body.targetingFingerprint || "").trim() ||
+      existing?.targetingSnapshotMeta?.frontendTargetingFingerprint ||
+      null,
     normalizedAst: targetingPayload.normalizedFilterAst,
     source: "RECURRING",
     semantics: "DYNAMIC_AT_RUN",

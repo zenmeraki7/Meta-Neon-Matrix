@@ -7,7 +7,6 @@ import React, {
 } from "react";
 import {
   Card,
-  Thumbnail,
   Text,
   Badge,
   InlineStack,
@@ -26,8 +25,9 @@ const FALLBACK_PRODUCT_IMAGE = "/assets/product-placeholder.svg";
 const EMPTY_STATE_IMAGE = "/assets/empty-preview.svg";
 
 const MAX_DISPLAY_VALUE_LENGTH = 160;
-const MAX_EXPANDED_VARIANTS = 50;
-const VARIANT_DETAILS_PAGE_LIMIT = 50;
+const MAX_STRUCTURED_VALUE_LENGTH = 600;
+const MAX_EXPANDED_VARIANTS = 25;
+const VARIANT_DETAILS_PAGE_LIMIT = 25;
 
 function safeString(value, fallback = "-") {
   if (value === undefined || value === null) return fallback;
@@ -52,10 +52,144 @@ function formatValue(value) {
     if (preferredValue !== undefined && preferredValue !== null) {
       return safeString(preferredValue);
     }
-    return "[complex value]";
+    return safeString(formatStructuredValue(value));
   }
   return safeString(value);
 }
+
+function formatStructuredValue(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return formatValue(value);
+  }
+}
+
+function getShortProductId(product) {
+  const productId = safeRawString(product?.productId || product?.id, "");
+  if (!productId) return "";
+  return productId.length > 8 ? productId.slice(-8) : productId;
+}
+
+function getSecondaryProductIdentifier(product) {
+  const handle = safeRawString(product?.handle, "");
+  if (handle) return handle;
+
+  const sku = safeRawString(product?.sku || product?.variantSku, "");
+  if (sku) return `SKU ${sku}`;
+
+  const shortId = getShortProductId(product);
+  return shortId ? `ID ${shortId}` : "";
+}
+
+function isObjectValue(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function getFieldRendererType(field) {
+  const normalized = safeRawString(field, "").toLowerCase();
+
+  if (normalized.includes("price") || normalized.includes("cost")) return "money";
+  if (normalized.includes("inventory") || normalized.includes("quantity")) return "inventory";
+  if (normalized.includes("metafield")) return "metafield";
+  if (normalized.includes("seo") || normalized.includes("meta")) return "seo";
+  if (normalized.includes("tag")) return "tag";
+  if (normalized.includes("collection")) return "collection";
+  if (normalized.includes("json")) return "json";
+
+  return "generic";
+}
+
+const StructuredValuePreview = memo(function StructuredValuePreview({ value }) {
+  const structured = formatStructuredValue(value);
+  const isLong = structured.length > MAX_STRUCTURED_VALUE_LENGTH;
+  const preview = isLong
+    ? `${structured.slice(0, MAX_STRUCTURED_VALUE_LENGTH)}...`
+    : structured;
+
+  return (
+    <BlockStack gap="100">
+      <Text as="span" variant="bodySm">
+        <code>{preview}</code>
+      </Text>
+      {isLong ? (
+        <details>
+          <summary>View full diff</summary>
+          <pre>{structured}</pre>
+        </details>
+      ) : null}
+    </BlockStack>
+  );
+});
+
+const GenericDiffValue = memo(function GenericDiffValue({ value, old }) {
+  if (isObjectValue(value) || Array.isArray(value)) {
+    return <StructuredValuePreview value={value} />;
+  }
+
+  return (
+    <Text
+      as="span"
+      tone={old ? "subdued" : undefined}
+      textDecorationLine={old ? "line-through" : undefined}
+      variant={old ? "bodySm" : "bodyMd"}
+      fontWeight={old ? undefined : "semibold"}
+    >
+      {formatValue(value)}
+    </Text>
+  );
+});
+
+const MoneyDiff = memo(function MoneyDiff({ value, old }) {
+  return <GenericDiffValue value={value} old={old} />;
+});
+
+const InventoryDiff = memo(function InventoryDiff({ value, old }) {
+  return <GenericDiffValue value={value} old={old} />;
+});
+
+const MetafieldDiff = memo(function MetafieldDiff({ value, old }) {
+  return <GenericDiffValue value={value} old={old} />;
+});
+
+const SeoDiff = memo(function SeoDiff({ value, old }) {
+  return <GenericDiffValue value={value} old={old} />;
+});
+
+const TagDiff = memo(function TagDiff({ value, old }) {
+  return <GenericDiffValue value={value} old={old} />;
+});
+
+const CollectionDiff = memo(function CollectionDiff({ value, old }) {
+  return <GenericDiffValue value={value} old={old} />;
+});
+
+const JsonMetafieldDiff = memo(function JsonMetafieldDiff({ value, old }) {
+  return <GenericDiffValue value={value} old={old} />;
+});
+
+const DiffValue = memo(function DiffValue({ field, value, old = false }) {
+  const rendererType = getFieldRendererType(field);
+
+  switch (rendererType) {
+    case "money":
+      return <MoneyDiff value={value} old={old} />;
+    case "inventory":
+      return <InventoryDiff value={value} old={old} />;
+    case "metafield":
+      return <MetafieldDiff value={value} old={old} />;
+    case "seo":
+      return <SeoDiff value={value} old={old} />;
+    case "tag":
+      return <TagDiff value={value} old={old} />;
+    case "collection":
+      return <CollectionDiff value={value} old={old} />;
+    case "json":
+      return <JsonMetafieldDiff value={value} old={old} />;
+    default:
+      return <GenericDiffValue value={value} old={old} />;
+  }
+});
 
 function safePositiveInteger(value, fallback) {
   const numberValue = Number(value);
@@ -69,20 +203,62 @@ function safeNonNegativeInteger(value, fallback = 0) {
   return Math.floor(numberValue);
 }
 
-function buildPreviewRowKey(product, index) {
-  const snapshotItemId = safeRawString(product?.snapshotItemId, null);
-  const productId = safeRawString(product?.productId || product?.id, null);
-  const variantId = safeRawString(product?.variantId, null);
-  const handle = safeRawString(product?.handle, null);
+function buildPreviewRowKey(product) {
+  const snapshotItemId = safeRawString(product?.snapshotItemId, "");
+  const productId = safeRawString(product?.productId || product?.id, "");
+  const variantId = safeRawString(product?.variantId, "");
 
   if (snapshotItemId) return `snapshot:${snapshotItemId}`;
   if (productId && variantId) return `product:${productId}:variant:${variantId}`;
   if (productId) return `product:${productId}`;
-  if (handle) return `handle:${handle}`;
-  return `preview:${index}`;
+
+  throw new Error("Preview row is missing stable identity.");
 }
 
-const VariantDetailsPanel = memo(function VariantDetailsPanel({ variants, t }) {
+function getPreviewRowKey(product) {
+  try {
+    return buildPreviewRowKey(product);
+  } catch {
+    return null;
+  }
+}
+
+const ResilientProductThumbnail = memo(function ResilientProductThumbnail({
+  source,
+  alt,
+}) {
+  const resolvedSource = safeRawString(source, FALLBACK_PRODUCT_IMAGE);
+  const [thumbnailSource, setThumbnailSource] = useState(resolvedSource);
+
+  useEffect(() => {
+    setThumbnailSource(resolvedSource);
+  }, [resolvedSource]);
+
+  const handleImageError = useCallback(() => {
+    setThumbnailSource(FALLBACK_PRODUCT_IMAGE);
+  }, []);
+
+  return (
+    <img
+      src={thumbnailSource}
+      alt={alt}
+      width="40"
+      height="40"
+      loading="lazy"
+      onError={handleImageError}
+      style={{
+        borderRadius: 4,
+        objectFit: "cover",
+        border: "1px solid var(--p-color-border)",
+        background: "var(--p-color-bg-surface-secondary)",
+        flexShrink: 0,
+      }}
+    />
+  );
+});
+
+const VariantDetailsPanel = memo(function VariantDetailsPanel({ variants, field }) {
+  const { t } = useTranslation(["products", "common"]);
   const safeVariants = Array.isArray(variants) ? variants : [];
   if (!safeVariants.length) {
     return (
@@ -108,13 +284,9 @@ const VariantDetailsPanel = memo(function VariantDetailsPanel({ variants, t }) {
               {formatValue(variant?.title || `Variant ${index + 1}`)}
             </Badge>
 
-            <Text as="span" tone="subdued" textDecorationLine="line-through">
-              {formatValue(variant?.oldValue)}
-            </Text>
+            <DiffValue field={field} value={variant?.oldValue} old />
 
-            <Text as="span" variant="bodyMd" fontWeight="semibold" tone="success">
-              {formatValue(variant?.newValue)}
-            </Text>
+            <DiffValue field={field} value={variant?.newValue} />
           </InlineStack>
         );
       })}
@@ -136,8 +308,9 @@ const VariantDetailsSection = memo(function VariantDetailsSection({
   previewId,
   productId,
   rowKey,
-  t,
+  field,
 }) {
+  const { t } = useTranslation(["products", "common"]);
   const [detailsPage, setDetailsPage] = useState(1);
 
   const variantDetailsQuery = usePreviewVariantDetailsQuery({
@@ -160,7 +333,7 @@ const VariantDetailsSection = memo(function VariantDetailsSection({
     setDetailsPage(1);
   }, [previewId, productId, rowKey]);
 
-  if (variantDetailsQuery.isLoading || variantDetailsQuery.isFetching) {
+  if (variantDetailsQuery.isLoading) {
     return <SkeletonBodyText lines={3} />;
   }
 
@@ -176,7 +349,15 @@ const VariantDetailsSection = memo(function VariantDetailsSection({
 
   return (
     <BlockStack gap="200">
-      <VariantDetailsPanel variants={rows} t={t} />
+      <VariantDetailsPanel variants={rows} field={field} />
+
+      {variantDetailsQuery.isFetching ? (
+        <Text as="p" tone="subdued" variant="bodySm">
+          {t("products:refreshingVariantDetails", {
+            defaultValue: "Refreshing variant details...",
+          })}
+        </Text>
+      ) : null}
 
       <InlineStack align="space-between" blockAlign="center" gap="200">
         <Text as="p" variant="bodySm" tone="subdued">
@@ -199,17 +380,163 @@ const VariantDetailsSection = memo(function VariantDetailsSection({
   );
 });
 
+const PreviewTableRow = memo(function PreviewTableRow({
+  product,
+  index,
+  isVariant,
+  isExpanded,
+  onToggle,
+  previewId,
+  field,
+}) {
+  const { t } = useTranslation(["products", "common"]);
+  const rowKey = getPreviewRowKey(product);
+  const expandedRowId = `${rowKey}:variants-row`;
+  const expandedPanelId = `${rowKey}:variants-panel`;
+  const variantCount = safeNonNegativeInteger(product?.variantCount, 0);
+  const changedCount =
+    product?.changedVariantCount !== undefined
+      ? safeNonNegativeInteger(product.changedVariantCount, 0)
+      : 0;
+  const productId = safeRawString(product?.productId || product?.id, "");
+  const secondaryIdentifier = getSecondaryProductIdentifier(product);
+
+  const handleToggle = useCallback(() => {
+    if (!rowKey) return;
+    onToggle(rowKey);
+  }, [onToggle, rowKey]);
+
+  if (!rowKey) return null;
+
+  return (
+    <React.Fragment>
+      <IndexTable.Row id={rowKey} position={index}>
+        <IndexTable.Cell>
+          <InlineStack gap="300" wrap={false} blockAlign="center">
+            <ResilientProductThumbnail
+              source={product?.imageUrl || product?.img || FALLBACK_PRODUCT_IMAGE}
+              alt={formatValue(product?.title)}
+            />
+            <BlockStack gap="050">
+              <Text as="span" truncate variant="bodyMd" fontWeight="medium">
+                {formatValue(product?.title)}
+              </Text>
+              {secondaryIdentifier ? (
+                <Text as="span" tone="subdued" variant="bodySm">
+                  {secondaryIdentifier}
+                </Text>
+              ) : null}
+            </BlockStack>
+          </InlineStack>
+        </IndexTable.Cell>
+
+        {isVariant ? (
+          <IndexTable.Cell>
+            <InlineStack gap="200" wrap>
+              <Badge tone="info">
+                {t("products:variantCountBadge", {
+                  defaultValue: "{{count}} variants",
+                  count: variantCount,
+                })}
+              </Badge>
+              <Badge tone={changedCount > 0 ? "success" : undefined}>
+                {t("products:changedVariantCountBadge", {
+                  defaultValue: "{{count}} changed",
+                  count: changedCount,
+                })}
+              </Badge>
+            </InlineStack>
+          </IndexTable.Cell>
+        ) : null}
+
+        <IndexTable.Cell>
+          {isVariant ? (
+            <InlineStack gap="300" blockAlign="center" wrap>
+              <Text as="span" tone="subdued" variant="bodySm">
+                {variantCount > 0
+                  ? t("products:showingVariantCount", {
+                      defaultValue: "{{count}} variants available",
+                      count: variantCount,
+                    })
+                  : "-"}
+              </Text>
+
+              <Button
+                size="slim"
+                onClick={handleToggle}
+                disabled={variantCount === 0}
+                aria-expanded={isExpanded}
+                aria-controls={expandedPanelId}
+              >
+                {isExpanded
+                  ? t("products:hideVariants", { defaultValue: "Hide variants" })
+                  : t("products:viewVariants", { defaultValue: "View variants" })}
+              </Button>
+            </InlineStack>
+          ) : (
+            <InlineStack gap="200" align="start" wrap>
+              <DiffValue field={field} value={product?.oldValue} old />
+              <DiffValue field={field} value={product?.newValue} />
+            </InlineStack>
+          )}
+        </IndexTable.Cell>
+      </IndexTable.Row>
+
+      {isVariant && isExpanded ? (
+        <IndexTable.Row id={expandedRowId} position={index + 1}>
+          <IndexTable.Cell />
+          <IndexTable.Cell colSpan={isVariant ? 2 : 1}>
+            <Box id={expandedPanelId}>
+              <VariantDetailsSection
+                previewId={previewId}
+                productId={productId}
+                rowKey={rowKey}
+                field={field}
+              />
+            </Box>
+          </IndexTable.Cell>
+        </IndexTable.Row>
+      ) : null}
+    </React.Fragment>
+  );
+});
+
 function PreviewTable({
   loading = false,
   products = [],
   pagination = {},
   onPageChange,
   isVariant = false,
+  field = "",
 }) {
   const { t } = useTranslation(["products", "common"]);
-  const [expandedRows, setExpandedRows] = useState(() => new Set());
+  const [expandedRowKey, setExpandedRowKey] = useState(null);
 
-  const safeProducts = useMemo(() => (Array.isArray(products) ? products : []), [products]);
+  const { validProducts, invalidRowCount } = useMemo(() => {
+    if (!Array.isArray(products)) {
+      return {
+        validProducts: [],
+        invalidRowCount: 0,
+      };
+    }
+
+    const valid = [];
+    let invalidCount = 0;
+
+    for (const product of products) {
+      if (getPreviewRowKey(product)) {
+        valid.push(product);
+      } else {
+        invalidCount += 1;
+      }
+    }
+
+    return {
+      validProducts: valid,
+      invalidRowCount: invalidCount,
+    };
+  }, [products]);
+  const safeProducts = validProducts;
   const page = safePositiveInteger(pagination?.page, 1);
   const limit = safePositiveInteger(pagination?.limit, safeProducts.length || 25);
   const total = safeNonNegativeInteger(pagination?.total, safeProducts.length);
@@ -239,20 +566,11 @@ function PreviewTable({
     ];
   }, [isVariant, t]);
 
-  const toggleExpandedRow = useCallback((rowKey) => {
-    setExpandedRows((previous) => {
-      const next = new Set(previous);
-      if (next.has(rowKey)) next.delete(rowKey);
-      else next.add(rowKey);
-      return next;
-    });
-  }, []);
-
   const handleToggleExpandedRow = useCallback(
     (rowKey) => {
-      toggleExpandedRow(rowKey);
+      setExpandedRowKey((current) => (current === rowKey ? null : rowKey));
     },
-    [toggleExpandedRow],
+    [],
   );
 
   const handlePreviousPage = useCallback(() => {
@@ -266,118 +584,10 @@ function PreviewTable({
   }, [onPageChange, page, totalPages]);
 
   useEffect(() => {
-    setExpandedRows(new Set());
+    setExpandedRowKey(null);
   }, [page, resultVersion]);
 
-  const rowFragments = useMemo(
-    () =>
-      safeProducts.map((product, index) => {
-        const rowKey = buildPreviewRowKey(product, index);
-        const variantCount = safeNonNegativeInteger(product?.variantCount, 0);
-        const changedCount =
-          product?.changedVariantCount !== undefined
-            ? safeNonNegativeInteger(product.changedVariantCount, 0)
-            : 0;
-        const isExpanded = expandedRows.has(rowKey);
-        const productId = safeRawString(product?.productId || product?.id, "");
-
-        return (
-          <React.Fragment key={`preview-fragment:${rowKey}`}>
-            <IndexTable.Row id={rowKey} key={rowKey} position={index}>
-              <IndexTable.Cell>
-                <InlineStack gap="300" wrap={false} blockAlign="center">
-                  <Thumbnail
-                    source={product?.imageUrl || product?.img || FALLBACK_PRODUCT_IMAGE}
-                    alt={formatValue(product?.title)}
-                    size="small"
-                  />
-                  <Text as="span" truncate variant="bodyMd" fontWeight="medium">
-                    {formatValue(product?.title)}
-                  </Text>
-                </InlineStack>
-              </IndexTable.Cell>
-
-              {isVariant ? (
-                <IndexTable.Cell>
-                  <InlineStack gap="200" wrap>
-                    <Badge tone="info">
-                      {t("products:variantCountBadge", {
-                        defaultValue: "{{count}} variants",
-                        count: variantCount,
-                      })}
-                    </Badge>
-                    <Badge tone={changedCount > 0 ? "success" : "attention"}>
-                      {t("products:changedVariantCountBadge", {
-                        defaultValue: "{{count}} changed",
-                        count: changedCount,
-                      })}
-                    </Badge>
-                  </InlineStack>
-                </IndexTable.Cell>
-              ) : null}
-
-              <IndexTable.Cell>
-                {isVariant ? (
-                  <InlineStack gap="300" blockAlign="center" wrap>
-                    <Text as="span" tone="subdued" variant="bodySm">
-                      {variantCount > 0
-                        ? t("products:showingVariantCount", {
-                            defaultValue: "{{count}} variants available",
-                            count: variantCount,
-                          })
-                        : "-"}
-                    </Text>
-
-                    <Button
-                      size="slim"
-                      onClick={() => handleToggleExpandedRow(rowKey)}
-                      disabled={variantCount === 0}
-                    >
-                      {isExpanded
-                        ? t("products:hideVariants", { defaultValue: "Hide variants" })
-                        : t("products:viewVariants", { defaultValue: "View variants" })}
-                    </Button>
-                  </InlineStack>
-                ) : (
-                  <InlineStack gap="200" align="start" wrap>
-                    <Text as="span" tone="subdued" textDecorationLine="line-through">
-                      {formatValue(product?.oldValue)}
-                    </Text>
-                    <Text as="span" variant="bodyMd" fontWeight="semibold" tone="success">
-                      {formatValue(product?.newValue)}
-                    </Text>
-                  </InlineStack>
-                )}
-              </IndexTable.Cell>
-            </IndexTable.Row>
-
-            {isVariant && isExpanded ? (
-              <IndexTable.Row id={`${rowKey}:variants`} key={`${rowKey}:variants`} position={index}>
-                <IndexTable.Cell />
-                <IndexTable.Cell colSpan={2}>
-                  <Box id={`${rowKey}:variants`}>
-                    <VariantDetailsSection
-                      previewId={previewId}
-                      productId={productId}
-                      rowKey={rowKey}
-                      t={t}
-                    />
-                  </Box>
-                </IndexTable.Cell>
-              </IndexTable.Row>
-            ) : null}
-          </React.Fragment>
-        );
-      }),
-    [
-      expandedRows,
-      handleToggleExpandedRow,
-      isVariant,
-      previewId,
-      safeProducts,
-      t,
-    ],
-  );
+  const expandedItemCount = expandedRowKey ? 1 : 0;
 
   const fromItem = total === 0 ? 0 : Math.min((page - 1) * limit + 1, total);
   const toItem = total === 0 ? 0 : Math.min(page * limit, total);
@@ -396,14 +606,18 @@ function PreviewTable({
     return (
       <Card>
         <EmptyState
-          heading={t("products:noProductMatchFilter", {
-            defaultValue: "No products match this filter",
+          heading={t("products:previewEmptyHeading", {
+            defaultValue: previewId
+              ? "No changed preview rows"
+              : "Preview is not ready",
           })}
           image={EMPTY_STATE_IMAGE}
         >
           <Text as="p" tone="subdued">
-            {t("products:tryAdjustingFiltersResults", {
-              defaultValue: "Try adjusting your filters to see more results.",
+            {t("products:previewEmptyMessage", {
+              defaultValue: previewId
+                ? "The preview returned no changed rows. The edit may be a no-op for the current target set."
+                : "Generate a preview to review product changes before running the edit.",
             })}
           </Text>
         </EmptyState>
@@ -419,12 +633,39 @@ function PreviewTable({
             singular: t("products:product", { defaultValue: "product" }),
             plural: t("products:products", { defaultValue: "products" }),
           }}
-          itemCount={safeProducts.length}
+          itemCount={safeProducts.length + expandedItemCount}
           selectable={false}
           headings={headings}
         >
-          {rowFragments}
+          {safeProducts.map((product, index) => {
+            const rowKey = buildPreviewRowKey(product);
+
+            return (
+              <PreviewTableRow
+                key={rowKey}
+                product={product}
+                index={index}
+                isVariant={isVariant}
+                isExpanded={expandedRowKey === rowKey}
+                onToggle={handleToggleExpandedRow}
+                previewId={previewId}
+                field={field}
+              />
+            );
+          })}
         </IndexTable>
+
+        {invalidRowCount > 0 ? (
+          <Box padding="400">
+            <Text as="p" tone="critical" variant="bodySm">
+              {t("products:invalidPreviewRowsHidden", {
+                defaultValue:
+                  "{{count}} preview rows were hidden because they were missing stable product identity.",
+                count: invalidRowCount,
+              })}
+            </Text>
+          </Box>
+        ) : null}
 
         <Box
           background="bg-surface-secondary"

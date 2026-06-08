@@ -22,6 +22,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import AlertUndo from "../../products/edit/components/AlertUndo";
 import useProductSyncStatus from "../../../hooks/useProductSyncStatus";
+import { useShopTimezone } from "../../../hooks/useShopTimezone";
 import { operationStatusBadge } from "../../shared/components/StatusBadge";
 import { protectedApiPut } from "../../../api/protectedApiClient";
 import { useLocaleFormatters } from "../../../hooks/useLocaleFormatters";
@@ -29,6 +30,16 @@ import TableErrorBoundary from "../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../components/Error/CellErrorBoundary";
 
 const HISTORY_TABLE_MIN_HEIGHT = "560px";
+
+function safeString(value, fallback = null, maxLength = 120) {
+  if (value === undefined || value === null) return fallback;
+  const stringValue = String(value).trim();
+  if (!stringValue) return fallback;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return stringValue;
+  return stringValue.length > maxLength
+    ? `${stringValue.slice(0, maxLength)}...`
+    : stringValue;
+}
 
 function getHistoryRowId(item) {
   if (item?.id != null && String(item.id).trim() !== "") {
@@ -97,10 +108,12 @@ const HistoryTable = memo(function HistoryTable({
   const { t } = useTranslation(["history", "common"]);
   const queryClient = useQueryClient();
   const { dateTimeFormatter, numberFormatter } = useLocaleFormatters();
+  const { shopTimezone } = useShopTimezone();
   const { isSyncInProgress } = useProductSyncStatus();
   const [showUndoModal, setShowUndoModal] = useState(false);
   const [undoLoading, setUndoLoading] = useState(false);
   const [undoHistoryItem, setUndoHistoryItem] = useState(null);
+  const [undoIdempotencyKey, setUndoIdempotencyKey] = useState(null);
   const [localHistories, setLocalHistories] = useState(() => histories || []);
 
   useEffect(() => {
@@ -184,7 +197,9 @@ const HistoryTable = memo(function HistoryTable({
   );
 
   const handleUndo = useCallback((history) => {
+    const operationId = safeString(history?.operationId || history?.id, "unknown", null);
     setUndoHistoryItem(history);
+    setUndoIdempotencyKey(`undo:${operationId}`);
     setShowUndoModal(true);
   }, []);
   const handleView = useCallback((rowId) => {
@@ -196,16 +211,31 @@ const HistoryTable = memo(function HistoryTable({
     handleUndo(target);
   }, [localHistories, handleUndo]);
 
-  const handleUndoEditHistory = useCallback(async () => {
-    if (!undoHistoryItem?.id) return;
+  const handleCloseUndoModal = useCallback(() => {
+    setShowUndoModal(false);
+    setUndoHistoryItem(null);
+    setUndoIdempotencyKey(null);
+  }, []);
+
+  const handleUndoEditHistory = useCallback(async ({
+    operationId,
+    historyId,
+    idempotencyKey,
+  } = {}) => {
+    const targetHistoryId = safeString(historyId || undoHistoryItem?.id, null, null);
+    const targetOperationId = safeString(operationId || undoHistoryItem?.operationId || targetHistoryId, null, null);
+    if (!targetHistoryId && !targetOperationId) return;
     setUndoLoading(true);
     try {
-      await protectedApiPut(`/api/products/undo-edit/${undoHistoryItem.id}`, undefined, {
+      await protectedApiPut(`/api/products/undo-edit/${targetHistoryId || targetOperationId}`, {
+        operationId: targetOperationId,
+        historyId: targetHistoryId,
+      }, {
         idempotent: true,
+        idempotencyKey,
       });
       await queryClient.invalidateQueries({ queryKey: ["history-list"] });
       await queryClient.invalidateQueries({ queryKey: ["edit-history-summary"] });
-      setShowUndoModal(false);
     } finally {
       setUndoLoading(false);
     }
@@ -229,7 +259,8 @@ const HistoryTable = memo(function HistoryTable({
         undoHistoryItem.variantCount ??
         null,
       createdAt: undoHistoryItem.createdAt || undoHistoryItem.updatedAt || null,
-      operationId: undoHistoryItem.id || null,
+      operationId: undoHistoryItem.operationId || undoHistoryItem.id || null,
+      historyId: undoHistoryItem.id || null,
     };
   }, [undoHistoryItem]);
 
@@ -407,13 +438,17 @@ const HistoryTable = memo(function HistoryTable({
         />
       </Box>
 
-      <AlertUndo
-        show={showUndoModal}
-        handleClose={() => setShowUndoModal(false)}
-        undoEditHistory={handleUndoEditHistory}
-        loading={undoLoading}
-        undoSummary={undoSummary}
-      />
+      {showUndoModal ? (
+        <AlertUndo
+          show={showUndoModal}
+          handleClose={handleCloseUndoModal}
+          undoEditHistory={handleUndoEditHistory}
+          loading={undoLoading}
+          undoSummary={undoSummary}
+          idempotencyKey={undoIdempotencyKey}
+          shopTimezone={shopTimezone}
+        />
+      ) : null}
       </Box>
     </Card>
   );

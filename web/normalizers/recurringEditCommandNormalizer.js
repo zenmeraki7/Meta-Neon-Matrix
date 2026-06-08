@@ -36,6 +36,7 @@ const ALLOWED_FREQUENCIES = Object.freeze([
   "WEEKLY",
   "MONTHLY",
   "CUSTOM",
+  "EVERY_X_MINUTES",
 ]);
 
 const PROHIBITED_OBJECT_KEYS = Object.freeze([
@@ -464,6 +465,10 @@ function resolveTimezone(body) {
   return body?.timezone || body?.schedule?.timezone || null;
 }
 
+function resolveIntervalMinutes(body) {
+  return body?.intervalMinutes || body?.schedule?.intervalMinutes || null;
+}
+
 function resolveEditPayload(body) {
   return (
     body?.editPayload ||
@@ -602,6 +607,29 @@ function normalizeRecurringEditBody(body, { partial = false } = {}) {
     timezone,
     startsAt,
     endsAt,
+    intervalMinutes: safeInteger(resolveIntervalMinutes(safeBody), null, {
+      min: 1,
+      max: 24 * 60,
+    }),
+    approvedPreviewCount:
+      safeBody.approvedPreviewCount === undefined
+        ? null
+        : safeInteger(safeBody.approvedPreviewCount, null, {
+            min: 0,
+            max: Number.MAX_SAFE_INTEGER,
+          }),
+    filterFingerprint:
+      safeBody.filterFingerprint === undefined
+        ? null
+        : safeString(safeBody.filterFingerprint, null, MAX_ID_LENGTH),
+    targetingFingerprint:
+      safeBody.targetingFingerprint === undefined
+        ? null
+        : safeString(safeBody.targetingFingerprint, null, MAX_ID_LENGTH),
+    createdAt:
+      safeBody.createdAt === undefined
+        ? null
+        : normalizeOptionalDateString(safeBody.createdAt, "createdAt"),
 
     filterParams:
       safeBody.filterParams === undefined

@@ -33,6 +33,9 @@ import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
 const AUTOCOMPLETE_RESULT_LIMIT = 25;
 const REFERENCE_DATA_STALE_TIME = 5 * 60 * 1000;
+const AUTOCOMPLETE_OFF = "off";
+const POLARIS_TONE_CRITICAL = "critical";
+const TEXT_AS_P = "p";
 const NUMERIC_PATTERNS = {
   money: /^\d{1,9}(\.\d{0,2})?$/,
   inventory: /^\d{1,7}$/,
@@ -93,6 +96,8 @@ const ValueInput = ({
   const inputType = editType?.inputType || InputType.SINGLE;
   const config = editType || {};
   const allowMultiple = config.allowMultiple || false;
+  const resourceLabelKey = config.resourceLabelKey || "label";
+  const resourceValueKey = config.resourceValueKey || config.valueKey || "value";
   const searchValue = searchReplace?.search?.trim() || "";
   const replaceValue = searchReplace?.replace ?? "";
   const searchReplaceError =
@@ -174,8 +179,8 @@ const ValueInput = ({
     queryKey: [
       "autocomplete",
       config.apiEndpoint || "",
-      config.valueKey || "value",
-      config.labelKey || "label",
+      resourceValueKey,
+      resourceLabelKey,
       normalizedAutocompleteQuery,
     ],
     enabled: shouldFetchAutocomplete,
@@ -197,8 +202,8 @@ const ValueInput = ({
       const rawItems = getArrayPayload(json);
 
       return rawItems.slice(0, AUTOCOMPLETE_RESULT_LIMIT).map((item) => ({
-          value: String(item[config.valueKey || "value"]),
-          label: String(item[config.labelKey || "label"] ?? ""),
+          value: String(item[resourceValueKey]),
+          label: String(item[resourceLabelKey] ?? ""),
       }));
     },
   });
@@ -404,7 +409,7 @@ const ValueInput = ({
           ? t("search_multiple", { defaultValue: "Search and select multiple..." })
           : t("search", { defaultValue: "Search..." })
       }
-      autoComplete="off"
+      autoComplete={AUTOCOMPLETE_OFF}
       error={helperText}
     />
   );
@@ -449,7 +454,7 @@ const ValueInput = ({
                 })
               }
               error={searchReplaceError}
-              autoComplete="off"
+              autoComplete={AUTOCOMPLETE_OFF}
             />
 
             <TextField
@@ -469,7 +474,7 @@ const ValueInput = ({
                   replace: val,
                 })
               }
-              autoComplete="off"
+              autoComplete={AUTOCOMPLETE_OFF}
             />
           </FormLayout.Group>
         </FormLayout>
@@ -483,7 +488,7 @@ const ValueInput = ({
             value={typeof value === "string" ? value : ""}
             onChange={handleChange}
             error={helperText || error}
-            autoComplete="off"
+            autoComplete={AUTOCOMPLETE_OFF}
           />
           <Select
             label={t("location", { defaultValue: "Location" })}
@@ -518,8 +523,8 @@ const ValueInput = ({
     case InputType.NONE:
       return (
         <FormLayout>
-          <Banner tone="critical">
-            <Text as="p">
+          <Banner tone={POLARIS_TONE_CRITICAL}>
+            <Text as={TEXT_AS_P}>
               {editType?.inputHelperLabel
                 ? t(editType.inputHelperLabel)
                 : t("permanentAction")}
@@ -539,7 +544,7 @@ const ValueInput = ({
                     })
                   : undefined
               }
-              autoComplete="off"
+              autoComplete={AUTOCOMPLETE_OFF}
             />
           )}
         </FormLayout>
@@ -552,7 +557,7 @@ const ValueInput = ({
           value={typeof value === "string" ? value : ""}
           onChange={handleChange}
           error={helperText || error}
-          autoComplete="off"
+          autoComplete={AUTOCOMPLETE_OFF}
         />
       );
   }

@@ -2,6 +2,7 @@ const IDEMPOTENT_ROUTE_PREFIXES = Object.freeze([
   "/api/products/update",
   "/api/products/schedule-task",
   "/api/products/create-recurring-edit",
+  "/api/recurring-edits",
   "/api/products/create-scheduled-export",
   "/api/products/export",
   "/api/products/undo-edit",

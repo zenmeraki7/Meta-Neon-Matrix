@@ -39,19 +39,14 @@ function normalizeRoundingValue(value) {
     : DEFAULT_ROUNDING_VALUE;
 }
 
-function supportsRounding(selectedField) {
-  return selectedField?.supportsRounding === true;
-}
-
 function RoundingSelector({
-  selectedField,
+  supportsRounding = false,
   rounding,
   onRoundingChange,
   disabled = false,
 }) {
   const { t } = useTranslation(["products", "common"]);
 
-  const shouldRender = supportsRounding(selectedField);
   const selectedValue = normalizeRoundingValue(rounding);
 
   const options = useMemo(
@@ -73,7 +68,7 @@ function RoundingSelector({
     [onRoundingChange],
   );
 
-  if (!shouldRender) return null;
+  if (supportsRounding !== true) return null;
 
   return (
     <Select
@@ -87,4 +82,3 @@ function RoundingSelector({
 }
 
 export default memo(RoundingSelector);
-

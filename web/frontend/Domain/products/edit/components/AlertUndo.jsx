@@ -1,5 +1,5 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Modal, Text, BlockStack, Box, Banner } from "@shopify/polaris";
+import React, { memo, useCallback, useMemo, useState } from "react";
+import { Modal, Text, BlockStack, Box, Banner, TextField } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 
 function safeNumber(value, fallback = null) {
@@ -12,38 +12,88 @@ function safeString(value, fallback = null, maxLength = 120) {
   if (value === undefined || value === null) return fallback;
   const stringValue = String(value).trim();
   if (!stringValue) return fallback;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return stringValue;
   return stringValue.length > maxLength
     ? `${stringValue.slice(0, maxLength)}...`
     : stringValue;
 }
 
-function safeDateLabel(value) {
+function safeDateLabel(value, timeZone) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  try {
+    return date.toLocaleString(undefined, {
+      timeZone,
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return date.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
 }
 
-const UndoSummary = memo(function UndoSummary({ summary, t }) {
+function shortOperationId(value) {
+  const operationId = safeString(value, null, null);
+  if (!operationId || operationId.length <= 18) return operationId;
+  return `${operationId.slice(0, 9)}...${operationId.slice(-6)}`;
+}
+
+function mapUndoError(t, error) {
+  const code =
+    error?.response?.data?.code ||
+    error?.payload?.code ||
+    error?.details?.code ||
+    error?.code;
+
+  switch (code) {
+    case "UNDO_ALREADY_QUEUED":
+      return t("products:undoAlreadyQueued", {
+        defaultValue: "Undo is already queued for this edit.",
+      });
+    case "UNDO_EXPIRED":
+      return t("products:undoExpired", {
+        defaultValue: "This edit can no longer be undone.",
+      });
+    case "OPERATION_NOT_UNDOABLE":
+      return t("products:operationNotUndoable", {
+        defaultValue: "This edit is not eligible for undo.",
+      });
+    default:
+      return t("products:undoEditSubmitFailed", {
+        defaultValue:
+          "Unable to submit the undo request. Please retry or refresh the app.",
+      });
+  }
+}
+
+const UndoSummary = memo(function UndoSummary({ summary, shopTimezone }) {
+  const { t } = useTranslation(["products"]);
+
   if (!summary) return null;
 
   const label = safeString(summary.label);
-  const operationId = safeString(summary.operationId, null, 80);
+  const operationId = safeString(summary.operationId, null, null);
+  const operationDisplayId = shortOperationId(operationId);
   const affectedProducts = safeNumber(summary.affectedProducts);
   const affectedVariants = safeNumber(summary.affectedVariants);
-  const editedAt = safeDateLabel(summary.createdAt || summary.editedAt);
+  const editedAt = safeDateLabel(summary.createdAt || summary.editedAt, shopTimezone);
+  const editedAtWithZone = editedAt && shopTimezone ? `${editedAt} ${shopTimezone}` : editedAt;
 
   if (
     affectedProducts === null &&
     affectedVariants === null &&
     !label &&
-    !operationId &&
+    !operationDisplayId &&
     !editedAt
   ) {
     return null;
@@ -65,7 +115,7 @@ const UndoSummary = memo(function UndoSummary({ summary, t }) {
           <Text as="p" variant="bodySm" tone="subdued">
             {t("products:undoEditEditedAt", {
               defaultValue: "Edited at: {{editedAt}}",
-              editedAt,
+              editedAt: editedAtWithZone,
             })}
           </Text>
         ) : null}
@@ -88,13 +138,24 @@ const UndoSummary = memo(function UndoSummary({ summary, t }) {
           </Text>
         ) : null}
 
-        {operationId ? (
+        {operationDisplayId ? (
           <Text as="p" variant="bodySm" tone="subdued">
             {t("products:undoEditOperationId", {
               defaultValue: "Operation: {{operationId}}",
-              operationId,
+              operationId: operationDisplayId,
             })}
           </Text>
+        ) : null}
+
+        {operationId && operationId !== operationDisplayId ? (
+          <TextField
+            label={t("products:undoEditFullOperationId", {
+              defaultValue: "Full operation ID",
+            })}
+            value={operationId}
+            readOnly
+            autoComplete="off"
+          />
         ) : null}
       </BlockStack>
     </Box>
@@ -107,24 +168,43 @@ function AlertUndo({
   undoEditHistory,
   loading = false,
   undoSummary = null,
+  idempotencyKey = null,
+  shopTimezone = null,
 }) {
   const { t } = useTranslation(["products", "common"]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState("idle");
   const [submitError, setSubmitError] = useState(null);
+  const [confirmationValue, setConfirmationValue] = useState("");
 
+  const operationId = safeString(undoSummary?.operationId, null, 120);
+  const historyId = safeString(undoSummary?.historyId, null, null);
+  const affectedProducts = safeNumber(undoSummary?.affectedProducts, 0);
+  const affectedVariants = safeNumber(undoSummary?.affectedVariants, 0);
+  const affectedCount = (affectedProducts ?? 0) + (affectedVariants ?? 0);
+  const hasSuspiciousZeroAffectedCount =
+    affectedProducts === 0 && affectedVariants === 0;
+  const requiresTypedConfirmation = affectedCount >= 1000;
+  const operationLabel = safeString(undoSummary?.label, null, null);
+  const normalizedConfirmationValue = safeString(confirmationValue, "", null);
+  const hasTypedConfirmation =
+    !requiresTypedConfirmation ||
+    normalizedConfirmationValue === "UNDO" ||
+    (operationLabel && normalizedConfirmationValue === operationLabel);
+  const isSubmitting = submitStatus === "submitting";
+  const isAccepted = submitStatus === "accepted";
   const isBusy = loading || isSubmitting;
-  const canUndo = typeof undoEditHistory === "function" && !isBusy;
-
-  useEffect(() => {
-    if (!show) {
-      setSubmitError(null);
-      setIsSubmitting(false);
-    }
-  }, [show]);
+  const canUndo =
+    typeof undoEditHistory === "function" &&
+    Boolean(operationId) &&
+    hasTypedConfirmation &&
+    !isBusy &&
+    !isAccepted;
 
   const handleModalClose = useCallback(() => {
     if (isBusy) return;
     setSubmitError(null);
+    setSubmitStatus("idle");
+    setConfirmationValue("");
     if (typeof handleClose === "function") {
       handleClose();
     }
@@ -135,29 +215,30 @@ function AlertUndo({
 
     try {
       setSubmitError(null);
-      setIsSubmitting(true);
-      await undoEditHistory();
-    } catch {
-      setSubmitError(
-        t("products:undoEditSubmitFailed", {
-          defaultValue:
-            "Unable to submit the undo request. Please retry or refresh the app.",
-        }),
-      );
-    } finally {
-      setIsSubmitting(false);
+      setSubmitStatus("submitting");
+      await undoEditHistory({
+        operationId,
+        historyId,
+        idempotencyKey: idempotencyKey || `undo:${operationId}`,
+      });
+      setSubmitStatus("accepted");
+    } catch (error) {
+      setSubmitStatus("failed");
+      setSubmitError(mapUndoError(t, error));
     }
-  }, [canUndo, t, undoEditHistory]);
+  }, [canUndo, historyId, idempotencyKey, operationId, t, undoEditHistory]);
 
   const primaryAction = useMemo(
     () => ({
-      content: t("products:yesUndoEdit", { defaultValue: "Yes, undo edit" }),
+      content: submitStatus === "accepted"
+        ? t("products:undoEditQueued", { defaultValue: "Undo queued" })
+        : t("products:yesUndoEdit", { defaultValue: "Yes, undo edit" }),
       tone: "critical",
       onAction: handleUndo,
-      loading: isBusy,
+      loading: submitStatus === "submitting",
       disabled: !canUndo,
     }),
-    [canUndo, handleUndo, isBusy, t],
+    [canUndo, handleUndo, submitStatus, t],
   );
 
   const secondaryActions = useMemo(
@@ -170,6 +251,8 @@ function AlertUndo({
     ],
     [handleModalClose, isBusy, t],
   );
+
+  if (!show) return null;
 
   return (
     <Modal
@@ -198,11 +281,60 @@ function AlertUndo({
             </p>
           </Banner>
 
-          <UndoSummary summary={undoSummary} t={t} />
+          <UndoSummary summary={undoSummary} shopTimezone={shopTimezone} />
+
+          {hasSuspiciousZeroAffectedCount ? (
+            <Banner tone="warning">
+              <p>
+                {t("products:undoEditNoRecordedTargets", {
+                  defaultValue:
+                    "This edit has no recorded affected products or variants. Undo may not be available.",
+                })}
+              </p>
+            </Banner>
+          ) : null}
+
+          {!operationId ? (
+            <Banner tone="critical">
+              <p>
+                {t("products:undoMissingOperationId", {
+                  defaultValue:
+                    "This edit cannot be undone because its operation identity is missing.",
+                })}
+              </p>
+            </Banner>
+          ) : null}
+
+          {requiresTypedConfirmation ? (
+            <TextField
+              label={t("products:undoEditConfirmationLabel", {
+                defaultValue: "Type UNDO to confirm",
+              })}
+              value={confirmationValue}
+              onChange={setConfirmationValue}
+              autoComplete="off"
+              disabled={isBusy || isAccepted}
+              helpText={t("products:undoEditConfirmationHelpText", {
+                defaultValue:
+                  "Large undo requests require typed confirmation before they can be queued.",
+              })}
+            />
+          ) : null}
 
           {submitError ? (
             <Banner tone="critical">
               <p>{submitError}</p>
+            </Banner>
+          ) : null}
+
+          {isAccepted ? (
+            <Banner tone="success">
+              <p>
+                {t("products:undoEditAcceptedMessage", {
+                  defaultValue:
+                    "Undo request accepted. You can track progress in history.",
+                })}
+              </p>
             </Banner>
           ) : null}
 

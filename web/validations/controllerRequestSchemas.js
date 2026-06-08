@@ -45,11 +45,15 @@ export const bulkEditPreviewSchema = Joi.object({
   searchKey: Joi.string().allow("", null),
   replaceText: Joi.string().allow("", null),
   locationId: Joi.string().allow("", null),
+  rounding: Joi.string().allow("", null),
   filterParams: Joi.array().items(filterParamSchema).default([]),
   filterAst: Joi.object().allow(null),
+  filterFingerprint: Joi.string().allow("", null),
+  filterVersion: Joi.string().allow("", null),
   supportValue: Joi.any(),
   operationKey: Joi.string().allow("", null),
   cursor: Joi.string().allow("", null),
+  page: Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(250).default(20),
 }).unknown(false);
 

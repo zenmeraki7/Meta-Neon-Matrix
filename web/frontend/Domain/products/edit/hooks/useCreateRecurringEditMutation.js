@@ -2,29 +2,43 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
+const UPGRADE_REQUIRED_CODES = new Set([
+  "UPGRADE_REQUIRED",
+  "PLAN_REQUIRED",
+  "RECURRING_EDIT_PLAN_REQUIRED",
+]);
+
 export const RECURRING_EDIT_QUERY_KEYS = Object.freeze({
-  list: ["recurring-edits"],
-  history: ["recurring-edit-history"],
-  status: ["recurring-edit-status"],
-  productHistory: ["product-edit-history"],
-  scheduledEdits: ["scheduled-edits"],
+  all: ["recurring-edits"],
+
+  lists: () => ["recurring-edits", "list"],
+  list: (params = {}) => ["recurring-edits", "list", params],
+
+  historyLists: () => ["recurring-edits", "history"],
+  history: (params = {}) => ["recurring-edits", "history", params],
+
+  status: (id) => ["recurring-edits", "status", id],
+
+  scheduledLists: () => ["recurring-edits", "scheduled"],
+  scheduled: (params = {}) => ["recurring-edits", "scheduled", params],
+
+  productHistory: (params = {}) => ["product-edit-history", params],
 });
 
 export function mapCreateRecurringEditError(t, error) {
   const detail =
     error?.details ||
+    error?.response?.data?.error ||
     error?.response?.data ||
+    error?.data?.error ||
     error?.data ||
     null;
   const code = detail?.code || error?.code || null;
-  const message = toSafeErrorMessage(t, error, "common.errors.generic");
 
   return {
     code,
-    message,
-    isUpgradeRequired:
-      code === "UPGRADE_REQUIRED" ||
-      (typeof message === "string" && message.toLowerCase().includes("pro")),
+    message: toSafeErrorMessage(t, error, "common.errors.generic"),
+    isUpgradeRequired: UPGRADE_REQUIRED_CODES.has(code),
   };
 }
 
@@ -34,30 +48,30 @@ export function useCreateRecurringEditMutation() {
 
   return useMutation({
     mutationFn: async ({ payload, idempotencyKey }) => {
-      return api.post("/api/products/create-recurring-edit", payload, {
+      if (!idempotencyKey) {
+        throw new Error("Missing idempotency key for recurring edit creation.");
+      }
+
+      const response = await api.post("/api/recurring-edits", payload, {
         idempotent: true,
-        ...(idempotencyKey ? { idempotencyKey } : {}),
+        idempotencyKey,
       });
+
+      return response?.data ?? response;
     },
     retry: false,
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: RECURRING_EDIT_QUERY_KEYS.list,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: RECURRING_EDIT_QUERY_KEYS.history,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: RECURRING_EDIT_QUERY_KEYS.status,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: RECURRING_EDIT_QUERY_KEYS.productHistory,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: RECURRING_EDIT_QUERY_KEYS.scheduledEdits,
-        }),
-      ]);
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: RECURRING_EDIT_QUERY_KEYS.lists(),
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: RECURRING_EDIT_QUERY_KEYS.scheduledLists(),
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: RECURRING_EDIT_QUERY_KEYS.historyLists(),
+      });
     },
   });
 }

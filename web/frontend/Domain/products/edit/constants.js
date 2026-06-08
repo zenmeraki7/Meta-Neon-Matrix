@@ -47,6 +47,22 @@ export const ValueKind = {
   NONE: "NONE",
 };
 
+export const FieldRiskLevel = {
+  LOW: "LOW",
+  MEDIUM: "MEDIUM",
+  HIGH: "HIGH",
+  DESTRUCTIVE: "DESTRUCTIVE",
+};
+
+const CONFIRMATION_PHRASE = "CONFIRM";
+const HIGH_RISK_FIELD_VALUES = new Set(["handle"]);
+const MEDIUM_RISK_FIELD_TYPES = new Set([
+  FieldType.NUMERIC,
+  FieldType.ARRAY,
+  FieldType.API_AUTOCOMPLETE,
+  FieldType.LOCATION,
+]);
+
 /**
  * Action factory function
  */
@@ -57,14 +73,29 @@ const createAction = (
   type,
   inputType = InputType.SINGLE,
   config = {}
-) => ({
-  label,
-  value,
-  inputHelperLabel,
-  type,
-  inputType,
-  ...config,
-});
+) => {
+  const defaultLabel = safeString(
+    config.defaultLabel || getActionDefaultLabel(label, value),
+    value,
+  );
+  const labelKey = safeString(
+    config.actionLabelKey,
+    defaultLabel ? toActionLabelKey(value) : "",
+  );
+  const resourceLabelKey = config.resourceLabelKey || config.labelKey;
+
+  return {
+    ...config,
+    label,
+    labelKey,
+    defaultLabel,
+    resourceLabelKey,
+    value,
+    inputHelperLabel,
+    type,
+    inputType,
+  };
+};
 
 /**
  * Reusable Action Templates
@@ -940,12 +971,155 @@ export const getAllFields = () => {
   return Object.values(fieldDefinitions);
 };
 
+function safeString(value, fallback = "") {
+  if (value === undefined || value === null) return fallback;
+
+  const stringValue = String(value).trim();
+
+  return stringValue || fallback;
+}
+
+function toTitleKey(value) {
+  const normalizedValue = safeString(value);
+
+  return normalizedValue
+    ? `products:fieldLabels.${normalizedValue}`
+    : "products:fieldLabels.unknown";
+}
+
+function toActionLabelKey(value) {
+  const words = safeString(value)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const normalizedValue = words
+    .map((word, index) =>
+      index === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join("");
+
+  return normalizedValue
+    ? `products:editActions.${normalizedValue}`
+    : "products:editActions.unknown";
+}
+
+function getActionDefaultLabel(label, value) {
+  const normalizedLabel = safeString(label);
+
+  if (
+    normalizedLabel &&
+    normalizedLabel.includes(" ") &&
+    !normalizedLabel.includes(".")
+  ) {
+    return normalizedLabel;
+  }
+
+  const normalizedValue = safeString(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  return normalizedValue
+    ? normalizedValue.charAt(0).toUpperCase() + normalizedValue.slice(1)
+    : normalizedLabel;
+}
+
+export function getFieldRiskProfile(field) {
+  const value = safeString(field?.value);
+  const category = safeString(field?.category);
+  const type = field?.type;
+  const actions = Array.isArray(field?.actions) ? field.actions : [];
+  const requiresDangerousAction = actions.some(
+    (action) => action?.requiresConfirmation === true,
+  );
+
+  if (category === "danger" || type === FieldType.DANGER) {
+    return {
+      requiresConfirmation: true,
+      riskLevel: FieldRiskLevel.DESTRUCTIVE,
+      confirmationPhrase: CONFIRMATION_PHRASE,
+    };
+  }
+
+  if (requiresDangerousAction || HIGH_RISK_FIELD_VALUES.has(value)) {
+    return {
+      requiresConfirmation: true,
+      riskLevel: FieldRiskLevel.HIGH,
+      confirmationPhrase: CONFIRMATION_PHRASE,
+    };
+  }
+
+  if (MEDIUM_RISK_FIELD_TYPES.has(type)) {
+    return {
+      requiresConfirmation: false,
+      riskLevel: FieldRiskLevel.MEDIUM,
+      confirmationPhrase: CONFIRMATION_PHRASE,
+    };
+  }
+
+  return {
+    requiresConfirmation: false,
+    riskLevel: FieldRiskLevel.LOW,
+    confirmationPhrase: CONFIRMATION_PHRASE,
+  };
+}
+
+export function getNormalizedEditField(field) {
+  const value = safeString(field?.value);
+  const defaultLabel = safeString(field?.defaultLabel || field?.label, value);
+  const labelKey = safeString(field?.labelKey, toTitleKey(value));
+  const aliases = Array.isArray(field?.aliases) ? field.aliases : [];
+  const searchTerms = Array.isArray(field?.searchTerms)
+    ? field.searchTerms
+    : aliases;
+
+  return {
+    ...field,
+    ...getFieldRiskProfile(field),
+    value,
+    labelKey,
+    defaultLabel,
+    category: safeString(field?.category),
+    searchTerms: searchTerms
+      .map((term) => safeString(term).toLowerCase())
+      .filter(Boolean),
+  };
+}
+
+export const NORMALIZED_EDIT_FIELDS = Object.freeze(
+  getAllFields()
+    .map((field) => Object.freeze(getNormalizedEditField(field)))
+    .filter((field) => field.value && field.defaultLabel && field.category),
+);
+
+export const COMMON_EDIT_FIELD_VALUES = Object.freeze([
+  "title",
+  "vendor",
+  "productType",
+  "tags",
+  "status",
+  "price",
+  "compareAtPrice",
+  "sku",
+  "barcode",
+  "inventoryPolicy",
+  "collections",
+]);
+
 export const getFieldActions = (fieldValue) => {
   return fieldDefinitions[fieldValue]?.actions || [];
 };
 
 export const getFieldDefinition = (fieldValue) => {
-  return fieldDefinitions[fieldValue];
+  const field = fieldDefinitions[fieldValue];
+
+  return field ? getNormalizedEditField(field) : undefined;
 };
 
 export const getFieldType = (fieldValue) => {

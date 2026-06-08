@@ -18,6 +18,7 @@ import collectionRoutes from "./routes/collectionRoutes.js";
 import SubscriptionRoutes from "./routes/SubscriptionRoutes.js";
 import SuggestionRoutes from "./routes/SuggestionRoutes.js";
 import HistoryRoutes from "./routes/HistoryRoutes.js";
+import recurringEditRoutes from "./routes/recurringEditRoutes.js";
 import StoreRoutes from "./routes/storeRoutes.js";
 import SyncRoutes from "./routes/syncRoutes.js";
 import AffiliateRoutes from "./routes/affiliateRoutes.js";
@@ -185,6 +186,7 @@ export const buildApp = (_server, io) => {
 
   // Routes
   app.use("/api/products", productRoutes);
+  app.use("/api/recurring-edits", recurringEditRoutes);
   app.use("/api/collection", collectionRoutes);
   app.use("/api/suggestion", SuggestionRoutes);
   app.use("/api/subscription", SubscriptionRoutes);
