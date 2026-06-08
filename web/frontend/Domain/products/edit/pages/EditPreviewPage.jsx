@@ -560,6 +560,8 @@ const summaryText = useMemo(() => {
             isSyncInProgress ||
             isFilterRegistryDegraded ||
             !canRunEdit ||
+            !hasFreshPreview ||
+            hasPreviewRegistryMismatch ||
             !hasRequiredLocation ||
             !hasDestructiveConfirmation,
         },
@@ -760,13 +762,10 @@ const summaryText = useMemo(() => {
           onHide={() => setModalState((current) => ({ ...current, scheduleEdit: false }))}
           count={previewTotal}
           editedField={selectedField.value}
-          editedBy={editType?.value}
-          value={inputValue}
-          searchKey={searchReplace.search}
-          replaceText={searchReplace.replace}
-          location={locationValue}
-          filters={effectiveFilters}
-          supportValue={supportValue}
+          previewFingerprint={previewFingerprint}
+          previewSignature={previewSignature}
+          hasFreshPreview={hasFreshPreview}
+          hasPreviewRegistryMismatch={hasPreviewRegistryMismatch}
         />
       )}
 

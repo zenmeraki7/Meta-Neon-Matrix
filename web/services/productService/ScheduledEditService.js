@@ -22,10 +22,27 @@ import {
   IdempotencyStoreService,
 } from "../idempotency/IdempotencyStoreService.js";
 import {
+  findPreviewContractRecord,
+} from "../../repositories/bulkEditCommandRepository.js";
+import {
   buildEditIntentFromRules,
   buildExecutionPlanForEdit,
   isVariantLevelField,
 } from "./helpers/bulkEditOperationHelpers.js";
+
+function getPreviewRegistryVersion(fingerprint = {}) {
+  return fingerprint?.registryVersion && typeof fingerprint.registryVersion === "object"
+    ? fingerprint.registryVersion
+    : {};
+}
+
+function requireMatchingPreviewValue({ actual, expected, fieldName, code }) {
+  if (String(actual || "") !== String(expected || "")) {
+    const error = new Error(`${fieldName} mismatch`);
+    error.code = code;
+    throw error;
+  }
+}
 
 export class ScheduledEditService {
   constructor({
@@ -69,43 +86,105 @@ export class ScheduledEditService {
 
     try {
     const {
-      editedField,
-      editedBy,
-      filterParams,
-      filterAst,
-      value,
       scheduledAt: rawScheduledAt,
       scheduledUndoAt: rawScheduledUndoAt,
-      searchKey,
-      replaceText,
-      supportValue,
-      locationId,
-      operationKey = null,
-      confirmDestructive = false,
-      criticalConfirmationText = null,
-      allowNonActiveProducts = false,
-      freezeMode = "DYNAMIC_AT_RUN",
+      freezeMode,
+      previewContractId,
+      previewId,
+      previewFilterHash,
+      previewMirrorBatchId,
+      previewFieldRegistryVersion,
+      previewOperatorRegistryVersion,
+      approvedTargetCount,
+      scheduleConfirmationText,
     } = body;
 
     const normalizedFreezeMode = String(
-      freezeMode || "DYNAMIC_AT_RUN",
+      freezeMode || "",
     ).toUpperCase();
-    if (
-      !["DYNAMIC_AT_RUN", "STATIC_AT_SCHEDULE_CREATE"].includes(
-        normalizedFreezeMode,
-      )
-    ) {
-      throw new Error("Invalid freezeMode");
+    if (normalizedFreezeMode !== "STATIC_AT_SCHEDULE_CREATE") {
+      throw new Error("STATIC_SCHEDULE_FREEZE_REQUIRED");
     }
-    const hasLegacyFilters =
-      Array.isArray(filterParams) && filterParams.length > 0;
-    const hasFilterAst =
-      filterAst &&
-      typeof filterAst === "object";
 
-    if (!editedField || (!hasLegacyFilters && !hasFilterAst)) {
-      throw new Error("Missing required edit field or target filter");
+    const resolvedPreviewContractId = String(
+      previewContractId || previewId || "",
+    ).trim();
+    if (!resolvedPreviewContractId) {
+      throw new Error("PREVIEW_ID_REQUIRED");
     }
+
+    const previewRecord = await findPreviewContractRecord(
+      resolvedPreviewContractId,
+      this.session.shop,
+    );
+    if (!previewRecord) {
+      throw new Error("Preview session expired. Please re-preview before scheduling.");
+    }
+    if (previewRecord.expiresAt && previewRecord.expiresAt < new Date()) {
+      throw new Error("PREVIEW_EXPIRED");
+    }
+
+    const fingerprint =
+      previewRecord.value && typeof previewRecord.value === "object"
+        ? previewRecord.value
+        : {};
+    const registryVersion = getPreviewRegistryVersion(fingerprint);
+    const editedField = fingerprint.field;
+    const editedBy = fingerprint.editType;
+    const value = fingerprint.editValue;
+    const searchKey = fingerprint.searchKey || null;
+    const replaceText = fingerprint.replaceText || null;
+    const supportValue = fingerprint.supportValue ?? null;
+    const locationId = fingerprint.locationId || null;
+    const operationKey = fingerprint.operationKey || null;
+    const filterAst = fingerprint.normalizedAst || null;
+    const filterParams = [];
+    const confirmDestructive = false;
+    const criticalConfirmationText = null;
+    const allowNonActiveProducts = false;
+
+    if (!editedField || !editedBy || !filterAst) {
+      throw new Error("PREVIEW_SNAPSHOT_INCOMPLETE");
+    }
+
+    const previewActorId = String(
+      previewRecord.userId || fingerprint.actorId || "",
+    ).trim();
+    const executionActorId = String(actor?.actorId || actor?.userId || "").trim();
+    if (!previewActorId) {
+      throw new Error("PREVIEW_OWNERSHIP_UNBOUND");
+    }
+    if (!executionActorId) {
+      throw new Error("ACTOR_ID_REQUIRED_FOR_SCHEDULE");
+    }
+    if (previewActorId !== executionActorId) {
+      throw new Error("PREVIEW_ACTOR_MISMATCH");
+    }
+
+    requireMatchingPreviewValue({
+      actual: previewFilterHash,
+      expected: fingerprint.filterHash,
+      fieldName: "previewFilterHash",
+      code: "PREVIEW_FINGERPRINT_MISMATCH",
+    });
+    requireMatchingPreviewValue({
+      actual: previewMirrorBatchId,
+      expected: fingerprint.mirrorBatchId,
+      fieldName: "previewMirrorBatchId",
+      code: "PREVIEW_FINGERPRINT_MISMATCH",
+    });
+    requireMatchingPreviewValue({
+      actual: previewFieldRegistryVersion,
+      expected: registryVersion.fieldRegistryVersion,
+      fieldName: "previewFieldRegistryVersion",
+      code: "PREVIEW_REGISTRY_VERSION_MISMATCH",
+    });
+    requireMatchingPreviewValue({
+      actual: previewOperatorRegistryVersion,
+      expected: registryVersion.operatorRegistryVersion,
+      fieldName: "previewOperatorRegistryVersion",
+      code: "PREVIEW_REGISTRY_VERSION_MISMATCH",
+    });
 
     const scheduledAt = new Date(rawScheduledAt);
     if (Number.isNaN(scheduledAt.getTime())) {
@@ -128,6 +207,28 @@ export class ScheduledEditService {
       throw new Error("Undo is not allowed for product deletion");
     }
 
+    const previewTargetCount = Number(
+      fingerprint.targetCount ?? previewRecord.previewResCount,
+    );
+    if (!Number.isFinite(previewTargetCount) || previewTargetCount < 0) {
+      throw new Error("PREVIEW_TARGET_COUNT_REQUIRED");
+    }
+    if (
+      approvedTargetCount !== null &&
+      approvedTargetCount !== undefined &&
+      Number(approvedTargetCount) !== previewTargetCount
+    ) {
+      throw new Error("APPROVED_TARGET_COUNT_MISMATCH");
+    }
+
+    const requiresTypedConfirm = previewTargetCount >= 50 || !scheduledUndoAt;
+    if (
+      requiresTypedConfirm &&
+      String(scheduleConfirmationText || "").trim().toUpperCase() !== "SCHEDULE"
+    ) {
+      throw new Error("SCHEDULE_CONFIRMATION_REQUIRED");
+    }
+
     const target = await TargetingEngineService.resolvePreviewTargets({
       shop: this.session.shop,
       source: "SCHEDULED",
@@ -139,6 +240,9 @@ export class ScheduledEditService {
       sampleLimit: 20,
     });
     const count = target.count;
+    if (Number(count) !== previewTargetCount) {
+      throw new Error("PREVIEW_TARGET_COUNT_MISMATCH");
+    }
 
     const planKey = subscription?.planKey;
     if (!planKey) {
@@ -208,7 +312,8 @@ export class ScheduledEditService {
         processedCount: 0,
         totalItems: count,
         targetSnapshotCount: 0,
-        targetMirrorBatchId: null,
+        targetMirrorBatchId: target.mirrorBatchId || fingerprint.mirrorBatchId || null,
+        filterHash: target.filterHash || fingerprint.filterHash || null,
         scheduledAt,
         scheduledUndoAt,
         type: "Scheduled edit",
@@ -233,14 +338,28 @@ export class ScheduledEditService {
           lastProductId: null,
           size: 75,
           previewCount: count,
+          approvedTargetCount: previewTargetCount,
           currentBatchTargetCount: 0,
           queuedAt: new Date().toISOString(),
           filterParams: [],
           filterAst: target.filterAst ?? filterAst ?? null,
+          previewId: resolvedPreviewContractId,
+          previewContractId: resolvedPreviewContractId,
+          previewFingerprint: {
+            previewId: resolvedPreviewContractId,
+            filterHash: String(fingerprint.filterHash || ""),
+            mirrorBatchId: String(fingerprint.mirrorBatchId || ""),
+            fieldRegistryVersion: String(registryVersion.fieldRegistryVersion || ""),
+            operatorRegistryVersion: String(registryVersion.operatorRegistryVersion || ""),
+            targetCount: previewTargetCount,
+          },
           confirmDestructive: confirmDestructive === true,
           criticalConfirmationText: String(criticalConfirmationText || "").trim() || null,
           allowNonActiveProducts: allowNonActiveProducts === true,
           locationId: locationId ?? null,
+          targetGranularity:
+            target?.targetGranularity ||
+            (isVariantLevelField(editedField) ? "VARIANT" : "PRODUCT"),
           executionPlan,
           operationKey: executionPlan.operationKey,
           blastRadiusAssessment,
@@ -270,12 +389,29 @@ export class ScheduledEditService {
       },
     });
     if (normalizedFreezeMode === "STATIC_AT_SCHEDULE_CREATE") {
+      const freezingStateSet = await db.editHistory.updateMany({
+        where: {
+          id: history.id,
+          shop: this.session.shop,
+          executionState: OPERATION_LIFECYCLE_STATES.SCHEDULED_PENDING_QUEUE,
+        },
+        data: {
+          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+          ),
+        },
+      });
+      if (freezingStateSet.count !== 1) {
+        throw new Error("SCHEDULED_EDIT_STATE_TRANSITION_REJECTED_TARGET_FREEZING");
+      }
+
       const frozenCount = await this.freezeEditHistoryTargets(history.id);
       const frozenStateSet = await db.editHistory.updateMany({
         where: {
           id: history.id,
           shop: this.session.shop,
-          executionState: OPERATION_LIFECYCLE_STATES.SCHEDULED_PENDING_QUEUE,
+          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
         },
         data: {
           totalItems: frozenCount,

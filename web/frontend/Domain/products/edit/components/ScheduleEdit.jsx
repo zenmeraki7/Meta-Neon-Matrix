@@ -11,7 +11,6 @@ import {
   Box,
 } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
-import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import { useShopTimezone } from "../../../../hooks/useShopTimezone";
@@ -22,14 +21,11 @@ function ScheduleEdit({
   onHide,
   count,
   editedField,
-  editedBy,
   show,
-  value,
-  searchKey,
-  replaceText,
-  location,
-  filters,
-  supportValue,
+  previewFingerprint,
+  previewSignature,
+  hasFreshPreview,
+  hasPreviewRegistryMismatch,
 }) {
   const navigate = useNavigate();
   const { t } = useTranslation(["products", "common"]);
@@ -44,6 +40,7 @@ function ScheduleEdit({
   const [startEditTime, setStartEditTime] = useState("");
   const [undoStartEditDate, setUndoStartEditDate] = useState("");
   const [undoStartEditTime, setUndoStartEditTime] = useState("");
+  const [confirmText, setConfirmText] = useState("");
   const [upgradeWarning, setUpgradeWarning] = useState(null);
 
 
@@ -51,8 +48,27 @@ function ScheduleEdit({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
+  const previewContractId = previewFingerprint?.previewId || null;
+  const approvedTargetCount = Number(previewFingerprint?.targetCount ?? count ?? 0);
+  const requiresTypedConfirm =
+    Number(approvedTargetCount || 0) >= 50 || !undoStartEditChecked;
+  const confirmationValid =
+    !requiresTypedConfirm || confirmText.trim().toUpperCase() === "SCHEDULE";
+  const isUndoValid =
+    !undoStartEditChecked || (undoStartEditDate && undoStartEditTime);
+  const isPreviewValid =
+    Boolean(previewContractId) &&
+    hasFreshPreview === true &&
+    hasPreviewRegistryMismatch !== true;
+
   // Check if the form is valid
-  const isFormValid = startEditChecked && startEditDate && startEditTime;
+  const isFormValid =
+    startEditChecked &&
+    startEditDate &&
+    startEditTime &&
+    isUndoValid &&
+    isPreviewValid &&
+    confirmationValid;
 
   // Handle date input changes
   const handleDateChange = useCallback((value, type) => {
@@ -97,6 +113,7 @@ function ScheduleEdit({
     setStartEditTime("");
     setUndoStartEditDate("");
     setUndoStartEditTime("");
+    setConfirmText("");
     setError(null);
   }, []);
 
@@ -109,6 +126,15 @@ function ScheduleEdit({
 
     try {
       const scheduledAt = zonedDateTimeToUtcIso(startEditDate, startEditTime, resolvedTimezone);
+      const scheduledAtMs = new Date(scheduledAt).getTime();
+
+      if (!Number.isFinite(scheduledAtMs) || scheduledAtMs <= Date.now()) {
+        throw new Error(
+          t("scheduledTimeMustBeFuture", {
+            defaultValue: "Scheduled edit time must be in the future.",
+          }),
+        );
+      }
 
       const scheduledUndoAt =
         undoStartEditChecked && undoStartEditDate && undoStartEditTime
@@ -127,22 +153,20 @@ function ScheduleEdit({
       }
 
       const payload = {
-        editedField,
-        editedBy,
+        previewContractId,
+        previewId: previewContractId,
+        previewFilterHash: previewFingerprint?.filterHash || null,
+        previewMirrorBatchId: previewFingerprint?.mirrorBatchId || null,
+        previewFieldRegistryVersion: previewFingerprint?.fieldRegistryVersion || null,
+        previewOperatorRegistryVersion:
+          previewFingerprint?.operatorRegistryVersion || null,
+        approvedTargetCount,
+        previewSignature,
+        freezeMode: "STATIC_AT_SCHEDULE_CREATE",
         scheduledAt,
         scheduledUndoAt,
-        value,
-        searchKey,
-        replaceText,
-        locationId: location,
         timezone: resolvedTimezone,
-        filterParams: filters,
-        filterAst: buildFilterAstFromLegacyFilters({
-          filterParams: filters,
-          targetGranularity: "PRODUCT",
-          source: "SCHEDULED_DEFINITION",
-        }),
-        supportValue,
+        scheduleConfirmationText: requiresTypedConfirm ? confirmText.trim() : null,
       };
 
       await api.post("/api/products/schedule-task", payload, {
@@ -177,20 +201,19 @@ function ScheduleEdit({
     undoStartEditChecked,
     undoStartEditDate,
     undoStartEditTime,
-    editedField,
-    editedBy,
-    value,
-    searchKey,
-    replaceText,
-    location,
-    filters,
-    supportValue,
+    previewContractId,
+    previewFingerprint,
+    approvedTargetCount,
+    previewSignature,
+    requiresTypedConfirm,
+    confirmText,
     api,
     resetForm,
     onHide,
     navigate,
     showError,
     showSuccess,
+    t,
   ]);
 
   return (
@@ -238,6 +261,21 @@ function ScheduleEdit({
             {error && (
               <Banner tone="critical" onDismiss={() => setError(null)}>
                 {error}
+              </Banner>
+            )}
+
+            {!isPreviewValid && (
+              <Banner
+                tone="critical"
+                title={t("bulkEditPreviewStaleTitle", {
+                  defaultValue: "Preview is stale",
+                })}
+              >
+                <p>
+                  {t("bulkEditPreviewStaleMessage", {
+                    defaultValue: "Run preview again before executing this edit.",
+                  })}
+                </p>
               </Banner>
             )}
 
@@ -295,6 +333,13 @@ function ScheduleEdit({
                   onChange={(value) => handleDateChange(value, "undo")}
                   helpText={t("selectDateUndoEdit")}
                   min={startEditDate || getDateInputInTimezone(resolvedTimezone)}
+                  error={
+                    undoStartEditChecked && !undoStartEditDate
+                      ? t("undoDateRequired", {
+                          defaultValue: "Choose an undo date.",
+                        })
+                      : undefined
+                  }
                 />
                 <TextField
                   label={t("undoTime")}
@@ -302,8 +347,26 @@ function ScheduleEdit({
                   value={undoStartEditTime}
                   onChange={(value) => handleTimeChange(value, "undo")}
                   helpText={t("selectTimeUndoEdit")}
+                  error={
+                    undoStartEditChecked && !undoStartEditTime
+                      ? t("undoTimeRequired", {
+                          defaultValue: "Choose an undo time.",
+                        })
+                      : undefined
+                  }
                 />
               </FormLayout.Group>
+            )}
+
+            {requiresTypedConfirm && (
+              <TextField
+                label={t("typeScheduleToConfirm", {
+                  defaultValue: "Type SCHEDULE to confirm",
+                })}
+                value={confirmText}
+                onChange={setConfirmText}
+                autoComplete="off"
+              />
             )}
 
             {startEditChecked && startEditDate && startEditTime && (

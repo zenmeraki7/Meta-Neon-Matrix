@@ -61,6 +61,25 @@ test("scheduled worker re-checks entitlement and mirror safety at runtime and bl
   assert.ok(source.includes("SCHEDULED_EDIT_MIRROR_UNSAFE"));
 });
 
+test("scheduled edit creation requires approved preview contract and rejects legacy mutable payloads", () => {
+  const normalizer = read("web/normalizers/productBulkEditCommandNormalizer.js");
+  const useCase = read("web/useCases/productBulkEditUseCases.js");
+  const service = read("web/services/productService/ScheduledEditService.js");
+  const modal = read("web/frontend/Domain/products/edit/components/ScheduleEdit.jsx");
+
+  assert.ok(normalizer.includes("LEGACY_SCHEDULE_PAYLOAD_FORBIDDEN"));
+  assert.ok(normalizer.includes("assertNoLegacySchedulePayload"));
+  assert.ok(useCase.includes("STATIC_SCHEDULE_FREEZE_REQUIRED"));
+  assert.ok(useCase.includes("APPROVED_TARGET_COUNT_REQUIRED"));
+  assert.ok(service.includes("findPreviewContractRecord"));
+  assert.ok(service.includes("APPROVED_TARGET_COUNT_MISMATCH"));
+  assert.ok(service.includes("PREVIEW_TARGET_COUNT_MISMATCH"));
+  assert.ok(service.includes("SCHEDULE_CONFIRMATION_REQUIRED"));
+  assert.ok(modal.includes('freezeMode: "STATIC_AT_SCHEDULE_CREATE"'));
+  assert.equal(modal.includes("filterParams"), false);
+  assert.equal(modal.includes("buildFilterAstFromLegacyFilters"), false);
+});
+
 test("execute worker persists and verifies execute lease fencing metadata", () => {
   const source = read("web/Jobs/Workers/bulkEditExecuteWorker.js");
   assert.ok(source.includes('namespace: "BULK_EDIT_EXECUTE"'));

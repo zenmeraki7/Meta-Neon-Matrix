@@ -13,7 +13,7 @@ function safeString(value, fallback = "") {
   return normalized || fallback;
 }
 
-function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit) {
+function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit, fallbackSignature) {
   const data = rawData?.data || rawData || {};
   const rows = Array.isArray(data?.rows)
     ? data.rows
@@ -33,6 +33,7 @@ function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit) {
   );
 
   const previewFingerprint = data?.previewFingerprint || {};
+  const registryVersion = previewFingerprint?.registryVersion || {};
   const previewId = safeString(
     data?.previewId || previewFingerprint?.previewId,
     "",
@@ -45,15 +46,24 @@ function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit) {
   return {
     rows,
     isVariant: data?.isVariant === true,
-    previewSignature: safeString(data?.previewSignature, "") || null,
+    previewSignature: safeString(data?.previewSignature, fallbackSignature) || null,
     previewFingerprint: {
       previewId,
       filterHash: safeString(previewFingerprint?.filterHash, "") || null,
       mirrorBatchId: safeString(previewFingerprint?.mirrorBatchId, "") || null,
+      targetCount: safeNumber(previewFingerprint?.targetCount, total),
       fieldRegistryVersion:
-        safeString(previewFingerprint?.fieldRegistryVersion, "") || null,
+        safeString(
+          previewFingerprint?.fieldRegistryVersion ||
+            registryVersion?.fieldRegistryVersion,
+          "",
+        ) || null,
       operatorRegistryVersion:
-        safeString(previewFingerprint?.operatorRegistryVersion, "") || null,
+        safeString(
+          previewFingerprint?.operatorRegistryVersion ||
+            registryVersion?.operatorRegistryVersion,
+          "",
+        ) || null,
     },
     requiresConfirmation: data?.requiresConfirmation === true,
     pagination: {
@@ -91,7 +101,7 @@ export function useEditPreviewQuery({
         },
         { signal },
       );
-      return normalizePreviewResponse(result, page, limit);
+      return normalizePreviewResponse(result, page, limit, queryKeyHash);
     },
     staleTime: 10_000,
     gcTime: 5 * 60 * 1000,

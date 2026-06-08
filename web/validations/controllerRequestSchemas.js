@@ -44,6 +44,7 @@ export const bulkEditPreviewSchema = Joi.object({
   editValue: Joi.any(),
   searchKey: Joi.string().allow("", null),
   replaceText: Joi.string().allow("", null),
+  locationId: Joi.string().allow("", null),
   filterParams: Joi.array().items(filterParamSchema).default([]),
   filterAst: Joi.object().allow(null),
   supportValue: Joi.any(),

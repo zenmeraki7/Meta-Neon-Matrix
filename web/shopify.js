@@ -3,7 +3,6 @@ import { shopifyApp } from "@shopify/shopify-app-express";
 import { PostgreSQLSessionStorage } from "@shopify/shopify-app-session-storage-postgresql";
 import dotenv from "dotenv";
 import PrivacyWebhookHandlers from "./privacy.js";
-import afterAuth from "./hooks/afterAuth.js";
 
 dotenv.config();
 
@@ -62,7 +61,6 @@ const shopify = shopifyApp({
     callbackPath: "/api/auth/callback",
     isOnline: false,
   },
-  hooks: { afterAuth },
   webhooks: {
     path: "/api/webhooks",
     ...PrivacyWebhookHandlers,

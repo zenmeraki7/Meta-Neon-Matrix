@@ -240,6 +240,20 @@ function normalizeLimit(value) {
   return limit;
 }
 
+function normalizeCount(value, fieldName = "count") {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const count = Number(value);
+
+  if (!Number.isInteger(count) || count < 0 || count > MAX_PRODUCT_IDS) {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+
+  return count;
+}
+
 function normalizeCursor(value) {
   return normalizeText(value, "cursor", MAX_CURSOR_LENGTH);
 }
@@ -619,6 +633,37 @@ function requirePreviewContract(command) {
   }
 }
 
+function assertNoLegacySchedulePayload(safeBody) {
+  const legacyFields = [
+    "editedField",
+    "field",
+    "editedBy",
+    "editedType",
+    "editType",
+    "value",
+    "editValue",
+    "searchKey",
+    "replaceText",
+    "supportValue",
+    "location",
+    "locationId",
+    "filterParams",
+    "filterAst",
+    "productIds",
+  ];
+
+  const present = legacyFields.filter((field) =>
+    Object.prototype.hasOwnProperty.call(safeBody, field),
+  );
+
+  if (present.length > 0) {
+    throw buildRequestError(
+      `Scheduled edits must reference an approved preview contract; remove legacy fields: ${present.join(", ")}`,
+      "LEGACY_SCHEDULE_PAYLOAD_FORBIDDEN",
+    );
+  }
+}
+
 function assertScheduledUndoAfterScheduledAt(scheduledAt, scheduledUndoAt) {
   if (!scheduledAt || !scheduledUndoAt) {
     return;
@@ -668,14 +713,12 @@ export function buildBulkEditExecuteCommand({
 
 export function buildScheduledEditCommand({
   body = {},
-  query = {},
   headers = {},
   context,
 }) {
   const safeContext = assertCommandContext(context);
-  const payload = normalizeEditPayload({ body, query });
-
   const safeBody = assertPlainObject(body, "body");
+  assertNoLegacySchedulePayload(safeBody);
 
   const scheduledAt = normalizeFutureDateString(
     safeBody.scheduledAt,
@@ -693,7 +736,49 @@ export function buildScheduledEditCommand({
 
   return Object.freeze({
     ...safeContext,
-    ...payload,
+    previewId: normalizeId(
+      safeBody.previewContractId ?? safeBody.previewId,
+      "previewContractId",
+    ),
+    previewContractId: normalizeId(
+      safeBody.previewContractId ?? safeBody.previewId,
+      "previewContractId",
+    ),
+    previewFilterHash: normalizeRequiredText(
+      safeBody.previewFilterHash,
+      "previewFilterHash",
+      500,
+    ),
+    previewMirrorBatchId: normalizeRequiredText(
+      safeBody.previewMirrorBatchId,
+      "previewMirrorBatchId",
+      200,
+    ),
+    previewFieldRegistryVersion: normalizeRequiredText(
+      safeBody.previewFieldRegistryVersion,
+      "previewFieldRegistryVersion",
+      120,
+    ),
+    previewOperatorRegistryVersion: normalizeRequiredText(
+      safeBody.previewOperatorRegistryVersion,
+      "previewOperatorRegistryVersion",
+      120,
+    ),
+    approvedTargetCount: normalizeCount(
+      safeBody.approvedTargetCount,
+      "approvedTargetCount",
+    ),
+    previewSignature: normalizeText(
+      safeBody.previewSignature,
+      "previewSignature",
+      500,
+    ),
+    timezone: normalizeText(safeBody.timezone, "timezone", 120),
+    scheduleConfirmationText: normalizeText(
+      safeBody.scheduleConfirmationText,
+      "scheduleConfirmationText",
+      80,
+    ),
     scheduledAt,
     scheduledUndoAt,
     freezeMode: normalizeFreezeMode(safeBody.freezeMode),

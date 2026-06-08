@@ -65,10 +65,26 @@ function assertEditPayload(command) {
 
 function assertScheduledCommand(command) {
   command = assertMutationCommand(command);
-  assertEditPayload(command);
 
   assertRequiredString(command.scheduledAt, "scheduledAt");
   assertRequiredString(command.freezeMode, "freezeMode");
+  if (String(command.freezeMode || "") !== "STATIC_AT_SCHEDULE_CREATE") {
+    throw buildUseCaseError(
+      "Scheduled edits must freeze the approved preview at schedule creation",
+      "STATIC_SCHEDULE_FREEZE_REQUIRED",
+    );
+  }
+  assertRequiredString(
+    command.previewContractId || command.previewId,
+    "previewContractId",
+    "PREVIEW_ID_REQUIRED",
+  );
+  if (!Number.isInteger(command.approvedTargetCount) || command.approvedTargetCount < 0) {
+    throw buildUseCaseError(
+      "approvedTargetCount is required",
+      "APPROVED_TARGET_COUNT_REQUIRED",
+    );
+  }
 
   return command;
 }
@@ -244,34 +260,22 @@ function toExecuteServiceInput(command) {
 
 function toScheduleInnerCommand(command) {
   return Object.freeze({
-    editedField: command.editedField,
-    editType: command.editType,
-    editValue: command.editValue,
-
-    searchKey: command.searchKey || null,
-    replaceText: command.replaceText || null,
-    supportValue: command.supportValue,
-    locationId: command.locationId || null,
-
-    filterParams: safeArray(command.filterParams),
-    filterAst: command.filterAst || null,
-    productIds: safeArray(command.productIds),
-
     title: command.title || null,
     scheduledAt: command.scheduledAt,
     scheduledUndoAt: command.scheduledUndoAt || null,
     freezeMode: command.freezeMode,
 
-    confirmBroadTarget: Boolean(command.confirmBroadTarget),
-    criticalConfirmationText: command.criticalConfirmationText || null,
-    operationKey: command.operationKey || null,
-
     previewId: command.previewId || null,
+    previewContractId: command.previewContractId || command.previewId,
     previewFilterHash: command.previewFilterHash || null,
     previewMirrorBatchId: command.previewMirrorBatchId || null,
     previewFieldRegistryVersion: command.previewFieldRegistryVersion || null,
     previewOperatorRegistryVersion:
       command.previewOperatorRegistryVersion || null,
+    approvedTargetCount: command.approvedTargetCount,
+    previewSignature: command.previewSignature || null,
+    timezone: command.timezone || null,
+    scheduleConfirmationText: command.scheduleConfirmationText || null,
   });
 }
 
