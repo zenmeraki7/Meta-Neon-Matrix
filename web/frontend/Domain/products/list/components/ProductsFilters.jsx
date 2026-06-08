@@ -26,6 +26,7 @@ const ProductsFilters = memo(function ProductsFilters({
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [activeFilterKey, setActiveFilterKey] = useState(null);
   const [searchDraft, setSearchDraft] = useState("");
+  const [fieldSearchDraft, setFieldSearchDraft] = useState("");
 
   const onCommitSearchRef = useRef(onCommitSearch);
   const hasMountedRef = useRef(false);
@@ -105,12 +106,14 @@ const ProductsFilters = memo(function ProductsFilters({
 
   const handleOpenPicker = useCallback(() => {
     setActiveFilterKey(null);
+    setFieldSearchDraft("");
     setIsPopoverOpen(true);
   }, []);
 
   const handleClosePopover = useCallback(() => {
     setIsPopoverOpen(false);
     setActiveFilterKey(null);
+    setFieldSearchDraft("");
   }, []);
 
   const handleSelectFilter = useCallback((filterKey) => {
@@ -134,6 +137,7 @@ const ProductsFilters = memo(function ProductsFilters({
 
   const handleBackToList = useCallback(() => {
     setActiveFilterKey(null);
+    setFieldSearchDraft("");
   }, []);
 
   const handleApplyFilter = useCallback(
@@ -147,13 +151,32 @@ const ProductsFilters = memo(function ProductsFilters({
     [onFilterChange, handleClosePopover]
   );
 
+  const filteredFieldOptions = useMemo(() => {
+    const query = fieldSearchDraft.trim().toLowerCase();
+    if (!query) return translatedFilters;
+
+    return translatedFilters.filter((filter) => {
+      const haystack = [
+        filter.translatedLabel,
+        filter.label,
+        filter.key,
+        ...(Array.isArray(filter.searchAliases) ? filter.searchAliases : []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(query);
+    });
+  }, [fieldSearchDraft, translatedFilters]);
+
   const actionItems = useMemo(
     () =>
-      translatedFilters.map((filter) => ({
+      filteredFieldOptions.map((filter) => ({
         content: filter.translatedLabel,
         onAction: filterActionHandlers[filter.key],
       })),
-    [translatedFilters, filterActionHandlers]
+    [filteredFieldOptions, filterActionHandlers]
   );
 
   return (
@@ -188,7 +211,29 @@ const ProductsFilters = memo(function ProductsFilters({
           onClose={handleClosePopover}
         >
           {!activeFilter ? (
-            <ActionList items={actionItems} />
+            <Box width="320px" padding="200">
+              <BlockStack gap="200">
+                <TextField
+                  label={t("filterFieldSearchLabel", "Search filter fields")}
+                  labelHidden
+                  value={fieldSearchDraft}
+                  placeholder={t("filterFieldSearchPlaceholder", "Search filters")}
+                  onChange={setFieldSearchDraft}
+                  clearButton
+                  onClearButtonClick={() => setFieldSearchDraft("")}
+                  autoComplete="off"
+                />
+                {actionItems.length > 0 ? (
+                  <ActionList items={actionItems} />
+                ) : (
+                  <Box padding="200">
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      {t("noFilterFieldsFound", "No filter fields found")}
+                    </Text>
+                  </Box>
+                )}
+              </BlockStack>
+            </Box>
           ) : (
             <FilterPanel
               filter={activeFilter}

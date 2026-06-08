@@ -1,6 +1,7 @@
 import {
   buildAuthenticatedActor,
   handleControllerError,
+  handleLoggedControllerError,
   requireShopifySession,
 } from "./controllerUtils.js";
 import {
@@ -25,8 +26,9 @@ import {
 } from "../dtos/productQueryDto.js";
 
 export const getProductsWithQuery = async (req, res) => {
+  let session = null;
   try {
-    const session = requireShopifySession(res);
+    session = requireShopifySession(res);
     const command = buildProductQueryCommand({
       shop: session.shop,
       actor: buildAuthenticatedActor(req, session),
@@ -36,7 +38,14 @@ export const getProductsWithQuery = async (req, res) => {
     const result = await executeProductQuery(command);
     return res.status(200).json(toProductQueryResponseDto(result));
   } catch (error) {
-    return handleControllerError(res, error, "PRODUCT_QUERY_FAILED");
+    return handleLoggedControllerError({
+      res,
+      req,
+      session,
+      error,
+      source: "productQueryController.getProductsWithQuery",
+      fallbackCode: "PRODUCT_QUERY_FAILED",
+    });
   }
 };
 

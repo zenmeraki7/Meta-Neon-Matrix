@@ -1,4 +1,5 @@
 import React, { useEffect, useCallback, useMemo, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Banner,
@@ -30,6 +31,7 @@ const rows = [{ key: "products", api: "/api/sync/products" }];
 export default function DataSyncPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const { showSuccess, showError } = useAppToast();
   const { dateTimeFormatter } = useLocaleFormatters();
 const {
@@ -52,10 +54,11 @@ const {
     [t],
   );
 
-  const hasActiveProductMirror = Boolean(dataSources?.activeMirrorBatchId);
+  const productsSynced = Boolean(dataSources?.productsSynced);
+  const syncNeeded = Boolean(dataSources?.syncNeeded);
   const productSyncNeedsAttention =
     Boolean(dataSources) &&
-    !hasActiveProductMirror &&
+    syncNeeded &&
     !isSyncInProgress &&
     !startProductSync.isPending;
 const isAnySyncRunning =
@@ -102,12 +105,12 @@ const isAnySyncRunning =
       if (!dataSources) return null;
 
       const map = {
-        products: hasActiveProductMirror ? dataSources.lastProductSyncAt : null,
+        products: productsSynced ? dataSources.lastProductSyncAt : null,
       };
 
       return map[key] ? dateTimeFormatter.format(new Date(map[key])) : t("neverSynced");
     },
-    [dataSources, dateTimeFormatter, hasActiveProductMirror, t],
+    [dataSources, dateTimeFormatter, productsSynced, t],
   );
 
   const isSyncingForKey = useCallback(
@@ -129,9 +132,10 @@ const isAnySyncRunning =
     (key) => {
       if (isSyncingForKey(key)) return "attention";
       if (key === "products" && productSyncNeedsAttention) return "warning";
+      if (key === "products" && !productsSynced) return "warning";
       return "success";
     },
-    [isSyncingForKey, productSyncNeedsAttention],
+    [isSyncingForKey, productSyncNeedsAttention, productsSynced],
   );
 
   const getStatusLabel = useCallback(
@@ -140,9 +144,12 @@ const isAnySyncRunning =
       if (key === "products" && productSyncNeedsAttention) {
         return t("syncNeeded", { defaultValue: "Sync needed" });
       }
+      if (key === "products" && !productsSynced) {
+        return t("syncNeeded", { defaultValue: "Sync needed" });
+      }
       return t("synced");
     },
-    [isSyncingForKey, productSyncNeedsAttention, t],
+    [isSyncingForKey, productSyncNeedsAttention, productsSynced, t],
   );
 
   const summaryTone =

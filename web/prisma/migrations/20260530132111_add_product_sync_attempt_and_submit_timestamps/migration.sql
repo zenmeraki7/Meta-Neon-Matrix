@@ -1,4 +1,4 @@
-﻿ALTER TABLE "Store"
+ALTER TABLE "Store"
   ADD COLUMN IF NOT EXISTS "lastProductSyncAttemptAt" TIMESTAMP(3),
   ADD COLUMN IF NOT EXISTS "lastProductSyncSubmittedAt" TIMESTAMP(3);
 

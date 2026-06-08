@@ -7,11 +7,38 @@ import {
   recoverStaleProductSyncStateByShop,
 } from "../repositories/storeRepository.js";
 import {
+  getActiveProductCountByShop,
   getLatestProductSyncByShop,
+  getLatestCompletedProductSyncByShop,
   getLatestProductSyncSummaryByShop,
 } from "../repositories/syncRepository.js";
 
-function toSyncStatusDetailDto(store, latestSync) {
+function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount }) {
+  const safeProductCount = Number(productCount || 0);
+  const productsSynced =
+    latestCompletedSync?.status === "completed" &&
+    safeProductCount > 0;
+
+  return {
+    productCount: safeProductCount,
+    productsSynced,
+    syncNeeded: !latestCompletedSync || safeProductCount === 0,
+    mirrorReady: Boolean(store),
+    emptyMirror: safeProductCount === 0,
+    latestCompletedSync: latestCompletedSync
+      ? {
+          id: latestCompletedSync.id,
+          status: latestCompletedSync.status,
+          updatedAt: latestCompletedSync.updatedAt,
+          recordCount: latestCompletedSync.recordCount,
+          syncBatchId: latestCompletedSync.syncBatchId,
+        }
+      : null,
+    latestSyncStatus: latestSync?.status || null,
+  };
+}
+
+function toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCount) {
   return {
     isCollectionSyncing: store.isCollectionSyncing,
     lastCollectionSyncAt: store.lastCollectionSyncAt,
@@ -37,10 +64,11 @@ function toSyncStatusDetailDto(store, latestSync) {
     lastProductSyncAt: store.lastProductSyncAt,
     activeMirrorBatchId: store.activeMirrorBatchId,
     latestSync,
+    ...buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount }),
   };
 }
 
-function toSyncStatusSummaryDto(store, latestSync) {
+function toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productCount) {
   return {
     syncProgressStage: store.syncProgressStage,
     isProductInitialySyning: store.isProductInitialySyning,
@@ -59,12 +87,13 @@ function toSyncStatusSummaryDto(store, latestSync) {
           isInitialProductSync: latestSync.isInitialProductSync,
         }
       : null,
+    ...buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount }),
   };
 }
 
 export async function getSyncStatusDetailForShop(shop) {
   const recovery = await recoverStaleProductSyncStateByShop(shop);
-  const cacheKey = `${shop}:sync_details`;
+  const cacheKey = `${shop}:sync_details:v2`;
   const cached = recovery.recovered ? null : await getCache(cacheKey);
   if (cached) {
     return {
@@ -82,9 +111,13 @@ export async function getSyncStatusDetailForShop(shop) {
     throw error;
   }
 
-  const latestSync = await getLatestProductSyncByShop(shop);
+  const [latestSync, latestCompletedSync] = await Promise.all([
+    getLatestProductSyncByShop(shop),
+    getLatestCompletedProductSyncByShop(shop),
+  ]);
+  const productCount = await getActiveProductCountByShop(shop, store.activeMirrorBatchId);
 
-  const syncDetails = toSyncStatusDetailDto(store, latestSync);
+  const syncDetails = toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCount);
   await setCache(cacheKey, syncDetails, 300);
 
   return {
@@ -96,7 +129,7 @@ export async function getSyncStatusDetailForShop(shop) {
 
 export async function getSyncStatusSummaryForShop(shop) {
   const recovery = await recoverStaleProductSyncStateByShop(shop);
-  const cacheKey = `${shop}:sync_summary`;
+  const cacheKey = `${shop}:sync_summary:v2`;
   const cached = recovery.recovered ? null : await getCache(cacheKey);
   if (cached) {
     return {
@@ -106,9 +139,10 @@ export async function getSyncStatusSummaryForShop(shop) {
     };
   }
 
-  const [store, latestSync] = await Promise.all([
+  const [store, latestSync, latestCompletedSync] = await Promise.all([
     getStoreSyncSummaryByShop(shop),
     getLatestProductSyncSummaryByShop(shop),
+    getLatestCompletedProductSyncByShop(shop),
   ]);
 
   if (!store) {
@@ -117,7 +151,8 @@ export async function getSyncStatusSummaryForShop(shop) {
     throw error;
   }
 
-  const syncSummary = toSyncStatusSummaryDto(store, latestSync);
+  const productCount = await getActiveProductCountByShop(shop, store.activeMirrorBatchId);
+  const syncSummary = toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productCount);
   await setCache(cacheKey, syncSummary, 60);
 
   return {

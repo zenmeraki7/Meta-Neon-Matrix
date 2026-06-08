@@ -22,13 +22,29 @@ export function toBulkEditStatusDto(result) {
 }
 
 export function toProductOptionListDto(result) {
-  const data = safeArray(result);
+  const data = safeArray(result)
+    .map((item) => {
+      if (item && typeof item === "object") {
+        const value = safeString(
+          item.value ?? item.title ?? item.name ?? item.label ?? item.id,
+          "",
+        );
+        const label = safeString(
+          item.label ?? item.title ?? item.name ?? item.value ?? item.id,
+          value,
+        );
+
+        return value ? { value, label } : null;
+      }
+
+      const value = safeString(item, "");
+      return value ? { value, label: value } : null;
+    })
+    .filter(Boolean);
+
   return {
     success: true,
-    data: data.map((value) => ({
-      value: safeString(value, ""),
-      label: safeString(value, ""),
-    })),
+    data,
     meta: { count: data.length },
   };
 }

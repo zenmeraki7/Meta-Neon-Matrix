@@ -14,13 +14,32 @@ function sanitizeRequestForLogging(req = {}) {
     headers,
     query: req?.query,
     params: req?.params,
-    body: req?.body ? "[REDACTED]" : undefined,
+    body: req?.body ? summarizeRequestBody(req.body) : undefined,
     rawBody: req?.rawBody ? "[REDACTED]" : undefined,
     session: req?.session ? "[REDACTED]" : undefined,
     accessToken: req?.accessToken ? "[REDACTED]" : undefined,
   };
 
   return redactSensitive(payload);
+}
+
+function summarizeRequestBody(body) {
+  if (!body || typeof body !== "object") {
+    return {
+      present: Boolean(body),
+      type: body === null ? "null" : typeof body,
+    };
+  }
+
+  return {
+    present: true,
+    keys: Object.keys(body).sort(),
+    filterType: body.filter == null ? null : typeof body.filter,
+    filtersCount: Array.isArray(body.filters) ? body.filters.length : null,
+    filterParamsCount: Array.isArray(body.filterParams) ? body.filterParams.length : null,
+    hasCursor: Object.prototype.hasOwnProperty.call(body, "cursor"),
+    hasLimit: Object.prototype.hasOwnProperty.call(body, "limit"),
+  };
 }
 
 function safeJson(value) {
@@ -37,6 +56,8 @@ export const logApiError = async ({
   req,
   source,
   level = "error",
+  errorId = null,
+  metadata = null,
 }) => {
   try {
     await db.errorLog.create({
@@ -52,13 +73,18 @@ export const logApiError = async ({
         path: req?.originalUrl || req?.url || null,
         statusCode: err?.statusCode || 500,
         safeContext: safeJson({
+          ...(metadata && typeof metadata === "object" ? metadata : {}),
+          errorId,
           params: req?.params,
           query: req?.query,
-          hasBody: Boolean(req?.body && Object.keys(req.body).length > 0),
+          bodySummary: summarizeRequestBody(req?.body),
           hasSession: Boolean(req?.session),
+          dbError: err?.meta || err?.clientVersion || err?.code || null,
+          stack: err?.stack || null,
         }),
         request: safeJson({
           ...sanitizeRequestForLogging(req),
+          errorId,
           statusCode: err?.statusCode || 500,
         }),
       },

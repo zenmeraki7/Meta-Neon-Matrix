@@ -7,6 +7,20 @@ export async function getProductCountByShop(shop) {
   return Number(productCount || 0);
 }
 
+export async function getActiveProductCountByShop(shop, activeMirrorBatchId = null) {
+  const resolvedShop = requireShopScope(shop);
+  const mirrorBatchId = String(activeMirrorBatchId || "").trim();
+  if (!mirrorBatchId) return 0;
+
+  const productCount = await prisma.product.count({
+    where: {
+      shop: resolvedShop,
+      mirrorBatchId,
+    },
+  });
+  return Number(productCount || 0);
+}
+
 export async function getLatestCompletedProductSyncByShop(shop) {
   const resolvedShop = requireShopScope(shop);
 
@@ -19,6 +33,7 @@ export async function getLatestCompletedProductSyncByShop(shop) {
     orderBy: { updatedAt: "desc" },
     select: {
       id: true,
+      status: true,
       updatedAt: true,
       recordCount: true,
       syncBatchId: true,

@@ -111,7 +111,8 @@ function toStableRowId(product) {
 }
 
 function normalizeProductsPayload(data) {
-  const rawProducts = Array.isArray(data?.products) ? data.products : [];
+  const payload = data?.data && typeof data.data === "object" ? data.data : data;
+  const rawProducts = Array.isArray(payload?.products) ? payload.products : [];
   let droppedRows = 0;
 
   const products = rawProducts
@@ -132,10 +133,10 @@ function normalizeProductsPayload(data) {
 
   return {
     products,
-    pagination: data?.pagination || null,
-    count: Number(data?.pagination?.total ?? data?.count ?? products.length) || 0,
-    unavailableReason: data?.unavailableReason || null,
-    mirrorHealth: data?.mirrorHealth || null,
+    pagination: payload?.pagination || null,
+    count: Number(payload?.pagination?.total ?? payload?.count ?? products.length) || 0,
+    unavailableReason: payload?.unavailableReason || null,
+    mirrorHealth: payload?.mirrorHealth || null,
     droppedRows,
   };
 }
@@ -184,6 +185,7 @@ export default function useProducts({
     queryKey: ["products", safeCursor || null, pageSize, resolvedFilterHash],
     enabled,
     initialData: normalizedInitialData,
+    initialDataUpdatedAt: normalizedInitialData ? Date.now() : undefined,
     staleTime: 10_000,
     queryFn: async ({ signal }) => {
       if (isCursorHashMismatch) {
@@ -216,7 +218,7 @@ export default function useProducts({
         filterHash: resolvedFilterHash,
       });
 
-      const normalized = normalizeProductsPayload(json?.data);
+      const normalized = normalizeProductsPayload(json);
 
       if (normalized.droppedRows > 0) {
         markPerf("products_rows_dropped_missing_stable_id", {
@@ -295,7 +297,7 @@ export default function useProducts({
           filterHash: resolvedFilterHash,
         });
 
-        return normalizeProductsPayload(json?.data);
+        return normalizeProductsPayload(json);
       },
     });
   }, [

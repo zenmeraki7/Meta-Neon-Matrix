@@ -111,6 +111,18 @@ const FilterValueInput = memo(function FilterValueInput({
     return noSuggestionsText || null;
   }, [error, hasSearched, loading, noSuggestionsText, options.length]);
 
+  if (filter.type === "enum") {
+    return (
+      <ChoiceList
+        titleHidden
+        choices={enumChoices}
+        selected={selectedValues}
+        allowMultiple={Boolean(filter.allowMultiple)}
+        onChange={handleChoiceChange}
+      />
+    );
+  }
+
   if (filter.isSearchable) {
     return (
       <Autocomplete
@@ -130,18 +142,6 @@ const FilterValueInput = memo(function FilterValueInput({
             onChange={onSearch}
           />
         }
-      />
-    );
-  }
-
-  if (filter.type === "enum") {
-    return (
-      <ChoiceList
-        titleHidden
-        choices={enumChoices}
-        selected={selectedValues}
-        allowMultiple={Boolean(filter.allowMultiple)}
-        onChange={handleChoiceChange}
       />
     );
   }

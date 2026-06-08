@@ -1,23 +1,26 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "6f9d8710bcea15a9a7814c24bb5404be"
+client_id = "6c1a39944a4ab6bdd6e4428ccceb028b"
 name = "new"
-application_url = "https://example.com"
+application_url = "https://appreciate-explosion-abc-allows.trycloudflare.com"
 embedded = true
+handle = "new-270"
 
 [webhooks]
-api_version = "2026-01"
+api_version = "2025-10"
 
   [[webhooks.subscriptions]]
-  topics = [ "bulk_operations/finish" ]
-  uri = "/webhooks/bulk-operations-finish"
+  topics = [ "products/create", "bulk_operations/finish" ]
+  uri = "/api/webhooks"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_inventory,read_products,write_products"
+scopes = "read_inventory,read_locations,read_metaobjects,read_products,write_products"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://appreciate-explosion-abc-allows.trycloudflare.com/api/auth/callback"
+]
 
 [build]
 automatically_update_urls_on_dev = true

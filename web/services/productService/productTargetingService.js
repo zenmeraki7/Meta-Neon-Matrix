@@ -55,6 +55,10 @@ function compileLegacyWhereViaEngine({
   filterParams = [],
   targetGranularity = "PRODUCT",
 }) {
+  if (!Array.isArray(filterParams) || filterParams.length === 0) {
+    return {};
+  }
+
   const filterAst = adaptLegacyFilterParamsToAst({
     filterParams: Array.isArray(filterParams) ? filterParams : [],
     targetGranularity,
@@ -129,8 +133,12 @@ function decodeCursorToken(cursorToken) {
   try {
     const payload = JSON.parse(Buffer.from(cursorToken, "base64url").toString("utf8"));
     return payload && typeof payload === "object" ? payload : null;
-  } catch (_error) {
-    return null;
+  } catch (error) {
+    const cursorError = new Error("Invalid cursor");
+    cursorError.code = "INVALID_CURSOR";
+    cursorError.statusCode = 400;
+    cursorError.cause = error;
+    throw cursorError;
   }
 }
 
@@ -204,7 +212,10 @@ function assertProductCursorContext({
     cursorPayload.filterHash !== filterHash ||
     cursorPayload.targetType !== "PRODUCT"
   ) {
-    throw new Error("Invalid cursor for current targeting query");
+    const error = new Error("Invalid cursor for current targeting query");
+    error.code = "INVALID_CURSOR";
+    error.statusCode = 400;
+    throw error;
   }
 }
 
@@ -223,7 +234,10 @@ function assertVariantCursorContext({
     cursorPayload.sortKey !== sortKey ||
     cursorPayload.sortOrder !== sortOrder
   ) {
-    throw new Error("Invalid cursor for current targeting query");
+    const error = new Error("Invalid cursor for current targeting query");
+    error.code = "INVALID_CURSOR";
+    error.statusCode = 400;
+    throw error;
   }
 }
 

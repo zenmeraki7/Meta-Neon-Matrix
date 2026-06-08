@@ -38,7 +38,6 @@ import {
 } from "../../../../store/slices/productSlice";
 import { buildCanonicalFilterHash } from "../hooks/useProducts";
 const MIN_PRODUCT_SEARCH_LENGTH = 2;
-const STATUS_RAIL_MIN_HEIGHT = "84px";
 
 function getStableProductId(product) {
   const id =
@@ -160,14 +159,34 @@ export default function ProductsPage() {
     });
 
   const productMirrorHealth = mirrorHealth || bootstrapProductList?.mirrorHealth || null;
+  const backendProductCount = Number(
+    syncStatus?.productCount ??
+    bootstrapSyncStatus?.productCount ??
+    totalCount ??
+    0,
+  );
+  const syncNeeded = Boolean(
+    syncStatus?.syncNeeded ??
+    bootstrapSyncStatus?.syncNeeded ??
+    (backendProductCount === 0),
+  );
+  const emptyMirror = Boolean(
+    syncStatus?.emptyMirror ??
+    bootstrapSyncStatus?.emptyMirror ??
+    (backendProductCount === 0 && syncNeeded),
+  );
   const productUnavailableReason =
     unavailableReason ||
     bootstrapProductList?.unavailableReason ||
     bootstrapProductList?.error?.message ||
     null;
   const isProductMirrorUnavailable =
-    Boolean(productUnavailableReason) ||
-    (!productMirrorHealth?.activeMirrorBatchId && totalCount === 0);
+    syncNeeded ||
+    Boolean(productUnavailableReason);
+  const pageError =
+    bootstrapQuery.error?.message ||
+    error ||
+    null;
 
   const productIdsCsv = useMemo(
     () =>
@@ -403,24 +422,43 @@ export default function ProductsPage() {
 
   const shouldShowLoadingState =
     loading ||
+    bootstrapQuery.isLoading ||
     !hasFetched;
 
-  const shouldShowEmptyState =
+  const shouldShowSyncNeededState =
     !shouldShowLoadingState &&
-    !error &&
+    !pageError &&
     hasFetched &&
     !isSyncInProgress &&
-    totalCount === 0;
+    syncNeeded &&
+    emptyMirror;
+
+  const shouldShowFilteredEmptyState =
+    !shouldShowLoadingState &&
+    !pageError &&
+    hasFetched &&
+    !isSyncInProgress &&
+    backendProductCount > 0 &&
+    products.length === 0;
+
+  const shouldShowProductStatusRail =
+    Boolean(pageError) ||
+    shouldShowSyncNeededState ||
+    (isProductMirrorUnavailable &&
+      (!isSyncInProgress || isSyncStale) &&
+      backendProductCount === 0) ||
+    (isSyncInProgress && !isSyncStale && !products.length) ||
+    shouldShowFilteredEmptyState;
 
   const resultSummary = useMemo(() => {
     if (shouldShowLoadingState) {
       return <SkeletonBodyText lines={1} />;
     }
 
-    if (totalCount > 0) {
+    if (backendProductCount > 0) {
       return (
         <InlineStack gap="200" blockAlign="center">
-          <Badge tone="info">{totalCount}</Badge>
+          <Badge tone="info">{backendProductCount}</Badge>
           <Text variant="bodySm" tone="subdued">
             {t("productsMatch")}
           </Text>
@@ -428,7 +466,7 @@ export default function ProductsPage() {
       );
     }
 
-    if (shouldShowEmptyState) {
+    if (shouldShowFilteredEmptyState) {
       return (
         <Text variant="bodySm" tone="subdued">
           {t("noProductsMatch")}
@@ -448,7 +486,7 @@ export default function ProductsPage() {
     }
 
     return null;
-  }, [isSyncInProgress, shouldShowEmptyState, shouldShowLoadingState, totalCount, t]);
+  }, [backendProductCount, isSyncInProgress, shouldShowFilteredEmptyState, shouldShowLoadingState, t]);
 
   const handleNextPage = useCallback(() => {
     dispatch(
@@ -507,9 +545,13 @@ export default function ProductsPage() {
             </Box>
           </Card>
         </Layout.Section>
-        <Layout.Section>
-          <Box minHeight={STATUS_RAIL_MIN_HEIGHT}>
-            {isProductMirrorUnavailable && (!isSyncInProgress || isSyncStale) ? (
+        {shouldShowProductStatusRail ? (
+          <Layout.Section>
+            {pageError ? (
+              <Banner tone="critical" title="Products could not be loaded">
+                <p>{pageError}</p>
+              </Banner>
+            ) : shouldShowSyncNeededState || (isProductMirrorUnavailable && (!isSyncInProgress || isSyncStale) && backendProductCount === 0) ? (
               <Banner
                 tone="warning"
                 title={isSyncStale ? "Product sync is stuck" : "Product sync needed"}
@@ -526,9 +568,13 @@ export default function ProductsPage() {
               <Banner tone="info" title="Sync in progress">
                 <p>Products are still syncing. Counts and rows will fill in automatically as the mirror updates.</p>
               </Banner>
+            ) : shouldShowFilteredEmptyState ? (
+              <Banner tone="info" title="No products match the current filters">
+                <p>Try changing or clearing filters to broaden the product set.</p>
+              </Banner>
             ) : null}
-          </Box>
-        </Layout.Section>
+          </Layout.Section>
+        ) : null}
 
         <Layout.Section>
           <Card>
@@ -584,13 +630,17 @@ export default function ProductsPage() {
               onNext={handleNextPage}
               onPrev={handlePreviousPage}
               emptyHeading={
-                isProductMirrorUnavailable
+                shouldShowSyncNeededState
                   ? "Sync products to show rows"
+                  : shouldShowFilteredEmptyState
+                    ? "No products match the current filters"
                   : undefined
               }
               emptyText={
-                isProductMirrorUnavailable
+                shouldShowSyncNeededState
                   ? "The product mirror does not have an active batch yet. Run product sync, then this table will fill automatically."
+                  : shouldShowFilteredEmptyState
+                    ? "Try changing or clearing filters to broaden the product set."
                   : undefined
               }
             />

@@ -18,9 +18,9 @@ export function normalizeProductsBootstrapQuery(req = {}, session = null) {
   });
 
   const limit = normalizeIntInRange(query.limit, {
-    fallback: 20,
+    fallback: 50,
     min: 1,
-    max: 50,
+    max: 100,
     fieldName: "limit",
   });
 

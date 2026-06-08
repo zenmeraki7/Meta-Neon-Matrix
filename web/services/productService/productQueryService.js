@@ -15,12 +15,16 @@ import {
 const FILTER_VALUE_FIELD_MAP = {
   vendor: { source: "product", field: "vendor" },
   tag: { source: "product_tags", field: "value" },
+  tags: { source: "product_tags", field: "value" },
   product_type: { source: "product", field: "productType" },
+  productType: { source: "product", field: "productType" },
   category: { source: "product", field: "categoryName" },
+  categoryName: { source: "product", field: "categoryName" },
   option_name_1: { source: "product", field: "option1Name" },
   option_name_2: { source: "product", field: "option2Name" },
   option_name_3: { source: "product", field: "option3Name" },
   collection: { source: "collection", field: "title" },
+  collections: { source: "collection", field: "title" },
   googleShoppingCategory: { source: "product", field: "googleShoppingCategory" },
   googleShoppingColor: { source: "product", field: "googleShoppingColor" },
   googleShoppingCustomLabel0: { source: "product", field: "googleShoppingCustomLabel0" },
@@ -179,7 +183,7 @@ export async function getDistinctProductFilterValues({
   const cachedData = await getCache(cacheKey);
   if (cachedData) return cachedData;
 
-  const mirrorBatchId = await getActiveMirrorBatchId(shop);
+  const mirrorBatchId = await getActiveMirrorBatchId(shop, { purpose: "PREVIEW" });
   let rows = [];
 
   if (fieldConfig.source === "product") {
