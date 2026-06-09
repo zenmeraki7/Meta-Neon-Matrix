@@ -1,361 +1,239 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useState } from "react";
 import {
-  Page,
-  Card,
-  Text,
-  BlockStack,
-  InlineStack,
-  Button,
   Badge,
-  Divider,
+  Banner,
+  BlockStack,
   Box,
-  Icon,
-  Collapsible,
-  Spinner,
+  Button,
+  Card,
+  Divider,
+  InlineGrid,
+  InlineStack,
   Layout,
-} from '@shopify/polaris';
-import { CheckIcon, StarFilledIcon } from '@shopify/polaris-icons';
-import { Modal } from "@shopify/polaris";
-import { useNavigate } from "react-router-dom"
-
+  Page,
+  Text,
+} from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+
 import { protectedApiPost } from "../api/protectedApiClient";
-import { subscriptionService } from "../Domain/Subscription/services/subscriptionService";
+import { getDefaultPricingPlans } from "../Domain/Subscription/config/pricingPlans";
 import { useEmbeddedRedirect } from "../hooks/useEmbeddedRedirect";
 import { toSafeErrorMessage } from "../utils/frontendError";
-import { useToast as useAppToast } from "../components/providers/ToastProvider";
-import styles from "./Pricing.module.css";
+
+const PLAN_BADGES = {
+  STARTER: { label: "Current plan", tone: "success" },
+  BASIC_MONTHLY: { label: "Standard", tone: "new" },
+  ADVANCED_MONTHLY: { label: "Most popular", tone: "info" },
+  PROFESSIONAL_MONTHLY: { label: "Best for scale", tone: "attention" },
+};
+
+const PLAN_DESCRIPTIONS = {
+  STARTER: "For small stores getting started with basic bulk editing.",
+  BASIC_MONTHLY: "For stores that need faster bulk editing workflows.",
+  ADVANCED_MONTHLY: "For growing stores with recurring catalog operations.",
+  PROFESSIONAL_MONTHLY: "For teams managing high-volume catalog operations.",
+};
+
+const PLAN_CTA_LABELS = {
+  STARTER: "Current plan",
+  BASIC_MONTHLY: "Choose Basic",
+  ADVANCED_MONTHLY: "Choose Advanced",
+  PROFESSIONAL_MONTHLY: "Choose Pro",
+};
+
+function PricingCard({ plan, isSubscribing, onSelectPlan, t, planText }) {
+  const features = Array.isArray(plan.features) ? plan.features : [];
+  const badge = PLAN_BADGES[plan.key] || { label: "Standard", tone: "new" };
+  const description = PLAN_DESCRIPTIONS[plan.key] || plan.description;
+  const ctaLabel = PLAN_CTA_LABELS[plan.key] || plan.buttonText;
+  const isFree = plan.price == null;
+
+  return (
+    <Card>
+      <Box padding="500">
+        <BlockStack gap="500">
+          <BlockStack gap="300">
+            <Text variant="headingLg" as="h2">
+              {planText(plan.name)}
+            </Text>
+
+            <InlineStack align="start">
+              <Badge tone={badge.tone}>{t(badge.label, { defaultValue: badge.label })}</Badge>
+            </InlineStack>
+
+            <Text as="p" tone="subdued">
+              {planText(description)}
+            </Text>
+          </BlockStack>
+
+          <BlockStack gap="200">
+            {isFree ? (
+              <Text variant="heading3xl" as="p" fontWeight="bold">
+                Free
+              </Text>
+            ) : (
+              <InlineStack align="start" blockAlign="end" gap="200" wrap={false}>
+                <Text variant="heading3xl" as="p" fontWeight="bold">
+                  ${plan.price}
+                </Text>
+                <Box paddingBlockEnd="100">
+                  <Text variant="bodyMd" as="p" tone="subdued">
+                    / {t("PerMonth", { defaultValue: "month" })}
+                  </Text>
+                </Box>
+              </InlineStack>
+            )}
+
+            <Text variant="bodySm" as="p" tone="subdued">
+              {isFree
+                ? t("NoMonthlyCharge", { defaultValue: "No monthly charge" })
+                : t("BilledEveryThirtyDays", { defaultValue: "Billed every 30 days" })}
+            </Text>
+          </BlockStack>
+
+          <Button
+            variant={plan.isCurrent ? "secondary" : plan.buttonVariant}
+            fullWidth
+            loading={isSubscribing}
+            disabled={plan.isCurrent || isSubscribing}
+            onClick={() => onSelectPlan(plan)}
+          >
+            {plan.isCurrent
+              ? t("CurrentPlan", { defaultValue: "Current plan" })
+              : t(ctaLabel, { defaultValue: ctaLabel })}
+          </Button>
+
+          <Divider />
+
+          <BlockStack gap="300">
+            <Text variant="headingMd" as="h3">
+              {t("WhatsIncluded", { defaultValue: "What's included" })}
+            </Text>
+            <BlockStack gap="300">
+              {features.map((feature) => (
+                <InlineStack key={feature} gap="300" blockAlign="start" wrap={false}>
+                  <Text variant="bodyMd" as="span" tone="success">
+                    {"\u2713"}
+                  </Text>
+                  <Text variant="bodyMd" as="p">
+                    {planText(feature)}
+                  </Text>
+                </InlineStack>
+              ))}
+            </BlockStack>
+          </BlockStack>
+        </BlockStack>
+      </Box>
+    </Card>
+  );
+}
 
 export default function PricingPage() {
-  const navigate = useNavigate()
-  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { t } = useTranslation(["subscription", "common"]);
   const { redirectRemote } = useEmbeddedRedirect();
-  const { showError } = useAppToast();
-  const [openFaqIndex, setOpenFaqIndex] = useState(null);
-  const [showFreeModal, setShowFreeModal] = useState(false);
-  const [selectedFreePlan, setSelectedFreePlan] = useState(null);
-  const [plans, setPlans] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [plans, setPlans] = useState(() => getDefaultPricingPlans());
+  const [billingError, setBillingError] = useState(null);
   const [subscribing, setSubscribing] = useState(null);
-  // ✅ Move fetchPlans outside of useEffect so we can reuse it
-  const fetchPlans = useCallback(async () => {
-    try {
-      setLoading(true);
-      const data = await subscriptionService.getSubscriptionPlans();
 
-      if (data.success && data.plans) {
-        setPlans(data.plans);
-      }
-      else {
-        setError(t("pricingLoadPlansError", { defaultValue: "Failed to load plans" }));
-      }
-    } catch (err) {
-      console.error('Error fetching plans:', err);
-      setError(
-        toSafeErrorMessage(t, err, "common.errors.generic"),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => {
-    void fetchPlans();
-  }, [fetchPlans]);
-
-  useEffect(() => {
-    if (!error) {
-      return;
-    }
-    showError(error);
-  }, [error, showError]);
-
-  const faqs = [
-    {
-      question: t("faqQuestion1"),
-      answer: t("faqAnswer1"),
-    },
-    {
-      question: t("faqQuestion2"),
-      answer: t("faqAnswer2"),
-    },
-    {
-      question: t("faqQuestion3"),
-      answer: t("faqAnswer3"),
-    },
-    {
-      question: t("faqQuestion4"),
-      answer: t("faqAnswer4"),
-    },
-    {
-      question: t("faqQuestion5"),
-      answer: t("faqAnswer5"),
-    },
-  ];
-
-  const toggleFaq = (index) => {
-    setOpenFaqIndex(openFaqIndex === index ? null : index);
-  };
+  const planText = useCallback((value) => String(value || "").trim(), []);
 
   const handleSelectPlan = async (plan) => {
+    if (plan.isCurrent) {
+      return;
+    }
+
     try {
+      setBillingError(null);
       setSubscribing(plan.key);
 
-      const data = await protectedApiPost("/api/subscription/create-subscription", {
-        planKey: plan.key,
-        returnUrl: `${window.location.origin}/pricing`,
-      }, {
-        idempotent: true,
-      });
+      const data = await protectedApiPost(
+        "/api/subscription/create-subscription",
+        {
+          planKey: plan.key,
+          returnUrl: `${window.location.origin}/pricing`,
+        },
+        {
+          idempotent: true,
+        },
+      );
 
-      if (!data.success) {
-        throw new Error(data.message || t("subscriptionFailed", { defaultValue: "Subscription failed" }));
+      if (!data?.success) {
+        throw new Error(
+          data?.message ||
+            t("subscriptionFailed", { defaultValue: "Subscription failed" }),
+        );
       }
 
-      // ✅ Handle FREE plan - refetch to update UI
       if (!data.confirmationUrl) {
-        // alert("Free plan activated successfully");
-        setSubscribing(null);
-        // ✅ Refetch plans to update the UI
-        await fetchPlans();
+        setPlans((currentPlans) =>
+          currentPlans.map((currentPlan) => ({
+            ...currentPlan,
+            isCurrent: currentPlan.key === plan.key,
+          })),
+        );
         return;
       }
 
-      // Redirect to Shopify payment page for paid plans
       redirectRemote(data.confirmationUrl);
     } catch (err) {
       console.error("Subscription error:", err);
-      showError(toSafeErrorMessage(t, err, "common.errors.generic"));
+      setBillingError(
+        err?.code === "AUTH_FETCH_UNAVAILABLE"
+          ? t("billingAuthUnavailable", {
+              defaultValue:
+                "Billing actions are unavailable because authenticated fetch is not initialized. Reload the embedded app.",
+            })
+          : toSafeErrorMessage(t, err, "common.errors.generic"),
+      );
+    } finally {
       setSubscribing(null);
     }
   };
 
-  if (loading) {
-    return (
-      <Page>
-        <Layout>
-          <Layout.Section>
-            <Box paddingBlockStart="1600" paddingBlockEnd="1600">
-              <BlockStack gap="400" inlineAlign="center">
-                <Spinner size="large" />
-                <Text variant="bodyLg" as="p" tone="subdued">
-                  {t("LoadingPlans")}
-                </Text>
-              </BlockStack>
-            </Box>
-          </Layout.Section>
-        </Layout>
-      </Page>
-    );
-  }
-
-  if (error) {
-    return (
-      <Page>
-        <Layout>
-          <Layout.Section>
-            <Box paddingBlockStart="400">
-              <Card>
-                <Box padding="500">
-                  <BlockStack gap="300" inlineAlign="center">
-                    <Text as="h2" variant="headingMd">
-                      {t("pricingUnableToLoadPlans", { defaultValue: "Unable to load plans" })}
-                    </Text>
-                    <Text as="p" tone="subdued">
-                      {t("pricingRetryLoadingData", { defaultValue: "Please retry loading pricing data." })}
-                    </Text>
-                    <Button onClick={fetchPlans} variant="primary">
-                      Retry
-                    </Button>
-                  </BlockStack>
-                </Box>
-              </Card>
-            </Box>
-          </Layout.Section>
-        </Layout>
-      </Page>
-    );
-  }
+  const visiblePlans = Array.isArray(plans) ? plans : getDefaultPricingPlans();
 
   return (
     <Page
-      title={t("pricingPageTitle")}
-      subtitle={t("pricingPageSubtitle")}
+      title={t("pricingPageTitle", { defaultValue: "Pricing" })}
+      subtitle={t("pricingPageSubtitle", {
+        defaultValue: "Choose a plan that fits your store's bulk editing needs.",
+      })}
     >
       <Layout>
         <Layout.Section>
-          <div className={styles.plansGrid}>
-            {plans.map((plan) => (
-              <div key={plan.key} className={styles.planCardWrap}>
-                <Card>
-                  {plan.isCurrent && (
-                    <Box position="absolute" insetBlockStart="200" insetInlineEnd="200">
-                      <Badge tone="success">{t("CurrentPlan")}</Badge>
-                    </Box>
-                  )}
-                  <div className={plan.popular ? styles.popularHeader : styles.headerBase}>
-                    {plan.popular && (
-                      <InlineStack align="center" gap="200" blockAlign="center">
-                        <Text variant="headingSm" as="p" tone="text-inverse">
-                          {t("MostPopular")}
-                        </Text>
-                      </InlineStack>
-                    )}
-                  </div>
+          <BlockStack gap="500">
+            <Text as="p" tone="subdued">
+              {t("pricingBillingNote", {
+                defaultValue:
+                  "All charges are billed in USD. Recurring charges are billed every 30 days.",
+              })}
+            </Text>
 
-                  <Box paddingBlockStart={plan.popular ? "400" : "0"}>
-                    <BlockStack gap="500">
-                      <BlockStack gap="200">
-                        <Text variant="headingXl" as="h2">
-                          {t(plan.name)}
-                        </Text>
-                        <Text variant="bodyMd" as="p" tone="subdued">
-                          {t(plan.description)}
-                        </Text>
-                      </BlockStack>
+            {billingError ? (
+              <Banner tone="warning" onDismiss={() => setBillingError(null)}>
+                <p>{billingError}</p>
+              </Banner>
+            ) : null}
 
-                      <BlockStack gap="200">
-                        <InlineStack align="start" blockAlign="end" gap="200">
-                          <Text variant="heading3xl" as="p" fontWeight="bold">
-                            ${plan.price}
-                          </Text>
+            <InlineGrid columns={{ xs: 1, sm: 2, md: 2, lg: 4 }} gap="500">
+              {visiblePlans.map((plan) => {
+                const isSubscribing = subscribing === plan.key;
 
-                          {plan.compareAtPrice && plan.compareAtPrice > plan.price && (
-                            <Text variant="headingMd" as="p" tone="subdued">
-                              <span className={styles.comparePrice}>
-                                ${plan.compareAtPrice}
-                              </span>
-                            </Text>
-                          )}
-
-                          <Box paddingBlockEnd="100">
-                            <Text variant="headingMd" as="p" tone="subdued">
-                              {t("PerMonth")}
-                            </Text>
-                          </Box>
-                        </InlineStack>
-
-
-                        {plan.isFree ? (
-                          <Badge tone="success">{t("FreeForever")}</Badge>
-                        ) : (
-                          <Text variant="bodySm" as="p" tone="subdued">
-                            {t(plan.highlight)}
-                          </Text>
-                        )}
-                      </BlockStack>
-
-                      <Button
-                        variant={plan.isCurrent ? "primary" : plan.buttonVariant}
-                        size="large"
-                        fullWidth
-                        disabled={plan.isCurrent || subscribing === plan.key}
-                        onClick={() => {
-                          if (plan.isFree) {
-                            setSelectedFreePlan(plan);
-                            setShowFreeModal(true);
-                          } else {
-                            handleSelectPlan(plan);
-                          }
-                        }}
-                      >
-                        {subscribing === plan.key ? (
-                          <InlineStack gap="200" align="center">
-                            <Spinner size="small" />
-                            <Text as="span">{t("Processing")}</Text>
-                          </InlineStack>
-                        ) : plan.isCurrent ? (
-                          t("CurrentPlan")
-                        ) : (
-                          t(plan.buttonText)
-                        )}
-                      </Button>
-
-                      <Divider />
-
-                      <BlockStack gap="300">
-                        <Text variant="headingMd" as="h3">
-                          {t("WhatsIncluded")}
-                        </Text>
-                        <BlockStack gap="300">
-                          {plan.features.map((feature, featureIndex) => (
-                            <div key={featureIndex} className={styles.featureRow}>
-                              <div className={styles.featureIconCell}>
-                                <Icon source={CheckIcon} tone="success" />
-                              </div>
-
-                              <div className={styles.featureTextCell}>
-                                <Text
-                                  variant="bodyMd"
-                                  as="p"
-                                >
-                                  {t(feature)}
-                                </Text>
-                              </div>
-                            </div>
-                          ))}
-                        </BlockStack>
-                      </BlockStack>
-                    </BlockStack>
-                  </Box>
-                </Card>
-              </div>
-            ))}
-          </div>
-        </Layout.Section>
-
-        <Layout.Section>
-          <Box paddingBlockStart="800" paddingBlockEnd="400">
-            <BlockStack gap="600" inlineAlign="center">
-              <BlockStack gap="300" inlineAlign="center">
-                <Text variant="heading2xl" as="h2" alignment="center">
-                  {t("FrequentlyAskedQuestions")}
-                </Text>
-                <Box maxWidth="600px">
-                  <Text variant="bodyLg" as="p" tone="subdued" alignment="center">
-                    {t("PlansAndBillingHelpText")}
-                  </Text>
-                </Box>
-              </BlockStack>
-
-              <Box width="100%" maxWidth="800px">
-                <BlockStack gap="300">
-                  {faqs.map((faq, index) => (
-                    <Card key={index}>
-                      <Box>
-                        <Button
-                          variant="plain"
-                          textAlign="left"
-                          fullWidth
-                          onClick={() => toggleFaq(index)}
-                          disclosure={openFaqIndex === index ? 'up' : 'down'}
-                        >
-                          <Text variant="headingMd" as="h3">
-                            {faq.question}
-                          </Text>
-                        </Button>
-                        <Collapsible
-                          open={openFaqIndex === index}
-                          id={`faq-${index}`}
-                          transition={{ duration: '200ms', timingFunction: 'ease-in-out' }}
-                        >
-                          <Box paddingBlockStart="400">
-                            <Divider />
-                            <Box paddingBlockStart="400">
-                              <Text variant="bodyMd" as="p" tone="subdued">
-                                {faq.answer}
-                              </Text>
-                            </Box>
-                          </Box>
-                        </Collapsible>
-                      </Box>
-                    </Card>
-                  ))}
-                </BlockStack>
-              </Box>
-            </BlockStack>
-          </Box>
+                return (
+                  <PricingCard
+                    key={plan.key}
+                    plan={plan}
+                    isSubscribing={isSubscribing}
+                    onSelectPlan={handleSelectPlan}
+                    t={t}
+                    planText={planText}
+                  />
+                );
+              })}
+            </InlineGrid>
+          </BlockStack>
         </Layout.Section>
 
         <Layout.Section>
@@ -365,58 +243,28 @@ export default function PricingPage() {
                 <BlockStack gap="400" inlineAlign="center">
                   <BlockStack gap="200" inlineAlign="center">
                     <Text variant="headingLg" as="h3" alignment="center">
-                      {t("StillHaveQuestions")}
+                      {t("StillHaveQuestions", { defaultValue: "Still have questions?" })}
                     </Text>
                     <Text variant="bodyMd" as="p" tone="subdued" alignment="center">
-                      {t("SupportHelpChoosePlan")}
+                      {t("SupportHelpChoosePlan", {
+                        defaultValue:
+                          "Our support team can help you choose the right plan.",
+                      })}
                     </Text>
                   </BlockStack>
-                  <InlineStack gap="300" align="center">
-                    <Button variant="primary" size="large"
-                      onClick={() => navigate("/suggestionpage")}
-                    >
-                      {t("ContactSupport")}
-                    </Button>
-
-                  </InlineStack>
+                  <Button
+                    variant="primary"
+                    size="large"
+                    onClick={() => navigate("/suggestionpage")}
+                  >
+                    {t("ContactSupport", { defaultValue: "Contact support" })}
+                  </Button>
                 </BlockStack>
               </Box>
             </Card>
           </Box>
         </Layout.Section>
       </Layout>
-      <Modal
-        open={showFreeModal}
-        onClose={() => setShowFreeModal(false)}
-        title={t("activateFreePlanTitle", { defaultValue: "Activate Free Plan?" })}
-        primaryAction={{
-          content: t("Confirm"),
-          onAction: async () => {
-            setShowFreeModal(false);
-            if (selectedFreePlan) {
-              await handleSelectPlan(selectedFreePlan);
-            }
-          },
-        }}
-        secondaryActions={[
-          {
-            content: t("Cancel"),
-            onAction: () => setShowFreeModal(false),
-          },
-        ]}
-      >
-        <Modal.Section>
-          <Text variant="bodyMd" as="p">
-            {t("FreePlanActivationLine1")}
-            <br />
-            <br />
-            {t("FreePlanActivationLine2")}
-            <br />
-            <br />
-            {t("FreePlanActivationLine3")}
-          </Text>
-        </Modal.Section>
-      </Modal>
     </Page>
   );
 }

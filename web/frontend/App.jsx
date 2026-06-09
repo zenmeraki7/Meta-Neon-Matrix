@@ -21,16 +21,26 @@ import "./app.css";
 
 const pages = import.meta.glob("./pages/**/!(*.test.[jt]sx)*.([jt]sx)");
 
+function getEmbeddedRouterBasename() {
+  if (typeof window === "undefined") {
+    return "/";
+  }
+
+  const match = window.location.pathname.match(/^(\/store\/[^/]+\/apps\/[^/]+)(?:\/|$)/);
+  return match?.[1] || "/";
+}
+
 export default function App() {
   const { host } = getShopifyContext();
   const hasApiKey = Boolean(import.meta.env.VITE_SHOPIFY_API_KEY);
 
   const [isSyncing, setIsSyncing] = useState(false);
   const { t } = useTranslation();
+  const routerBasename = getEmbeddedRouterBasename();
 
   if (!host || !hasApiKey) {
     return (
-      <BrowserRouter>
+      <BrowserRouter basename={routerBasename}>
         <PolarisProvider>
           <MissingEmbeddedContext missingApiKey={!hasApiKey} />
         </PolarisProvider>
@@ -39,20 +49,20 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter basename="/">
+    <BrowserRouter basename={routerBasename}>
       <AppBridgeProvider host={host}>
         <PolarisProvider>
           <AuthenticatedFetchProvider>
-            <ToastProvider>
-              <QueryProvider>
-                <EmbeddedNavMenu isSyncing={isSyncing} t={t} />
-                <Frame>
+            <Frame>
+              <ToastProvider>
+                <QueryProvider>
+                  <EmbeddedNavMenu isSyncing={isSyncing} t={t} />
                   <ErrorBoundary context="App routes">
                     <Routes pages={pages} data={{ setIsSyncing }} />
                   </ErrorBoundary>
-                </Frame>
-              </QueryProvider>
-            </ToastProvider>
+                </QueryProvider>
+              </ToastProvider>
+            </Frame>
           </AuthenticatedFetchProvider>
         </PolarisProvider>
       </AppBridgeProvider>
