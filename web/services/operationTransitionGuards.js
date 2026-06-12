@@ -1,4 +1,6 @@
-import { db } from "../repositories/repositoryDb.js";
+import { db as repositoryDb } from "../repositories/repositoryDb.js";
+
+const db = repositoryDb;
 
 export async function guardedEditHistoryUpdate({
   id,
@@ -7,7 +9,7 @@ export async function guardedEditHistoryUpdate({
   expectedStatuses = [],
   extraWhere = {},
   data,
-  db = db,
+  db = repositoryDb,
 }) {
   const where = {
     id,

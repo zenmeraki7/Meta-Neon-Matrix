@@ -29,6 +29,7 @@ import metricsRoute from "./routes/metricsRoute.js";
 import filterCombinationRoutes from "./routes/filterCombinationRoutes.js";
 import rumRoutes from "./routes/rumRoutes.js";
 import bootstrapRoutes from "./routes/bootstrapRoutes.js";
+import variantsRoutes from "./routes/variants.js";
 
 // Socket
 import { initSocket } from "./socket.js";
@@ -186,6 +187,7 @@ export const buildApp = (_server, io) => {
 
   // Routes
   app.use("/api/products", productRoutes);
+  app.use("/api/variants", variantsRoutes);
   app.use("/api/recurring-edits", recurringEditRoutes);
   app.use("/api/collection", collectionRoutes);
   app.use("/api/suggestion", SuggestionRoutes);

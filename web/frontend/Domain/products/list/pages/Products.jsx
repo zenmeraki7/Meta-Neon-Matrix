@@ -24,11 +24,10 @@ import { useFilterRegistry } from "../hooks/useFilterRegistry";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import { useSyncStatusHelpers } from "../../../../hooks/useSyncStatusQuery";
 import { useApiClient } from "../../../../hooks/useApiClient";
-import TableErrorBoundary from "../../../../components/Error/TableErrorBoundary";
-import VariantMetafieldGrid from "../../../variantMetafields/VariantMetafieldGrid";
 
 import {
   setProducts,
+  setSearch,
   selectFilters,
   selectCursor,
   selectCursorFilterHash,
@@ -37,6 +36,7 @@ import {
   setCursorForFilterHash,
 } from "../../../../store/slices/productSlice";
 import { buildCanonicalFilterHash } from "../hooks/useProducts";
+import { buildProductTargetingContract } from "../../shared/productTargetingContract";
 const MIN_PRODUCT_SEARCH_LENGTH = 2;
 
 function getStableProductId(product) {
@@ -165,6 +165,7 @@ export default function ProductsPage() {
     totalCount ??
     0,
   );
+  const filteredProductCount = Number(totalCount || 0);
   const syncNeeded = Boolean(
     syncStatus?.syncNeeded ??
     bootstrapSyncStatus?.syncNeeded ??
@@ -197,83 +198,22 @@ export default function ProductsPage() {
     [products],
   );
 
-  const metafieldDefinitionsQuery = useQuery({
-    queryKey: ["metafield-definitions"],
-    queryFn: async ({ signal }) =>
-      api.get("/api/metafield-definitions", { signal }),
-    staleTime: 30_000,
-    retry: 1,
-  });
-
   const variantsGridQuery = useQuery({
     queryKey: ["variants-grid", productIdsCsv],
     enabled: Boolean(productIdsCsv),
     queryFn: async ({ signal }) => {
-      const params = new URLSearchParams();
-      params.set("limit", "500");
-      params.set("productIds", productIdsCsv);
-      return api.get(`/api/variants?${params.toString()}`, { signal });
+      return api.post(
+        "/api/variants/query",
+        {
+          limit: 500,
+          productIds: products.map(getStableProductId).filter(Boolean),
+        },
+        { signal },
+      );
     },
     staleTime: 10_000,
     retry: 1,
   });
-
-  const [sessionId, setSessionId] = useState(null);
-  const sessionSeedRef = useRef("");
-
-  const variantRows = useMemo(
-    () =>
-      Array.isArray(variantsGridQuery.data?.rows)
-        ? variantsGridQuery.data.rows
-        : [],
-    [variantsGridQuery.data?.rows],
-  );
-
-  const variantCount = variantRows.length;
-
-  useEffect(() => {
-    const nextSeed = `${productIdsCsv}:${variantCount}`;
-
-    if (!productIdsCsv || variantCount === 0) {
-      if (sessionSeedRef.current !== "") {
-        sessionSeedRef.current = "";
-        setSessionId(null);
-      }
-
-      return;
-    }
-
-    if (sessionSeedRef.current === nextSeed) {
-      return;
-    }
-
-    let active = true;
-    sessionSeedRef.current = nextSeed;
-
-    async function createSession() {
-      try {
-        const created = await api.post("/api/sessions", {
-          filterParams: effectiveFilters,
-          variantCount,
-        });
-
-        const nextSessionId = String(created?.session?.id || "").trim();
-
-        if (!active) return;
-
-        setSessionId(nextSessionId || null);
-      } catch {
-        if (!active) return;
-        setSessionId(null);
-      }
-    }
-
-    void createSession();
-
-    return () => {
-      active = false;
-    };
-  }, [api, productIdsCsv, variantCount, effectiveFilters]);
 
   useEffect(() => {
     if (!bootstrapStoreDetails) return;
@@ -371,16 +311,28 @@ export default function ProductsPage() {
   const handleCommitSearch = useCallback(
     (nextSearch) => {
       setCommittedSearch(nextSearch);
+      dispatch(setSearch(nextSearch));
       applyAtomicFilterCursorReset(filterState, nextSearch);
     },
-    [applyAtomicFilterCursorReset, filterState],
+    [applyAtomicFilterCursorReset, dispatch, filterState],
   );
 
   const onClearAll = () => {
     setCommittedSearch("");
+    dispatch(setSearch(""));
     setSearchResetSignal((current) => current + 1);
     applyAtomicFilterCursorReset([], "");
   };
+
+  const editTargeting = useMemo(
+    () =>
+      buildProductTargetingContract({
+        filters: filterState,
+        searchQuery: committedSearch,
+        selectionMode: "filtered",
+      }),
+    [committedSearch, filterState],
+  );
 
   const handleRemoveFilter = useCallback(
     (field) => {
@@ -455,10 +407,10 @@ export default function ProductsPage() {
       return <SkeletonBodyText lines={1} />;
     }
 
-    if (backendProductCount > 0) {
+    if (filteredProductCount > 0) {
       return (
         <InlineStack gap="200" blockAlign="center">
-          <Badge tone="info">{backendProductCount}</Badge>
+          <Badge tone="info">{filteredProductCount}</Badge>
           <Text variant="bodySm" tone="subdued">
             {t("productsMatch")}
           </Text>
@@ -486,7 +438,7 @@ export default function ProductsPage() {
     }
 
     return null;
-  }, [backendProductCount, isSyncInProgress, shouldShowFilteredEmptyState, shouldShowLoadingState, t]);
+  }, [filteredProductCount, isSyncInProgress, shouldShowFilteredEmptyState, shouldShowLoadingState, t]);
 
   const handleNextPage = useCallback(() => {
     dispatch(
@@ -513,7 +465,12 @@ export default function ProductsPage() {
       fullWidth
       primaryAction={{
         content: t("edit"),
-        onAction: () => navigate("/edit"),
+        onAction: () =>
+          navigate("/edit", {
+            state: {
+              productTargeting: editTargeting,
+            },
+          }),
       }}
       secondaryActions={[
         {
@@ -644,21 +601,6 @@ export default function ProductsPage() {
                   : undefined
               }
             />
-            {sessionId ? (
-              <Box padding="400" borderBlockStartWidth="1" borderColor="border">
-                <TableErrorBoundary>
-                  <VariantMetafieldGrid
-                    sessionId={sessionId}
-                    variants={variantRows}
-                    definitions={
-                      Array.isArray(metafieldDefinitionsQuery.data?.definitions)
-                        ? metafieldDefinitionsQuery.data.definitions
-                        : []
-                    }
-                  />
-                </TableErrorBoundary>
-              </Box>
-            ) : null}
           </Card>
         </Layout.Section>
       </Layout>

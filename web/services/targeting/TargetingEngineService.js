@@ -1,4 +1,4 @@
-import { db } from "../../repositories/repositoryDb.js";
+import { db as repositoryDb } from "../../repositories/repositoryDb.js";
 import crypto from "crypto";
 import { adaptLegacyFilterParamsToAst } from "./adapters/legacyFilterParamsAdapter.js";
 import { normalizeFilterAst } from "./normalize/filterAstNormalizer.js";
@@ -32,6 +32,8 @@ import {
   freezeTargetSnapshot,
 } from "../productService/productTargetingService.js";
 import { assertMirrorSafeForTargeting } from "../mirrorHealthService.js";
+
+const db = repositoryDb;
 
 const OWNER_MODEL_MAP = Object.freeze({
   [TARGET_SNAPSHOT_OWNER_TYPES.EDIT_HISTORY]: "editHistory",
@@ -548,7 +550,7 @@ async function persistTargetingMetadata({
   freezeKey = null,
   freezeStats = null,
   mutationIntent = null,
-  db = db,
+  db = repositoryDb,
 }) {
   const modelName = OWNER_MODEL_MAP[ownerType];
   if (!modelName || !db[modelName]) return;
@@ -636,7 +638,7 @@ async function resolveAndMaybeFreeze({
   mutationIntent = null,
   requireBroadTargetConfirmation = false,
   confirmBroadTarget = false,
-  db = db,
+  db = repositoryDb,
 }) {
   const flags = getTargetingFeatureFlags();
   await assertMirrorSafeForTargeting(shop, { purpose: flow });

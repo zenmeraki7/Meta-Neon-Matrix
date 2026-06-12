@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { db } from "../../repositories/repositoryDb.js";
 import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
 import { computeBlastRadiusRisk } from "../targeting/validate/mutationIntentPreflightValidator.js";
+import { getStoreMirrorState } from "../mirrorHealthService.js";
 import { getUpdatedProducts } from "../../helpers/productBulkOperationHelpers/productUpdateHandler.js";
 import {
   FIELD_TRANSLATIONS,
@@ -26,11 +27,9 @@ export const PREVIEW_VARIANT_SELECT = Object.freeze({
   inventoryPolicy: true,
   inventoryQuantity: true,
   cost: true,
-  requiresShipping: true,
   weight: true,
   weightUnit: true,
   selectedOptionsJson: true,
-  selectedOptions: true,
 });
 
 export const PREVIEW_PRODUCT_SELECT = Object.freeze({
@@ -52,9 +51,378 @@ export const PREVIEW_PRODUCT_SELECT = Object.freeze({
   featuredImageUrl: true,
 });
 
+function withVariantPreviewGranularity(filterAst) {
+  if (!filterAst || typeof filterAst !== "object" || Array.isArray(filterAst)) {
+    return filterAst ?? null;
+  }
+
+  return {
+    ...filterAst,
+    options: {
+      ...(filterAst.options || {}),
+      targetGranularity: "PRODUCT_WITH_MATCHING_VARIANTS",
+    },
+  };
+}
+
+function buildPreviewTargetingError(message = "Refresh product data before previewing this edit.") {
+  const error = new Error(message);
+  error.code = "TARGETING_REQUIRES_SYNC";
+  error.action = "SYNC_PRODUCTS";
+  return error;
+}
+
+function isSyncRequiredTargetingError(error) {
+  const code = String(error?.code || "").toUpperCase();
+  return code === "TARGETING_REQUIRES_SYNC" || code === "TARGETING_MIRROR_UNSAFE";
+}
+
+function mergeMirrorScope(where, shop, mirrorBatchId) {
+  const scoped = where && typeof where === "object" && !Array.isArray(where)
+    ? { ...where }
+    : {};
+  const hasScopedFilter = Object.keys(scoped).length > 0;
+  return {
+    AND: [
+      { shop },
+      { mirrorBatchId },
+      ...(hasScopedFilter ? [scoped] : []),
+    ],
+  };
+}
+
+function displayPreviewValue(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value.displayText ?? value.value ?? value.text ?? null;
+  }
+  return value ?? null;
+}
+
+function buildProductOptionsForProductSet(product) {
+  return (Array.isArray(product?.options) ? product.options : [])
+    .map((option) => ({
+      name: option?.name,
+      values: (Array.isArray(option?.values) ? option.values : [])
+        .map((value) => ({ name: value?.name ?? value }))
+        .filter((value) => value.name !== undefined && value.name !== null && value.name !== ""),
+    }))
+    .filter((option) => option.name);
+}
+
+function buildVariantOptionValues(variant) {
+  return (Array.isArray(variant?.selectedOptions) ? variant.selectedOptions : [])
+    .map((option) => ({
+      optionName: option?.name,
+      name: option?.value,
+    }))
+    .filter((option) => option.optionName && option.name !== undefined && option.name !== null);
+}
+
+function buildExecutablePreviewRow({
+  product,
+  variant,
+  previewVariant,
+  field,
+  previewId,
+}) {
+  const productId = String(product?.id || "").trim();
+  const variantId = String(previewVariant?.variantId || previewVariant?.id || variant?.id || "").trim();
+  const currentValue = displayPreviewValue(previewVariant?.oldValue);
+  const newValue = displayPreviewValue(previewVariant?.newValue);
+  const status = String(previewVariant?.status || "READY").toUpperCase();
+  const productSet = {
+    id: productId,
+    productOptions: buildProductOptionsForProductSet(product),
+    variants: [
+      {
+        id: variantId,
+        optionValues: buildVariantOptionValues(variant),
+        [field]: newValue,
+      },
+    ],
+  };
+  const plannedMutation = {
+    jsonlRow: JSON.stringify({ productSet }),
+    productSet,
+    variantFieldChanges: [
+      {
+        variantId,
+        variantTitle: previewVariant?.title || variant?.title || "Default Title",
+        changes: [
+          {
+            field,
+            oldValue: currentValue,
+            newValue,
+          },
+        ],
+      },
+    ],
+  };
+
+  return {
+    previewId,
+    productId,
+    variantId,
+    productTitle: product?.title || "",
+    variantTitle: previewVariant?.title || variant?.title || "Default Title",
+    currentValue,
+    newValue,
+    status,
+    warning: previewVariant?.warning || null,
+    targetType: "VARIANT",
+    targetIdentity: variantId ? `VARIANT:${variantId}` : null,
+    beforeValues: {
+      field,
+      currentValue,
+      oldValue: currentValue,
+      productTitle: product?.title || "",
+      variantTitle: previewVariant?.title || variant?.title || "Default Title",
+    },
+    plannedMutation,
+  };
+}
+
+async function resolveBestAvailableMirrorBatchId(shop) {
+  const state = await getStoreMirrorState(shop);
+  if (state?.activeMirrorBatchId) {
+    return {
+      mirrorBatchId: state.activeMirrorBatchId,
+      mirrorState: state,
+    };
+  }
+
+  const latestProduct = await db.product.findFirst({
+    where: {
+      shop,
+      mirrorBatchId: { not: null },
+    },
+    select: {
+      mirrorBatchId: true,
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+  });
+
+  if (!latestProduct?.mirrorBatchId) {
+    throw buildPreviewTargetingError();
+  }
+
+  return {
+    mirrorBatchId: latestProduct.mirrorBatchId,
+    mirrorState: state || null,
+  };
+}
+
 export class ProductBulkPreviewService {
   constructor({ session }) {
     this.session = session;
+  }
+
+  async resolvePreviewTargetsWithSnapshotFallback({
+    field,
+    previewFilterAst,
+    filterParams,
+    cursor,
+    page,
+    limit,
+    isVariant,
+  }) {
+    try {
+      return await TargetingEngineService.resolvePreviewTargets({
+        shop: this.session.shop,
+        source: "MANUAL_PREVIEW",
+        targetType: isVariant ? "VARIANT" : "PRODUCT",
+        targetGranularity: isVariant ? "VARIANT" : "PRODUCT",
+        filterAst: previewFilterAst ?? null,
+        legacyFilterParams: Array.isArray(filterParams) ? filterParams : [],
+        queryParams: { cursor, page, limit },
+        sampleLimit: Number.parseInt(limit, 10) || 20,
+      });
+    } catch (error) {
+      if (!isSyncRequiredTargetingError(error)) {
+        throw error;
+      }
+      return this.resolvePreviewTargetsFromAvailableSnapshot({
+        field,
+        previewFilterAst,
+        filterParams,
+        page,
+        limit,
+        isVariant,
+        originalError: error,
+      });
+    }
+  }
+
+  async resolvePreviewTargetsFromAvailableSnapshot({
+    previewFilterAst,
+    filterParams,
+    page = 1,
+    limit = 20,
+    isVariant,
+    originalError = null,
+  }) {
+    if (!previewFilterAst && (!Array.isArray(filterParams) || filterParams.length === 0)) {
+      throw buildPreviewTargetingError();
+    }
+
+    let prepared;
+    try {
+      prepared = TargetingEngineService.prepareTargetingPayload({
+        shop: this.session.shop,
+        source: "MANUAL_PREVIEW",
+        targetType: isVariant ? "VARIANT" : "PRODUCT",
+        targetGranularity: isVariant
+          ? "PRODUCT_WITH_MATCHING_VARIANTS"
+          : "PRODUCT",
+        filterAst: previewFilterAst ?? null,
+        legacyFilterParams: Array.isArray(filterParams) ? filterParams : [],
+        applyMirrorScope: false,
+      });
+    } catch (error) {
+      const wrapped = buildPreviewTargetingError(
+        "This filter cannot be previewed safely. Refresh products or simplify the filter.",
+      );
+      wrapped.code = "TARGETING_FILTER_UNSUPPORTED";
+      wrapped.cause = error;
+      throw wrapped;
+    }
+
+    const { mirrorBatchId, mirrorState } = await resolveBestAvailableMirrorBatchId(
+      this.session.shop,
+    );
+    const productWhere = mergeMirrorScope(
+      prepared?.compiled?.where || {},
+      this.session.shop,
+      mirrorBatchId,
+    );
+    const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
+    const safeLimit = Math.max(1, Math.min(50, Number.parseInt(limit, 10) || 20));
+
+    if (isVariant) {
+      const matchingProducts = await db.product.findMany({
+        where: productWhere,
+        select: {
+          id: true,
+        },
+        orderBy: {
+          id: "asc",
+        },
+      });
+      const productIds = matchingProducts.map((product) => product.id);
+      const variantWhere = {
+        shop: this.session.shop,
+        mirrorBatchId,
+        productId: productIds.length ? { in: productIds } : "__no_match__",
+      };
+      const [variantCount, sampleVariants] = await db.$transaction([
+        db.variant.count({ where: variantWhere }),
+        db.variant.findMany({
+          where: variantWhere,
+          select: {
+            id: true,
+            productId: true,
+          },
+          orderBy: [
+            { productId: "asc" },
+            { position: "asc" },
+            { id: "asc" },
+          ],
+          skip: (safePage - 1) * safeLimit,
+          take: safeLimit,
+        }),
+      ]);
+
+      console.info("[edit-preview] snapshot fallback", {
+        shop: this.session.shop,
+        mirrorBatchId,
+        mirrorHealthState: mirrorState?.mirrorHealthState || null,
+        originalCode: originalError?.code || null,
+        matchingProductCount: productIds.length,
+        affectedVariantCount: variantCount,
+        rowsReturned: sampleVariants.length,
+      });
+
+      return {
+        flow: "PREVIEW",
+        mirrorBatchId,
+        where: productWhere,
+        count: variantCount,
+        matchingProductCount: productIds.length,
+        sampleProducts: [],
+        sampleVariants,
+        pagination: {
+          page: safePage,
+          limit: safeLimit,
+          total: variantCount,
+          totalPages: Math.max(1, Math.ceil(variantCount / safeLimit)),
+        },
+        broadTargetAssessment: {
+          requiresConfirmation: false,
+          reason: null,
+          targetCount: variantCount,
+          totalInBatch: productIds.length,
+        },
+        filterHash: prepared.filterHash,
+        filterAst: prepared.filterAst,
+        normalizedFilterAst: prepared.normalizedFilterAst,
+        targetGranularity: "VARIANT",
+        targetModel: "Variant",
+        versions: prepared.versions,
+      };
+    }
+
+    const [productCount, sampleProducts] = await db.$transaction([
+      db.product.count({ where: productWhere }),
+      db.product.findMany({
+        where: productWhere,
+        select: {
+          id: true,
+        },
+        orderBy: {
+          id: "asc",
+        },
+        skip: (safePage - 1) * safeLimit,
+        take: safeLimit,
+      }),
+    ]);
+
+    console.info("[edit-preview] snapshot fallback", {
+      shop: this.session.shop,
+      mirrorBatchId,
+      mirrorHealthState: mirrorState?.mirrorHealthState || null,
+      originalCode: originalError?.code || null,
+      matchingProductCount: productCount,
+      rowsReturned: sampleProducts.length,
+    });
+
+    return {
+      flow: "PREVIEW",
+      mirrorBatchId,
+      where: productWhere,
+      count: productCount,
+      sampleProducts,
+      sampleVariants: [],
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total: productCount,
+        totalPages: Math.max(1, Math.ceil(productCount / safeLimit)),
+      },
+      broadTargetAssessment: {
+        requiresConfirmation: false,
+        reason: null,
+        targetCount: productCount,
+        totalInBatch: productCount,
+      },
+      filterHash: prepared.filterHash,
+      filterAst: prepared.filterAst,
+      normalizedFilterAst: prepared.normalizedFilterAst,
+      targetGranularity: "PRODUCT",
+      targetModel: "Product",
+      versions: prepared.versions,
+    };
   }
 
   async getPreviewVariantDetails({
@@ -162,6 +530,7 @@ export class ProductBulkPreviewService {
 
   async trackEditProducts({
     field,
+    operation = null,
     editType,
     editValue,
     filterParams,
@@ -169,9 +538,11 @@ export class ProductBulkPreviewService {
     replaceText,
     supportValue,
     locationId,
+    rounding = "NONE",
     filterAst,
     operationKey = null,
     cursor = null,
+    page = 1,
     limit = 20,
     lang,
     subscription = {},
@@ -181,16 +552,17 @@ export class ProductBulkPreviewService {
     field = normalizeField(field);
 
     const isVariant = isVariantLevelField(field);
-    const targetGranularity = isVariant ? "VARIANT" : "PRODUCT";
-    const target = await TargetingEngineService.resolvePreviewTargets({
-      shop: this.session.shop,
-      source: "MANUAL_PREVIEW",
-      targetType: targetGranularity === "VARIANT" ? "VARIANT" : "PRODUCT",
-      targetGranularity,
-      filterAst: filterAst ?? null,
-      legacyFilterParams: Array.isArray(filterParams) ? filterParams : [],
-      queryParams: { cursor, limit },
-      sampleLimit: Number.parseInt(limit, 10) || 20,
+    const previewFilterAst = isVariant
+      ? withVariantPreviewGranularity(filterAst)
+      : filterAst;
+    const target = await this.resolvePreviewTargetsWithSnapshotFallback({
+      field,
+      previewFilterAst,
+      filterParams,
+      cursor,
+      page,
+      limit,
+      isVariant,
     });
     const previewSignatureHash = crypto
       .createHash("sha256")
@@ -209,9 +581,11 @@ export class ProductBulkPreviewService {
         mirrorBatchId: target.mirrorBatchId,
         targetCount: Number(target.count || 0),
         cursor: cursor || null,
+        page: Number.parseInt(page, 10) || 1,
         limit: Number.parseInt(limit, 10) || 20,
       }))
       .digest("hex");
+    const previewSignature = `sig_${previewSignatureHash.slice(0, 12)}`;
     const dedupeWindowMs = Number.parseInt(
       process.env.PREVIEW_DEDUPE_WINDOW_MS || "45000",
       10,
@@ -241,8 +615,15 @@ export class ProductBulkPreviewService {
           expiresAt: new Date(Date.now() + 10 * 60 * 1000),
           value: {
             previewId,
+            shop: this.session.shop,
             actorId: actorId ? String(actorId) : null,
+            owner: {
+              type: actorId ? "SHOPIFY_USER" : "SHOP",
+              shop: this.session.shop,
+              actorId: actorId ? String(actorId) : null,
+            },
             field,
+            operation,
             editType,
             editValue,
             searchKey: searchKey || null,
@@ -258,6 +639,7 @@ export class ProductBulkPreviewService {
               fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,
               operatorRegistryVersion: target.versions?.operatorRegistryVersion || null,
             },
+            previewSignature,
             previewSignatureHash,
           },
         },
@@ -274,8 +656,15 @@ export class ProductBulkPreviewService {
           searchKey: previewSignatureHash,
           value: {
             previewId,
+            shop: this.session.shop,
             actorId: actorId ? String(actorId) : null,
+            owner: {
+              type: actorId ? "SHOPIFY_USER" : "SHOP",
+              shop: this.session.shop,
+              actorId: actorId ? String(actorId) : null,
+            },
             field,
+            operation,
             editType,
             editValue,
             searchKey: searchKey || null,
@@ -291,6 +680,7 @@ export class ProductBulkPreviewService {
               fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,
               operatorRegistryVersion: target.versions?.operatorRegistryVersion || null,
             },
+            previewSignature,
             previewSignatureHash,
           },
           source: "manual_preview",
@@ -320,7 +710,18 @@ export class ProductBulkPreviewService {
       }
     }
 
-    const productIds = target.sampleProducts.map((product) => product.id);
+    const targetSampleVariants = Array.isArray(target.sampleVariants)
+      ? target.sampleVariants
+      : [];
+    const targetSampleVariantIds = new Set(
+      targetSampleVariants.map((variant) => String(variant?.id || "")).filter(Boolean),
+    );
+    const productIds = isVariant
+      ? [...new Set(targetSampleVariants.map((variant) => variant.productId).filter(Boolean))]
+      : target.sampleProducts.map((product) => product.id);
+    const matchingProductCount = isVariant
+      ? Number(target.matchingProductCount ?? new Set(targetSampleVariants.map((variant) => String(variant?.productId || "")).filter(Boolean)).size)
+      : Number(target.count || 0);
     let products = await db.product.findMany({
       where: {
         shop: this.session.shop,
@@ -352,15 +753,27 @@ export class ProductBulkPreviewService {
 
     const productMap = new Map(products.map((product) => [product.id, product]));
     const formattedProducts = [];
+    const executablePreviewRows = [];
 
-    for (const targetProduct of target.sampleProducts) {
-      const rawProduct = productMap.get(targetProduct.id);
+    const orderedPreviewProductIds = isVariant ? productIds : target.sampleProducts.map((product) => product.id);
+
+    for (const productId of orderedPreviewProductIds) {
+      const rawProduct = productMap.get(productId);
       if (!rawProduct) continue;
 
       const product = normalizeMirrorProductForPreview(rawProduct);
+      const previewProduct =
+        isVariant && targetSampleVariantIds.size
+          ? {
+              ...product,
+              variants: product.variants.filter((variant) =>
+                targetSampleVariantIds.has(String(variant?.id || "")),
+              ),
+            }
+          : product;
 
       const result = getUpdatedProducts({
-        product,
+        product: previewProduct,
         field,
         editType,
         value: editValue,
@@ -373,8 +786,91 @@ export class ProductBulkPreviewService {
 
       if (result) {
         formattedProducts.push(result);
+        if (isVariant && Array.isArray(result?.variants)) {
+          const variantById = new Map(
+            (Array.isArray(previewProduct?.variants) ? previewProduct.variants : [])
+              .map((variant) => [String(variant?.id || variant?._id || "").trim(), variant]),
+          );
+          for (const previewVariant of result.variants) {
+            const variantId = String(previewVariant?.variantId || previewVariant?.id || "").trim();
+            if (!variantId) continue;
+            executablePreviewRows.push(buildExecutablePreviewRow({
+              product: previewProduct,
+              variant: variantById.get(variantId) || null,
+              previewVariant,
+              field,
+              previewId,
+            }));
+          }
+        }
       }
     }
+
+    const readyExecutablePreviewRows = executablePreviewRows.filter(
+      (row) => String(row?.status || "").toUpperCase() === "READY",
+    );
+    await db.filterTrack.update({
+      where: { id: previewId },
+      data: {
+        value: {
+          previewId,
+          shop: this.session.shop,
+          actorId: actorId ? String(actorId) : null,
+          owner: {
+            type: actorId ? "SHOPIFY_USER" : "SHOP",
+            shop: this.session.shop,
+            actorId: actorId ? String(actorId) : null,
+          },
+          field,
+          operation,
+          editType,
+          editValue,
+          searchKey: searchKey || null,
+          replaceText: replaceText || null,
+          supportValue: supportValue ?? null,
+          locationId: locationId || null,
+          rounding,
+          normalizedAst: target.normalizedFilterAst,
+          filterAst: target.normalizedFilterAst,
+          where: target.where || null,
+          filterHash: target.filterHash,
+          mirrorBatchId: target.mirrorBatchId,
+          targetCount: target.count,
+          count: readyExecutablePreviewRows.length || Number(target.count || 0),
+          matchingProductCount,
+          affectedVariantCount:
+            String(target?.targetGranularity || "PRODUCT").toUpperCase() === "VARIANT"
+              ? Number(target.count || 0)
+              : readyExecutablePreviewRows.length,
+          targetGranularity: target?.targetGranularity || (isVariant ? "VARIANT" : "PRODUCT"),
+          broadTargetAssessment: target?.broadTargetAssessment || null,
+          compilerVersion: target.versions?.targetingCompilerVersion || null,
+          registryVersion: {
+            fieldRegistryVersion: target.versions?.fieldRegistryVersion || null,
+            operatorRegistryVersion: target.versions?.operatorRegistryVersion || null,
+          },
+          previewSignature,
+          previewSignatureHash,
+          status: "READY",
+          rows: executablePreviewRows,
+          executableRows: readyExecutablePreviewRows,
+          rowsPersisted: executablePreviewRows.length,
+          readyRows: readyExecutablePreviewRows.length,
+        },
+      },
+    });
+
+    console.info("[edit-preview] persisted", {
+      previewId,
+      shop: this.session.shop,
+      rowsPersisted: executablePreviewRows.length,
+      readyRows: readyExecutablePreviewRows.length,
+      affectedVariantCount:
+        String(target?.targetGranularity || "PRODUCT").toUpperCase() === "VARIANT"
+          ? Number(target.count || 0)
+          : readyExecutablePreviewRows.length,
+    });
+
     const blastRadiusAssessment = computeBlastRadiusRisk({
       targetCount: Number(target.count || 0),
       totalCatalogCount: Number(target?.broadTargetAssessment?.totalInBatch || 0),
@@ -439,17 +935,20 @@ export class ProductBulkPreviewService {
         preview: formattedProducts,
         targetCount: Number(target.count || 0),
         targetGranularity: target?.targetGranularity || "PRODUCT",
-        productCount:
-          String(target?.targetGranularity || "PRODUCT").toUpperCase() === "VARIANT"
-            ? 0
-            : Number(target.count || 0),
+        productCount: matchingProductCount,
+        matchingProductCount,
         variantCount:
           String(target?.targetGranularity || "PRODUCT").toUpperCase() === "VARIANT"
             ? Number(target.count || 0)
             : 0,
         field: FIELD_TRANSLATIONS?.[field]?.[lang] || field,
+        canonicalField: field,
+        operation,
+        value: editValue,
+        rounding,
         isVariant,
         mirrorBatchId: target.mirrorBatchId,
+        previewSignature,
         previewFingerprint: {
           previewId,
           normalizedAst: target.normalizedFilterAst,

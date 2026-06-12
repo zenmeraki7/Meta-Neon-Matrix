@@ -72,6 +72,8 @@ function buildActorFromSession(session, fallbackType = "MERCHANT_ADMIN") {
 function buildBaseCommandContext({ req, session, fallbackActorType }) {
   return Object.freeze({
     shop: session.shop,
+    accessToken: session.accessToken || null,
+    scope: session.scope || null,
     actor: buildActorFromSession(session, fallbackActorType),
     subscription: req.subscription || null,
     entitlement: req.entitlement || null,
@@ -94,6 +96,8 @@ async function logAndSendError({ res, req, error, shop, source }) {
   const fallbackCode =
     error?.code === "UNAUTHENTICATED"
       ? "UNAUTHENTICATED"
+      : source === "productBulkEditController.trackEditPreview" && !error?.code
+        ? "EDIT_PREVIEW_FAILED"
       : error?.code || "VALIDATION_FAILED";
 
   const { statusCode, body } = buildPublicApiErrorResponse(error, fallbackCode);
@@ -127,6 +131,20 @@ function buildCommand(req, res, normalizer, fallbackActorType = "MERCHANT_ADMIN"
   });
 }
 
+function buildPreviewDebugContext({ req, session, command }) {
+  return Object.freeze({
+    requestId: req.id || req.get?.("X-Request-Id") || null,
+    shop: session?.shop || null,
+    field: command?.editedField || command?.field || null,
+    operation: command?.operation || null,
+    editType: command?.editType || null,
+    hasFilterAst: Boolean(command?.filterAst),
+    filterFingerprint: command?.previewFilterHash || command?.filterFingerprint || null,
+    page: command?.page || null,
+    limit: command?.limit || null,
+  });
+}
+
 // Preview
 export const trackEditPreview = async (req, res) => {
   let session;
@@ -142,6 +160,11 @@ export const trackEditPreview = async (req, res) => {
     );
 
     session = built.session;
+    console.info("[edit-preview:validated]", buildPreviewDebugContext({
+      req,
+      session,
+      command: built.command,
+    }));
 
     const result = await productBulkEditUseCases.preview(built.command);
 

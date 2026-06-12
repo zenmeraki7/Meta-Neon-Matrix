@@ -232,10 +232,12 @@ function toEditHistoryDetailDto(history) {
 
 function toEditHistorySummaryDto(summary) {
   const safe = asObject(summary) || {};
+  const rawType = toStringOrNull(safe.type ?? safe.editType, 120);
+  const type = rawType && rawType.toLowerCase() === "manual edit" ? "edit" : rawType;
 
   return {
     id: toStringOrNull(safe.id, 200),
-    type: toStringOrNull(safe.type ?? safe.editType, 120),
+    type,
     status: toStringOrNull(safe.status, 120),
     title: toSafeText(safe.title ?? safe.name, MAX_TITLE_LENGTH),
     createdAt: toIsoString(safe.createdAt),

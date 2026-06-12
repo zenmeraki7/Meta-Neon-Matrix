@@ -47,7 +47,7 @@ function lightweightStableHash(input) {
 export function createEditPreviewPayloadHash(payload) {
   const signaturePayload = [
     normalizeSignatureValue(payload?.field),
-    normalizeSignatureValue(payload?.editType),
+    normalizeSignatureValue(payload?.operation || payload?.editType),
     normalizeSignatureValue(payload?.editValue),
     normalizeSignatureValue(payload?.searchKey),
     normalizeSignatureValue(payload?.replaceText),
@@ -60,6 +60,21 @@ export function createEditPreviewPayloadHash(payload) {
   ].join("||");
 
   return `sig_${lightweightStableHash(signaturePayload)}`;
+}
+
+export function createEditPreviewRequestKey(input) {
+  return [
+    normalizeSignatureValue(input?.field),
+    normalizeSignatureValue(input?.operation || input?.editType),
+    normalizeSignatureValue(input?.editValue ?? input?.value),
+    normalizeSignatureValue(input?.rounding || "NONE"),
+    normalizeSignatureValue(input?.locationId || input?.location || ""),
+    normalizeSignatureValue(input?.filterFingerprint),
+    normalizeSignatureValue(input?.filterVersion),
+    normalizeSignatureValue(input?.searchKey),
+    normalizeSignatureValue(input?.replaceText),
+    normalizeSignatureValue(input?.supportValue),
+  ].join("|");
 }
 
 function createFilterFingerprint(filterAst) {
@@ -85,25 +100,55 @@ function normalizeSupportValue(value) {
   return value;
 }
 
+const VARIANT_LEVEL_PREVIEW_FIELDS = new Set([
+  "barcode",
+  "sku",
+  "price",
+  "compareAtPrice",
+  "taxable",
+  "inventoryPolicy",
+  "inventory",
+  "cost",
+  "weight",
+]);
+
+const CANONICAL_OPERATION_BY_LEGACY_VALUE = Object.freeze({
+  "Set to fixed value": "SET_FIXED",
+  "Changed by fixed amount": "INCREASE_FIXED",
+  "Increase by percent": "INCREASE_PERCENT",
+  "Decrease by percent": "DECREASE_PERCENT",
+  "Set to percentage of compare-at-price": "PERCENT_OF_COMPARE_AT_PRICE",
+});
+
+export function toCanonicalEditOperation(editTypeValue) {
+  const value = safeString(editTypeValue, "");
+  return CANONICAL_OPERATION_BY_LEGACY_VALUE[value] || value;
+}
+
 function buildEditPreviewRequestBody(payload, page, limit) {
-  return {
+  const body = {
     field: payload.field,
-    editType: payload.editType,
-    editValue: payload.editValue,
-    searchKey: payload.searchKey,
-    replaceText: payload.replaceText,
+    operation: payload.operation,
+    value: payload.editValue,
     locationId: payload.locationId,
     rounding: payload.rounding,
     filterAst: payload.filterAst,
     filterFingerprint: payload.filterFingerprint,
     filterVersion: payload.filterVersion,
-    supportValue: payload.supportValue,
     page,
     limit,
   };
+
+  if (payload.searchKey) body.searchKey = payload.searchKey;
+  if (payload.replaceText) body.replaceText = payload.replaceText;
+  if (payload.supportValue !== null && payload.supportValue !== undefined) {
+    body.supportValue = payload.supportValue;
+  }
+
+  return body;
 }
 
-function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit, fallbackSignature) {
+function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit, requestKey) {
   const data = rawData?.data || rawData || {};
   if (!Array.isArray(data?.rows) && !Array.isArray(data?.preview)) {
     throw new Error("Invalid edit preview response: missing rows.");
@@ -138,7 +183,8 @@ function normalizePreviewResponse(rawData, fallbackPage, fallbackLimit, fallback
   return {
     rows,
     isVariant: data?.isVariant === true,
-    previewSignature: safeString(data?.previewSignature, fallbackSignature) || null,
+    previewSignature: safeString(data?.previewSignature, "") || null,
+    requestKey,
     previewFingerprint: {
       previewId,
       filterHash,
@@ -183,17 +229,18 @@ export function useEditPreviewQuery({
   const safePage = safePositiveInteger(page, null);
   const safeLimit = safePositiveInteger(limit, null);
   const payloadHash = createEditPreviewPayloadHash(payload);
+  const requestKey = createEditPreviewRequestKey(payload);
   const safeQueryKeyHash = safeString(queryKeyHash, "");
-  const previewSignature = payloadHash;
   const hasCanonicalQueryKeyHash = safeQueryKeyHash === payloadHash;
   const canPreview =
     Boolean(enabled) &&
     Boolean(payload?.field) &&
-    Boolean(payload?.editType) &&
+    Boolean(payload?.operation || payload?.editType) &&
     Boolean(payload?.filterAst) &&
     Boolean(payload?.filterFingerprint) &&
     Boolean(payload?.filterVersion) &&
-    Boolean(previewSignature) &&
+    Boolean(payloadHash) &&
+    Boolean(requestKey) &&
     hasCanonicalQueryKeyHash &&
     safePage !== null &&
     safeLimit !== null;
@@ -205,7 +252,7 @@ export function useEditPreviewQuery({
         language: safeLanguage,
         page: safePage,
         limit: safeLimit,
-        payloadHash: previewSignature,
+        payloadHash,
       },
     ],
     enabled: canPreview,
@@ -215,12 +262,12 @@ export function useEditPreviewQuery({
         buildEditPreviewRequestBody(payload, safePage, safeLimit),
         { signal },
       );
-      return normalizePreviewResponse(result, safePage, safeLimit, previewSignature);
+      return normalizePreviewResponse(result, safePage, safeLimit, requestKey);
     },
     staleTime: 10_000,
     gcTime: 5 * 60 * 1000,
     placeholderData: (previous) => {
-      if (previous?.previewSignature === previewSignature) {
+      if (previous?.requestKey === requestKey) {
         return previous;
       }
 
@@ -242,15 +289,21 @@ export function usePreviewQueryInput({
 }) {
   return useMemo(
     () => {
+      const targetGranularity = VARIANT_LEVEL_PREVIEW_FIELDS.has(
+        safeString(selectedFieldValue, ""),
+      )
+        ? "PRODUCT_WITH_MATCHING_VARIANTS"
+        : "PRODUCT";
       const filterAst = buildFilterAstFromLegacyFilters({
         filterParams: Array.isArray(effectiveFilters) ? effectiveFilters : [],
-        targetGranularity: "PRODUCT",
+        targetGranularity,
         source: "MANUAL_PREVIEW",
       });
 
       return {
         field: safeString(selectedFieldValue, ""),
         editType: safeString(editTypeValue, ""),
+        operation: toCanonicalEditOperation(editTypeValue),
         editValue: inputValue,
         searchKey: safeString(searchReplace?.search, ""),
         replaceText: safeString(searchReplace?.replace, ""),

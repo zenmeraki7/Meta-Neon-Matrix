@@ -175,12 +175,20 @@ export async function upsertFrozenSnapshotSetFromLegacy({
       if (!targetKey || targetKey.endsWith(":")) {
         continue;
       }
+      const plannedMutation =
+        legacyRow.beforeValues &&
+        typeof legacyRow.beforeValues === "object" &&
+        !Array.isArray(legacyRow.beforeValues) &&
+        legacyRow.beforeValues.plannedMutation &&
+        typeof legacyRow.beforeValues.plannedMutation === "object"
+          ? legacyRow.beforeValues.plannedMutation
+          : {};
       const rowChecksum = buildRowChecksum({
         snapshotSetId: set.id,
         shop,
         operationId: resolvedOperationId,
         mirrorBatchId: resolvedMirrorBatchId,
-        row: legacyRow,
+        row: { ...legacyRow, plannedMutation },
         targetKey,
         compilerVersion,
         projectionVersion,
@@ -199,7 +207,7 @@ export async function upsertFrozenSnapshotSetFromLegacy({
         targetType,
         mutationGroupKey: source,
         beforeValues: legacyRow.beforeValues || {},
-        plannedMutation: {},
+        plannedMutation,
         targetFingerprint: sha256(targetKey),
         rowChecksum,
       });

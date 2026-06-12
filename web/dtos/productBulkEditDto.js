@@ -88,6 +88,10 @@ function toDisplayValue(value) {
   };
 }
 
+function displayTextOf(value) {
+  return toDisplayValue(value).displayText;
+}
+
 function mapVariantSample(variants) {
   if (!Array.isArray(variants) || variants.length === 0) return [];
   return variants.slice(0, MAX_VARIANT_SAMPLE).map((variant, index) => ({
@@ -96,6 +100,8 @@ function mapVariantSample(variants) {
     title: safeString(variant?.title, `Variant ${index + 1}`),
     oldValue: toDisplayValue(variant?.oldValue),
     newValue: toDisplayValue(variant?.newValue),
+    status: safeString(variant?.status, "READY"),
+    warning: safeString(variant?.warning, "") || null,
   }));
 }
 
@@ -114,6 +120,7 @@ function mapPreviewRows(rawRows) {
       imageUrl: row?.img || row?.imageUrl || null,
       oldValue: toDisplayValue(row?.oldValue),
       newValue: toDisplayValue(row?.newValue),
+      variants: mapVariantSample(variants),
       variantCount,
       changedVariantCount: safeNumber(row?.changedVariantCount, 0),
       hasVariantDetails:
@@ -122,10 +129,30 @@ function mapPreviewRows(rawRows) {
   });
 }
 
+function mapVariantLevelRows(productRows) {
+  if (!Array.isArray(productRows)) return [];
+
+  return productRows.flatMap((productRow) => {
+    const variants = Array.isArray(productRow?.variants) ? productRow.variants : [];
+    return variants.map((variant) => ({
+      productId: safeString(productRow?.productId, ""),
+      variantId: safeString(variant?.variantId, ""),
+      productTitle: safeString(productRow?.title, "Untitled product"),
+      variantTitle: safeString(variant?.title, "Default Title"),
+      currentValue: displayTextOf(variant?.oldValue),
+      newValue: displayTextOf(variant?.newValue),
+      status: safeString(variant?.status, "READY"),
+      warning: safeString(variant?.warning, "") || null,
+    }));
+  });
+}
+
 export function toBulkEditPreviewResponseDto(result) {
   const data = result?.data || {};
   const pagination = data?.pagination || {};
   const rows = mapPreviewRows(data?.preview);
+  const isVariant = Boolean(data?.isVariant);
+  const responseRows = isVariant ? mapVariantLevelRows(rows) : rows;
   const rawFingerprint = data?.previewFingerprint || {};
   const previewFingerprint = {
     previewId: safeString(rawFingerprint.previewId, "") || null,
@@ -152,6 +179,11 @@ export function toBulkEditPreviewResponseDto(result) {
   const mirrorBatchId = previewFingerprint.mirrorBatchId;
   const targetingFingerprint = previewFingerprint.filterHash;
   const previewContractId = previewFingerprint.previewId;
+  const matchingProductCount = safeNumber(
+    data?.matchingProductCount ?? data?.productCount ?? data?.targetCount,
+    total,
+  );
+  const affectedVariantCount = safeNumber(data?.variantCount, 0);
 
   return {
     success: true,
@@ -162,8 +194,8 @@ export function toBulkEditPreviewResponseDto(result) {
       targetingFingerprint,
       previewCounts: {
         targetCount: total,
-        productCount: safeNumber(data?.productCount, 0),
-        variantCount: safeNumber(data?.variantCount, 0),
+        productCount: matchingProductCount,
+        variantCount: affectedVariantCount,
       },
       sampleRows: rows,
       compilerVersion,
@@ -174,8 +206,13 @@ export function toBulkEditPreviewResponseDto(result) {
       limit,
       total,
       totalPages,
+      field: safeString(data?.canonicalField || data?.field, "") || null,
+      operation: safeString(data?.operation, "") || null,
+      value: data?.value ?? null,
+      matchingProductCount,
+      affectedVariantCount,
       rows,
-      isVariant: Boolean(data?.isVariant),
+      isVariant,
       previewSignature: safeString(data?.previewSignature, "") || null,
       previewFingerprint,
       requiresConfirmation: data?.requiresConfirmation === true,
@@ -188,12 +225,37 @@ export function toBulkEditPreviewResponseDto(result) {
         targetSnapshotId: previewFingerprint.filterHash,
       },
     },
+    field: safeString(data?.canonicalField || data?.field, "") || null,
+    operation: safeString(data?.operation, "") || null,
+    value: data?.value ?? null,
+    matchingProductCount,
+    affectedVariantCount,
+    page,
+    limit,
+    total,
+    totalPages,
+    rounding: safeString(data?.rounding, "NONE"),
+    fingerprint: previewFingerprint.filterHash,
+    previewFingerprint,
+    rows: responseRows,
   };
 }
 
 export function toBulkEditExecuteResponseDto(result) {
+  const historyId = safeString(
+    result?.historyId || result?.jobId || result?.id || result?.operationId,
+    "",
+  ) || null;
   return {
     success: true,
+    ...(historyId ? {
+      id: historyId,
+      operationId: historyId,
+      historyId,
+      jobId: historyId,
+      historyUrl: `/editDetails/${encodeURIComponent(historyId)}`,
+    } : {}),
+    status: safeString(result?.status, "") || null,
     data: result || {},
   };
 }

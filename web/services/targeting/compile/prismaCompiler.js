@@ -71,7 +71,10 @@ function compileCondition(node, context = {}) {
   }
 
   const scalar = scalarExpr(path, node.operator, node.value);
-  if (context.targetGranularity === "PRODUCT" && fieldSpec.entity === "VARIANT") {
+  if (
+    ["PRODUCT", "PRODUCT_WITH_MATCHING_VARIANTS"].includes(context.targetGranularity) &&
+    fieldSpec.entity === "VARIANT"
+  ) {
     return { variants: { some: scalar } };
   }
   return scalar;

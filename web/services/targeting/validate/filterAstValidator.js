@@ -114,6 +114,7 @@ function walk(node, path, depth, state, context) {
       throw new TargetingValidationError("Invalid group logic", { code: "INVALID_LOGIC", path });
     }
     if (!Array.isArray(node.children) || node.children.length === 0) {
+      if (path === "root") return;
       throw new TargetingValidationError("Empty filter group", { code: "EMPTY_GROUP", path });
     }
     node.children.forEach((child, idx) => walk(child, `${path}.children[${idx}]`, depth + 1, state, context));

@@ -1,5 +1,7 @@
-import { db } from "../../repositories/repositoryDb.js";
+import { db as repositoryDb } from "../../repositories/repositoryDb.js";
 import { OPTION_NAME_FIELDS, isVariantLevelField } from "./bulkEditRuleUtils.js";
+
+const db = repositoryDb;
 
 export function buildProductInclude(fields = []) {
   const needsVariants = fields.some(
@@ -95,7 +97,7 @@ export async function hydrateMissingVariantsForProducts(
   products,
   shop,
   mirrorBatchId = null,
-  db = db,
+  db = repositoryDb,
 ) {
   const list = Array.isArray(products) ? products : [];
 

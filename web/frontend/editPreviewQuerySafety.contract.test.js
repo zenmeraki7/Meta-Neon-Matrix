@@ -13,17 +13,26 @@ const pageSource = readFileSync(
 
 test("edit preview query uses a canonical payload identity", () => {
   assert.match(hookSource, /createEditPreviewPayloadHash\(payload\)/);
+  assert.match(hookSource, /createEditPreviewRequestKey\(payload\)/);
   assert.match(hookSource, /safeQueryKeyHash === payloadHash/);
-  assert.match(hookSource, /payloadHash: previewSignature/);
+  assert.match(hookSource, /payloadHash/);
   assert.match(pageSource, /createEditPreviewPayloadHash\(previewQueryPayload\)/);
+  assert.match(pageSource, /createEditPreviewRequestKey\(previewQueryPayload\)/);
 });
 
-test("edit preview query does not reuse rows across payload signatures", () => {
+test("edit preview query does not reuse rows across request keys", () => {
   assert.match(
     hookSource,
-    /previous\?\.previewSignature === previewSignature/,
+    /previous\?\.requestKey === requestKey/,
   );
   assert.doesNotMatch(hookSource, /placeholderData:\s*\(previous\)\s*=>\s*previous/);
+});
+
+test("run edit freshness compares request key, not server preview signature", () => {
+  assert.match(pageSource, /previewRequestKey === currentPreviewRequestKey/);
+  assert.doesNotMatch(pageSource, /previewSignature === currentPreviewSignature/);
+  assert.match(pageSource, /previewSignature,/);
+  assert.match(hookSource, /previewSignature: safeString\(data\?\.previewSignature, ""\)/);
 });
 
 test("edit preview request is validated and explicitly projected", () => {

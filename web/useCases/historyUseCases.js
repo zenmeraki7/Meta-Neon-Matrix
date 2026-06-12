@@ -119,11 +119,7 @@ export const historyUseCases = Object.freeze({
 
       const service = createEditHistoryService(command);
 
-      const result = await service.getHistoryDetails({
-        shop: command.shop,
-        id: command.id,
-        lang: command.lang,
-      });
+      const result = await service.getHistoryDetails(command.id, command.lang);
 
       return requireResult(result, "Edit history record not found");
     },
@@ -133,11 +129,7 @@ export const historyUseCases = Object.freeze({
 
       const service = createEditHistoryService(command);
 
-      const result = await service.getHistorySummary({
-        shop: command.shop,
-        id: command.id,
-        lang: command.lang,
-      });
+      const result = await service.getHistorySummary(command.id, command.lang);
 
       return requireResult(result, "Edit history summary not found");
     },
@@ -147,12 +139,11 @@ export const historyUseCases = Object.freeze({
 
       const service = createEditHistoryService(command);
 
-      const result = await service.getHistoryEditChanges({
-        shop: command.shop,
-        id: command.id,
-        cursor: command.cursor,
-        limit: command.limit,
-      });
+      const result = await service.getHistoryEditChanges(
+        command.id,
+        command.cursor,
+        command.limit,
+      );
 
       return requireResult(result, "Edit history changes not found");
     },

@@ -1,3 +1,5 @@
+import { generateErrorId } from "../utils/errorUtils.js";
+
 export const validateQuery = (schema) => {
   return (req, res, next) => {
     const { error, value } = schema.validate(req.query, {
@@ -31,10 +33,26 @@ export const validateBody = (schema) => {
     });
 
     if (error) {
+      const errorId = generateErrorId();
+      const errors = Object.fromEntries(
+        error.details.map((detail) => [
+          detail.path.join(".") || "body",
+          detail.message,
+        ]),
+      );
+      console.warn("[request-validation:error]", {
+        path: req.originalUrl || req.url,
+        requestId: req.id || req.get?.("X-Request-Id") || errorId,
+        errors,
+        normalizedBody: value,
+      });
+
       return res.status(400).json({
         success: false,
         code: "VALIDATION_FAILED",
-        message: "Validation failed",
+        message: "Request validation failed",
+        errors,
+        errorId,
         details: error.details.map((detail) => detail.message),
       });
     }

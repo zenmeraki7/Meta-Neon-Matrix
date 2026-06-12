@@ -1,4 +1,4 @@
-import { db } from "../../repositories/repositoryDb.js";
+import { db as repositoryDb } from "../../repositories/repositoryDb.js";
 import { Prisma } from "../../repositories/prismaTypes.js";
 import crypto from "crypto";
 import { buildNormalizedFilterPlan, mergeResolvedIdSets } from "./normalizedFilterPlan.js";
@@ -23,6 +23,7 @@ const NEGATIVE_OPERATOR_MODE = Object.freeze({
   NOT_LIKE: "NOT_LIKE",
   ANTI_JOIN: "ANTI_JOIN",
 });
+const db = repositoryDb;
 const LEGACY_COMPAT = Object.freeze({
   negativeOperators: String(process.env.ENABLE_LEGACY_NEGATIVE_OPERATORS || "false").toLowerCase() === "true",
 });
@@ -155,7 +156,7 @@ export async function computeTargetSnapshotChecksum({
   ownerId,
   shop,
   mirrorBatchId,
-  db = db,
+  db = repositoryDb,
 }) {
   const hash = crypto.createHash("sha256");
   const PAGE_SIZE = 2000;
@@ -876,18 +877,25 @@ export async function getActiveMirrorBatchId(shop, { purpose = "EXECUTE" } = {})
     throw new Error("Mirror batch unavailable. Run sync before preview or execution.");
   }
 
-  const executionUnsafe = store.mirrorHealthState !== "HEALTHY" || store.repairRequired;
-  const previewUnsafe = ["UNSAFE", "REPAIR_REQUIRED"].includes(store.mirrorHealthState) || store.repairRequired;
+  const mirrorHealthState = String(store.mirrorHealthState || "").toUpperCase();
+  const executionUnsafe = mirrorHealthState !== "HEALTHY" || store.repairRequired;
+  const previewUnsafe = ["UNSAFE", "REPAIR_REQUIRED"].includes(mirrorHealthState) || store.repairRequired;
 
   if (purpose === "EXECUTE" && executionUnsafe) {
-    throw new Error(
+    const error = new Error(
       `Mirror is not safe for execution (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );
+    error.code = "TARGETING_REQUIRES_SYNC";
+    error.meta = { purpose, state: store };
+    throw error;
   }
   if ((purpose === "PREVIEW" || purpose === "EXPORT") && previewUnsafe) {
-    throw new Error(
+    const error = new Error(
       `Mirror is not safe for ${purpose.toLowerCase()} (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );
+    error.code = "TARGETING_REQUIRES_SYNC";
+    error.meta = { purpose, state: store };
+    throw error;
   }
 
   return store.activeMirrorBatchId;
@@ -1314,7 +1322,7 @@ export async function freezeProductTargetSnapshot({
   filterHash,
   targetGranularity = TARGET_GRANULARITIES.PRODUCT,
   source = null,
-  db = db,
+  db = repositoryDb,
 }) {
   if (!filterHash) {
     throw new Error("FILTER_HASH_REQUIRED");
@@ -1393,7 +1401,7 @@ export async function freezeVariantTargetSnapshot({
   targetGranularity = TARGET_GRANULARITIES.VARIANT,
   explicitVariantIds = [],
   source = null,
-  db = db,
+  db = repositoryDb,
 }) {
   if (!filterHash) {
     throw new Error("FILTER_HASH_REQUIRED");
@@ -1510,7 +1518,7 @@ export async function freezeTargetSnapshot({
   explicitVariantIds = [],
   returnStats = false,
   source = null,
-  db = db,
+  db = repositoryDb,
 }) {
   if (!ownerType || !ownerId || !shop || !mirrorBatchId) {
     throw new Error("ownerType, ownerId, shop, and mirrorBatchId are required for snapshot freeze");
@@ -1609,7 +1617,7 @@ export async function freezeExplicitTargetSnapshot({
   targets = [],
   returnStats = false,
   source = null,
-  db = db,
+  db = repositoryDb,
 }) {
   if (!ownerType || !ownerId || !shop || !mirrorBatchId) {
     throw new Error("ownerType, ownerId, shop, and mirrorBatchId are required for explicit snapshot freeze");
@@ -1660,7 +1668,12 @@ export async function freezeExplicitTargetSnapshot({
       targetIdentity: canonicalIdentity,
       ordinal: index,
       filterHash,
-      beforeValues: target.beforeValues || null,
+      beforeValues: {
+        ...(target.beforeValues && typeof target.beforeValues === "object"
+          ? target.beforeValues
+          : {}),
+        ...(target.plannedMutation ? { plannedMutation: target.plannedMutation } : {}),
+      },
     };
   });
 

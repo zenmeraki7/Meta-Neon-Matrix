@@ -144,6 +144,8 @@ function assertPreviewRegistryVersionMatches(command) {
 function buildServiceContext(command) {
   return Object.freeze({
     shop: command.shop,
+    accessToken: command.accessToken || null,
+    scope: command.scope || null,
     actor: command.actor || null,
     subscription: command.subscription || null,
     entitlement: command.entitlement || null,
@@ -189,6 +191,7 @@ function toPreviewServiceInput(command) {
 
     field: command.editedField,
     editedField: command.editedField,
+    operation: command.operation || null,
     editType: command.editType,
     editValue: command.editValue,
 
@@ -198,11 +201,13 @@ function toPreviewServiceInput(command) {
     replaceText: command.replaceText || null,
     supportValue: command.supportValue,
     locationId: command.locationId || null,
+    rounding: command.rounding || "NONE",
     operationKey: command.operationKey || null,
     productIds: safeArray(command.productIds),
 
     lang: command.lang || "en",
     cursor: command.cursor || null,
+    page: command.page || 1,
     limit: command.limit || null,
 
     actor: command.actor || null,
@@ -216,6 +221,7 @@ function toPreviewServiceInput(command) {
 function toExecuteInnerCommand(command) {
   return Object.freeze({
     editedField: command.editedField,
+    operation: command.operation || null,
     editType: command.editType,
     editValue: command.editValue,
 
@@ -229,6 +235,7 @@ function toExecuteInnerCommand(command) {
 
     previewId: command.previewId,
     previewContractId: command.previewContractId || command.previewId,
+    previewSignature: command.previewSignature || null,
     previewFilterHash: command.previewFilterHash,
     previewMirrorBatchId: command.previewMirrorBatchId || null,
     previewFieldRegistryVersion: command.previewFieldRegistryVersion,

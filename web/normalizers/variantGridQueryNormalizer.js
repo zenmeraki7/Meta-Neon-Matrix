@@ -8,29 +8,36 @@ import {
 } from "./normalizerPrimitives.js";
 
 function normalizeProductIds(raw) {
-  const input = Array.isArray(raw)
-    ? raw
-    : raw == null
-      ? []
-      : String(raw)
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean);
+  if (!Array.isArray(raw)) {
+    throw buildError("Invalid variants query request.", 400, "VALIDATION_FAILED", [
+      { field: "productIds", error: "must be an array" },
+    ]);
+  }
 
-  if (input.length > 500) {
-    throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
-      { field: "productIds", error: "max 500 ids" },
+  const input = raw
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+
+  if (input.length > 50) {
+    throw buildError("Invalid variants query request.", 400, "VALIDATION_FAILED", [
+      { field: "productIds", error: "max 50 ids" },
     ]);
   }
 
   return input.map((id) => {
-    const value = capLength(id, 32, "productIds");
-    if (!/^\d+$/.test(value)) {
-      throw buildError("Validation failed", 400, "VALIDATION_FAILED", [
-        { field: "productIds", error: "must be numeric ids" },
+    const value = capLength(String(id || "").trim(), 200, "productIds");
+    const gidMatch = value.match(/^gid:\/\/shopify\/Product\/(\d+)$/);
+
+    if (!gidMatch) {
+      throw buildError("Invalid variants query request.", 400, "VALIDATION_FAILED", [
+        { field: "productIds", error: "must be Shopify Product GIDs" },
       ]);
     }
-    return value;
+
+    return Object.freeze({
+      gid: value,
+      numericId: gidMatch[1],
+    });
   });
 }
 
@@ -49,7 +56,7 @@ export function normalizeVariantGridQuery(params = {}, query = {}, locals = {}) 
   const limit = normalizeIntInRange(query.limit, {
     fallback: 50,
     min: 1,
-    max: 200,
+    max: 500,
     fieldName: "limit",
   });
   const productIds = normalizeProductIds(query.productIds);

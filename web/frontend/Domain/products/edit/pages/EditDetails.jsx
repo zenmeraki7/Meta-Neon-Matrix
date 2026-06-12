@@ -39,6 +39,13 @@ import CellErrorBoundary from "../../../../components/Error/CellErrorBoundary";
 
 const FALLBACK_IMAGE = "https://www.otithee.com/img/fallback/fallback-2.png";
 
+function normalizeRouteHistoryId(value) {
+  const historyId = String(value || "").trim();
+  return historyId && historyId !== "undefined" && historyId !== "null"
+    ? historyId
+    : null;
+}
+
 function formatDuration(ms = 0) {
   if (!ms || ms < 0) return "0s";
 
@@ -168,6 +175,7 @@ function buildStableChangeRowKey({
 
 export default function EditDetails() {
   const { id } = useParams();
+  const historyId = normalizeRouteHistoryId(id);
   const navigate = useNavigate();
 const { t, i18n } = useTranslation();
   const { showError } = useAppToast();
@@ -194,11 +202,11 @@ const { t, i18n } = useTranslation();
   
 
   const summaryQuery = useQuery({
-    queryKey: ["edit-history-summary", id || "", i18n.language || "en"],
-    enabled: Boolean(id),
+    queryKey: ["edit-history-summary", historyId || "", i18n.language || "en"],
+    enabled: Boolean(historyId),
     queryFn: async ({ signal }) => {
       const json = await api.get(
-        `/api/history/get-edit-history-summary/${id}?lang=${i18n.language}`,
+        `/api/history/get-edit-history-summary/${encodeURIComponent(historyId)}?lang=${i18n.language}`,
         { signal },
       );
       return json?.data || null;
@@ -210,11 +218,11 @@ const { t, i18n } = useTranslation();
   });
 
   const fetchHistoryDetail = useCallback(async () => {
-    if (!id) return;
+    if (!historyId) return;
 
     try {
       const json = await api.get(
-        `/api/history/get-edit-history-details/${id}?lang=${i18n.language}`,
+        `/api/history/get-edit-history-details/${encodeURIComponent(historyId)}?lang=${i18n.language}`,
       );
       setHistoryItem((previous) => ({
         ...(previous || {}),
@@ -223,18 +231,18 @@ const { t, i18n } = useTranslation();
     } catch (_err) {
       // Keep summary-visible UI stable even if detail enrichment fails.
     }
-  }, [api, id, i18n.language]);
+  }, [api, historyId, i18n.language]);
 
   const fetchChanges = useCallback(
     async (page = 1) => {
-      if (!id) return;
+      if (!historyId) return;
 
       try {
         setChangesError(null);
         setIsLoadingChanges(true);
 
         const json = await api.get(
-          `/api/history/get-edit-history/changes/${id}?page=${page}&limit=${itemsPerPage}&lang=${i18n.language}`,
+          `/api/history/get-edit-history/changes/${encodeURIComponent(historyId)}?page=${page}&limit=${itemsPerPage}&lang=${i18n.language}`,
         );
         const changeRows = Array.isArray(json?.data) ? json.data : [];
         const meta = json?.meta || {};
@@ -283,7 +291,7 @@ const { t, i18n } = useTranslation();
         setIsLoadingChanges(false);
       }
     },
-    [api, id, i18n.language, t],
+    [api, historyId, i18n.language, t],
   );
 
   useEffect(() => {
@@ -421,6 +429,34 @@ const { t, i18n } = useTranslation();
 
     URL.revokeObjectURL(url);
   }, [flattenedRows, historyItem]);
+
+  if (!historyId) {
+    return (
+      <Page
+        fullWidth
+        title={t("errorPageTitle")}
+        backAction={{ content: t("History"), onAction: handleBack }}
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <Box padding="500">
+                <BlockStack gap="300">
+                  <Text as="h2" variant="headingMd">
+                    Missing history ID.
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Open this edit from History or run the edit again.
+                  </Text>
+                  <Button onClick={handleBack}>Back to history</Button>
+                </BlockStack>
+              </Box>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
 
   if (summaryQuery.isLoading && !historyItem) {
     return (

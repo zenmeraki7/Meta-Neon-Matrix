@@ -8,6 +8,25 @@ export async function findPreviewContractRecord(previewContractId, shop) {
       id: String(previewContractId),
       shop,
       type: "preview",
+      source: "manual_preview",
+    },
+  });
+}
+
+export async function extendPreviewContractExpiry({
+  previewContractId,
+  shop,
+  expiresAt,
+}) {
+  return prisma.filterTrack.updateMany({
+    where: {
+      id: String(previewContractId),
+      shop,
+      type: "preview",
+      source: "manual_preview",
+    },
+    data: {
+      expiresAt,
     },
   });
 }

@@ -1,5 +1,7 @@
-import { db } from "../repositories/repositoryDb.js";
+import { db as repositoryDb } from "../repositories/repositoryDb.js";
 import { guardedEditHistoryUpdate } from "./operationTransitionGuards.js";
+
+const db = repositoryDb;
 
 const DEFAULT_LEASE_MS = 10 * 60 * 1000;
 
@@ -33,7 +35,7 @@ function buildNextBatchWithStage(batch, stage, nextStageState) {
 }
 
 async function writeStageWithCas({
-  db = db,
+  db = repositoryDb,
   historyId,
   shop,
   expectedExecutionStates = [],
@@ -87,7 +89,7 @@ export async function beginEditHistoryStage({
   executionId = null,
   leaseMs = DEFAULT_LEASE_MS,
   metadata = null,
-  db = db,
+  db = repositoryDb,
 } = {}) {
   const normalizedExecutionId = normalizeExecutionId(executionId);
   const history = await db.editHistory.findFirst({
@@ -172,7 +174,7 @@ export async function completeEditHistoryStage({
   stage,
   executionId = null,
   checkpoint = null,
-  db = db,
+  db = repositoryDb,
 } = {}) {
   const normalizedExecutionId = normalizeExecutionId(executionId);
   const history = await db.editHistory.findFirst({
@@ -212,7 +214,7 @@ export async function failEditHistoryStage({
   retryable = false,
   checkpoint = null,
   error = null,
-  db = db,
+  db = repositoryDb,
 } = {}) {
   const normalizedExecutionId = normalizeExecutionId(executionId);
   const history = await db.editHistory.findFirst({

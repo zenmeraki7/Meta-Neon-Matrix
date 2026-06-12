@@ -61,9 +61,9 @@ export class BulkEditTargetFreezeService {
   }
 
   async freezeEditHistoryTargets(historyId, options = {}) {
-    const db = options?.tx || db;
+    const database = options?.tx || db;
 
-    const history = await db.editHistory.findUnique({
+    const history = await database.editHistory.findUnique({
       where: { id: historyId },
       select: {
         shop: true,
@@ -89,6 +89,70 @@ export class BulkEditTargetFreezeService {
       ? history.batch.explicitProductIds.filter(Boolean)
       : [];
 
+    const previewRows = Array.isArray(history.batch?.previewRows)
+      ? history.batch.previewRows.filter((row) =>
+        String(row?.status || "").toUpperCase() === "READY",
+      )
+      : [];
+
+    if (previewRows.length > 0) {
+      const targetGranularity = String(
+        history.batch?.targetGranularity || "VARIANT",
+      ).toUpperCase();
+      const stats = await freezeExplicitTargetSnapshot({
+        ownerType: "EDIT_HISTORY",
+        ownerId: historyId,
+        shop: history.shop,
+        source: "MANUAL_PREVIEW",
+        mirrorBatchId: history.targetMirrorBatchId,
+        filterHash: String(
+          history.batch?.previewFingerprint?.filterHash ||
+          history.filterHash ||
+          history.batch?.previewId ||
+          historyId,
+        ),
+        targetGranularity,
+        targets: previewRows.map((row) => ({
+          productId: row.productId,
+          variantId: row.variantId || null,
+          targetType: row.targetType || (row.variantId ? "VARIANT" : "PRODUCT"),
+          beforeValues: {
+            ...(row.beforeValues && typeof row.beforeValues === "object"
+              ? row.beforeValues
+              : {}),
+            currentValue: row.currentValue ?? null,
+            newValue: row.newValue ?? null,
+            plannedMutation: row.plannedMutation || null,
+          },
+          plannedMutation: row.plannedMutation || null,
+        })),
+        returnStats: true,
+        db: database,
+      });
+
+      const frozenCount = Number(stats?.finalSnapshotCount || 0);
+      const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
+        shop: history.shop,
+        historyId,
+        operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,
+        previewContractId: String(history.batch?.previewContractId || history.batch?.previewId || "").trim() || `EDIT_HISTORY:${historyId}`,
+        mirrorBatchId: history.targetMirrorBatchId,
+        targetingFingerprint: String(history.batch?.previewFingerprint?.filterHash || history.filterHash || "").trim() || null,
+        compilerVersion: String(history.batch?.targetingCompilerVersion || "preview-v1"),
+        projectionVersion: "preview-v1",
+        plannerVersion: String(history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion || "").trim() || null,
+        source: "MANUAL_PREVIEW",
+        db: database,
+      });
+      await attachFrozenSnapshotRefToFreezingHistory({
+        db: database,
+        historyId,
+        history,
+        snapshotSet,
+      });
+      return frozenCount;
+    }
+
     if (explicitProductIds.length > 0) {
       const stats = await freezeExplicitTargetSnapshot({
         ownerType: "EDIT_HISTORY",
@@ -106,7 +170,7 @@ export class BulkEditTargetFreezeService {
           targetType: "PRODUCT",
         })),
         returnStats: true,
-        db,
+        db: database,
       });
 
       const frozenCount = Number(stats?.finalSnapshotCount || 0);
@@ -121,10 +185,10 @@ export class BulkEditTargetFreezeService {
         projectionVersion: "legacy-v1",
         plannerVersion: String(history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion || "").trim() || null,
         source: "MANUAL_SELECTION",
-        db,
+        db: database,
       });
       await attachFrozenSnapshotRefToFreezingHistory({
-        db,
+        db: database,
         historyId,
         history,
         snapshotSet,
@@ -211,7 +275,7 @@ export class BulkEditTargetFreezeService {
         targetGranularity,
         targets: explicitTargets,
         returnStats: true,
-        db,
+        db: database,
       })
       : (
         await freezeResolver({
@@ -236,7 +300,7 @@ export class BulkEditTargetFreezeService {
           confirmBroadTarget: history.batch?.confirmBroadTarget === true,
           queryParams: { cursor: null, limit: 1 },
           sampleLimit: 1,
-          db,
+          db: database,
         })
       ).freezeStats;
 
@@ -264,11 +328,11 @@ export class BulkEditTargetFreezeService {
       projectionVersion: "legacy-v1",
       plannerVersion: String(history.batch?.executionPlan?.plannerVersion || history.batch?.plannerVersion || "").trim() || null,
       source: "BULK_EDIT",
-      db,
+      db: database,
     });
 
     await attachFrozenSnapshotRefToFreezingHistory({
-      db,
+      db: database,
       historyId,
       history,
       snapshotSet,

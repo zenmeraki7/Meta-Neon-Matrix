@@ -390,17 +390,29 @@ function handleVariantField(
           operation,
           value
         );
+        const numericNewValue = Number(newValue);
+        const isNegativePrice =
+          config.fieldName === "price" &&
+          Number.isFinite(numericNewValue) &&
+          numericNewValue < 0;
 
         const finalNewValue =
-          config.isNumeric && typeof newValue === "number"
-            ? Number(newValue).toFixed(2)
+          config.isNumeric && Number.isFinite(numericNewValue)
+            ? numericNewValue.toFixed(2)
             : newValue;
+        const formattedCurrentValue =
+          config.isNumeric && Number.isFinite(Number(currentValue))
+            ? Number(currentValue).toFixed(2)
+            : currentValue;
 
         return {
           id: variant.id || variant._id,
+          variantId: variant.id || variant._id,
           title: variant.title || "Default",
-          oldValue: currentValue,
+          oldValue: formattedCurrentValue,
           newValue: finalNewValue,
+          status: isNegativePrice ? "ERROR" : "READY",
+          warning: isNegativePrice ? "New price cannot be negative." : null,
         };
       }),
     };

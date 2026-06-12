@@ -44,6 +44,12 @@ function requireMatchingPreviewValue({ actual, expected, fieldName, code }) {
   }
 }
 
+function buildCodedError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
 export class ScheduledEditService {
   constructor({
     session,
@@ -128,6 +134,20 @@ export class ScheduledEditService {
       previewRecord.value && typeof previewRecord.value === "object"
         ? previewRecord.value
         : {};
+    const previewShop = String(
+      previewRecord.shop
+      || fingerprint.shop
+      || fingerprint.owner?.shop
+      || "",
+    ).trim();
+    const authenticatedShop = String(this.session.shop || "").trim();
+    if (!previewShop || previewShop !== authenticatedShop) {
+      throw buildCodedError(
+        "Run preview again before scheduling this edit.",
+        "PREVIEW_NOT_FOUND",
+      );
+    }
+
     const registryVersion = getPreviewRegistryVersion(fingerprint);
     const editedField = fingerprint.field;
     const editedBy = fingerprint.editType;
@@ -148,17 +168,17 @@ export class ScheduledEditService {
     }
 
     const previewActorId = String(
-      previewRecord.userId || fingerprint.actorId || "",
+      previewRecord.userId
+      || fingerprint.actorId
+      || fingerprint.owner?.actorId
+      || "",
     ).trim();
     const executionActorId = String(actor?.actorId || actor?.userId || "").trim();
-    if (!previewActorId) {
-      throw new Error("PREVIEW_OWNERSHIP_UNBOUND");
-    }
-    if (!executionActorId) {
-      throw new Error("ACTOR_ID_REQUIRED_FOR_SCHEDULE");
-    }
-    if (previewActorId !== executionActorId) {
-      throw new Error("PREVIEW_ACTOR_MISMATCH");
+    if (previewActorId && executionActorId && previewActorId !== executionActorId) {
+      throw buildCodedError(
+        "Preview is stale. Run preview again before scheduling this edit.",
+        "PREVIEW_STALE",
+      );
     }
 
     requireMatchingPreviewValue({

@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import shopify from "../../shopify.js";
+import { db } from "../../repositories/repositoryDb.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import {
   buildActorContext,
@@ -30,8 +32,145 @@ import {
 import { createIdempotencyStore } from "../../repositories/idempotencyRepository.js";
 import {
   createManualEditHistoryWithImmutableCommand,
+  extendPreviewContractExpiry,
   findPreviewContractRecord,
 } from "../../repositories/bulkEditCommandRepository.js";
+
+const PREVIEW_EXECUTE_TTL_MS = Math.max(
+  10 * 60 * 1000,
+  Number.parseInt(process.env.PREVIEW_EXECUTE_TTL_MS || "3600000", 10),
+);
+const DIRECT_EXECUTION_LIMIT = Math.max(
+  1,
+  Number.parseInt(process.env.BULK_EDIT_DIRECT_EXECUTION_LIMIT || "100", 10),
+);
+
+const PRODUCT_VARIANT_UPDATE_MUTATION = `
+  mutation productVariantUpdate($input: ProductVariantInput!) {
+    productVariantUpdate(input: $input) {
+      productVariant {
+        id
+        price
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+function buildCodedError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function getPreviewFreshUntil(previewRecord) {
+  const expiresAtMs = previewRecord?.expiresAt
+    ? new Date(previewRecord.expiresAt).getTime()
+    : 0;
+  const updatedAtMs = previewRecord?.updatedAt
+    ? new Date(previewRecord.updatedAt).getTime()
+    : 0;
+  const createdAtMs = previewRecord?.createdAt
+    ? new Date(previewRecord.createdAt).getTime()
+    : 0;
+  const activityMs = Math.max(updatedAtMs, createdAtMs, 0);
+  const activityFreshUntil = activityMs > 0
+    ? activityMs + PREVIEW_EXECUTE_TTL_MS
+    : 0;
+  return Math.max(expiresAtMs, activityFreshUntil);
+}
+
+function isPreviewContractExpired(previewRecord, now = new Date()) {
+  const freshUntil = getPreviewFreshUntil(previewRecord);
+  return freshUntil > 0 && freshUntil < now.getTime();
+}
+
+function getReadyPreviewRows(fingerprint = {}) {
+  const rows = Array.isArray(fingerprint.executableRows)
+    ? fingerprint.executableRows
+    : Array.isArray(fingerprint.rows)
+      ? fingerprint.rows
+      : [];
+  return rows.filter((row) => String(row?.status || "").toUpperCase() === "READY");
+}
+
+function assertExecutablePreviewRows({ rows, field }) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw buildCodedError(
+      "Preview data is incomplete. Run preview again before applying this edit.",
+      "PREVIEW_SNAPSHOT_INCOMPLETE",
+    );
+  }
+
+  if (String(field || "") === "price") {
+    const incomplete = rows.find((row) =>
+      !row?.variantId ||
+      row.currentValue === undefined ||
+      row.currentValue === null ||
+      row.newValue === undefined ||
+      row.newValue === null ||
+      !row?.plannedMutation?.jsonlRow
+    );
+    if (incomplete) {
+      throw buildCodedError(
+        "Preview data is incomplete. Run preview again before applying this edit.",
+        "PREVIEW_SNAPSHOT_INCOMPLETE",
+      );
+    }
+  }
+}
+
+function getDirectPreviewRowsFromHistoryData(historyData = {}) {
+  const rows = Array.isArray(historyData?.batch?.previewRows)
+    ? historyData.batch.previewRows
+    : [];
+  return rows.filter((row) => String(row?.status || "").toUpperCase() === "READY");
+}
+
+function shouldExecuteDirectly(historyData = {}) {
+  const rows = getDirectPreviewRowsFromHistoryData(historyData);
+  const mode = String(process.env.BULK_EDIT_EXECUTION_MODE || "").toLowerCase();
+  return rows.length > 0 && (mode === "direct" || rows.length <= DIRECT_EXECUTION_LIMIT);
+}
+
+function safeShopifyErrorMessage(error) {
+  const message = String(error?.message || error || "Shopify mutation failed").trim();
+  return message.slice(0, 300);
+}
+
+function normalizeDirectStatus({ successCount, failedCount, totalCount }) {
+  if (successCount === totalCount && totalCount > 0) {
+    return {
+      status: "completed",
+      statusNormalized: normalizeEditHistoryStatus("completed"),
+      executionState: OPERATION_LIFECYCLE_STATES.COMPLETED,
+      executionStateNormalized: normalizeEditHistoryExecutionState(
+        OPERATION_LIFECYCLE_STATES.COMPLETED,
+      ),
+    };
+  }
+  if (successCount > 0 && failedCount > 0) {
+    return {
+      status: "completed_with_errors",
+      statusNormalized: normalizeEditHistoryStatus("partial"),
+      executionState: OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED,
+      executionStateNormalized: normalizeEditHistoryExecutionState(
+        OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED,
+      ),
+    };
+  }
+  return {
+    status: "failed",
+    statusNormalized: normalizeEditHistoryStatus("failed"),
+    executionState: OPERATION_LIFECYCLE_STATES.FAILED,
+    executionStateNormalized: normalizeEditHistoryExecutionState(
+      OPERATION_LIFECYCLE_STATES.FAILED,
+    ),
+  };
+}
 
 export class BulkEditCommandService {
   constructor(session) {
@@ -101,6 +240,20 @@ export class BulkEditCommandService {
 
     await clearKeyCaches(`${historyShop}:fetchHistories`);
 
+    if (shouldExecuteDirectly(historyData)) {
+      const directResult = await this.#executePreviewRowsDirectly({
+        historyId,
+        historyShop,
+        executionIdentity,
+        historyData,
+      });
+      await this.idempotencyStore.complete({
+        recordId: begin.recordId,
+        response: directResult,
+      });
+      return directResult;
+    }
+
     await enqueueBulkEditTargetFreezeJob({
       historyId,
       shop: historyShop,
@@ -112,6 +265,8 @@ export class BulkEditCommandService {
       success: true,
       id: historyId,
       operationId: historyId,
+      historyId,
+      jobId: historyId,
       status: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
       message: "Bulk edit has been queued.",
     };
@@ -139,6 +294,7 @@ export class BulkEditCommandService {
       filterAst,
       previewFilterHash,
       previewMirrorBatchId,
+      previewSignature,
       confirmBroadTarget,
       criticalConfirmationText,
       operationKey,
@@ -157,13 +313,38 @@ export class BulkEditCommandService {
     );
 
     if (!previewRecord) {
-      throw new Error("Preview session expired. Please re-preview before executing.");
+      throw buildCodedError(
+        "Run preview again before applying this edit.",
+        "PREVIEW_NOT_FOUND",
+      );
     }
-    if (previewRecord.expiresAt && previewRecord.expiresAt < new Date()) {
-      throw new Error("PREVIEW_EXPIRED");
+    if (isPreviewContractExpired(previewRecord)) {
+      throw buildCodedError(
+        "Preview is stale. Run preview again before applying this edit.",
+        "PREVIEW_STALE",
+      );
     }
+    await extendPreviewContractExpiry({
+      previewContractId,
+      shop: this.session.shop,
+      expiresAt: new Date(Date.now() + PREVIEW_EXECUTE_TTL_MS),
+    });
 
     const fingerprint = previewRecord.value || {};
+    const previewShop = String(
+      previewRecord.shop
+      || fingerprint.shop
+      || fingerprint.owner?.shop
+      || "",
+    ).trim();
+    const authenticatedShop = String(this.session.shop || "").trim();
+    if (!previewShop || previewShop !== authenticatedShop) {
+      throw buildCodedError(
+        "Run preview again before applying this edit.",
+        "PREVIEW_NOT_FOUND",
+      );
+    }
+
     const resolvedEditedField = editedField ?? fingerprint.field;
     const resolvedEditType = body.editType ?? fingerprint.editType;
     const resolvedEditValue =
@@ -190,29 +371,36 @@ export class BulkEditCommandService {
     const previewActorId = String(
       previewRecord.userId
       || previewRecord?.value?.actorId
+      || previewRecord?.value?.owner?.actorId
       || "",
     ).trim();
     const executionActorId = String(
       operationContext.actor?.actorId || "",
     ).trim();
-    if (!previewActorId) {
-      throw new Error("PREVIEW_OWNERSHIP_UNBOUND");
-    }
-    if (!executionActorId) {
-      throw new Error("ACTOR_ID_REQUIRED_FOR_EXECUTE");
-    }
-    if (executionActorId !== previewActorId) {
-      throw new Error("PREVIEW_ACTOR_MISMATCH");
+    if (previewActorId && executionActorId && executionActorId !== previewActorId) {
+      throw buildCodedError(
+        "Preview is stale. Run preview again before applying this edit.",
+        "PREVIEW_STALE",
+      );
     }
 
     const expectedHash = String(fingerprint.filterHash || "");
     const expectedBatch = String(fingerprint.mirrorBatchId || "");
+    const expectedSignature = String(fingerprint.previewSignature || "").trim();
 
     if (
       (previewFilterHash && String(previewFilterHash || "") !== expectedHash)
       || (previewMirrorBatchId && String(previewMirrorBatchId || "") !== expectedBatch)
+      || (
+        previewSignature
+        && expectedSignature
+        && String(previewSignature || "").trim() !== expectedSignature
+      )
     ) {
-      throw new Error("Preview is stale. Please re-preview before executing.");
+      throw buildCodedError(
+        "Preview is stale. Run preview again before applying this edit.",
+        "PREVIEW_STALE",
+      );
     }
 
     const targetGranularity =
@@ -233,16 +421,37 @@ export class BulkEditCommandService {
       && typeof fingerprint.broadTargetAssessment === "object"
         ? fingerprint.broadTargetAssessment
         : null;
+    const readyPreviewRows = getReadyPreviewRows(fingerprint);
+    console.info("[products-update] preview snapshot", {
+      previewId: previewContractId,
+      shop: this.session.shop,
+      headerFound: true,
+      rowsLoaded: Array.isArray(fingerprint.rows) ? fingerprint.rows.length : 0,
+      readyRows: readyPreviewRows.length,
+      incompleteReason: readyPreviewRows.length ? null : "NO_READY_PREVIEW_ROWS",
+    });
 
     if (
-      !previewWhere
-      || !Number.isFinite(previewCount)
-      || previewCount < 0
+      readyPreviewRows.length === 0 &&
+      (
+        !previewWhere
+        || !Number.isFinite(previewCount)
+        || previewCount < 0
+      )
     ) {
-      throw new Error("PREVIEW_SNAPSHOT_INCOMPLETE");
+      throw buildCodedError(
+        "Preview data is incomplete. Run preview again before applying this edit.",
+        "PREVIEW_SNAPSHOT_INCOMPLETE",
+      );
+    }
+    if (readyPreviewRows.length > 0) {
+      assertExecutablePreviewRows({
+        rows: readyPreviewRows,
+        field: resolvedEditedField,
+      });
     }
 
-    const count = previewCount;
+    const count = readyPreviewRows.length || previewCount;
     const limit = subscription?.limit || 100;
     const planName = subscription?.planName || "Free Plan";
     const isUnlimited = subscription?.isUnlimited || false;
@@ -301,7 +510,10 @@ export class BulkEditCommandService {
     return {
       shop: this.session.shop,
       title,
-      queryFilter: JSON.stringify(previewWhere),
+      queryFilter: JSON.stringify(previewWhere || {
+        previewId: previewContractId,
+        source: "PERSISTED_PREVIEW_ROWS",
+      }),
       rules,
       startedAt: new Date(),
       status: "pending",
@@ -315,6 +527,7 @@ export class BulkEditCommandService {
       totalItems: count,
       targetSnapshotCount: 0,
       targetMirrorBatchId: expectedBatch,
+      type: "Manual edit",
       durationMs: 0,
       batch: {
         frozen: true,
@@ -326,7 +539,8 @@ export class BulkEditCommandService {
         queuedAt: new Date().toISOString(),
         // Execute must reuse preview snapshot targeting material only.
         filterParams: [],
-        filterAst: previewFilterAst,
+        filterAst: readyPreviewRows.length > 0 ? null : previewFilterAst,
+        previewRows: readyPreviewRows,
         previewId: previewContractId,
         previewContractId,
         previewFingerprint: {
@@ -334,6 +548,7 @@ export class BulkEditCommandService {
           filterHash: expectedHash,
           mirrorBatchId: expectedBatch,
         },
+        previewSignature: String(previewSignature || "").trim() || null,
         maxBulkEditTargets,
         executionPlan,
         operationKey: executionPlan.operationKey,
@@ -357,6 +572,224 @@ export class BulkEditCommandService {
       undo: buildPlannedUndoState({
         allowed: resolvedEditedField !== "deleteProducts",
       }),
+    };
+  }
+
+  async #executePreviewRowsDirectly({
+    historyId,
+    historyShop,
+    executionIdentity,
+    historyData,
+  }) {
+    const rows = getDirectPreviewRowsFromHistoryData(historyData);
+    const startedAt = new Date();
+    const batchId = `direct:${historyId}`;
+    const field = String(historyData?.rules?.[0]?.field || "").trim();
+
+    console.info("[bulk-edit-execute] start", {
+      historyId,
+      shop: historyShop,
+      loadedItems: rows.length,
+      executionMode: "direct",
+    });
+
+    if (!this.session?.accessToken) {
+      throw buildCodedError("Unable to start edit job.", "EDIT_START_FAILED");
+    }
+
+    const client = new shopify.api.clients.Graphql({ session: this.session });
+
+    await db.changeRecord.deleteMany({
+      where: {
+        shop: historyShop,
+        editHistoryId: historyId,
+        batchId,
+      },
+    });
+
+    await db.editHistory.updateMany({
+      where: { id: historyId, shop: historyShop },
+      data: {
+        status: "processing",
+        statusNormalized: normalizeEditHistoryStatus("processing"),
+        executionState: OPERATION_LIFECYCLE_STATES.EXECUTING,
+        executionStateNormalized: normalizeEditHistoryExecutionState(
+          OPERATION_LIFECYCLE_STATES.EXECUTING,
+        ),
+        startedAt,
+        totalItems: rows.length,
+        targetSnapshotCount: rows.length,
+        processedCount: 0,
+        type: "Manual edit",
+        batch: {
+          ...(historyData.batch && typeof historyData.batch === "object"
+            ? historyData.batch
+            : {}),
+          executionMode: "direct",
+          currentBatchTargetCount: rows.length,
+          ingestionSummary: {
+            totalTargets: rows.length,
+            submittedCount: 0,
+            successCount: 0,
+            failedCount: 0,
+            skippedCount: 0,
+          },
+        },
+      },
+    });
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const row of rows) {
+      const variantId = String(row?.variantId || "").trim();
+      const newValue = row?.newValue;
+      let status = "succeeded";
+      let failureMessage = null;
+      let afterValues = { [field]: newValue };
+
+      try {
+        const result = await client.query({
+          data: {
+            query: PRODUCT_VARIANT_UPDATE_MUTATION,
+            variables: {
+              input: {
+                id: variantId,
+                [field]: String(newValue),
+              },
+            },
+          },
+        });
+        const payload = result?.body?.data?.productVariantUpdate
+          || result?.data?.productVariantUpdate
+          || null;
+        const userErrors = Array.isArray(payload?.userErrors)
+          ? payload.userErrors
+          : [];
+        if (userErrors.length) {
+          throw new Error(userErrors.map((item) => item?.message).filter(Boolean).join("; "));
+        }
+        afterValues = {
+          [field]: payload?.productVariant?.[field] ?? newValue,
+        };
+        successCount += 1;
+        console.info("[bulk-edit-execute] variant update success", {
+          historyId,
+          variantId,
+        });
+      } catch (error) {
+        status = "failed";
+        failureMessage = safeShopifyErrorMessage(error);
+        failedCount += 1;
+        console.warn("[bulk-edit-execute] variant update failed", {
+          historyId,
+          variantId,
+          code: error?.code || null,
+        });
+      }
+
+      await db.changeRecord.create({
+        data: {
+          editHistoryId: historyId,
+          targetType: "VARIANT",
+          targetIdentity: variantId,
+          productId: String(row?.productId || ""),
+          variantId,
+          shop: historyShop,
+          mirrorBatchId: historyData.targetMirrorBatchId || null,
+          beforeValues: row?.beforeValues || { [field]: row?.currentValue ?? null },
+          afterValues,
+          failureCode: failureMessage ? "SHOPIFY_USER_ERROR" : null,
+          failureMessage,
+          options: {
+            productTitle: row?.productTitle || null,
+            variantTitle: row?.variantTitle || null,
+          },
+          productFieldChanges: [],
+          variantFieldChanges: [
+            {
+              variantId,
+              variantTitle: row?.variantTitle || "Default Title",
+              changes: [
+                {
+                  field,
+                  oldValue: row?.currentValue ?? null,
+                  newValue,
+                },
+              ],
+            },
+          ],
+          title: row?.productTitle || "Untitled product",
+          scope: "variant",
+          status,
+          batchId,
+        },
+      });
+    }
+
+    const totalCount = rows.length;
+    const skippedCount = 0;
+    const processedCount = successCount + failedCount + skippedCount;
+    const finalState = normalizeDirectStatus({
+      successCount,
+      failedCount,
+      totalCount,
+    });
+    const completedAt = new Date();
+
+    await db.editHistory.updateMany({
+      where: { id: historyId, shop: historyShop },
+      data: {
+        status: finalState.status,
+        statusNormalized: finalState.statusNormalized,
+        executionState: finalState.executionState,
+        executionStateNormalized: finalState.executionStateNormalized,
+        processedCount,
+        totalItems: totalCount,
+        targetSnapshotCount: totalCount,
+        completedAt,
+        durationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+        type: "Manual edit",
+        batch: {
+          ...(historyData.batch && typeof historyData.batch === "object"
+            ? historyData.batch
+            : {}),
+          executionMode: "direct",
+          currentBatchTargetCount: totalCount,
+          ingestionSummary: {
+            totalTargets: totalCount,
+            submittedCount: processedCount,
+            successCount,
+            failedCount,
+            skippedCount,
+          },
+        },
+      },
+    });
+
+    await clearKeyCaches(`${historyShop}:fetchHistories`);
+    console.info("[bulk-edit-execute] finalized", {
+      historyId,
+      status: finalState.status,
+      success: successCount,
+      failed: failedCount,
+    });
+
+    return {
+      success: true,
+      id: historyId,
+      operationId: historyId,
+      historyId,
+      jobId: historyId,
+      status: finalState.status,
+      matchingProductCount: totalCount,
+      affectedVariantCount: totalCount,
+      successCount,
+      failedCount,
+      skippedCount,
+      historyUrl: `/editDetails/${historyId}`,
+      executionId: executionIdentity || null,
+      message: "Bulk edit completed.",
     };
   }
 }

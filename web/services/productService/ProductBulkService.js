@@ -10,7 +10,9 @@ import { ScheduledEditService } from "../bulkEdit/ScheduledEditService.js";
 export default class ProductBulkService {
   constructor(session) {
     this.session = session;
-    this.client = new shopify.api.clients.Graphql({ session });
+    this.client = session?.accessToken
+      ? new shopify.api.clients.Graphql({ session })
+      : null;
 
     this.commandService = new BulkEditCommandService(session);
     this.previewService = new BulkEditPreviewService(session);
@@ -57,6 +59,14 @@ export default class ProductBulkService {
     hasMore = false,
     nextRetryCursorIndex = null,
   }) {
+    if (!this.shopifyBulkMutationService.client) {
+      if (!this.session?.accessToken) {
+        throw new Error("Shopify access token is required for bulk mutation submission.");
+      }
+      this.client = new shopify.api.clients.Graphql({ session: this.session });
+      this.shopifyBulkMutationService.client = this.client;
+    }
+
     return this.shopifyBulkMutationService.submitProductSetBulkMutation({
       historyId,
       executionId,

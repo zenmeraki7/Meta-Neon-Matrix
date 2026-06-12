@@ -34,9 +34,21 @@ const SEARCH_REPLACE_EDIT_TYPES = new Set([
   "Search/replace within tag name",
 ]);
 
-function buildRequestError(message, code = "VALIDATION_FAILED") {
+const CANONICAL_OPERATION_TO_LEGACY_EDIT_TYPE = Object.freeze({
+  SET_FIXED: "Set to fixed value",
+  INCREASE_FIXED: "Changed by fixed amount",
+  DECREASE_FIXED: "Changed by fixed amount",
+  INCREASE_PERCENT: "Increase by percent",
+  DECREASE_PERCENT: "Decrease by percent",
+  PERCENT_OF_COMPARE_AT_PRICE: "Set to percentage of compare-at-price",
+});
+
+function buildRequestError(message, code = "VALIDATION_FAILED", fields = []) {
   const error = new Error(message);
   error.code = code;
+  if (Array.isArray(fields) && fields.length) {
+    error.fields = fields;
+  }
   return error;
 }
 
@@ -238,6 +250,38 @@ function normalizeLimit(value) {
   }
 
   return limit;
+}
+
+function normalizePreviewLimit(value) {
+  if (value === undefined || value === null || value === "") {
+    return 10;
+  }
+
+  const limit = Number(value);
+
+  if (!Number.isFinite(limit)) {
+    throw buildRequestError("Limit must be a valid number.", "VALIDATION_FAILED", [
+      { field: "limit", error: "Limit must be a valid number." },
+    ]);
+  }
+
+  return Math.max(1, Math.min(50, Math.floor(limit)));
+}
+
+function normalizePage(value) {
+  if (value === undefined || value === null || value === "") {
+    return 1;
+  }
+
+  const page = Number(value);
+
+  if (!Number.isInteger(page) || page < 1) {
+    throw buildRequestError("Page must be a positive integer.", "VALIDATION_FAILED", [
+      { field: "page", error: "Page must be a positive integer." },
+    ]);
+  }
+
+  return page;
 }
 
 function normalizeCount(value, fieldName = "count") {
@@ -521,6 +565,8 @@ function assertCommandContext(context) {
 
   return Object.freeze({
     shop: normalizeRequiredText(safe.shop, "shop", 255),
+    accessToken: normalizeText(safe.accessToken, "accessToken", MAX_LONG_TEXT_LENGTH),
+    scope: normalizeText(safe.scope, "scope", MAX_LONG_TEXT_LENGTH),
     actor: normalizeOptionalPlainObject(safe.actor, "actor"),
     subscription: normalizeOptionalPlainObject(safe.subscription, "subscription"),
     entitlement: normalizeOptionalPlainObject(safe.entitlement, "entitlement"),
@@ -545,11 +591,22 @@ function normalizeEditPayload({ body = {}, query = {} }) {
     "editedField",
     160,
   );
+  const operation = normalizeText(safeBody.operation, "operation", 160);
   const editType = normalizeRequiredText(
-    safeBody.editType ?? safeBody.editedType,
+    safeBody.editType ??
+      safeBody.editedType ??
+      CANONICAL_OPERATION_TO_LEGACY_EDIT_TYPE[operation],
     "editType",
     160,
   );
+  const incomingEditValue = safeBody.editValue ?? safeBody.value;
+  const rawEditValue =
+    operation === "DECREASE_FIXED" &&
+    incomingEditValue !== undefined &&
+    incomingEditValue !== null &&
+    String(incomingEditValue).trim() !== ""
+      ? String(-Math.abs(Number(incomingEditValue)))
+      : incomingEditValue;
   const searchKey = normalizeText(safeBody.searchKey, "searchKey", 300);
   const replaceText = normalizeText(
     safeBody.replaceText,
@@ -564,11 +621,33 @@ function normalizeEditPayload({ body = {}, query = {} }) {
     );
   }
 
+  if (["price", "compareAtPrice"].includes(String(editedField || ""))) {
+    if (rawEditValue === undefined || rawEditValue === null || String(rawEditValue).trim() === "") {
+      throw buildRequestError("Enter a valid price.", "VALIDATION_FAILED", [
+        { field: "value", error: "Value is required." },
+      ]);
+    }
+
+    const numericValue = Number(rawEditValue);
+    if (!Number.isFinite(numericValue)) {
+      throw buildRequestError("Enter a valid price.", "VALIDATION_FAILED", [
+        { field: "value", error: "Value must be a valid number." },
+      ]);
+    }
+
+    if (editType === "Set to fixed value" && numericValue < 0) {
+      throw buildRequestError("Enter a valid price.", "VALIDATION_FAILED", [
+        { field: "value", error: "Value must be zero or greater." },
+      ]);
+    }
+  }
+
   return Object.freeze({
     editedField,
+    operation,
     editType,
     editValue: normalizeEditValue(
-      safeBody.editValue ?? safeBody.value,
+      rawEditValue,
       "editValue",
     ),
     searchKey,
@@ -579,6 +658,7 @@ function normalizeEditPayload({ body = {}, query = {} }) {
       "locationId",
       200,
     ),
+    rounding: normalizeText(safeBody.rounding, "rounding", 80) || "NONE",
     filterParams: normalizeFilterParams(safeBody.filterParams),
     filterAst: normalizeFilterAst(safeBody.filterAst),
     previewId: normalizeOptionalId(
@@ -594,6 +674,11 @@ function normalizeEditPayload({ body = {}, query = {} }) {
       safeBody.previewMirrorBatchId ?? previewFingerprint.mirrorBatchId,
       "previewMirrorBatchId",
       200,
+    ),
+    previewSignature: normalizeText(
+      safeBody.previewSignature,
+      "previewSignature",
+      500,
     ),
     previewFieldRegistryVersion: normalizeText(
       safeBody.previewFieldRegistryVersion ??
@@ -617,7 +702,8 @@ function normalizeEditPayload({ body = {}, query = {} }) {
     productIds: normalizeProductIds(safeBody.productIds),
     title: normalizeText(safeBody.title, "title", 255),
     cursor: normalizeCursor(safeBody.cursor ?? safeQuery.cursor),
-    limit: normalizeLimit(safeBody.limit ?? safeQuery.limit),
+    page: normalizePage(safeBody.page ?? safeQuery.page),
+    limit: normalizePreviewLimit(safeBody.limit ?? safeQuery.limit),
   });
 }
 

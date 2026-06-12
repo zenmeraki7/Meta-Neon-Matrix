@@ -55,15 +55,21 @@ export async function getStoreMirrorState(shop, tx = db) {
 
 export async function assertMirrorSafeForTargeting(shop, { purpose = "PREVIEW" } = {}) {
   const state = await getStoreMirrorState(shop);
+  const normalizedPurpose = String(purpose || "PREVIEW").toUpperCase();
+  const mirrorHealthState = String(state?.mirrorHealthState || "").toUpperCase();
 
-  const isUnsafeHealth = ["UNSAFE", "DEGRADED"].includes(
-    String(state?.mirrorHealthState || "").toUpperCase(),
-  );
+  const isPreviewLike = normalizedPurpose === "PREVIEW" || normalizedPurpose === "EXPORT";
+  const isUnsafeHealth = isPreviewLike
+    ? ["UNSAFE", "REPAIR_REQUIRED"].includes(mirrorHealthState)
+    : ["UNSAFE", "DEGRADED", "REPAIR_REQUIRED"].includes(mirrorHealthState);
   const missingActiveBatch = !state?.activeMirrorBatchId;
   const initialSyncIncomplete =
-    state?.isProductInitialySyning === true || state?.shopifyBulkJobCompleted === false;
+    !isPreviewLike &&
+    (state?.isProductInitialySyning === true || state?.shopifyBulkJobCompleted === false);
   const lastSyncFailed = String(state?.staleReason || "").toUpperCase() === MIRROR_STALE_REASONS.FULL_SYNC_FAILED;
-  const syncUnsafeNow = state?.isProductSyncing === true || state?.isCollectionSyncing === true;
+  const syncUnsafeNow =
+    !isPreviewLike &&
+    (state?.isProductSyncing === true || state?.isCollectionSyncing === true);
 
   if (
     !state ||
@@ -76,9 +82,9 @@ export async function assertMirrorSafeForTargeting(shop, { purpose = "PREVIEW" }
     throw new TargetingValidationError(
       "Product data is still syncing. Please retry after sync completes.",
       {
-        code: "TARGETING_MIRROR_UNSAFE",
+        code: "TARGETING_REQUIRES_SYNC",
         meta: {
-          purpose,
+          purpose: normalizedPurpose,
           state: state || null,
         },
       },

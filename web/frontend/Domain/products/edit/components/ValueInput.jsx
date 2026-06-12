@@ -280,12 +280,22 @@ const ValueInput = ({
     setHelperText("");
 
     if (isNumeric) {
+      if (val.trim() === "") {
+        onChange("");
+        return;
+      }
+
       const pattern = NUMERIC_PATTERNS[numericKind] || NUMERIC_PATTERNS.number;
 
       if (!pattern.test(val)) {
         setHelperText(
           t("errors.invalidNumericValue", {
-            defaultValue: "Enter a valid numeric value.",
+            defaultValue:
+              numericKind === "money"
+                ? "Enter a valid price."
+                : numericKind === "percentage"
+                  ? "Enter a valid percentage."
+                  : "Enter a valid amount.",
           }),
         );
         return;
@@ -296,7 +306,12 @@ const ValueInput = ({
       if (!Number.isFinite(numericValue)) {
         setHelperText(
           t("errors.invalidNumericValue", {
-            defaultValue: "Enter a valid numeric value.",
+            defaultValue:
+              numericKind === "money"
+                ? "Enter a valid price."
+                : numericKind === "percentage"
+                  ? "Enter a valid percentage."
+                  : "Enter a valid amount.",
           }),
         );
         return;

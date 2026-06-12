@@ -431,7 +431,10 @@ function escapeRegExp(string = "") {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const toFixed00 = (num) => Number(Math.round(num));
+const toFixed00 = (num) => {
+  const value = Number(num);
+  return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+};
 
 function removeStripHtmlTags(html) {
   if (!html) return "";

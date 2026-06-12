@@ -161,11 +161,9 @@ export async function hydrateMissingVariantsForProducts(products, shop, mirrorBa
       inventoryPolicy: true,
       inventoryQuantity: true,
       cost: true,
-      requiresShipping: true,
       weight: true,
       weightUnit: true,
       selectedOptionsJson: true,
-      selectedOptions: true,
     },
     orderBy: [{ productId: "asc" }, { position: "asc" }],
   });

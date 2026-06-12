@@ -57,6 +57,58 @@ function buildIngestionSummaryFields(batch, targetSnapshotCount, processedCount)
   };
 }
 
+async function getEditExecutionCounts({ shop, historyId, snapshotSetId = null }) {
+  if (snapshotSetId) {
+    const grouped = await db.targetSnapshotItem.groupBy({
+      by: ["executionStatus"],
+      where: {
+        shop,
+        snapshotSetId,
+      },
+      _count: {
+        _all: true,
+      },
+    }).catch(() => []);
+
+    return (Array.isArray(grouped) ? grouped : []).reduce(
+      (acc, row) => {
+        const status = String(row?.executionStatus || "").toUpperCase();
+        const count = toNonNegativeInt(row?._count?._all || 0, 0);
+        if (["SUCCEEDED", "VERIFIED"].includes(status)) acc.successCount += count;
+        else if (status === "FAILED") acc.failedCount += count;
+        else if (status === "SKIPPED") acc.skippedCount += count;
+        acc.totalCount += count;
+        return acc;
+      },
+      { totalCount: 0, successCount: 0, failedCount: 0, skippedCount: 0 },
+    );
+  }
+
+  const grouped = await db.changeRecord.groupBy({
+    by: ["status"],
+    where: {
+      shop,
+      editHistoryId: historyId,
+    },
+    _count: {
+      _all: true,
+    },
+  }).catch(() => []);
+
+  return (Array.isArray(grouped) ? grouped : []).reduce(
+    (acc, row) => {
+      const status = String(row?.status || "").toUpperCase();
+      const count = toNonNegativeInt(row?._count?._all || 0, 0);
+      if (["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status)) acc.successCount += count;
+      else if (status === "FAILED") acc.failedCount += count;
+      else if (status === "SKIPPED") acc.skippedCount += count;
+      acc.totalCount += count;
+      return acc;
+    },
+    { totalCount: 0, successCount: 0, failedCount: 0, skippedCount: 0 },
+  );
+}
+
 function buildIdempotencyStageFields(batch) {
   const stages = batch && typeof batch === "object" && batch.idempotencyStages
     && typeof batch.idempotencyStages === "object"
@@ -564,8 +616,32 @@ export class EditHistoryService {
         );
       }
 
+      const snapshotSetId =
+        String(history?.snapshotSetId || "").trim()
+        || String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
+      const executionCounts = await getEditExecutionCounts({
+        shop: this.session.shop,
+        historyId: history.id,
+        snapshotSetId,
+      });
+      const totalCount =
+        executionCounts.totalCount ||
+        toNonNegativeInt(history.targetSnapshotCount || history.totalItems || 0, 0);
+      console.info("[history-summary]", {
+        id: history.id,
+        status: history.status,
+        totalCount,
+        successCount: executionCounts.successCount,
+        failedCount: executionCounts.failedCount,
+      });
+
       return projectEditHistoryStatus({
         ...history,
+        type: history.type || "Manual edit",
+        totalCount,
+        successCount: executionCounts.successCount,
+        failedCount: executionCounts.failedCount,
+        skippedCount: executionCounts.skippedCount,
         snapshotReference: buildSnapshotReference(history),
         title: getLocalizedJsonText(history.title, lang),
       });
