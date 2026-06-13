@@ -200,12 +200,20 @@ function toEditHistoryListItemDto(edgeOrHistory) {
     type: toStringOrNull(safe.type ?? safe.editType, 120),
     status: toStringOrNull(safe.status, 120),
     title: toSafeText(safe.title ?? safe.name, MAX_TITLE_LENGTH),
+    shop: toStringOrNull(safe.shop, 200),
     createdAt: toIsoString(safe.createdAt),
+    updatedAt: toIsoString(safe.updatedAt),
     completedAt: toIsoString(safe.completedAt),
     totalCount: toNumber(safe.totalCount ?? safe.totalItems, 0),
+    totalItems: toNumber(safe.totalItems, 0),
+    processedCount: toNumber(safe.processedCount, 0),
     successCount: toNumber(safe.successCount, 0),
     failedCount: toNumber(safe.failedCount, 0),
     undoStatus: toStringOrNull(safe.undoStatus, 120),
+    primaryStatus: asObject(safe.primaryStatus),
+    undoStatusSummary: asObject(safe.undoStatusSummary),
+    progressSummary: asObject(safe.progressSummary),
+    timelineSummary: asObject(safe.timelineSummary),
   };
 }
 

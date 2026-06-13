@@ -378,6 +378,8 @@ export class EditHistoryService {
           batch: true,
           error: true,
           createdAt: true,
+          updatedAt: true,
+          completedAt: true,
           snapshotSetId: true,
           snapshotSet: {
             select: {

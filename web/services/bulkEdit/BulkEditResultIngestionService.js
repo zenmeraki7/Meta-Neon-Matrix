@@ -438,7 +438,7 @@ export class BulkEditResultIngestionService {
       },
       data: {
         processedCount: {
-          increment: successCount,
+          increment: successCount + failureCount,
         },
         status: failureCount > 0 ? "partial" : "completed",
         statusNormalized: normalizeEditHistoryStatus(failureCount > 0 ? "partial" : "completed"),
