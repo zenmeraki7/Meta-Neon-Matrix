@@ -132,7 +132,13 @@ export async function casMarkFailedNonTerminal({
       failureStage,
       completedAt: new Date(),
       batch: batchPatch,
-      failureMessage,
+      error: [
+        {
+          stage: failureStage || "BULK_EDIT_EXECUTE_WORKER",
+          message: String(failureMessage || "Bulk edit execution failed"),
+          at: new Date().toISOString(),
+        },
+      ],
     },
   });
 }

@@ -635,11 +635,20 @@ const undoBadge = undoStatus
                   <Badge {...statusBadge} />
                 </InlineStack>
 
-                <ProgressBar
-                  progress={Number(mainProgress.percent || 0)}
-                  animated={isActiveStatus(primaryStatus)}
-                  size="small"
-                  tone={primaryStatus.key === "failed" ? "critical" : primaryStatus.key === "partial" ? "warning" : "primary"}
+              <ProgressBar
+  progress={Number(mainProgress.percent || 0)}
+  animated={isActiveStatus(primaryStatus)}
+  size="small"
+  tone={
+    primaryStatus.key === "completed"
+      ? "success"
+      : primaryStatus.key === "failed"
+      ? "critical"
+      : primaryStatus.key === "partial"
+      ? "warning"
+      : "primary"
+  }
+/>={primaryStatus.key === "failed" ? "critical" : primaryStatus.key === "partial" ? "warning" : "primary"}
                 />
 
                 <InlineStack align="space-between">

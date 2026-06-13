@@ -41,16 +41,29 @@ const PREVIEW_EXECUTE_TTL_MS = Math.max(
   Number.parseInt(process.env.PREVIEW_EXECUTE_TTL_MS || "3600000", 10),
 );
 const DIRECT_EXECUTION_LIMIT = Math.max(
-  1,
+  0,
   Number.parseInt(process.env.BULK_EDIT_DIRECT_EXECUTION_LIMIT || "100", 10),
 );
+const DIRECT_VARIANT_BULK_UPDATE_FIELDS = new Set([
+  "barcode",
+  "compareAtPrice",
+  "inventoryPolicy",
+  "price",
+  "sku",
+  "taxable",
+]);
 
-const PRODUCT_VARIANT_UPDATE_MUTATION = `
-  mutation productVariantUpdate($input: ProductVariantInput!) {
-    productVariantUpdate(input: $input) {
-      productVariant {
+const PRODUCT_VARIANTS_BULK_UPDATE_MUTATION = `
+  mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants {
         id
         price
+        compareAtPrice
+        sku
+        barcode
+        taxable
+        inventoryPolicy
       }
       userErrors {
         field
@@ -105,21 +118,24 @@ function assertExecutablePreviewRows({ rows, field }) {
     );
   }
 
-  if (String(field || "") === "price") {
-    const incomplete = rows.find((row) =>
-      !row?.variantId ||
+  const incomplete = rows.find((row) => {
+    const targetType = String(row?.targetType || "").toUpperCase();
+    return (
+      !row?.productId ||
+      !row?.targetIdentity ||
+      (targetType === "VARIANT" && !row?.variantId) ||
       row.currentValue === undefined ||
       row.currentValue === null ||
       row.newValue === undefined ||
       row.newValue === null ||
       !row?.plannedMutation?.jsonlRow
     );
-    if (incomplete) {
-      throw buildCodedError(
-        "Preview data is incomplete. Run preview again before applying this edit.",
-        "PREVIEW_SNAPSHOT_INCOMPLETE",
-      );
-    }
+  });
+  if (incomplete) {
+    throw buildCodedError(
+      "Preview data is incomplete. Run preview again before applying this edit.",
+      "PREVIEW_SNAPSHOT_INCOMPLETE",
+    );
   }
 }
 
@@ -132,8 +148,16 @@ function getDirectPreviewRowsFromHistoryData(historyData = {}) {
 
 function shouldExecuteDirectly(historyData = {}) {
   const rows = getDirectPreviewRowsFromHistoryData(historyData);
+  const field = String(historyData?.rules?.[0]?.field || "").trim();
   const mode = String(process.env.BULK_EDIT_EXECUTION_MODE || "").toLowerCase();
-  return rows.length > 0 && (mode === "direct" || rows.length <= DIRECT_EXECUTION_LIMIT);
+  const isDirectSupported =
+    DIRECT_EXECUTION_LIMIT > 0 &&
+    DIRECT_VARIANT_BULK_UPDATE_FIELDS.has(field) &&
+    rows.every((row) =>
+      String(row?.targetType || "").toUpperCase() === "VARIANT" &&
+      String(row?.productId || "").trim() &&
+      String(row?.variantId || "").trim());
+  return isDirectSupported && rows.length > 0 && (mode === "direct" || rows.length <= DIRECT_EXECUTION_LIMIT);
 }
 
 function safeShopifyErrorMessage(error) {
@@ -169,6 +193,21 @@ function normalizeDirectStatus({ successCount, failedCount, totalCount }) {
     executionStateNormalized: normalizeEditHistoryExecutionState(
       OPERATION_LIFECYCLE_STATES.FAILED,
     ),
+  };
+}
+
+function getDirectVariantPayload({ row, field }) {
+  const plannedVariant =
+    Array.isArray(row?.plannedMutation?.productSet?.variants)
+      ? row.plannedMutation.productSet.variants.find((variant) =>
+        String(variant?.id || "").trim() === String(row?.variantId || "").trim())
+      : null;
+  const plannedValue = plannedVariant && Object.prototype.hasOwnProperty.call(plannedVariant, field)
+    ? plannedVariant[field]
+    : row?.newValue;
+  return {
+    id: String(row?.variantId || "").trim(),
+    [field]: String(plannedValue),
   };
 }
 
@@ -431,25 +470,22 @@ export class BulkEditCommandService {
       incompleteReason: readyPreviewRows.length ? null : "NO_READY_PREVIEW_ROWS",
     });
 
-    if (
-      readyPreviewRows.length === 0 &&
-      (
-        !previewWhere
-        || !Number.isFinite(previewCount)
-        || previewCount < 0
-      )
-    ) {
+    if (readyPreviewRows.length === 0) {
+      if (Number.isFinite(previewCount) && previewCount === 0) {
+        throw buildCodedError(
+          "No matching products were found for this edit. Adjust filters and preview again.",
+          "NO_MATCHING_TARGETS",
+        );
+      }
       throw buildCodedError(
         "Preview data is incomplete. Run preview again before applying this edit.",
         "PREVIEW_SNAPSHOT_INCOMPLETE",
       );
     }
-    if (readyPreviewRows.length > 0) {
-      assertExecutablePreviewRows({
-        rows: readyPreviewRows,
-        field: resolvedEditedField,
-      });
-    }
+    assertExecutablePreviewRows({
+      rows: readyPreviewRows,
+      field: resolvedEditedField,
+    });
 
     const count = readyPreviewRows.length || previewCount;
     const limit = subscription?.limit || 100;
@@ -539,7 +575,7 @@ export class BulkEditCommandService {
         queuedAt: new Date().toISOString(),
         // Execute must reuse preview snapshot targeting material only.
         filterParams: [],
-        filterAst: readyPreviewRows.length > 0 ? null : previewFilterAst,
+        filterAst: null,
         previewRows: readyPreviewRows,
         previewId: previewContractId,
         previewContractId,
@@ -649,19 +685,18 @@ export class BulkEditCommandService {
       let afterValues = { [field]: newValue };
 
       try {
+        const variantInput = getDirectVariantPayload({ row, field });
         const result = await client.query({
           data: {
-            query: PRODUCT_VARIANT_UPDATE_MUTATION,
+            query: PRODUCT_VARIANTS_BULK_UPDATE_MUTATION,
             variables: {
-              input: {
-                id: variantId,
-                [field]: String(newValue),
-              },
+              productId: String(row?.productId || "").trim(),
+              variants: [variantInput],
             },
           },
         });
-        const payload = result?.body?.data?.productVariantUpdate
-          || result?.data?.productVariantUpdate
+        const payload = result?.body?.data?.productVariantsBulkUpdate
+          || result?.data?.productVariantsBulkUpdate
           || null;
         const userErrors = Array.isArray(payload?.userErrors)
           ? payload.userErrors
@@ -669,8 +704,11 @@ export class BulkEditCommandService {
         if (userErrors.length) {
           throw new Error(userErrors.map((item) => item?.message).filter(Boolean).join("; "));
         }
+        const updatedVariant = Array.isArray(payload?.productVariants)
+          ? payload.productVariants.find((variant) => String(variant?.id || "").trim() === variantId)
+          : null;
         afterValues = {
-          [field]: payload?.productVariant?.[field] ?? newValue,
+          [field]: updatedVariant?.[field] ?? variantInput[field] ?? newValue,
         };
         successCount += 1;
         console.info("[bulk-edit-execute] variant update success", {
@@ -763,6 +801,8 @@ export class BulkEditCommandService {
             failedCount,
             skippedCount,
           },
+          verificationStatus: failedCount > 0 ? "FAILED" : "PASSED",
+          verifiedCount: successCount,
         },
       },
     });

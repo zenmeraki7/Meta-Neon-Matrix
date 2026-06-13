@@ -182,6 +182,65 @@ function buildExecutablePreviewRow({
   };
 }
 
+function buildProductExecutablePreviewRow({
+  product,
+  previewProduct,
+  field,
+  previewId,
+  jsonlRow,
+}) {
+  const productId = String(product?.id || product?._id || "").trim();
+  const fieldChange = Array.isArray(previewProduct?.productFieldChanges)
+    ? previewProduct.productFieldChanges.find((change) => change?.field)
+    : null;
+  const currentValue = displayPreviewValue(
+    fieldChange?.oldValue ?? previewProduct?.oldValue,
+  );
+  const newValue = displayPreviewValue(
+    fieldChange?.newValue ?? previewProduct?.newValue,
+  );
+  let parsedMutationRow = null;
+  try {
+    parsedMutationRow = JSON.parse(String(jsonlRow || ""));
+  } catch {
+    parsedMutationRow = null;
+  }
+  const plannedMutation = {
+    jsonlRow,
+    ...(parsedMutationRow && typeof parsedMutationRow === "object"
+      ? parsedMutationRow
+      : {}),
+    productFieldChanges: [
+      {
+        field,
+        oldValue: currentValue,
+        newValue,
+      },
+    ],
+  };
+
+  return {
+    previewId,
+    productId,
+    variantId: null,
+    productTitle: product?.title || previewProduct?.title || "",
+    variantTitle: null,
+    currentValue,
+    newValue,
+    status: String(previewProduct?.status || "READY").toUpperCase(),
+    warning: previewProduct?.warning || null,
+    targetType: "PRODUCT",
+    targetIdentity: productId ? `PRODUCT:${productId}` : null,
+    beforeValues: {
+      field,
+      currentValue,
+      oldValue: currentValue,
+      productTitle: product?.title || previewProduct?.title || "",
+    },
+    plannedMutation,
+  };
+}
+
 async function resolveBestAvailableMirrorBatchId(shop) {
   const state = await getStoreMirrorState(shop);
   if (state?.activeMirrorBatchId) {
@@ -802,6 +861,31 @@ export class ProductBulkPreviewService {
               previewId,
             }));
           }
+        } else if (!isVariant) {
+          const jsonlRow = getUpdatedProducts({
+            product: previewProduct,
+            field,
+            editType,
+            value: editValue,
+            changes: [],
+            searchKey,
+            replaceText,
+            supportValue,
+            isTracking: false,
+            historyId: previewId,
+            shop: this.session.shop,
+            batchId: `preview:${previewId}`,
+          });
+          if (!jsonlRow || !String(jsonlRow).trim()) {
+            continue;
+          }
+          executablePreviewRows.push(buildProductExecutablePreviewRow({
+            product: previewProduct,
+            previewProduct: result,
+            field,
+            previewId,
+            jsonlRow: String(jsonlRow).trim(),
+          }));
         }
       }
     }

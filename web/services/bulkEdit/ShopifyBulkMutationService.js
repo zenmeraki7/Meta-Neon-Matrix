@@ -447,6 +447,7 @@ export class ShopifyBulkMutationService {
           executionStateNormalized: normalizeEditHistoryExecutionState(
             OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
           ),
+          bulkOperationId: existingSubmission.shopifyBulkOperationId,
           batch: mergeBatch(history.batch, {
             shopifySubmissionIntent: null,
             shopifyBulkOperation: {
@@ -535,6 +536,7 @@ export class ShopifyBulkMutationService {
             executionStateNormalized: normalizeEditHistoryExecutionState(
               OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
             ),
+            bulkOperationId: intentBulkOperationId,
             batch: mergeBatch(history.batch, {
               shopifySubmissionIntent: null,
               shopifyBulkOperation: {
@@ -867,6 +869,7 @@ export class ShopifyBulkMutationService {
           executionStateNormalized: normalizeEditHistoryExecutionState(
             OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
           ),
+          bulkOperationId: bulkOperation.id,
           batch: mergeBatch(history.batch, {
             shopifySubmissionIntent: null,
             waitingForShopifySlot: false,

@@ -216,17 +216,39 @@ function toEditHistoryDetailDto(history) {
     id: toStringOrNull(safe.id, 200),
     type: toStringOrNull(safe.type ?? safe.editType, 120),
     status: toStringOrNull(safe.status, 120),
+    statusNormalized: toStringOrNull(safe.statusNormalized, 120),
+    executionState: toStringOrNull(safe.executionState, 120),
+    executionStateNormalized: toStringOrNull(safe.executionStateNormalized, 120),
     title: toSafeText(safe.title ?? safe.name, MAX_TITLE_LENGTH),
+    field: toStringOrNull(safe.field, 160),
     createdAt: toIsoString(safe.createdAt),
+    updatedAt: toIsoString(safe.updatedAt),
     completedAt: toIsoString(safe.completedAt),
     totalCount: toNumber(safe.totalCount ?? safe.totalItems, 0),
+    totalItems: toNumber(safe.totalItems, 0),
+    processedCount: toNumber(safe.processedCount, 0),
+    progressCount: toNumber(safe.progressCount, 0),
+    targetSnapshotCount: toNumber(safe.targetSnapshotCount, 0),
+    durationMs: toNumber(safe.durationMs, 0),
     successCount: toNumber(safe.successCount, 0),
     failedCount: toNumber(safe.failedCount, 0),
+    skippedCount: toNumber(safe.skippedCount, 0),
+    primaryStatus: asObject(safe.primaryStatus),
+    undoStatusSummary: asObject(safe.undoStatusSummary),
+    progressSummary: asObject(safe.progressSummary),
+    merchantSafetyState: toStringOrNull(safe.merchantSafetyState, 160),
+    displayStatus: toStringOrNull(safe.displayStatus, 120),
+    supportStatus: asObject(safe.supportStatus),
+    timelineSummary: asObject(safe.timelineSummary),
+    executionTransparency: asObject(safe.executionTransparency),
+    snapshotReference: asObject(safe.snapshotReference),
+    undo: asObject(safe.undo),
     undoStatus: toStringOrNull(safe.undoStatus, 120),
     summary: asObject(safe.summary)
       ? toEditHistoryEmbeddedSummaryDto(safe.summary)
       : null,
-    errors: toSafeErrorList(safe.errors),
+    error: safe.error ?? null,
+    errors: toSafeErrorList(safe.errors || safe.error),
   };
 }
 
@@ -239,13 +261,33 @@ function toEditHistorySummaryDto(summary) {
     id: toStringOrNull(safe.id, 200),
     type,
     status: toStringOrNull(safe.status, 120),
+    statusNormalized: toStringOrNull(safe.statusNormalized, 120),
+    executionState: toStringOrNull(safe.executionState, 120),
+    executionStateNormalized: toStringOrNull(safe.executionStateNormalized, 120),
     title: toSafeText(safe.title ?? safe.name, MAX_TITLE_LENGTH),
     createdAt: toIsoString(safe.createdAt),
+    updatedAt: toIsoString(safe.updatedAt),
     completedAt: toIsoString(safe.completedAt),
     totalCount: toNumber(safe.totalCount ?? safe.totalItems, 0),
+    totalItems: toNumber(safe.totalItems, 0),
+    processedCount: toNumber(safe.processedCount, 0),
+    progressCount: toNumber(safe.progressCount, 0),
+    targetSnapshotCount: toNumber(safe.targetSnapshotCount, 0),
+    durationMs: toNumber(safe.durationMs, 0),
     successCount: toNumber(safe.successCount, 0),
     failedCount: toNumber(safe.failedCount, 0),
     skippedCount: toNumber(safe.skippedCount, 0),
+    primaryStatus: asObject(safe.primaryStatus),
+    undoStatusSummary: asObject(safe.undoStatusSummary),
+    progressSummary: asObject(safe.progressSummary),
+    merchantSafetyState: toStringOrNull(safe.merchantSafetyState, 160),
+    displayStatus: toStringOrNull(safe.displayStatus, 120),
+    supportStatus: asObject(safe.supportStatus),
+    timelineSummary: asObject(safe.timelineSummary),
+    executionTransparency: asObject(safe.executionTransparency),
+    snapshotReference: asObject(safe.snapshotReference),
+    undo: asObject(safe.undo),
+    error: safe.error ?? null,
     undoStatus: toStringOrNull(safe.undoStatus, 120),
   };
 }
@@ -255,8 +297,12 @@ function toEditHistoryChangeDto(change) {
 
   return {
     id: toStringOrNull(safe.id, 200),
+    title: toSafeText(safe.title, MAX_TITLE_LENGTH),
+    image: toSafeText(safe.image, MAX_URL_LENGTH),
     productId: toStringOrNull(safe.productId, 200),
     variantId: toStringOrNull(safe.variantId, 200),
+    productFieldChanges: asArray(safe.productFieldChanges),
+    variantFieldChanges: asArray(safe.variantFieldChanges),
     field: toStringOrNull(safe.field ?? safe.fieldName, 160),
     beforeValue: toDisplayValue(safe.beforeValue),
     afterValue: toDisplayValue(safe.afterValue),
@@ -302,13 +348,18 @@ export function toEditHistorySummaryResponseDto(result) {
 export function toEditHistoryChangesResponseDto(result) {
   const safe = asObject(result) || {};
   const changes = asArray(safe.changes);
+  const currentPage = toNumber(safe.currentPage ?? safe.page, 1) || 1;
+  const totalCount = toNumber(safe.totalCount, 0);
+  const limit = toNumber(safe.limit, changes.length || 1) || 1;
 
   return {
     success: true,
     data: changes.map(toEditHistoryChangeDto),
     meta: {
       count: changes.length,
-      totalCount: toNumber(safe.totalCount, 0),
+      totalCount,
+      currentPage,
+      totalPages: Math.max(1, Math.ceil(totalCount / Math.max(limit, 1))),
       pageInfo: toPageInfoDto(safe.pageInfo),
     },
   };

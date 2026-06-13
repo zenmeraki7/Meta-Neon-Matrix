@@ -80,8 +80,8 @@ export function buildBulkTargetFreezeJobId({ shop, operationId }) {
   return joinSafeJobId("target-freeze", shop, operationId);
 }
 
-export function buildBulkEditExecuteJobId({ shop, operationId }) {
-  return joinSafeJobId("bulk-edit-execute", shop, operationId);
+export function buildBulkEditExecuteJobId({ shop, operationId, executionId }) {
+  return joinSafeJobId("bulk-edit-execute", shop, operationId, executionId);
 }
 
 export function buildBulkOperationMutationJobId({ shop, operationId }) {
@@ -102,8 +102,8 @@ export function bulkOperationMutationJobId({
   });
 }
 
-export function buildBulkPipelineStageJobId({ shop, operationId, stage }) {
-  return joinSafeJobId("bulk-edit-pipeline", stage, shop, operationId);
+export function buildBulkPipelineStageJobId({ shop, operationId, stage, executionId }) {
+  return joinSafeJobId(stage, shop, operationId, executionId);
 }
 
 export function buildProductSyncClearTypesJobId({ shop, operationId }) {
@@ -138,8 +138,8 @@ export function normalizeScheduledFor(value) {
   return parsed.toISOString();
 }
 
-export function bulkEditExecuteJobId({ shop, operationId }) {
-  return buildBulkEditExecuteJobId({ shop, operationId });
+export function bulkEditExecuteJobId({ shop, operationId, executionId }) {
+  return buildBulkEditExecuteJobId({ shop, operationId, executionId });
 }
 
 export function bulkEditResultIngestJobId({ shop, bulkOperationId }) {

@@ -13,6 +13,10 @@ const defaultJobOptions = buildDefaultJobOptions({
   removeOnFail: { age: 30 * 24 * 3600, count: 10_000 },
 });
 
+const TARGET_FREEZE_JOB_ID_STAGE = "bulk-edit-pipeline-freeze";
+const MUTATION_PLAN_JOB_ID_STAGE = "bulk-edit-pipeline-plan";
+const EXECUTE_JOB_ID_STAGE = "bulk-edit-pipeline-execute";
+
 export async function enqueueBulkEditTargetFreezeJob(data, options = {}) {
   if (!data?.historyId || !data?.shop || !data?.executionId) {
     throw new Error("target.freeze job requires historyId, shop, and executionId");
@@ -27,7 +31,8 @@ export async function enqueueBulkEditTargetFreezeJob(data, options = {}) {
         || buildBulkPipelineStageJobId({
           shop: data.shop,
           operationId: data.historyId,
-          stage: "target-freeze",
+          stage: TARGET_FREEZE_JOB_ID_STAGE,
+          executionId: data.executionId,
         }),
     }),
   );
@@ -47,7 +52,8 @@ export async function enqueueBulkEditMutationPlanJob(data, options = {}) {
         || buildBulkPipelineStageJobId({
           shop: data.shop,
           operationId: data.historyId,
-          stage: "mutation-plan",
+          stage: MUTATION_PLAN_JOB_ID_STAGE,
+          executionId: data.executionId,
         }),
     }),
   );
@@ -67,7 +73,8 @@ export async function enqueueBulkEditExecuteStageJob(data, options = {}) {
         || buildBulkPipelineStageJobId({
           shop: data.shop,
           operationId: data.historyId,
-          stage: "execute",
+          stage: EXECUTE_JOB_ID_STAGE,
+          executionId: data.executionId,
         }),
     }),
   );

@@ -207,12 +207,29 @@ function buildExecutionTransparencyFields({
     0,
   );
   const processed = toNonNegativeInt(history?.processedCount || 0, 0);
-  const verifiedCount = toNonNegativeInt(changeStatusCounts?.VERIFIED || 0, 0);
   const failedCount = toNonNegativeInt(changeStatusCounts?.FAILED || 0, 0);
-  const successCount = toNonNegativeInt(changeStatusCounts?.SUCCESS || 0, 0);
+  const successCount = toNonNegativeInt(
+    (changeStatusCounts?.SUCCESS || 0) + (changeStatusCounts?.SUCCEEDED || 0),
+    0,
+  );
   const pendingCount = toNonNegativeInt(changeStatusCounts?.PENDING || 0, 0);
-  const submittedToShopify = Boolean(history?.bulkOperationId);
-  const verificationStatus = String(batch.verificationStatus || "UNKNOWN").toUpperCase();
+  const directSucceeded =
+    String(batch.executionMode || "").toUpperCase() === "DIRECT" &&
+    String(history?.executionState || "").toUpperCase() === "COMPLETED" &&
+    successCount > 0 &&
+    failedCount === 0;
+  const explicitVerifiedCount = toNonNegativeInt(
+    changeStatusCounts?.VERIFIED ?? batch.verifiedCount ?? 0,
+    0,
+  );
+  const verifiedCount = explicitVerifiedCount || (directSucceeded ? successCount : 0);
+  const directGraphqlExecution =
+    String(batch.executionMode || "").toUpperCase() === "DIRECT" &&
+    processed > 0;
+  const submittedToShopify = Boolean(history?.bulkOperationId) || directGraphqlExecution;
+  const verificationStatus = String(
+    batch.verificationStatus || (directSucceeded ? "PASSED" : "UNKNOWN"),
+  ).toUpperCase();
   const ingestion = buildIngestionSummaryFields(batch, targetTotal, processed);
 
   return {
@@ -232,10 +249,12 @@ function buildExecutionTransparencyFields({
         submitted: submittedToShopify,
         bulkOperationId: history?.bulkOperationId || null,
       },
-      shopifyBulkOperationStatus: normalizeShopifyBulkStatus(
-        history?.executionState,
-        history?.bulkOperationId,
-      ),
+      shopifyBulkOperationStatus: directGraphqlExecution
+        ? String(history?.executionState || "").toUpperCase()
+        : normalizeShopifyBulkStatus(
+          history?.executionState,
+          history?.bulkOperationId,
+        ),
       resultIngestionProgress: {
         submittedCount: ingestion.ingestionSubmittedCount,
         successCount: ingestion.ingestionSuccessCount,
@@ -585,6 +604,7 @@ export class EditHistoryService {
           targetSnapshotCount: true,
           durationMs: true,
           shop: true,
+          bulkOperationId: true,
           undo: true,
           batch: true,
           error: true,
@@ -624,6 +644,25 @@ export class EditHistoryService {
         historyId: history.id,
         snapshotSetId,
       });
+      const groupedStatuses = await db.changeRecord.groupBy({
+        by: ["status"],
+        where: {
+          editHistoryId: history.id,
+          shop: history.shop,
+        },
+        _count: {
+          _all: true,
+        },
+      }).catch(() => []);
+      const changeStatusCounts = (Array.isArray(groupedStatuses) ? groupedStatuses : []).reduce(
+        (acc, row) => {
+          const key = String(row?.status || "").toUpperCase();
+          if (!key) return acc;
+          acc[key] = toNonNegativeInt(row?._count?._all || 0, 0);
+          return acc;
+        },
+        {},
+      );
       const totalCount =
         executionCounts.totalCount ||
         toNonNegativeInt(history.targetSnapshotCount || history.totalItems || 0, 0);
@@ -635,7 +674,7 @@ export class EditHistoryService {
         failedCount: executionCounts.failedCount,
       });
 
-      return projectEditHistoryStatus({
+      const returnData = projectEditHistoryStatus({
         ...history,
         type: history.type || "Manual edit",
         totalCount,
@@ -645,6 +684,28 @@ export class EditHistoryService {
         snapshotReference: buildSnapshotReference(history),
         title: getLocalizedJsonText(history.title, lang),
       });
+      Object.assign(
+        returnData,
+        buildIngestionSummaryFields(
+          history.batch,
+          history.targetSnapshotCount,
+          history.processedCount,
+        ),
+      );
+      Object.assign(returnData, buildIdempotencyStageFields(history.batch));
+      Object.assign(returnData, buildExecutionTransparencyFields({
+        history,
+        changeStatusCounts,
+      }));
+      returnData.supportStatus = {
+        ...(returnData.supportStatus && typeof returnData.supportStatus === "object"
+          ? returnData.supportStatus
+          : {}),
+        idempotencyStages: returnData.idempotencyStages,
+        executionTransparency: returnData.executionTransparency,
+      };
+
+      return returnData;
     } catch (error) {
       if (error instanceof NotFoundError) {
         throw error;
@@ -761,6 +822,7 @@ export class EditHistoryService {
             endCursor,
           },
           totalCount,
+          limit: limitNum,
           message: "Fetched history changes successfully.",
         };
 
@@ -838,6 +900,7 @@ export class EditHistoryService {
           endCursor,
         },
         totalCount,
+        limit: limitNum,
         message: "Fetched history changes successfully.",
       };
 

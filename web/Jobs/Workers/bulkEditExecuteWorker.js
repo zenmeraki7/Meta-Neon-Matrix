@@ -719,6 +719,9 @@ async function processBulkEditExecuteJob(job) {
           shop,
           expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.EXECUTING],
           nextExecutionState: OPERATION_LIFECYCLE_STATES.RECONCILE_SUBMITTED,
+          extraData: {
+            bulkOperationId: error.bulkOperationId,
+          },
           batchPatch: {
             shopifyBulkOperationId: error.bulkOperationId,
             reconcileReason: "SUBMITTED_BUT_LOCAL_PERSIST_FAILED",

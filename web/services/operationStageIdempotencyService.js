@@ -34,6 +34,12 @@ function buildNextBatchWithStage(batch, stage, nextStageState) {
   };
 }
 
+function hasStageState(batch, stage) {
+  const currentBatch = asObject(batch);
+  const idempotencyStages = asObject(currentBatch.idempotencyStages);
+  return Object.prototype.hasOwnProperty.call(idempotencyStages, stage);
+}
+
 async function writeStageWithCas({
   db = repositoryDb,
   historyId,
@@ -99,6 +105,18 @@ export async function beginEditHistoryStage({
   if (!history) {
     throw new Error("EDIT_HISTORY_NOT_FOUND");
   }
+  if (
+    normalizedExecutionId
+    && history.executionIdentity
+    && normalizedExecutionId !== history.executionIdentity
+  ) {
+    return {
+      state: "stale",
+      stageKey: buildStageKey(shop, history.executionIdentity, stage),
+      operationId: String(history.executionIdentity),
+      stageState: {},
+    };
+  }
 
   const operationId = String(history.executionIdentity || history.id);
   const stageKey = buildStageKey(shop, operationId, stage);
@@ -132,31 +150,19 @@ export async function beginEditHistoryStage({
     recovered: existing.status === "running",
   };
 
-  const expectedStageStatus = existing.status ?? null;
-  const expectedExecutionId = normalizeExecutionId(existing.executionId);
-  const casAnd = [];
-  if (expectedExecutionId === null) {
-    casAnd.push({
-      batch: {
-        path: ["idempotencyStages", stage, "executionId"],
-        equals: null,
-      },
-    });
-  } else {
-    casAnd.push({
-      batch: {
-        path: ["idempotencyStages", stage, "executionId"],
-        equals: expectedExecutionId,
-      },
-    });
-  }
+  const stageAlreadyExists = hasStageState(batch, stage);
+  const expectedStageStatus = stageAlreadyExists ? existing.status ?? null : undefined;
+  const expectedExecutionId = stageAlreadyExists
+    ? normalizeExecutionId(existing.executionId)
+    : undefined;
   const updated = await writeStageWithCas({
     db,
     historyId,
     shop,
     expectedExecutionStates: history.executionState ? [history.executionState] : [],
     stage,
-    expectedStageStatuses: [expectedStageStatus],
+    expectedStageStatuses:
+      expectedStageStatus === undefined ? [] : [expectedStageStatus],
     expectedStageExecutionId: expectedExecutionId,
     expectedExecutionIdentity: history.executionIdentity ?? null,
     nextStageState: buildNextBatchWithStage(batch, stage, nextStageState),

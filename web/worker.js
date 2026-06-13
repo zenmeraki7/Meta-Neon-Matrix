@@ -85,6 +85,9 @@ const closables = [];
 for (const modPath of workerModulePaths) {
   // eslint-disable-next-line no-await-in-loop
   const mod = await import(modPath);
+  if (typeof mod?.startBulkEditExecuteWorker === "function") {
+    mod.startBulkEditExecuteWorker();
+  }
   for (const value of Object.values(mod || {})) {
     if (value && typeof value.close === "function") {
       closables.push(value);

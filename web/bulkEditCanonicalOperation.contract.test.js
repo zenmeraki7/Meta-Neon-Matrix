@@ -396,6 +396,30 @@ test("run edit preview ownership is shop-scoped and actor matching is optional",
   assert.match(repositorySource, /source: "manual_preview"/);
 });
 
+test("run edit requires executable preview rows before queuing", () => {
+  const commandSource = fs.readFileSync(
+    path.resolve("web/services/bulkEdit/BulkEditCommandService.js"),
+    "utf8",
+  );
+
+  assert.match(commandSource, /NO_READY_PREVIEW_ROWS/);
+  assert.match(commandSource, /NO_MATCHING_TARGETS/);
+  assert.match(commandSource, /!row\?\.plannedMutation\?\.jsonlRow/);
+  assert.match(commandSource, /filterAst: null/);
+});
+
+test("direct variant execution uses supported Shopify bulk update mutation", () => {
+  const commandSource = fs.readFileSync(
+    path.resolve("web/services/bulkEdit/BulkEditCommandService.js"),
+    "utf8",
+  );
+
+  assert.match(commandSource, /PRODUCT_VARIANTS_BULK_UPDATE_MUTATION/);
+  assert.match(commandSource, /productVariantsBulkUpdate\(productId: \$productId, variants: \$variants\)/);
+  assert.match(commandSource, /ProductVariantsBulkInput/);
+  assert.doesNotMatch(commandSource, /productVariantUpdate/);
+});
+
 test("preview mirror gate allows degraded active mirrors while execution remains strict", () => {
   const source = fs.readFileSync(
     path.resolve("web/services/mirrorHealthService.js"),

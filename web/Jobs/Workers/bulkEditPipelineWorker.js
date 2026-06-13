@@ -36,16 +36,30 @@ function assertPipelineExecutionState(history, allowedStates = []) {
 
 const QUEUE_NAME = process.env.BULK_EDIT_PIPELINE_QUEUE || "bulk-edit-pipeline";
 
+const PIPELINE_STAGE_KEYS = Object.freeze({
+  TARGET_FREEZE: "TARGET_FREEZE",
+  MUTATION_PLAN: "MUTATION_PLAN",
+  EXECUTE_DISPATCH: "EXECUTE_DISPATCH",
+});
+
 async function processTargetFreeze(jobData) {
   const { historyId, shop, executionId } = jobData;
   const stageRun = await beginEditHistoryStage({
     historyId,
     shop,
-    stage: "targetFreeze",
+    stage: PIPELINE_STAGE_KEYS.TARGET_FREEZE,
     executionId,
   });
-  if (stageRun.state === "completed" || stageRun.state === "running") {
+  if (stageRun.state === "completed") {
     return;
+  }
+  if (stageRun.state === "stale") {
+    return;
+  }
+  if (stageRun.state === "running") {
+    const error = new Error("TARGET_FREEZE_STAGE_ALREADY_RUNNING");
+    error.retryable = true;
+    throw error;
   }
   const history = await db.editHistory.findFirst({
     where: { id: historyId, shop },
@@ -125,7 +139,7 @@ async function processTargetFreeze(jobData) {
       await failEditHistoryStage({
         historyId,
         shop,
-        stage: "targetFreeze",
+        stage: PIPELINE_STAGE_KEYS.TARGET_FREEZE,
         executionId,
         retryable: true,
         error: error.message,
@@ -156,7 +170,7 @@ async function processTargetFreeze(jobData) {
     await completeEditHistoryStage({
       historyId,
       shop,
-      stage: "targetFreeze",
+      stage: PIPELINE_STAGE_KEYS.TARGET_FREEZE,
       executionId,
       checkpoint: { frozenCount },
     });

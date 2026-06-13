@@ -62,26 +62,31 @@ export function buildOperationTimeline(currentState) {
   const activeIndex = timeline.findIndex((stage) => stage.key === normalized);
   const isTerminal = TERMINAL_KEYS.has(normalized);
 
-  if (activeIndex >= 0) {
-    for (let index = 0; index < timeline.length; index += 1) {
-      if (index < activeIndex) timeline[index].status = "completed";
-    }
-    timeline[activeIndex].status = isTerminal ? "completed" : "active";
-  }
-
-  const extraTerminalStage =
-    isTerminal && !timeline.some((stage) => stage.key === normalized)
-      ? {
+  if (isTerminal) {
+    return {
+      currentState: normalized || "UNKNOWN",
+      stages: [
+        ...timeline,
+        {
           key: normalized,
           index: timeline.length,
           labelKey: `operationLifecycleStageLabels.${normalized}`,
           defaultLabel: STAGE_LABELS[normalized] || normalized,
           status: "active",
-        }
-      : null;
+        },
+      ],
+    };
+  }
+
+  if (activeIndex >= 0) {
+    for (let index = 0; index < timeline.length; index += 1) {
+      if (index < activeIndex) timeline[index].status = "completed";
+    }
+    timeline[activeIndex].status = "active";
+  }
 
   return {
     currentState: normalized || "UNKNOWN",
-    stages: extraTerminalStage ? [...timeline, extraTerminalStage] : timeline,
+    stages: timeline,
   };
 }

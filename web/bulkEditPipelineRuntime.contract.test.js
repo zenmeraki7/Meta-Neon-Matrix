@@ -16,6 +16,15 @@ test("worker boot imports execute, ingest, and verification workers", () => {
   assert.ok(source.includes("./Jobs/Workers/bulkEditVerificationWorker.js"));
 });
 
+test("worker boot starts autorun-disabled bulk edit execute worker", () => {
+  const workerBootSource = read("web/worker.js");
+  const executeWorkerSource = read("web/Jobs/Workers/bulkEditExecuteWorker.js");
+
+  assert.ok(executeWorkerSource.includes("autorun: false"));
+  assert.ok(executeWorkerSource.includes("export function startBulkEditExecuteWorker()"));
+  assert.ok(workerBootSource.includes("startBulkEditExecuteWorker()"));
+});
+
 test("scheduled edit worker does not call legacy updateProducts path", () => {
   const source = read("web/Jobs/Workers/scheduledEditWorker.js");
   assert.ok(!source.includes("updateProducts("));
