@@ -6,6 +6,14 @@ import {
 } from "../services/bulkEditExecutionStateService.js";
 
 const CONFLICT_CHUNK_SIZE = 500;
+const SUCCESSFUL_CHANGE_STATUSES = [
+  "SUCCESS",
+  "SUCCEEDED",
+  "VERIFIED",
+  "success",
+  "succeeded",
+  "verified",
+];
 
 export async function persistUndoConflictChunks({
   shop,
@@ -138,7 +146,7 @@ export async function findSuccessfulChangeRecords({ historyId, shop, limit, curs
     where: {
       editHistoryId: historyId,
       shop,
-      status: { in: ["SUCCESS", "VERIFIED"] },
+      status: { in: SUCCESSFUL_CHANGE_STATUSES },
     },
     orderBy: { id: "asc" },
     take: limit,

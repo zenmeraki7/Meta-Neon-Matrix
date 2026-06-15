@@ -16,6 +16,19 @@ const DEFAULT_MESSAGES = Object.freeze({
   PREVIEW_SNAPSHOT_INCOMPLETE: "Preview data is incomplete. Run preview again before applying this edit.",
   EDIT_EXECUTION_FAILED: "Unable to start this edit. Run preview again and retry.",
   EDIT_PREVIEW_FAILED: "Unable to generate edit preview.",
+  IDEMPOTENCY_KEY_REQUIRED: "Request idempotency key is required.",
+  OPERATION_NOT_UNDOABLE: "This edit is not eligible for undo.",
+  UNDO_ALREADY_QUEUED: "Undo is already queued for this edit.",
+  UNDO_ELIGIBLE_TARGETS_NOT_FOUND: "No successfully edited targets are available to undo.",
+  UNDO_HISTORY_NOT_FOUND: "The edit history record was not found.",
+  UNDO_QUEUE_TRANSITION_REJECTED: "Undo could not be queued for this edit.",
+  UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED: "Undo cannot run because before-values are missing.",
+  UNDO_TARGET_IDENTITY_REQUIRED: "Undo cannot run because a target identity is missing.",
+  UNDO_BEFORE_VALUES_REQUIRED: "Undo cannot run because before-values are missing.",
+  UNDO_CONFLICT_REQUIRES_CONFIRMATION: "This undo has conflicts that require review.",
+  SHOPIFY_UNDO_STAGED_UPLOAD_FAILED: "Shopify rejected the undo upload request.",
+  SHOPIFY_UNDO_BULK_MUTATION_FAILED: "Shopify rejected the undo mutation.",
+  SHOPIFY_UNDO_BULK_OPERATION_MISSING: "Shopify did not return an undo bulk operation id.",
   INTERNAL_ERROR: "An unexpected error occurred. Please try again later.",
 });
 
@@ -34,6 +47,19 @@ function statusFromCode(code = "INTERNAL_ERROR") {
   if (code === "PREVIEW_STALE") return 409;
   if (code === "PREVIEW_SNAPSHOT_INCOMPLETE") return 409;
   if (code === "EDIT_EXECUTION_FAILED") return 500;
+  if (code === "IDEMPOTENCY_KEY_REQUIRED") return 400;
+  if (code === "OPERATION_NOT_UNDOABLE") return 409;
+  if (code === "UNDO_ALREADY_QUEUED") return 409;
+  if (code === "UNDO_ELIGIBLE_TARGETS_NOT_FOUND") return 409;
+  if (code === "UNDO_HISTORY_NOT_FOUND") return 404;
+  if (code === "UNDO_QUEUE_TRANSITION_REJECTED") return 409;
+  if (code === "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED") return 409;
+  if (code === "UNDO_TARGET_IDENTITY_REQUIRED") return 409;
+  if (code === "UNDO_BEFORE_VALUES_REQUIRED") return 409;
+  if (code === "UNDO_CONFLICT_REQUIRES_CONFIRMATION") return 409;
+  if (code === "SHOPIFY_UNDO_STAGED_UPLOAD_FAILED") return 502;
+  if (code === "SHOPIFY_UNDO_BULK_MUTATION_FAILED") return 502;
+  if (code === "SHOPIFY_UNDO_BULK_OPERATION_MISSING") return 502;
   return 500;
 }
 
@@ -98,6 +124,45 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
       message: DEFAULT_MESSAGES.EDIT_PREVIEW_FAILED,
     };
   }
+  if (raw === "IDEMPOTENCY_KEY_REQUIRED") {
+    return { code: "IDEMPOTENCY_KEY_REQUIRED", message: DEFAULT_MESSAGES.IDEMPOTENCY_KEY_REQUIRED };
+  }
+  if (raw === "OPERATION_NOT_UNDOABLE") {
+    return { code: "OPERATION_NOT_UNDOABLE", message: DEFAULT_MESSAGES.OPERATION_NOT_UNDOABLE };
+  }
+  if (raw === "UNDO_ALREADY_QUEUED") {
+    return { code: "UNDO_ALREADY_QUEUED", message: DEFAULT_MESSAGES.UNDO_ALREADY_QUEUED };
+  }
+  if (raw === "UNDO_ELIGIBLE_TARGETS_NOT_FOUND") {
+    return { code: "UNDO_ELIGIBLE_TARGETS_NOT_FOUND", message: DEFAULT_MESSAGES.UNDO_ELIGIBLE_TARGETS_NOT_FOUND };
+  }
+  if (raw === "UNDO_HISTORY_NOT_FOUND") {
+    return { code: "UNDO_HISTORY_NOT_FOUND", message: DEFAULT_MESSAGES.UNDO_HISTORY_NOT_FOUND };
+  }
+  if (raw === "UNDO_QUEUE_TRANSITION_REJECTED") {
+    return { code: "UNDO_QUEUE_TRANSITION_REJECTED", message: DEFAULT_MESSAGES.UNDO_QUEUE_TRANSITION_REJECTED };
+  }
+  if (raw === "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED") {
+    return { code: "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED", message: DEFAULT_MESSAGES.UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED };
+  }
+  if (raw === "UNDO_TARGET_IDENTITY_REQUIRED") {
+    return { code: "UNDO_TARGET_IDENTITY_REQUIRED", message: DEFAULT_MESSAGES.UNDO_TARGET_IDENTITY_REQUIRED };
+  }
+  if (raw === "UNDO_BEFORE_VALUES_REQUIRED") {
+    return { code: "UNDO_BEFORE_VALUES_REQUIRED", message: DEFAULT_MESSAGES.UNDO_BEFORE_VALUES_REQUIRED };
+  }
+  if (raw === "UNDO_CONFLICT_REQUIRES_CONFIRMATION") {
+    return { code: "UNDO_CONFLICT_REQUIRES_CONFIRMATION", message: DEFAULT_MESSAGES.UNDO_CONFLICT_REQUIRES_CONFIRMATION };
+  }
+  if (raw === "SHOPIFY_UNDO_STAGED_UPLOAD_FAILED") {
+    return { code: "SHOPIFY_UNDO_STAGED_UPLOAD_FAILED", message: DEFAULT_MESSAGES.SHOPIFY_UNDO_STAGED_UPLOAD_FAILED };
+  }
+  if (raw === "SHOPIFY_UNDO_BULK_MUTATION_FAILED") {
+    return { code: "SHOPIFY_UNDO_BULK_MUTATION_FAILED", message: DEFAULT_MESSAGES.SHOPIFY_UNDO_BULK_MUTATION_FAILED };
+  }
+  if (raw === "SHOPIFY_UNDO_BULK_OPERATION_MISSING") {
+    return { code: "SHOPIFY_UNDO_BULK_OPERATION_MISSING", message: DEFAULT_MESSAGES.SHOPIFY_UNDO_BULK_OPERATION_MISSING };
+  }
   if (raw.includes("PREMIUM_FEATURE_REQUIRED") || raw.includes("FORBIDDEN")) {
     return { code: "FORBIDDEN", message: DEFAULT_MESSAGES.FORBIDDEN };
   }
@@ -152,6 +217,9 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
       code: mapped.code,
       message: mapped.message,
       errorId: generateErrorId(),
+      rootCause: error?.message ? String(error.message) : mapped.message,
+      ...(error?.details && typeof error.details === "object" ? { details: error.details } : {}),
+      ...(process.env.NODE_ENV !== "production" && error?.stack ? { stack: String(error.stack) } : {}),
       ...(error?.action ? { action: String(error.action) } : {}),
       ...(Object.keys(errors).length ? { errors } : {}),
     },

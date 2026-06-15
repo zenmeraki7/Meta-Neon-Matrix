@@ -68,6 +68,23 @@ function mapUndoError(t, error) {
       return t("products:operationNotUndoable", {
         defaultValue: "This edit is not eligible for undo.",
       });
+    case "UNDO_ELIGIBLE_TARGETS_NOT_FOUND":
+      return t("products:undoNoEligibleTargets", {
+        defaultValue: "No successfully edited products or variants are available to undo.",
+      });
+    case "UNDO_HISTORY_NOT_FOUND":
+      return t("products:undoHistoryNotFound", {
+        defaultValue: "The edit history record could not be found. Refresh the app and try again.",
+      });
+    case "UNDO_QUEUE_TRANSITION_REJECTED":
+      return t("products:undoQueueRejected", {
+        defaultValue: "Undo could not be queued because this edit changed state. Refresh the app and try again.",
+      });
+    case "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED":
+    case "UNDO_BEFORE_VALUES_REQUIRED":
+      return t("products:undoBeforeValuesMissing", {
+        defaultValue: "Undo cannot run because the original values are missing.",
+      });
     default:
       return t("products:undoEditSubmitFailed", {
         defaultValue:
@@ -216,6 +233,11 @@ function AlertUndo({
     try {
       setSubmitError(null);
       setSubmitStatus("submitting");
+      console.info("[undo-ui] submit", {
+        operationId,
+        historyId,
+        hasIdempotencyKey: Boolean(idempotencyKey),
+      });
       await undoEditHistory({
         operationId,
         historyId,
@@ -223,6 +245,14 @@ function AlertUndo({
       });
       setSubmitStatus("accepted");
     } catch (error) {
+      console.error("[undo-ui] submit_failed", {
+        operationId,
+        historyId,
+        code: error?.code || error?.payload?.code || null,
+        status: error?.status || null,
+        rootCause: error?.payload?.rootCause || error?.message || null,
+        errorId: error?.payload?.errorId || null,
+      });
       setSubmitStatus("failed");
       setSubmitError(mapUndoError(t, error));
     }

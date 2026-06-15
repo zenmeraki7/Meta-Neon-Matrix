@@ -23,6 +23,8 @@ export async function addbulkUndoJob(data, options = {}) {
     || buildUndoExecuteJobId({
       shop: data.shop,
       undoOperationId: data.historyId,
+      executionId: data.executionId,
+      source: data?.source || "default",
     });
 
   return bulkUndoQueue.add(

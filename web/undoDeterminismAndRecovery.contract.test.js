@@ -15,9 +15,10 @@ test("undo operation and chunk models exist in prisma schema", () => {
 
 test("bulk undo worker persists chunked safe/conflict subsets", () => {
   const src = read("web/Jobs/Workers/bulkUndoWorker.js");
+  const repo = read("web/repositories/bulkUndoExecutionRepository.js");
   assert.ok(src.includes("persistUndoConflictChunks"));
-  assert.ok(src.includes("UndoOperationConflictChunk"));
-  assert.ok(src.includes("CONFLICT_CHUNK_SIZE"));
+  assert.ok(repo.includes("UndoOperationConflictChunk"));
+  assert.ok(repo.includes("CONFLICT_CHUNK_SIZE"));
 });
 
 test("undo result ingestion uses fenced lease transitions", () => {

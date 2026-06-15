@@ -118,8 +118,8 @@ export function buildBulkResultIngestJobId({ shop, bulkOperationId }) {
   return joinSafeJobId("bulk-edit-result-ingest", shop, bulkOperationId);
 }
 
-export function buildUndoExecuteJobId({ shop, undoOperationId }) {
-  return joinSafeJobId("undo-execute", shop, undoOperationId);
+export function buildUndoExecuteJobId({ shop, undoOperationId, executionId, source = "default" }) {
+  return joinSafeJobId("undo-execute", shop, undoOperationId, executionId, source);
 }
 
 export function buildScheduledRuleRunJobId({ shop, ruleId, scheduledFor }) {
@@ -146,8 +146,8 @@ export function bulkEditResultIngestJobId({ shop, bulkOperationId }) {
   return buildBulkResultIngestJobId({ shop, bulkOperationId });
 }
 
-export function undoExecuteJobId({ shop, undoOperationId }) {
-  return buildUndoExecuteJobId({ shop, undoOperationId });
+export function undoExecuteJobId({ shop, undoOperationId, executionId, source }) {
+  return buildUndoExecuteJobId({ shop, undoOperationId, executionId, source });
 }
 
 export function scheduledEditRunJobId({ shop, scheduledEditId, scheduledFor }) {

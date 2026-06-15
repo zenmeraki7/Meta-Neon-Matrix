@@ -414,8 +414,14 @@ export const productBulkUndoUseCases = Object.freeze({
     command = assertHistoryMutationCommand(command);
 
     const service = createUndoEditService(command);
-
-    const result = await service.undoEdit(toUndoServiceInput(command));
+    const undoInput = toUndoServiceInput(command);
+    const result = await service.undoEdit(undoInput.historyId, {
+      idempotencyKey: undoInput.idempotencyKey,
+      actor: undoInput.actor || null,
+      subscription: undoInput.subscription || null,
+      entitlement: undoInput.entitlement || null,
+      activePlan: undoInput.activePlan || EMPTY_OBJECT,
+    });
 
     return requireResult(result, "Undo operation failed");
   },

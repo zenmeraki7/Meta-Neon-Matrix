@@ -16,11 +16,16 @@ test("pipeline stage job ids include executionId", () => {
 });
 
 test("undo queue job id includes historyId + executionId + source", () => {
-  const source = read("web/Jobs/Queues/bulkUndoJob.js");
-  assert.ok(source.includes('joinSafeJobId('));
-  assert.ok(source.includes("data?.historyId"));
-  assert.ok(source.includes("data?.executionId"));
-  assert.ok(source.includes("data?.source || \"default\""));
+  const queueSource = read("web/Jobs/Queues/bulkUndoJob.js");
+  const utilsSource = read("web/utils/jobQueueUtils.js");
+  assert.ok(queueSource.includes("buildUndoExecuteJobId({"));
+  assert.ok(queueSource.includes("undoOperationId: data.historyId"));
+  assert.ok(queueSource.includes("executionId: data.executionId"));
+  assert.ok(queueSource.includes("source: data?.source || \"default\""));
+  assert.ok(utilsSource.includes("export function buildUndoExecuteJobId"));
+  assert.ok(
+    utilsSource.includes('return joinSafeJobId("undo-execute", shop, undoOperationId, executionId, source);'),
+  );
 });
 
 test("result ingestion uses authoritative Shopify fetch status", () => {

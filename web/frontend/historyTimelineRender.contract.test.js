@@ -9,29 +9,45 @@ function read(filePath) {
   return fs.readFileSync(path.join(ROOT, filePath), "utf8");
 }
 
-test("history row/details views render lifecycle timeline state", () => {
+test("history list hides worker lifecycle details while details keeps lifecycle timeline", () => {
   const historyTable = read("web/frontend/Domain/History/components/HistoryTable.jsx");
+  const jobProgressCell = read("web/frontend/Domain/History/components/JobProgressCell.tsx");
   const editDetails = read("web/frontend/Domain/products/edit/pages/EditDetails.jsx");
 
   assert.equal(
-    historyTable.includes("buildOperationTimeline"),
+    historyTable.includes("JobProgressCell"),
     true,
-    "HistoryTable should render lifecycle timeline state",
+    "HistoryTable should render the merchant-facing progress cell",
   );
   assert.equal(
-    historyTable.includes("Tooltip"),
-    true,
-    "HistoryTable should include per-stage lifecycle tooltips",
+    historyTable.includes("timelineSummary"),
+    false,
+    "HistoryTable must not render lifecycle timeline state",
   );
   assert.equal(
-    historyTable.includes("idempotencyStages"),
-    true,
-    "HistoryTable should read supportStatus.idempotencyStages for stage timestamps",
+    historyTable.includes("stageBadges"),
+    false,
+    "HistoryTable must not render internal stage badges",
   );
   assert.equal(
-    historyTable.includes("stages"),
+    jobProgressCell.includes("STATUS_CONFIG"),
     true,
-    "HistoryTable should show stage progression summary",
+    "JobProgressCell should own the status-to-badge-and-progress color config",
+  );
+  assert.equal(
+    jobProgressCell.includes("export function calculateProgress(job"),
+    true,
+    "JobProgressCell should expose the single progress calculation function",
+  );
+  assert.equal(
+    jobProgressCell.includes("Math.max(totalItems, 1)"),
+    true,
+    "JobProgressCell should protect progress calculation against divide-by-zero",
+  );
+  assert.equal(
+    jobProgressCell.includes("firstProvidedCount"),
+    true,
+    "JobProgressCell should honor an explicit zero progress count for failed jobs",
   );
   assert.equal(
     editDetails.includes("Operation lifecycle"),

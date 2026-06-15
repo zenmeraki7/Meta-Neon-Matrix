@@ -196,34 +196,41 @@ const bulkUndoWorker = new Worker(
         throw new Error("No original products found to undo changes");
       }
       const snapshotSetId = String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
-      if (!snapshotSetId) {
-        throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED_FOR_UNDO");
+      let snapshotRows = [];
+      let snapshotByIdentity = new Map();
+      let snapshotSource = "change_record_before_values";
+
+      if (snapshotSetId) {
+        const snapshotSet = await getFrozenSnapshotSetForExecution({
+          shop,
+          snapshotSetId,
+          operationId:
+            String(history?.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "").trim()
+            || undefined,
+        });
+        snapshotRows = await findUndoSnapshotRows({
+          shop,
+          snapshotSetId: snapshotSet.id,
+          targetKeys: products.map((record) => record.targetIdentity).filter(Boolean),
+        });
+        assertSnapshotItemsFullyIngested(snapshotRows, "undo_worker");
+        snapshotByIdentity = new Map(
+          snapshotRows.map((row) => [String(row.targetKey), row]),
+        );
+        snapshotSource = "target_snapshot";
       }
-      const snapshotSet = await getFrozenSnapshotSetForExecution({
-        shop,
-        snapshotSetId,
-        operationId:
-          String(history?.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "").trim()
-          || undefined,
-      });
-      const snapshotRows = await findUndoSnapshotRows({
-        shop,
-        snapshotSetId: snapshotSet.id,
-        targetKeys: products.map((record) => record.targetIdentity).filter(Boolean),
-      });
-      assertSnapshotItemsFullyIngested(snapshotRows, "undo_worker");
-      const snapshotByIdentity = new Map(
-        snapshotRows.map((row) => [String(row.targetKey), row]),
-      );
+
       const service = new UndoEditService(session);
       const undoReplayProducts = service.buildUndoReplayRecords(
         products,
         snapshotByIdentity,
       );
       const snapshotIdentitySet = new Set(snapshotRows.map((row) => row.targetKey));
-      const replayableProducts = undoReplayProducts.filter(
-        (record) => record.targetIdentity && snapshotIdentitySet.has(record.targetIdentity),
-      );
+      const replayableProducts = snapshotSetId
+        ? undoReplayProducts.filter(
+          (record) => record.targetIdentity && snapshotIdentitySet.has(record.targetIdentity),
+        )
+        : undoReplayProducts.filter((record) => record.targetIdentity);
       if (!replayableProducts.length) {
         const err = new Error("UNDO_TARGET_IDENTITY_MISMATCH");
         err.code = "UNDO_TARGET_IDENTITY_MISMATCH";
@@ -333,6 +340,7 @@ const bulkUndoWorker = new Worker(
         executionId: executionId || undo.executionIdentity || null,
         attempt,
         source,
+        snapshotSource,
         bulkOperationId,
       });
 

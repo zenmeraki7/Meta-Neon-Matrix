@@ -424,8 +424,8 @@ function buildProgressSummary({
   fallbackPercent = 0,
   statusLabel,
 }) {
-  const current = Number(processedCount || 0);
-  const total = Number(totalItems || 0);
+  const current = Math.max(0, Number(processedCount || 0));
+  const total = Math.max(0, Number(totalItems || 0));
   const percent =
     total > 0
       ? Math.max(0, Math.min(100, Math.round((current / total) * 100)))
@@ -442,6 +442,47 @@ function buildProgressSummary({
         ? `${current}`
         : statusLabel,
   };
+}
+
+function getIngestionSummary(record) {
+  const summary = record?.batch && typeof record.batch === "object"
+    && record.batch.ingestionSummary && typeof record.batch.ingestionSummary === "object"
+    ? record.batch.ingestionSummary
+    : {};
+  const recordSuccessCount = Math.max(0, Number(record?.successCount || 0));
+  const summarySuccessCount = Math.max(0, Number(summary.successCount || 0));
+  const recordFailedCount = Math.max(0, Number(record?.failedCount || 0));
+  const summaryFailedCount = Math.max(0, Number(summary.failedCount || 0));
+  const recordSkippedCount = Math.max(0, Number(record?.skippedCount || 0));
+  const summarySkippedCount = Math.max(0, Number(summary.skippedCount || 0));
+
+  return {
+    submittedCount: Math.max(0, Number(summary.submittedCount || 0)),
+    successCount: Math.max(recordSuccessCount, summarySuccessCount),
+    failedCount: Math.max(recordFailedCount, summaryFailedCount),
+    skippedCount: Math.max(recordSkippedCount, summarySkippedCount),
+  };
+}
+
+function getDisplayProgressProcessedCount(record, primaryStatus) {
+  const rawProcessedCount = Math.max(0, Number(record?.processedCount || 0));
+  const totalItems = Math.max(0, Number(record?.targetSnapshotCount || record?.totalItems || record?.totalCount || 0));
+  const ingestion = getIngestionSummary(record);
+  const successfulCount = ingestion.successCount;
+
+  switch (primaryStatus?.key) {
+    case "completed":
+      return totalItems || rawProcessedCount;
+    case "queued":
+      return 0;
+    case "failed":
+    case "partial":
+      return Math.min(successfulCount, totalItems || successfulCount);
+    case "cancelled":
+      return Math.min(successfulCount || rawProcessedCount, totalItems || successfulCount || rawProcessedCount);
+    default:
+      return Math.min(successfulCount || rawProcessedCount, totalItems || successfulCount || rawProcessedCount);
+  }
 }
 
 function getExportProgressPercent(executionState, processedCount, totalItems) {
@@ -570,9 +611,10 @@ export function projectEditHistoryStatus(record) {
   });
 
   const undoErrors = parseHistoryErrors(undo.error);
+  const progressProcessedCount = getDisplayProgressProcessedCount(record, primaryStatus);
 
   const progress = buildProgressSummary({
-    processedCount: record.processedCount,
+    processedCount: progressProcessedCount,
     totalItems: record.targetSnapshotCount || record.totalItems,
     fallbackPercent: primaryStatus.key === "completed" ? 100 : 0,
     statusLabel: primaryStatus.label,
@@ -586,6 +628,7 @@ export function projectEditHistoryStatus(record) {
     undoStatusSummary: undoStatus,
     progressSummary: progress,
     progressCount: progress.current,
+    progressProcessedCount,
     displayStatus: primaryStatus.key,
     merchantSafetyState,
     supportStatus: {

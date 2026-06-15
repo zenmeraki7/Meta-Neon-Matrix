@@ -14,7 +14,6 @@ import {
   Card,
   Divider,
   Pagination,
-  Tooltip,
   Badge,
   ChoiceList,
 } from "@shopify/polaris";
@@ -23,11 +22,11 @@ import { useTranslation } from "react-i18next";
 import AlertUndo from "../../products/edit/components/AlertUndo";
 import useProductSyncStatus from "../../../hooks/useProductSyncStatus";
 import { useShopTimezone } from "../../../hooks/useShopTimezone";
-import { operationStatusBadge } from "../../shared/components/StatusBadge";
 import { protectedApiPut } from "../../../api/protectedApiClient";
 import { useLocaleFormatters } from "../../../hooks/useLocaleFormatters";
 import TableErrorBoundary from "../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../components/Error/CellErrorBoundary";
+import JobProgressCell, { STATUS_CONFIG, normalizeJobStatus } from "./JobProgressCell";
 
 const HISTORY_TABLE_MIN_HEIGHT = "560px";
 
@@ -53,10 +52,44 @@ function getHistoryRowId(item) {
   return `derived:${shop}|${title}|${updatedAt}|${status}`;
 }
 
-function formatStageTimestamp(entry, formatter) {
-  if (!entry) return "No stage timestamps yet";
-  const fmt = (v) => (v ? formatter.format(new Date(v)) : "n/a");
-  return `Started: ${fmt(entry.startedAt)}\nUpdated: ${fmt(entry.updatedAt)}\nCompleted: ${fmt(entry.completedAt)}\nLease: ${fmt(entry.leaseUntil)}`;
+const STATUS_LABEL_KEYS = {
+  COMPLETED: { key: "jobStatus.completed", defaultValue: "Completed" },
+  FAILED: { key: "jobStatus.failed", defaultValue: "Failed" },
+  RUNNING: { key: "jobStatus.running", defaultValue: "Running" },
+  QUEUED: { key: "jobStatus.queued", defaultValue: "Queued" },
+  PENDING: { key: "jobStatus.pending", defaultValue: "Waiting to start" },
+  CANCELLED: { key: "jobStatus.cancelled", defaultValue: "Cancelled" },
+};
+
+function getMerchantStatusKey(item) {
+  return normalizeJobStatus(item);
+}
+
+function getJobTotalCount(item) {
+  const candidates = [
+    item?.totalCount,
+    item?.totalItems,
+    item?.progressSummary?.total,
+  ];
+  const positiveCount = candidates
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+
+  if (positiveCount !== undefined) return positiveCount;
+
+  const fallbackCount = Number(candidates[0] || 0);
+  return Number.isFinite(fallbackCount) && fallbackCount > 0 ? fallbackCount : 0;
+}
+
+function merchantStatusBadge(item, t) {
+  const statusKey = getMerchantStatusKey(item);
+  const config = STATUS_CONFIG[statusKey] || STATUS_CONFIG.RUNNING;
+  const label = STATUS_LABEL_KEYS[statusKey] || STATUS_LABEL_KEYS.RUNNING;
+  return (
+    <Badge tone={config.tone}>
+      {t(label.key, { defaultValue: label.defaultValue })}
+    </Badge>
+  );
 }
 
 const TYPE_OPTIONS = [
@@ -107,7 +140,7 @@ const HistoryTable = memo(function HistoryTable({
   const navigate = useNavigate();
   const { t } = useTranslation(["history", "common"]);
   const queryClient = useQueryClient();
-  const { dateTimeFormatter, numberFormatter } = useLocaleFormatters();
+  const { dateTimeFormatter } = useLocaleFormatters();
   const { shopTimezone } = useShopTimezone();
   const { isSyncInProgress } = useProductSyncStatus();
   const [showUndoModal, setShowUndoModal] = useState(false);
@@ -198,6 +231,11 @@ const HistoryTable = memo(function HistoryTable({
 
   const handleUndo = useCallback((history) => {
     const operationId = safeString(history?.operationId || history?.id, "unknown", null);
+    console.info("[undo-ui] button_click", {
+      historyId: history?.id || null,
+      operationId,
+      status: history?.status || history?.primaryStatus?.key || null,
+    });
     setUndoHistoryItem(history);
     setUndoIdempotencyKey(`undo:${operationId}`);
     setShowUndoModal(true);
@@ -227,12 +265,20 @@ const HistoryTable = memo(function HistoryTable({
     if (!targetHistoryId && !targetOperationId) return;
     setUndoLoading(true);
     try {
+      console.info("[undo-ui] request_start", {
+        historyId: targetHistoryId,
+        operationId: targetOperationId,
+      });
       await protectedApiPut(`/api/products/undo-edit/${targetHistoryId || targetOperationId}`, {
         operationId: targetOperationId,
         historyId: targetHistoryId,
       }, {
         idempotent: true,
         idempotencyKey,
+      });
+      console.info("[undo-ui] request_accepted", {
+        historyId: targetHistoryId,
+        operationId: targetOperationId,
       });
       await queryClient.invalidateQueries({ queryKey: ["history-list"] });
       await queryClient.invalidateQueries({ queryKey: ["edit-history-summary"] });
@@ -343,12 +389,8 @@ const HistoryTable = memo(function HistoryTable({
             >
               {(localHistories || []).map((item, index) => {
                 const id = getHistoryRowId(item);
-                const timelineSummary = item?.timelineSummary || {};
-                const stageBadges = Array.isArray(timelineSummary.stageBadges) ? timelineSummary.stageBadges : [];
-                const activeStageLabel = t(
-                  timelineSummary.activeStageLabelKey || "operationLifecycleStageLabels.UNKNOWN",
-                  { defaultValue: timelineSummary.activeStageDefaultLabel || "UNKNOWN" },
-                );
+                const totalCount = getJobTotalCount(item);
+                const statusKey = getMerchantStatusKey(item);
 
                 return (
                   <IndexTable.Row id={String(id)} key={String(id)} position={index}>
@@ -363,44 +405,19 @@ const HistoryTable = memo(function HistoryTable({
 
                     <IndexTable.Cell>
                       <CellErrorBoundary fallback="[render error]">
-                        <InlineStack gap="150" wrap>
-                          {operationStatusBadge(
-                            item?.primaryStatus?.key || item?.status,
-                            t(`historyStatus.${String(item?.primaryStatus?.key || item?.status || "pending").toLowerCase()}`, {
-                              defaultValue: String(item?.status || "pending"),
-                            }),
-                          )}
-                          {item?.undoStatusSummary?.key
-                            ? operationStatusBadge(
-                                item.undoStatusSummary.key,
-                                t(`historyStatus.${item.undoStatusSummary.key}`, { defaultValue: item.undoStatusSummary.key }),
-                              )
-                            : null}
-                        </InlineStack>
+                        {merchantStatusBadge(item, t)}
                       </CellErrorBoundary>
                     </IndexTable.Cell>
 
                     <IndexTable.Cell>
                       <CellErrorBoundary fallback="[render error]">
-                        <BlockStack gap="050">
-                          <Text as="span">
-                            {item?.progressSummary?.label ||
-                              `${numberFormatter.format(item?.processedCount || 0)} / ${numberFormatter.format(item?.totalItems || 0)}`}
-                          </Text>
-                          <InlineStack gap="100" wrap>
-                            <Badge tone="info">{activeStageLabel}</Badge>
-                            {stageBadges.map((stage) => {
-                              const tooltip = `${t(stage.labelKey, { defaultValue: stage.defaultLabel })}\n${formatStageTimestamp(stage, dateTimeFormatter)}`;
-                              return (
-                                <Tooltip key={`${id}-${stage.key}`} content={tooltip}>
-                                  <Badge tone={stage.status === "completed" ? "success" : stage.status === "active" ? "info" : "attention"}>
-                                    {String(stage.key).slice(0, 3)}
-                                  </Badge>
-                                </Tooltip>
-                              );
-                            })}
-                          </InlineStack>
-                        </BlockStack>
+                        <JobProgressCell
+                          job={item}
+                          processedCount={item?.processedCount || 0}
+                          progressProcessedCount={item?.progressProcessedCount ?? item?.successCount ?? 0}
+                          totalCount={totalCount}
+                          status={statusKey}
+                        />
                       </CellErrorBoundary>
                     </IndexTable.Cell>
 

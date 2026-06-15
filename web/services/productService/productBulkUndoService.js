@@ -20,6 +20,7 @@ import {
   IdempotencyStoreService,
 } from "../idempotency/IdempotencyStoreService.js";
 import { getFrozenSnapshotSetForExecution } from "../../repositories/targetSnapshotSetRepository.js";
+import logger from "../../utils/loggerUtils.js";
 
 
 const OPTION_NAME_FIELDS = new Set([
@@ -27,6 +28,25 @@ const OPTION_NAME_FIELDS = new Set([
   "option2Name",
   "option3Name",
 ]);
+const SUCCESSFUL_CHANGE_STATUSES = [
+  "SUCCESS",
+  "SUCCEEDED",
+  "VERIFIED",
+  "success",
+  "succeeded",
+  "verified",
+];
+
+function buildUndoError(code, message, details = {}) {
+  const error = new Error(message || code);
+  error.code = code;
+  error.details = details;
+  return error;
+}
+
+function normalizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
 
 class UndoEditService {
   constructor(session) {
@@ -38,10 +58,19 @@ class UndoEditService {
   async undoEdit(historyId, options = {}) {
     const idempotencyKey = String(options?.idempotencyKey || "").trim();
     if (!idempotencyKey) {
-      const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
-      error.code = "VALIDATION_FAILED";
-      throw error;
+      throw buildUndoError("IDEMPOTENCY_KEY_REQUIRED", "IDEMPOTENCY_KEY_REQUIRED", {
+        operationId: historyId,
+        shop: this.session.shop,
+      });
     }
+
+    logger.info("Undo request received", {
+      source: "UndoEditService.undoEdit",
+      shop: this.session.shop,
+      operationId: historyId,
+      hasIdempotencyKey: true,
+    });
+
     const begin = await this.idempotencyStore.begin({
       shop: this.session.shop,
       scope: "BULK_EDIT_UNDO",
@@ -52,34 +81,78 @@ class UndoEditService {
       }),
     });
     if (begin.mode === "replay") {
+      logger.info("Undo idempotency replay returned", {
+        source: "UndoEditService.undoEdit",
+        shop: this.session.shop,
+        operationId: historyId,
+      });
       return begin.response;
     }
 
     const editedHistory = await db.editHistory.findFirst({
       where: {
-        id: historyId,
         shop: this.session.shop,
+        OR: [
+          { id: historyId },
+          { executionIdentity: historyId },
+        ],
       },
       select: {
         id: true,
+        shop: true,
         status: true,
+        statusNormalized: true,
         undo: true,
         batch: true,
         executionState: true,
+        executionStateNormalized: true,
+        executionIdentity: true,
       },
     });
 
     if (!editedHistory) {
-      throw new Error("Edit history not found");
+      throw buildUndoError("UNDO_HISTORY_NOT_FOUND", "Edit history not found", {
+        operationId: historyId,
+        shop: this.session.shop,
+      });
     }
+
+    const sourceHistoryId = editedHistory.id;
+    logger.info("Undo operation lookup succeeded", {
+      source: "UndoEditService.undoEdit",
+      shop: this.session.shop,
+      requestedOperationId: historyId,
+      historyId: sourceHistoryId,
+      executionIdentity: editedHistory.executionIdentity || null,
+      status: editedHistory.status,
+      executionState: editedHistory.executionState,
+    });
 
     const undoData = normalizeUndoState(
       editedHistory.undo,
       buildPlannedUndoState({ allowed: false }),
     );
 
-    if (!["completed", "partial"].includes(String(editedHistory.status || "").toLowerCase()) || undoData.allowed === false) {
-      throw new Error("Undo can only be performed on completed or partially completed edits");
+    const normalizedStatus = String(editedHistory.status || editedHistory.statusNormalized || "").toLowerCase();
+    const normalizedExecutionState = String(
+      editedHistory.executionStateNormalized || editedHistory.executionState || "",
+    ).toLowerCase();
+    const isUndoableTerminal =
+      ["completed", "partial"].includes(normalizedStatus) ||
+      ["completed", "partial_failed"].includes(normalizedExecutionState);
+
+    if (!isUndoableTerminal || undoData.allowed === false) {
+      throw buildUndoError(
+        "OPERATION_NOT_UNDOABLE",
+        "Undo can only be performed on completed or partially completed edits",
+        {
+          shop: this.session.shop,
+          historyId: sourceHistoryId,
+          status: editedHistory.status,
+          executionState: editedHistory.executionState,
+          undoAllowed: undoData.allowed,
+        },
+      );
     }
     const operationKey =
       editedHistory?.batch?.operationKey ||
@@ -88,7 +161,11 @@ class UndoEditService {
     if (operationKey) {
       const operationDef = ProductEditOperationRegistry.PRODUCT_EDIT_OPERATIONS[operationKey] || null;
       if (operationDef && operationDef.undoable === false) {
-        throw new Error("Undo is not supported for this operation type");
+        throw buildUndoError("OPERATION_NOT_UNDOABLE", "Undo is not supported for this operation type", {
+          shop: this.session.shop,
+          historyId: sourceHistoryId,
+          operationKey,
+        });
       }
     }
 
@@ -101,7 +178,11 @@ class UndoEditService {
         BULK_UNDO_STATES.COMPLETED,
       ].includes(undoData.state)
     ) {
-      throw new Error("Undo is already queued or completed");
+      throw buildUndoError("UNDO_ALREADY_QUEUED", "Undo is already queued or completed", {
+        shop: this.session.shop,
+        historyId: sourceHistoryId,
+        undoState: undoData.state,
+      });
     }
 
     const snapshotSetId = String(
@@ -110,25 +191,57 @@ class UndoEditService {
     const snapshotOperationId = String(
       editedHistory?.batch?.targetSnapshotRef?.operationId || "",
     ).trim();
-    if (!snapshotSetId) {
-      throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED_FOR_UNDO");
-    }
-    const snapshotSet = await getFrozenSnapshotSetForExecution({
-      shop: this.session.shop,
-      snapshotSetId,
-      operationId: snapshotOperationId || undefined,
-      db: db,
-    });
-    const eligibleCount = await db.targetSnapshotItem.count({
-      where: {
+    let snapshotSet = null;
+    let eligibleCount = 0;
+    let snapshotSource = "target_snapshot";
+
+    if (snapshotSetId) {
+      snapshotSet = await getFrozenSnapshotSetForExecution({
         shop: this.session.shop,
-        snapshotSetId: snapshotSet.id,
-        executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
-        undoStatus: "PENDING",
-      },
+        snapshotSetId,
+        operationId: snapshotOperationId || undefined,
+        db: db,
+      });
+      eligibleCount = await db.targetSnapshotItem.count({
+        where: {
+          shop: this.session.shop,
+          snapshotSetId: snapshotSet.id,
+          executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
+          undoStatus: "PENDING",
+        },
+      });
+    } else {
+      snapshotSource = "change_record_before_values";
+      eligibleCount = await db.changeRecord.count({
+        where: {
+          shop: this.session.shop,
+          editHistoryId: sourceHistoryId,
+          status: { in: SUCCESSFUL_CHANGE_STATUSES },
+          OR: [
+            { beforeValues: { not: null } },
+            { productFieldChanges: { not: null } },
+            { variantFieldChanges: { not: null } },
+          ],
+        },
+      });
+    }
+
+    logger.info("Undo snapshot eligibility resolved", {
+      source: "UndoEditService.undoEdit",
+      shop: this.session.shop,
+      historyId: sourceHistoryId,
+      snapshotSource,
+      snapshotSetId: snapshotSet?.id || null,
+      eligibleCount,
     });
+
     if (eligibleCount <= 0) {
-      throw new Error("UNDO_ELIGIBLE_TARGETS_NOT_FOUND");
+      throw buildUndoError("UNDO_ELIGIBLE_TARGETS_NOT_FOUND", "UNDO_ELIGIBLE_TARGETS_NOT_FOUND", {
+        shop: this.session.shop,
+        historyId: sourceHistoryId,
+        snapshotSetId: snapshotSet?.id || null,
+        snapshotSource,
+      });
     }
 
     const executionIdentity = undoData.executionIdentity || crypto.randomUUID();
@@ -141,12 +254,12 @@ class UndoEditService {
       where: {
         shop_sourceEditHistoryId: {
           shop: this.session.shop,
-          sourceEditHistoryId: historyId,
+          sourceEditHistoryId: sourceHistoryId,
         },
       },
       create: {
         shop: this.session.shop,
-        sourceEditHistoryId: historyId,
+        sourceEditHistoryId: sourceHistoryId,
         executionIdentity,
         idempotencyKeyHash,
         status: "pending",
@@ -158,7 +271,7 @@ class UndoEditService {
 
     const updatedHistory = await db.editHistory.updateMany({
       where: {
-        id: historyId,
+        id: sourceHistoryId,
         shop: this.session.shop,
         status: { in: ["completed", "partial"] },
       },
@@ -179,6 +292,8 @@ class UndoEditService {
           eligibility: {
             sourceStatuses: ["SUCCESS", "VERIFIED"],
             eligibleCount,
+            snapshotSource,
+            snapshotSetId: snapshotSet?.id || null,
             computedAt: new Date().toISOString(),
           },
         },
@@ -186,21 +301,40 @@ class UndoEditService {
     });
 
     if (!updatedHistory.count) {
-      throw new Error("Undo could not be queued");
+      throw buildUndoError("UNDO_QUEUE_TRANSITION_REJECTED", "Undo could not be queued", {
+        shop: this.session.shop,
+        historyId: sourceHistoryId,
+      });
     }
 
     await clearKeyCaches(`${this.session.shop}:fetchHistories`);
-    await clearKeyCaches(`${this.session.shop}:historyDetails:${historyId}`);
+    await clearKeyCaches(`${this.session.shop}:historyDetails:${sourceHistoryId}`);
 
     await addbulkUndoJob({
-      historyId,
+      historyId: sourceHistoryId,
       shop: this.session.shop,
       source: "manual_undo",
       executionId: executionIdentity,
     });
 
+    logger.info("Undo job created", {
+      source: "UndoEditService.undoEdit",
+      shop: this.session.shop,
+      historyId: sourceHistoryId,
+      requestedOperationId: historyId,
+      undoOperationId: undoOperation.id,
+      executionIdentity,
+      eligibleCount,
+      snapshotSource,
+    });
+
     const response = {
-      data: { id: historyId },
+      data: {
+        id: sourceHistoryId,
+        operationId: editedHistory.executionIdentity || sourceHistoryId,
+        undoOperationId: undoOperation.id,
+        eligibleCount,
+      },
       message: "Undo processing started",
     };
     await this.idempotencyStore.complete({
@@ -258,15 +392,19 @@ class UndoEditService {
       }
 
       if (variantFieldChanges.length > 0) {
-        payload.productOptions = productOptions.map((option) => ({
-          name: option.name,
-          values: option.values?.map((value) => ({ name: value })),
-        }));
+        if (productOptions.length > 0) {
+          payload.productOptions = productOptions.map((option) => ({
+            name: option.name,
+            values: option.values?.map((value) => ({ name: value })),
+          }));
+        }
 
         payload.variants = variantFieldChanges.map((variant) => {
           const variantPayload = {
             id: variant.variantId,
-            optionValues: (() => {
+          };
+
+          const optionValues = (() => {
               if (Array.isArray(variant.selectedOptions) && variant.selectedOptions.length) {
                 return variant.selectedOptions.map((option) => ({
                   optionName: option.name,
@@ -284,8 +422,11 @@ class UndoEditService {
                   };
                 })
                 .filter(Boolean);
-            })(),
-          };
+            })();
+
+          if (optionValues.length > 0) {
+            variantPayload.optionValues = optionValues;
+          }
 
           const changePayload =
             variant.changes?.reduce((accumulator, fieldChange) => {
@@ -334,15 +475,29 @@ class UndoEditService {
     const ndjson = formattedProducts.join("\n");
     const userErrors = stagedRes?.body?.data?.stagedUploadsCreate?.userErrors;
     if (userErrors?.length) {
-      throw new Error(`Shopify API returned errors: ${JSON.stringify(userErrors)}`);
+      throw buildUndoError("SHOPIFY_UNDO_STAGED_UPLOAD_FAILED", "Shopify staged upload returned errors", {
+        userErrors,
+        count,
+        lastProductId: lastId,
+      });
     }
 
     const target = stagedRes?.body?.data?.stagedUploadsCreate?.stagedTargets?.[0];
     if (!target) {
-      throw new Error("Failed to get staged upload target from Shopify");
+      throw buildUndoError("SHOPIFY_UNDO_STAGED_UPLOAD_TARGET_MISSING", "Failed to get staged upload target from Shopify", {
+        count,
+        lastProductId: lastId,
+      });
     }
 
     const keyUrl = await uploadToShopifyStagedTarget(target, ndjson);
+    logger.info("Undo staged upload completed", {
+      source: "UndoEditService.undoEditBulkOperation",
+      shop: this.session.shop,
+      count,
+      lastProductId: lastId,
+      mode,
+    });
 
     const bulkRes = await this.client.query({
       data: {
@@ -362,10 +517,30 @@ class UndoEditService {
 
     const bulkErrors = bulkRes?.body?.data?.bulkOperationRunMutation?.userErrors;
     if (bulkErrors?.length) {
-      throw new Error(`Bulk operation returned errors: ${JSON.stringify(bulkErrors)}`);
+      throw buildUndoError("SHOPIFY_UNDO_BULK_MUTATION_FAILED", "Shopify bulk operation returned errors", {
+        userErrors: bulkErrors,
+        count,
+        lastProductId: lastId,
+      });
     }
 
     const result = bulkRes.body?.data?.bulkOperationRunMutation;
+    if (!result?.bulkOperation?.id) {
+      throw buildUndoError("SHOPIFY_UNDO_BULK_OPERATION_MISSING", "Shopify did not return an undo bulk operation id", {
+        count,
+        lastProductId: lastId,
+      });
+    }
+
+    logger.info("Undo Shopify bulk mutation submitted", {
+      source: "UndoEditService.undoEditBulkOperation",
+      shop: this.session.shop,
+      count,
+      lastProductId: lastId,
+      mode,
+      bulkOperationId: result?.bulkOperation?.id || null,
+      bulkOperationStatus: result?.bulkOperation?.status || null,
+    });
 
     return {
       bulkOperationId: result?.bulkOperation?.id,
@@ -474,7 +649,7 @@ class UndoEditService {
       const snapshotBeforeValues =
         snapshot?.beforeValues && typeof snapshot.beforeValues === "object"
           ? snapshot.beforeValues
-          : null;
+          : normalizeObject(record?.beforeValues);
       if (!snapshotBeforeValues || Object.keys(snapshotBeforeValues).length === 0) {
         const error = new Error("UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED");
         error.code = "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED";
@@ -491,10 +666,14 @@ class UndoEditService {
           : {};
       const beforeProductFieldChanges = Array.isArray(beforeValues.productFieldChanges)
         ? beforeValues.productFieldChanges
-        : [];
+        : Array.isArray(record?.productFieldChanges)
+          ? record.productFieldChanges
+          : [];
       const beforeVariantFieldChanges = Array.isArray(beforeValues.variantFieldChanges)
         ? beforeValues.variantFieldChanges
-        : [];
+        : Array.isArray(record?.variantFieldChanges)
+          ? record.variantFieldChanges
+          : [];
 
       const hasBeforeValues =
         beforeProductFieldChanges.length > 0 || beforeVariantFieldChanges.length > 0;

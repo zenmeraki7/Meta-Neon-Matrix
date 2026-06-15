@@ -17,28 +17,34 @@ test("bulk edit execute schema requires preview fingerprint + registry versions"
 test("undo endpoint is subscription-gated and requires idempotency key in controller", () => {
   const routeSrc = read("web/routes/productRoutes.js");
   const controllerSrc = read("web/controllers/productBulkEditController.js");
+  const normalizerSrc = read("web/normalizers/productBulkEditCommandNormalizer.js");
+  const useCaseSrc = read("web/useCases/productBulkEditUseCases.js");
   assert.ok(routeSrc.includes('router.put("/undo-edit/:id", subscriptionMiddleware, undoEdit);'));
-  assert.ok(controllerSrc.includes('const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();'));
-  assert.ok(controllerSrc.includes("IDEMPOTENCY_KEY_REQUIRED"));
+  assert.ok(controllerSrc.includes("buildUndoEditCommand"));
+  assert.ok(normalizerSrc.includes("idempotencyKey: normalizeIdempotencyKey(headers)"));
+  assert.ok(useCaseSrc.includes("assertHistoryMutationCommand(command)"));
+  assert.ok(useCaseSrc.includes("const undoInput = toUndoServiceInput(command);"));
+  assert.ok(useCaseSrc.includes("service.undoEdit(undoInput.historyId"));
+  assert.ok(useCaseSrc.includes("idempotencyKey: undoInput.idempotencyKey"));
+  assert.ok(useCaseSrc.includes("\"IDEMPOTENCY_KEY_REQUIRED\""));
 });
 
 test("preview contract emits deterministic fingerprint fields", () => {
   const src = read("web/services/productService/ProductBulkPreviewService.js");
-  const controllerSrc = read("web/controllers/productBulkEditController.js");
+  const dtoSrc = read("web/dtos/productBulkEditDto.js");
   assert.ok(src.includes("previewSignatureHash"));
   assert.ok(src.includes("registryVersion"));
   assert.ok(src.includes("filterHash"));
   assert.ok(src.includes("mirrorBatchId"));
-  assert.ok(controllerSrc.includes("data: {"));
-  assert.ok(controllerSrc.includes("preview: normalizedPreviewRows"));
-  assert.ok(controllerSrc.includes("previewFingerprint: normalizedFingerprint"));
-  assert.ok(controllerSrc.includes("requiresConfirmation: Boolean"));
-  assert.equal(controllerSrc.includes("// Backward-compatible top-level fields"), false);
+  assert.ok(dtoSrc.includes("previewFingerprint"));
+  assert.ok(dtoSrc.includes("requiresConfirmation: data?.requiresConfirmation === true"));
+  assert.equal(dtoSrc.includes("// Backward-compatible top-level fields"), false);
 });
 
 test("admin recovery endpoint requires idempotency key and uses idempotency scope", () => {
-  const src = read("web/controllers/adminController.js");
-  assert.ok(src.includes('const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();'));
-  assert.ok(src.includes("IDEMPOTENCY_KEY_REQUIRED"));
-  assert.ok(src.includes('scope: "BULK_EDIT_RECOVERY_API"'));
+  const controllerSrc = read("web/controllers/adminController.js");
+  const serviceSrc = read("web/services/adminService.js");
+  assert.ok(controllerSrc.includes('const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();'));
+  assert.ok(controllerSrc.includes("IDEMPOTENCY_KEY_REQUIRED"));
+  assert.ok(serviceSrc.includes('scope: "BULK_EDIT_RECOVERY_API"'));
 });
