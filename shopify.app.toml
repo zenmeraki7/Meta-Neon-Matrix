@@ -1,34 +1,21 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "20f31d269398d5f23df95d0450e772e9"
-name = "test-app"
-application_url = "https://education-bias-additions-sleeve.trycloudflare.com"
+client_id = "0d2faed5eadc2b3043d4da7d9dc6e290"
+name = "MetaMatrix Bulk Product Editor"
+application_url = "https://metamatrix-a1cccaa914e8.herokuapp.com"
 embedded = true
-handle = "test-app-11537"
-
-[build]
-automatically_update_urls_on_dev = true
+handle = "metamatrix"
 
 [webhooks]
-api_version = "2025-04"
+api_version = "2024-07"
 
   [[webhooks.subscriptions]]
   topics = [
-  "inventory_items/update",
-  "inventory_levels/disconnect",
+  "products/update",
   "app/uninstalled",
   "products/delete",
   "products/create",
-  "inventory_items/create",
-  "inventory_levels/connect",
-  "collections/delete",
-  "inventory_levels/update",
-  "collections/update",
-  "shop/update",
-  "products/update",
-  "inventory_items/delete",
-  "bulk_operations/finish",
-  "collections/create"
+  "bulk_operations/finish"
 ]
   uri = "/api/webhooks"
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
@@ -41,15 +28,7 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://education-bias-additions-sleeve.trycloudflare.com/auth/callback",
-  "https://education-bias-additions-sleeve.trycloudflare.com/auth/shopify/callback",
-  "https://education-bias-additions-sleeve.trycloudflare.com/api/auth/callback"
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/callback",
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/shopify/callback",
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/api/auth/callback"
 ]
-
-[app_proxy]
-url = "https://automatic-learners-excluded-decorative.trycloudflare.com/storefront/subscription"
-subpath = "proxy"
-prefix = "apps"
-
-[pos]
-embedded = false
