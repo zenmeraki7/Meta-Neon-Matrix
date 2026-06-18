@@ -4,6 +4,7 @@ import {
   getStoreSyncDetailsByShop,
   getStoreSyncSummaryByShop,
   getStoreTrackedProductSyncByShop,
+  ensureStoreForShop,
   recoverStaleProductSyncStateByShop,
 } from "../repositories/storeRepository.js";
 import {
@@ -13,7 +14,37 @@ import {
   getLatestProductSyncSummaryByShop,
 } from "../repositories/syncRepository.js";
 
-function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount }) {
+const DEFAULT_STORE_SYNC_STATE = Object.freeze({
+  isCollectionSyncing: false,
+  lastCollectionSyncAt: null,
+  mirrorHealthState: "UNSAFE",
+  staleReason: null,
+  repairRequired: true,
+  mirrorUnsafeSince: null,
+  lastFullSyncAt: null,
+  lastIncrementalSyncAt: null,
+  lastWebhookProcessedAt: null,
+  lastReconcileAt: null,
+  lastInventoryReconcileAt: null,
+  lastCollectionReconcileAt: null,
+  lastSyncErrorSummary: null,
+  syncProgressStage: "IDLE",
+  isProductTypeSyncing: false,
+  lastProductTypeSyncAt: null,
+  isProductInitialySyning: false,
+  productInitialSyncProgress: 0,
+  shopifyBulkJobCompleted: false,
+  storeTotalProducts: 0,
+  isProductSyncing: false,
+  lastProductSyncAt: null,
+  activeMirrorBatchId: null,
+});
+
+function normalizeStoreSyncState(store) {
+  return store || DEFAULT_STORE_SYNC_STATE;
+}
+
+function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount, mirrorReady }) {
   const safeProductCount = Number(productCount || 0);
   const productsSynced =
     latestCompletedSync?.status === "completed" &&
@@ -23,7 +54,7 @@ function buildProductSyncTruth({ store, latestSync, latestCompletedSync, product
     productCount: safeProductCount,
     productsSynced,
     syncNeeded: !latestCompletedSync || safeProductCount === 0,
-    mirrorReady: Boolean(store),
+    mirrorReady: Boolean(mirrorReady),
     emptyMirror: safeProductCount === 0,
     latestCompletedSync: latestCompletedSync
       ? {
@@ -39,44 +70,54 @@ function buildProductSyncTruth({ store, latestSync, latestCompletedSync, product
 }
 
 function toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCount) {
+  const storeState = normalizeStoreSyncState(store);
+
   return {
-    isCollectionSyncing: store.isCollectionSyncing,
-    lastCollectionSyncAt: store.lastCollectionSyncAt,
-    mirrorHealthState: store.mirrorHealthState,
-    staleReason: store.staleReason,
-    repairRequired: store.repairRequired,
-    mirrorUnsafeSince: store.mirrorUnsafeSince,
-    lastFullSyncAt: store.lastFullSyncAt,
-    lastIncrementalSyncAt: store.lastIncrementalSyncAt,
-    lastWebhookProcessedAt: store.lastWebhookProcessedAt,
-    lastReconcileAt: store.lastReconcileAt,
-    lastInventoryReconcileAt: store.lastInventoryReconcileAt,
-    lastCollectionReconcileAt: store.lastCollectionReconcileAt,
-    lastSyncErrorSummary: store.lastSyncErrorSummary,
-    syncProgressStage: store.syncProgressStage,
-    isProductTypeSyncing: store.isProductTypeSyncing,
-    lastProductTypeSyncAt: store.lastProductTypeSyncAt,
-    isProductInitialySyning: store.isProductInitialySyning,
-    productInitialSyncProgress: store.productInitialSyncProgress,
-    shopifyBulkJobCompleted: store.shopifyBulkJobCompleted,
-    storeTotalProducts: store.storeTotalProducts,
-    isProductSyncing: store.isProductSyncing,
-    lastProductSyncAt: store.lastProductSyncAt,
-    activeMirrorBatchId: store.activeMirrorBatchId,
+    isCollectionSyncing: storeState.isCollectionSyncing,
+    lastCollectionSyncAt: storeState.lastCollectionSyncAt,
+    mirrorHealthState: storeState.mirrorHealthState,
+    staleReason: storeState.staleReason,
+    repairRequired: storeState.repairRequired,
+    mirrorUnsafeSince: storeState.mirrorUnsafeSince,
+    lastFullSyncAt: storeState.lastFullSyncAt,
+    lastIncrementalSyncAt: storeState.lastIncrementalSyncAt,
+    lastWebhookProcessedAt: storeState.lastWebhookProcessedAt,
+    lastReconcileAt: storeState.lastReconcileAt,
+    lastInventoryReconcileAt: storeState.lastInventoryReconcileAt,
+    lastCollectionReconcileAt: storeState.lastCollectionReconcileAt,
+    lastSyncErrorSummary: storeState.lastSyncErrorSummary,
+    syncProgressStage: storeState.syncProgressStage,
+    isProductTypeSyncing: storeState.isProductTypeSyncing,
+    lastProductTypeSyncAt: storeState.lastProductTypeSyncAt,
+    isProductInitialySyning: storeState.isProductInitialySyning,
+    productInitialSyncProgress: storeState.productInitialSyncProgress,
+    shopifyBulkJobCompleted: storeState.shopifyBulkJobCompleted,
+    storeTotalProducts: storeState.storeTotalProducts,
+    isProductSyncing: storeState.isProductSyncing,
+    lastProductSyncAt: storeState.lastProductSyncAt,
+    activeMirrorBatchId: storeState.activeMirrorBatchId,
     latestSync,
-    ...buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount }),
+    ...buildProductSyncTruth({
+      store: storeState,
+      latestSync,
+      latestCompletedSync,
+      productCount,
+      mirrorReady: Boolean(store),
+    }),
   };
 }
 
 function toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productCount) {
+  const storeState = normalizeStoreSyncState(store);
+
   return {
-    syncProgressStage: store.syncProgressStage,
-    isProductInitialySyning: store.isProductInitialySyning,
-    shopifyBulkJobCompleted: store.shopifyBulkJobCompleted,
-    storeTotalProducts: store.storeTotalProducts,
-    isProductSyncing: store.isProductSyncing,
-    lastProductSyncAt: store.lastProductSyncAt,
-    activeMirrorBatchId: store.activeMirrorBatchId,
+    syncProgressStage: storeState.syncProgressStage,
+    isProductInitialySyning: storeState.isProductInitialySyning,
+    shopifyBulkJobCompleted: storeState.shopifyBulkJobCompleted,
+    storeTotalProducts: storeState.storeTotalProducts,
+    isProductSyncing: storeState.isProductSyncing,
+    lastProductSyncAt: storeState.lastProductSyncAt,
+    activeMirrorBatchId: storeState.activeMirrorBatchId,
     latestSync: latestSync
       ? {
           id: latestSync.id,
@@ -87,7 +128,13 @@ function toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productC
           isInitialProductSync: latestSync.isInitialProductSync,
         }
       : null,
-    ...buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount }),
+    ...buildProductSyncTruth({
+      store: storeState,
+      latestSync,
+      latestCompletedSync,
+      productCount,
+      mirrorReady: Boolean(store),
+    }),
   };
 }
 
@@ -105,20 +152,16 @@ export async function getSyncStatusDetailForShop(shop) {
 
   const store = await getStoreSyncDetailsByShop(shop);
 
-  if (!store) {
-    const error = new Error("NOT_FOUND");
-    error.code = "NOT_FOUND";
-    throw error;
-  }
-
   const [latestSync, latestCompletedSync] = await Promise.all([
     getLatestProductSyncByShop(shop),
     getLatestCompletedProductSyncByShop(shop),
   ]);
-  const productCount = await getActiveProductCountByShop(shop, store.activeMirrorBatchId);
+  const productCount = await getActiveProductCountByShop(shop, store?.activeMirrorBatchId);
 
   const syncDetails = toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCount);
-  await setCache(cacheKey, syncDetails, 300);
+  if (store) {
+    await setCache(cacheKey, syncDetails, 300);
+  }
 
   return {
     success: true,
@@ -145,15 +188,11 @@ export async function getSyncStatusSummaryForShop(shop) {
     getLatestCompletedProductSyncByShop(shop),
   ]);
 
-  if (!store) {
-    const error = new Error("NOT_FOUND");
-    error.code = "NOT_FOUND";
-    throw error;
-  }
-
-  const productCount = await getActiveProductCountByShop(shop, store.activeMirrorBatchId);
+  const productCount = await getActiveProductCountByShop(shop, store?.activeMirrorBatchId);
   const syncSummary = toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productCount);
-  await setCache(cacheKey, syncSummary, 60);
+  if (store) {
+    await setCache(cacheKey, syncSummary, 60);
+  }
 
   return {
     success: true,
@@ -163,6 +202,11 @@ export async function getSyncStatusSummaryForShop(shop) {
 }
 
 export async function getTrackedProductSyncStatus({ session, shop }) {
+  await ensureStoreForShop({
+    shop,
+    accessToken: session?.accessToken,
+    scope: session?.scope,
+  });
   await recoverStaleProductSyncStateByShop(shop);
   const storeDetails = await getStoreTrackedProductSyncByShop(shop);
 

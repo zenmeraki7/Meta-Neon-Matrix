@@ -23,6 +23,7 @@ import {
   fetchMetaobjectLookupByIds,
 } from "./productSyncMetaobjects.js";
 import { db } from "../../repositories/repositoryDb.js";
+import { ensureStoreForShop } from "../../repositories/storeRepository.js";
 import { recordMirrorAnomaly } from "../mirrorAnomalyService.js";
 
 function getSuspiciousPartialSyncThreshold() {
@@ -71,6 +72,12 @@ export async function startBulkOperationToFetchProducts({
   isInitialSync = false,
 }) {
   console.log(`[sync:start] shop=${session.shop} isInitialSync=${isInitialSync}`);
+
+  await ensureStoreForShop({
+    shop: session.shop,
+    accessToken: session.accessToken,
+    scope: session.scope,
+  });
 
   const { bulkOperationId, responseBody } = await runProductBulkFetch({ session });
   console.log(

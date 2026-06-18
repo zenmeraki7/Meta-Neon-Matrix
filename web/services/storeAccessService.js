@@ -1,6 +1,6 @@
 import { getCache, setCache } from "../utils/cacheUtils.js";
 import shopify from "../shopify.js";
-import { getStoreCreditFlagsByShop } from "../repositories/storeRepository.js";
+import { ensureStoreForShop } from "../repositories/storeRepository.js";
 import {
   countCompletedBulkEditsByShop,
   countCompletedProductSyncsByShop,
@@ -54,13 +54,11 @@ export async function getStoreAccessDto({ session }) {
     return cached;
   }
 
-  const store = await getStoreCreditFlagsByShop(shop);
-
-  if (!store) {
-    const error = new Error("NOT_FOUND");
-    error.code = "NOT_FOUND";
-    throw error;
-  }
+  const store = await ensureStoreForShop({
+    shop,
+    accessToken: session.accessToken,
+    scope: session.scope,
+  });
 
   const [totalbulkEditCount, totalSyncCount, shopTimezone] = await Promise.all([
     countCompletedBulkEditsByShop(shop),

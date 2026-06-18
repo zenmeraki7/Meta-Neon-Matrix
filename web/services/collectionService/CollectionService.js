@@ -4,6 +4,10 @@ import { getCache, setCache, clearKeyCaches } from "../../utils/cacheUtils.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 
 import { db } from "../../repositories/repositoryDb.js";
+import {
+  ensureStoreForShop,
+  logStoreMutation,
+} from "../../repositories/storeRepository.js";
 import { createMirrorBatchId } from "../mirrorHealthService.js";
 import { assertFeatureEntitlement } from "../entitlement/featureEntitlementService.js";
 import {
@@ -231,7 +235,18 @@ export class CollectionService {
         bulkResponse.body.data.bulkOperationRunQuery.bulkOperation.id;
       const syncBatchId = createMirrorBatchId("collection_sync");
 
-      await db.store.update({
+      const store = await ensureStoreForShop({
+        shop,
+        accessToken: session.accessToken,
+        scope: session.scope,
+      });
+      logStoreMutation("CollectionService.clearCollections.updateMany", {
+        shop,
+        storeId: store.id,
+        syncBatchId,
+        bulkOperationId,
+      });
+      await db.store.updateMany({
         where: { shopUrl: shop },
         data: {
           isCollectionSyncing: true,

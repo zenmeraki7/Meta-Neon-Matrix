@@ -2,6 +2,10 @@ import { Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
 import shopify from "../../shopify.js";
 import { db } from "../../repositories/repositoryDb.js";
+import {
+  ensureStoreForShop,
+  logStoreMutation,
+} from "../../repositories/storeRepository.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
@@ -86,22 +90,29 @@ const productSyncClearProductTypesWorker = new Worker(
       throw new Error("MISSING_BULK_OPERATION_ID");
     }
 
-    await db.$transaction([
-      db.store.update({
+    await db.$transaction(async (tx) => {
+      const store = await ensureStoreForShop({ shop }, tx);
+      logStoreMutation("productSyncClearProductTypesWorker.store.updateMany", {
+        shop,
+        storeId: store.id,
+        syncHistoryId: operationId,
+        bulkOperationId,
+      });
+      await tx.store.updateMany({
         where: { shopUrl: shop },
         data: {
           isProductTypeSyncing: true,
           lastProductTypeSyncAt: new Date(),
         },
-      }),
-      db.syncHistory.update({
+      });
+      await tx.syncHistory.update({
         where: { id: operationId },
         data: {
           status: "processing",
           bulkOperationId,
         },
-      }),
-    ]);
+      });
+    });
 
     await clearKeyCaches(`${shop}:sync_details`);
 

@@ -42,11 +42,40 @@ test("sync summary exposes one backend source of truth for product mirror status
   const syncRepository = read("web/repositories/syncRepository.js");
 
   assert.match(syncRepository, /getActiveProductCountByShop/);
+  assert.match(syncStatus, /DEFAULT_STORE_SYNC_STATE/);
+  assert.match(syncStatus, /mirrorReady:\s*Boolean\(mirrorReady\)/);
   assert.match(syncStatus, /productsSynced/);
   assert.match(syncStatus, /syncNeeded/);
   assert.match(syncStatus, /emptyMirror/);
   assert.match(syncStatus, /latestCompletedSync/);
   assert.match(syncStatus, /getLatestCompletedProductSyncByShop/);
+
+  const summaryStart = syncStatus.indexOf("export async function getSyncStatusSummaryForShop");
+  const trackedStart = syncStatus.indexOf("export async function getTrackedProductSyncStatus");
+  assert.ok(summaryStart >= 0 && trackedStart > summaryStart);
+  const summarySource = syncStatus.slice(summaryStart, trackedStart);
+  assert.doesNotMatch(summarySource, /throw error;/);
+});
+
+test("product sync lifecycle bootstraps Store rows instead of raw store.update calls", () => {
+  const storeRepository = read("web/repositories/storeRepository.js");
+  const productSyncRepository = read("web/repositories/productSyncRepository.js");
+  const mirrorHealth = read("web/services/mirrorHealthService.js");
+  const syncCommand = read("web/services/sync/SyncCommandService.js");
+  const productSyncService = read("web/services/productService/productSyncService.js");
+
+  assert.match(storeRepository, /export async function ensureStoreForShop/);
+  assert.match(storeRepository, /tx\.store\.upsert/);
+  assert.match(syncCommand, /ensureStoreForShop/);
+  assert.match(productSyncService, /ensureStoreForShop/);
+  assert.match(productSyncRepository, /ensureStoreForShop/);
+  assert.match(mirrorHealth, /ensureStoreForShop/);
+
+  for (const source of [productSyncRepository, mirrorHealth]) {
+    assert.doesNotMatch(source, /\.store\.update\(/);
+    assert.doesNotMatch(source, /prisma\.store\.update\(/);
+    assert.doesNotMatch(source, /db\.store\.update\(/);
+  }
 });
 
 test("products page prioritizes errors before sync-needed and filtered-empty states", () => {

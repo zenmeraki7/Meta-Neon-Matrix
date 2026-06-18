@@ -1,7 +1,61 @@
 import { prisma } from "../config/database.js";
 import { requireShopScope } from "../utils/shopScope.js";
+import { buildEncryptedTokenColumns } from "../utils/tokenCrypto.js";
 
 const PRODUCT_SYNC_STALE_MS = Number(process.env.PRODUCT_SYNC_STALE_MS || 2 * 60 * 60 * 1000);
+
+function withoutUndefined(value) {
+  return Object.fromEntries(
+    Object.entries(value || {}).filter(([, entry]) => entry !== undefined),
+  );
+}
+
+export function logStoreMutation(action, details = {}) {
+  console.info("[store:mutation]", {
+    action,
+    shop: details.shop || null,
+    storeId: details.storeId || null,
+    syncHistoryId: details.syncHistoryId || null,
+    syncBatchId: details.syncBatchId || null,
+    bulkOperationId: details.bulkOperationId || null,
+  });
+}
+
+export async function ensureStoreForShop(input, tx = prisma) {
+  const command = typeof input === "string" ? { shop: input } : (input || {});
+  const resolvedShop = requireShopScope(command.shop || command.shopUrl);
+  const now = new Date();
+  const markInstalled = command.markInstalled !== false;
+  const tokenColumns = command.accessToken
+    ? buildEncryptedTokenColumns(command.accessToken)
+    : {};
+
+  logStoreMutation("ensureStoreForShop.upsert", {
+    shop: resolvedShop,
+    storeId: command.storeId || null,
+  });
+
+  return tx.store.upsert({
+    where: { shopUrl: resolvedShop },
+    create: withoutUndefined({
+      shopUrl: resolvedShop,
+      shopEmail: command.shopEmail || "",
+      ...tokenColumns,
+      scope: command.scope,
+      isUnInstalled: markInstalled ? false : true,
+      unInstalledAt: markInstalled ? null : now,
+      installedAt: markInstalled ? command.installedAt || now : null,
+      lastActivityAt: now,
+    }),
+    update: withoutUndefined({
+      ...(command.shopEmail ? { shopEmail: command.shopEmail } : {}),
+      ...tokenColumns,
+      ...(command.scope !== undefined ? { scope: command.scope || "" } : {}),
+      ...(markInstalled ? { isUnInstalled: false, unInstalledAt: null } : {}),
+      lastActivityAt: now,
+    }),
+  });
+}
 
 function isStaleDate(value, cutoff) {
   if (!value) return false;
@@ -51,7 +105,11 @@ export async function recoverStaleProductSyncStateByShop(shop) {
     return { recovered: false };
   }
 
-  await prisma.store.update({
+  logStoreMutation("recoverStaleProductSyncStateByShop.updateMany", {
+    shop: resolvedShop,
+    storeId: store.shopUrl,
+  });
+  await prisma.store.updateMany({
     where: { shopUrl: resolvedShop },
     data: {
       isProductSyncing: false,

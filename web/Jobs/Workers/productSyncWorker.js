@@ -21,6 +21,10 @@ import {
   PRODUCT_SYNC_SCHEDULER_QUEUE_NAME,
 } from "../../queues/productSyncQueue.constants.js";
 import { productSyncDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import {
+  ensureStoreForShop,
+  logStoreMutation,
+} from "../../repositories/storeRepository.js";
 
 const PRODUCT_SYNC_JOB_NAMES = new Set([
   "schedule-all-product-syncs",
@@ -110,6 +114,14 @@ async function releaseShopLock(lock) {
 }
 
 async function assertShopStillInstalled(shopUrl) {
+  const ensuredStore = await ensureStoreForShop({
+    shop: shopUrl,
+    markInstalled: false,
+  });
+  logStoreMutation("productSyncWorker.assertShopStillInstalled.ensure", {
+    shop: shopUrl,
+    storeId: ensuredStore.id,
+  });
   const store = await db.store.findUnique({
     where: { shopUrl },
     select: {

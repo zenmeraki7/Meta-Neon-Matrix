@@ -9,6 +9,10 @@ import { generateReferralCode } from "../utils/referralUtils.js";
 import { clearKeyCaches } from "../utils/cacheUtils.js";
 import { logApiError } from "../utils/errorLogUtils.js";
 import { db } from "../repositories/repositoryDb.js";
+import {
+  ensureStoreForShop,
+  logStoreMutation,
+} from "../repositories/storeRepository.js";
 import shopify from "../shopify.js";
 import { buildEncryptedTokenColumns } from "../utils/tokenCrypto.js";
 
@@ -46,8 +50,13 @@ export const confirmShopInstallation = async ({
   shop,
   accessToken,
 }) => {
-  // The store row already exists (created by middleware upsert).
-  // Check if this is a new install by whether referralCode has been set yet.
+  await ensureStoreForShop({
+    shop,
+    accessToken,
+    scope: session.scope,
+    shopEmail: email,
+  });
+
   const existingStore = await db.store.findUnique({
     where: { shopUrl: shop },
     select: { referralCode: true, referredBy: true },
@@ -64,13 +73,31 @@ export const confirmShopInstallation = async ({
 
     const newReferralCode = generateReferralCode(shop);
 
-    // Patch the store row with full referral + email data
-    const updatedStore = await db.store.update({
+    logStoreMutation("confirmShopInstallation.newInstall.upsert", { shop });
+    const updatedStore = await db.store.upsert({
       where: { shopUrl: shop },
-      data: {
+      create: {
+        shopUrl: shop,
         shopEmail: email,
         ...buildEncryptedTokenColumns(accessToken),
         scope: session.scope,
+        isUnInstalled: false,
+        unInstalledAt: null,
+        installedAt: new Date(),
+        referralCode: newReferralCode,
+        referralLink: `https://zenmeraki.com/metamatrix-app?ref=${newReferralCode}`,
+        referredBy: latestReferral?.referralCode ?? null,
+        refRewardExpiresAt: latestReferral
+          ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          : null,
+      },
+      update: {
+        shopEmail: email,
+        ...buildEncryptedTokenColumns(accessToken),
+        scope: session.scope,
+        isUnInstalled: false,
+        unInstalledAt: null,
+        installedAt: new Date(),
         referralCode: newReferralCode,
         referralLink: `https://zenmeraki.com/metamatrix-app?ref=${newReferralCode}`,
         referredBy: latestReferral?.referralCode ?? null,
@@ -104,9 +131,19 @@ export const confirmShopInstallation = async ({
     await db.referralCode.deleteMany({ where: { shop } });
   } else {
     // Reinstall — just refresh credentials + email
-    await db.store.update({
+    logStoreMutation("confirmShopInstallation.reinstall.upsert", { shop });
+    await db.store.upsert({
       where: { shopUrl: shop },
-      data: {
+      create: {
+        shopUrl: shop,
+        ...buildEncryptedTokenColumns(accessToken),
+        shopEmail: email,
+        scope: session.scope,
+        isUnInstalled: false,
+        unInstalledAt: null,
+        installedAt: new Date(),
+      },
+      update: {
         ...buildEncryptedTokenColumns(accessToken),
         shopEmail: email,
         scope: session.scope,
@@ -162,23 +199,11 @@ export const appInstallMiddleware = async (req, res, next) => {
 
     // ✅ Bare-minimum DB write so the app has a valid store row
     //    before the browser lands on the dashboard.
-    await db.store.upsert({
-      where: { shopUrl: shop },
-      create: {
-        shopUrl: shop,
-        ...buildEncryptedTokenColumns(accessToken),
-        shopEmail: "",
-        isUnInstalled: false,
-        unInstalledAt: null,
-        scope: session.scope,
-        installedAt: new Date(),
-      },
-      update: {
-        ...buildEncryptedTokenColumns(accessToken),
-        isUnInstalled: false,
-        unInstalledAt: null,
-        installedAt: new Date(),
-      },
+    await ensureStoreForShop({
+      shop,
+      accessToken,
+      scope: session.scope,
+      installedAt: new Date(),
     });
 
     // Redirect immediately. Background setup should never block OAuth callback.

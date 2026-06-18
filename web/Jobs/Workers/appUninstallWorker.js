@@ -5,6 +5,7 @@ import { uninstallFeedbackHTML } from "../../config/templates/uninstallTemplate.
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { logWebhookError } from "../../utils/errorLogUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
+import { logStoreMutation } from "../../repositories/storeRepository.js";
 import logger from "../../utils/loggerUtils.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import shopify from "../../shopify.js";
@@ -278,7 +279,11 @@ const appUninstallWorker = new Worker(
         await tx.recurringEdit.deleteMany({ where: { shop } });
         await tx.scheduledExportRun.deleteMany({ where: { shop } });
         await tx.scheduledExport.deleteMany({ where: { shop } });
-        await tx.store.update({
+        logStoreMutation("appUninstallWorker.markUninstalled.updateMany", {
+          shop,
+          storeId: store.id,
+        });
+        await tx.store.updateMany({
           where: { shopUrl: shop },
           data: {
             isUnInstalled: true,

@@ -1,5 +1,9 @@
 import crypto from "crypto";
 import { db } from "../repositories/repositoryDb.js";
+import {
+  ensureStoreForShop,
+  logStoreMutation,
+} from "../repositories/storeRepository.js";
 import { recordMirrorAnomaly } from "./mirrorAnomalyService.js";
 import { TargetingValidationError } from "./targeting/errors/TargetingValidationError.js";
 
@@ -95,7 +99,12 @@ export async function assertMirrorSafeForTargeting(shop, { purpose = "PREVIEW" }
 }
 
 export async function markFullSyncStarted(shop, tx = db) {
-  return tx.store.update({
+  const store = await ensureStoreForShop({ shop }, tx);
+  logStoreMutation("markFullSyncStarted.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await tx.store.updateMany({
     where: { shopUrl: shop },
     data: {
       isProductSyncing: true,
@@ -107,15 +116,22 @@ export async function markFullSyncStarted(shop, tx = db) {
       lastProductSyncAt: new Date(),
     },
   });
+  return tx.store.findUnique({ where: { shopUrl: shop } });
 }
 
 export async function markMirrorStaging(shop, tx = db) {
-  return tx.store.update({
+  const store = await ensureStoreForShop({ shop }, tx);
+  logStoreMutation("markMirrorStaging.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await tx.store.updateMany({
     where: { shopUrl: shop },
     data: {
       syncProgressStage: "MIRROR_STAGING",
     },
   });
+  return tx.store.findUnique({ where: { shopUrl: shop } });
 }
 
 export async function markFullSyncCompleted({
@@ -124,7 +140,13 @@ export async function markFullSyncCompleted({
   productCount,
   reconciliationAt = new Date(),
 }, tx = db) {
-  return tx.store.update({
+  const store = await ensureStoreForShop({ shop }, tx);
+  logStoreMutation("markFullSyncCompleted.updateMany", {
+    shop,
+    storeId: store.id,
+    syncBatchId: batchId,
+  });
+  await tx.store.updateMany({
     where: { shopUrl: shop },
     data: {
       activeMirrorBatchId: batchId,
@@ -145,6 +167,7 @@ export async function markFullSyncCompleted({
       productInitialSyncProgress: productCount,
     },
   });
+  return tx.store.findUnique({ where: { shopUrl: shop } });
 }
 
 export async function markFullSyncFailed({
@@ -152,7 +175,12 @@ export async function markFullSyncFailed({
   reason = MIRROR_STALE_REASONS.FULL_SYNC_FAILED,
   errorSummary,
 }) {
-  await db.store.update({
+  const store = await ensureStoreForShop({ shop });
+  logStoreMutation("markFullSyncFailed.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await db.store.updateMany({
     where: { shopUrl: shop },
     data: {
       ...buildUnsafeUpdate(reason, errorSummary),
@@ -174,17 +202,28 @@ export async function markFullSyncFailed({
 }
 
 export async function markWebhookProcessed(shop, details = {}, tx = db) {
-  return tx.store.update({
+  const store = await ensureStoreForShop({ shop }, tx);
+  logStoreMutation("markWebhookProcessed.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await tx.store.updateMany({
     where: { shopUrl: shop },
     data: {
       lastWebhookProcessedAt: new Date(),
       ...(details.lastIncrementalSyncAt ? { lastIncrementalSyncAt: details.lastIncrementalSyncAt } : {}),
     },
   });
+  return tx.store.findUnique({ where: { shopUrl: shop } });
 }
 
 export async function markCollectionReconciliationPending(shop) {
-  await db.store.update({
+  const store = await ensureStoreForShop({ shop });
+  logStoreMutation("markCollectionReconciliationPending.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await db.store.updateMany({
     where: { shopUrl: shop },
     data: {
       mirrorHealthState: "DEGRADED",
@@ -195,7 +234,12 @@ export async function markCollectionReconciliationPending(shop) {
 }
 
 export async function markInventoryReconciliationPending(shop) {
-  await db.store.update({
+  const store = await ensureStoreForShop({ shop });
+  logStoreMutation("markInventoryReconciliationPending.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await db.store.updateMany({
     where: { shopUrl: shop },
     data: {
       mirrorHealthState: "DEGRADED",
@@ -212,7 +256,12 @@ export async function markRepairRequired({
   severity = "high",
   details = null,
 }) {
-  await db.store.update({
+  const store = await ensureStoreForShop({ shop });
+  logStoreMutation("markRepairRequired.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await db.store.updateMany({
     where: { shopUrl: shop },
     data: buildUnsafeUpdate(reason, summary),
   });

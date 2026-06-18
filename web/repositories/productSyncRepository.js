@@ -1,6 +1,10 @@
 import { prisma } from "../config/database.js";
 import { clearKeyCaches } from "../utils/cacheUtils.js";
 import {
+  ensureStoreForShop,
+  logStoreMutation,
+} from "./storeRepository.js";
+import {
   createMirrorBatchId,
   markFullSyncStarted,
 } from "../services/mirrorHealthService.js";
@@ -109,7 +113,14 @@ export async function queueProductSyncStart({
   const syncBatchId = createMirrorBatchId("product_sync");
 
   const syncHistory = await prisma.$transaction(async (tx) => {
-    await tx.store.update({
+    const store = await ensureStoreForShop({ shop }, tx);
+    logStoreMutation("queueProductSyncStart.store.updateMany", {
+      shop,
+      storeId: store.id,
+      syncBatchId,
+      bulkOperationId,
+    });
+    await tx.store.updateMany({
       where: { shopUrl: shop },
       data: {
         isProductSyncing: true,
@@ -162,7 +173,14 @@ export async function stageProductMirrorBatch({
   syncHistoryId = null,
 }) {
   await prisma.$transaction(async (tx) => {
-    await tx.store.update({
+    const store = await ensureStoreForShop({ shop }, tx);
+    logStoreMutation("stageProductMirrorBatch.store.updateMany", {
+      shop,
+      storeId: store.id,
+      syncHistoryId,
+      syncBatchId,
+    });
+    await tx.store.updateMany({
       where: { shopUrl: shop },
       data: {
         syncProgressStage: "MIRROR_STAGING",
@@ -296,77 +314,91 @@ export async function markSyncHistoryFailed({
         where: { id: syncHistoryId },
       });
       if (!syncHistory) {
-        throw new Error("SYNC_HISTORY_NOT_FOUND");
-      }
-      const updatedSyncHistoryResult = await tx.syncHistory.updateMany({
-        where: {
-          id: syncHistoryId,
-          shop: syncHistory.shop,
-          status: { in: ["processing", "queued"] },
-          stage: {
-            in: [
-              "SHOPIFY_BULK_RUNNING",
-              "MIRROR_STAGING",
-              "INGESTING_TO_STAGING_BATCH",
-              "VALIDATING_BATCH",
-              "ACTIVATING_BATCH",
-              "ACTIVE",
-            ],
-          },
-        },
-        data: {
-          status: "failed",
-          stage: "FAILED",
+        console.warn("[sync:history_missing_on_fail]", {
+          shop,
+          syncHistoryId,
           errorMessage,
-        },
-      });
-      if (updatedSyncHistoryResult.count !== 1) {
-        return;
-      }
-
-      if (syncHistory.syncBatchId) {
-        await upsertMirrorBatch(tx, {
-          id: syncHistory.syncBatchId,
-          shop: syncHistory.shop,
-          syncHistoryId: syncHistory.id,
-          bulkOperationId: syncHistory.bulkOperationId || null,
-          resourceType: "PRODUCT_CATALOG",
-          status: "FAILED",
         });
-        await tx.mirrorBatch.updateMany({
+      } else {
+        const updatedSyncHistoryResult = await tx.syncHistory.updateMany({
           where: {
-            id: syncHistory.syncBatchId,
+            id: syncHistoryId,
             shop: syncHistory.shop,
-            status: {
+            status: { in: ["processing", "queued"] },
+            stage: {
               in: [
-                "SYNC_REQUESTED",
-                "BULK_OPERATION_STARTED",
-                "FILE_DOWNLOADED",
+                "SHOPIFY_BULK_RUNNING",
+                "MIRROR_STAGING",
                 "INGESTING_TO_STAGING_BATCH",
                 "VALIDATING_BATCH",
                 "ACTIVATING_BATCH",
+                "ACTIVE",
               ],
             },
           },
           data: {
-            status: "FAILED",
-            failedAt: new Date(),
-            failureReason: errorMessage,
+            status: "failed",
+            stage: "FAILED",
+            errorMessage,
           },
         });
-      }
+        if (updatedSyncHistoryResult.count !== 1) {
+          console.warn("[sync:history_fail_transition_skipped]", {
+            shop,
+            syncHistoryId,
+            currentStatus: syncHistory.status,
+            currentStage: syncHistory.stage,
+          });
+        } else if (syncHistory.syncBatchId) {
+          await upsertMirrorBatch(tx, {
+            id: syncHistory.syncBatchId,
+            shop: syncHistory.shop,
+            syncHistoryId: syncHistory.id,
+            bulkOperationId: syncHistory.bulkOperationId || null,
+            resourceType: "PRODUCT_CATALOG",
+            status: "FAILED",
+          });
+          await tx.mirrorBatch.updateMany({
+            where: {
+              id: syncHistory.syncBatchId,
+              shop: syncHistory.shop,
+              status: {
+                in: [
+                  "SYNC_REQUESTED",
+                  "BULK_OPERATION_STARTED",
+                  "FILE_DOWNLOADED",
+                  "INGESTING_TO_STAGING_BATCH",
+                  "VALIDATING_BATCH",
+                  "ACTIVATING_BATCH",
+                ],
+              },
+            },
+            data: {
+              status: "FAILED",
+              failedAt: new Date(),
+              failureReason: errorMessage,
+            },
+          });
+        }
 
-      await transitionMirrorSyncLedgerBySyncHistoryId(tx, {
-        shop: syncHistory.shop,
-        syncHistoryId: syncHistory.id,
-        from: ["QUEUED", "STARTING_BULK_QUERY", "RUNNING", "INGESTING"],
-        to: "FAILED",
-        data: { lastError: errorMessage || null },
-      });
+        await transitionMirrorSyncLedgerBySyncHistoryId(tx, {
+          shop: syncHistory.shop,
+          syncHistoryId: syncHistory.id,
+          from: ["QUEUED", "STARTING_BULK_QUERY", "RUNNING", "INGESTING"],
+          to: "FAILED",
+          data: { lastError: errorMessage || null },
+        });
+      }
     }
 
     if (shop) {
-      await tx.store.update({
+      const store = await ensureStoreForShop({ shop }, tx);
+      logStoreMutation("markSyncHistoryFailed.store.updateMany", {
+        shop,
+        storeId: store.id,
+        syncHistoryId,
+      });
+      await tx.store.updateMany({
         where: { shopUrl: shop },
         data: {
           isProductSyncing: false,
@@ -593,15 +625,17 @@ export async function activateProductMirrorBatch({
   syncBatchId,
   syncHistoryId,
 }) {
-  const store = await prisma.store.findUnique({
+  const store = await ensureStoreForShop({ shop });
+  const mirrorState = await prisma.store.findUnique({
     where: { shopUrl: shop },
     select: { activeMirrorBatchId: true },
   });
 
-  const previousBatchId = store?.activeMirrorBatchId || null;
+  const previousBatchId = mirrorState?.activeMirrorBatchId || null;
   const completedAt = new Date();
 
   await prisma.$transaction(async (tx) => {
+    const transactionStore = await ensureStoreForShop({ shop }, tx);
     if (previousBatchId && previousBatchId !== syncBatchId) {
       await preserveNewerPreviousBatchProducts(tx, {
         shop,
@@ -613,10 +647,15 @@ export async function activateProductMirrorBatch({
     const finalProductCount = await tx.product.count({ where: { shop, mirrorBatchId: syncBatchId } });
     const finalVariantCount = await tx.variant.count({ where: { shop, mirrorBatchId: syncBatchId } });
 
+    logStoreMutation("activateProductMirrorBatch.store.updateMany", {
+      shop,
+      storeId: transactionStore.id || store.id,
+      syncHistoryId,
+      syncBatchId,
+    });
     const storeActivated = await tx.store.updateMany({
       where: {
         shopUrl: shop,
-        isProductSyncing: true,
       },
       data: {
         activeMirrorBatchId: syncBatchId,
@@ -636,7 +675,12 @@ export async function activateProductMirrorBatch({
       },
     });
     if (storeActivated.count !== 1) {
-      throw new Error("STORE_SYNC_ACTIVATION_TRANSITION_REJECTED");
+      console.warn("[sync:store_activation_transition_unexpected]", {
+        shop,
+        syncBatchId,
+        syncHistoryId,
+        updatedCount: storeActivated.count,
+      });
     }
 
     if (syncHistoryId) {
@@ -763,7 +807,12 @@ export async function updateInitialSyncProgress({
   shop,
   totalProductsProcessed,
 }) {
-  await prisma.store.update({
+  const store = await ensureStoreForShop({ shop });
+  logStoreMutation("updateInitialSyncProgress.store.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await prisma.store.updateMany({
     where: { shopUrl: shop },
     data: {
       productInitialSyncProgress: totalProductsProcessed,

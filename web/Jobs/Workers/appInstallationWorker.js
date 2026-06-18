@@ -9,6 +9,10 @@ import {
 } from "../../middleware/appInstallMiddleware.js";
 import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
+import {
+  ensureStoreForShop,
+  logStoreMutation,
+} from "../../repositories/storeRepository.js";
 import logger from "../../utils/loggerUtils.js";
 import { adminGraphqlWithRetry } from "../../utils/shopifyAdminApi.js";
 
@@ -16,6 +20,11 @@ const QUEUE_NAME = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 const productService = new Services();
 
 async function claimInstallation(shop) {
+  const store = await ensureStoreForShop({ shop });
+  logStoreMutation("appInstallationWorker.claimInstallation.updateMany", {
+    shop,
+    storeId: store.id,
+  });
   const result = await db.store.updateMany({
     where: {
       shopUrl: shop,
@@ -122,7 +131,12 @@ const appInstallationWorker = new Worker(
           isInitialSync: true,
         });
 
-        await db.store.update({
+        const ensuredStore = await ensureStoreForShop({ shop }, db);
+        logStoreMutation("appInstallationWorker.initialSync.updateMany", {
+          shop,
+          storeId: ensuredStore.id,
+        });
+        await db.store.updateMany({
           where: { shopUrl: shop },
           data: {
             storeTotalProducts: count,
@@ -131,7 +145,12 @@ const appInstallationWorker = new Worker(
           },
         });
       } else {
-        await db.store.update({
+        const ensuredStore = await ensureStoreForShop({ shop }, db);
+        logStoreMutation("appInstallationWorker.skipInitialSync.updateMany", {
+          shop,
+          storeId: ensuredStore.id,
+        });
+        await db.store.updateMany({
           where: { shopUrl: shop },
           data: {
             storeTotalProducts: count,
