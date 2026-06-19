@@ -72,7 +72,12 @@ const isAnySyncRunning =
   useEffect(() => {
     const isSyncing = Boolean(isAnySyncRunning);
 
-    if (wasSyncingRef.current && !isSyncing && dataSources) {
+    if (
+      wasSyncingRef.current &&
+      !isSyncing &&
+      dataSources?.productsSynced === true &&
+      dataSources?.syncNeeded !== true
+    ) {
       showSuccess(t("syncCompletedSuccess"));
     }
 

@@ -884,10 +884,10 @@ async function recoverStaleProductSyncFlags() {
       isProductSyncing: false,
       isProductInitialySyning: false,
       syncProgressStage: "IDLE",
-      shopifyBulkJobCompleted: true,
+      shopifyBulkJobCompleted: false,
       productSyncRecoveryRequired: true,
       productSyncStartedAt: null,
-      lastSyncErrorSummary: "Product sync timed out before completion. Please start sync again.",
+      lastSyncErrorSummary: "Product sync timed out before mirror activation. Please start sync again.",
       updatedAt: new Date(),
     },
   });

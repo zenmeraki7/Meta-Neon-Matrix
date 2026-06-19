@@ -2,7 +2,7 @@ import { Services } from "../productService/productFilterService.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import {
-  getProductCountByShop,
+  getActiveProductCountByShop,
   getLatestCompletedProductSyncByShop,
 } from "../../repositories/syncRepository.js";
 import {
@@ -36,14 +36,15 @@ export async function startProductSync(command = Object.freeze({})) {
     throw error;
   }
 
-  const [store, productCount, latestCompletedSync] = await Promise.all([
+  const [store, latestCompletedSync] = await Promise.all([
     getStoreSyncStateByShop(shop),
-    getProductCountByShop(shop),
     getLatestCompletedProductSyncByShop(shop),
   ]);
+  const productCount = await getActiveProductCountByShop(shop, store?.activeMirrorBatchId);
 
   const alreadySynced =
     !!store
+    && Boolean(store.activeMirrorBatchId)
     && store.isProductSyncing === false
     && store.isProductInitialySyning === false
     && store.shopifyBulkJobCompleted === true

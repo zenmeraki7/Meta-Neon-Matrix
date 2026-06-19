@@ -3,7 +3,6 @@ import axios from "axios";
 import readline from "readline";
 import { getSession } from "../../../utils/sessionHandler.js";
 import { Services } from "../../../services/productService/productFilterService.js";
-import CacheService from "../../../utils/cacheService.js";
 import { emitToUser } from "../../../socket.js";
 import { clearKeyCaches } from "../../../utils/cacheUtils.js";
 import { enqueueAutomaticProductRuleSignalJob } from "../../../services/automaticProductRuleExecutionService.js";
@@ -25,7 +24,27 @@ const ACTIVE_SYNC_STAGES = [
   "FILE_DOWNLOADING",
 ];
 
-const ACTIVE_SYNC_STATUSES = ["processing", "queued"];
+const ACTIVE_SYNC_STATUSES = ["processing"];
+const BULK_OPERATION_DETAILS_TIMEOUT_MS = Number(
+  process.env.BULK_OPERATION_DETAILS_TIMEOUT_MS || 30_000,
+);
+const BULK_RESULT_DOWNLOAD_TIMEOUT_MS = Number(
+  process.env.BULK_RESULT_DOWNLOAD_TIMEOUT_MS || 60_000,
+);
+const PRODUCT_SYNC_IMPORT_TIMEOUT_MS = Number(
+  process.env.PRODUCT_SYNC_IMPORT_TIMEOUT_MS || 10 * 60_000,
+);
+
+function withTimeout(promise, timeoutMs, message, onTimeout = null) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
 
 async function transitionMirrorSyncFromHistory({
   shop,
@@ -89,23 +108,30 @@ export async function handleSyncOperation({ bulkOperationId, shop = null }) {
 
     // Atomic claim: only one worker may transition Shopify-completed -> mirror-processing
     if (syncHistory.operationType === "Product") {
-      const claimed = await db.syncHistory.updateMany({
-        where: {
-          id: syncHistory.id,
-          status: "processing",
-          stage: {
-            in: ["SHOPIFY_BULK_RUNNING"],
+      if (syncHistory.stage === "SHOPIFY_BULK_RUNNING") {
+        const claimed = await db.syncHistory.updateMany({
+          where: {
+            id: syncHistory.id,
+            status: "processing",
+            stage: "SHOPIFY_BULK_RUNNING",
           },
-        },
-        data: {
-          stage: "MIRROR_DOWNLOAD_STARTED",
-        },
-      });
+          data: {
+            stage: "MIRROR_DOWNLOAD_STARTED",
+          },
+        });
 
-      if (claimed.count !== 1) {
+        if (claimed.count !== 1) {
+          return {
+            skipped: true,
+            reason: "already_claimed_or_not_processable",
+            bulkOperationId,
+            syncHistoryId: syncHistory.id,
+          };
+        }
+      } else if (!ACTIVE_SYNC_STAGES.includes(syncHistory.stage)) {
         return {
           skipped: true,
-          reason: "already_claimed_or_not_processable",
+          reason: "sync_history_not_in_active_stage",
           bulkOperationId,
           syncHistoryId: syncHistory.id,
         };
@@ -205,9 +231,17 @@ export async function handleSyncOperation({ bulkOperationId, shop = null }) {
       );
     }
 
-    const urlResponse = await axios.get(new URL(bulkOperation.url).toString(), {
-      headers: { Accept: "application/json" },
-      responseType: "stream",
+    await db.syncHistory.updateMany({
+      where: {
+        id: syncHistory.id,
+        shop: syncHistory.shop,
+        status: { in: ACTIVE_SYNC_STATUSES },
+        stage: { in: ACTIVE_SYNC_STAGES },
+      },
+      data: {
+        stage: "MIRROR_DOWNLOAD_STARTED",
+        responseUrl: bulkOperation.url,
+      },
     });
 
     if (
@@ -219,6 +253,24 @@ export async function handleSyncOperation({ bulkOperationId, shop = null }) {
         shop: syncHistory.shop,
         syncBatchId: syncHistory.syncBatchId,
         status: "FILE_DOWNLOADING",
+      });
+    }
+
+    const urlResponse = await axios.get(new URL(bulkOperation.url).toString(), {
+      headers: { Accept: "application/json" },
+      responseType: "stream",
+      timeout: BULK_RESULT_DOWNLOAD_TIMEOUT_MS,
+    });
+
+    if (
+      (syncHistory.operationType === "Product" ||
+        syncHistory.operationType === "Collection") &&
+      syncHistory.syncBatchId
+    ) {
+      await markMirrorBatchStatus({
+        shop: syncHistory.shop,
+        syncBatchId: syncHistory.syncBatchId,
+        status: "FILE_DOWNLOADED",
       });
     }
 
@@ -316,13 +368,20 @@ export async function handleSyncOperation({ bulkOperationId, shop = null }) {
 
       const service = new Services();
 
-      const syncResult = await service.formatAndSyncProductsToDB({
-        dataStream: urlResponse.data,
-        shop: session.shop,
-        session,
-        syncBatchId: syncHistory.syncBatchId,
-        syncHistoryId: syncHistory.id,
-      });
+      const syncResult = await withTimeout(
+        service.formatAndSyncProductsToDB({
+          dataStream: urlResponse.data,
+          shop: session.shop,
+          session,
+          syncBatchId: syncHistory.syncBatchId,
+          syncHistoryId: syncHistory.id,
+        }),
+        PRODUCT_SYNC_IMPORT_TIMEOUT_MS,
+        `Product sync import timed out after ${PRODUCT_SYNC_IMPORT_TIMEOUT_MS}ms`,
+        () => urlResponse.data?.destroy?.(
+          new Error(`Product sync import timed out after ${PRODUCT_SYNC_IMPORT_TIMEOUT_MS}ms`),
+        ),
+      );
 
       recordCount = syncResult.totalProductsProcessed || 0;
 
@@ -456,12 +515,16 @@ async function fetchBulkOperationDetails(session, bulkOperationId) {
   }`;
 
   const client = new shopify.api.clients.Graphql({ session });
-  const response = await client.query({
-    data: {
-      query,
-      variables: { id: bulkOperationId },
-    },
-  });
+  const response = await withTimeout(
+    client.query({
+      data: {
+        query,
+        variables: { id: bulkOperationId },
+      },
+    }),
+    BULK_OPERATION_DETAILS_TIMEOUT_MS,
+    `Timed out fetching Shopify bulk operation details after ${BULK_OPERATION_DETAILS_TIMEOUT_MS}ms`,
+  );
 
   return response.body?.data?.node;
 }

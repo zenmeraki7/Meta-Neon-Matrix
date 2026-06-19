@@ -44,17 +44,39 @@ function normalizeStoreSyncState(store) {
   return store || DEFAULT_STORE_SYNC_STATE;
 }
 
+function isActiveStoreSyncState(store) {
+  if (!store) return false;
+  return (
+    store.isProductSyncing === true ||
+    store.isProductInitialySyning === true ||
+    store.syncProgressStage === "SHOPIFY_BULK_RUNNING" ||
+    store.syncProgressStage === "MIRROR_STAGING"
+  );
+}
+
+async function resolveActiveProductCount(shop, store) {
+  const storedCount = Number(store?.storeTotalProducts || 0);
+  if (storedCount > 0) return storedCount;
+  return getActiveProductCountByShop(shop, store?.activeMirrorBatchId);
+}
+
 function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount, mirrorReady }) {
   const safeProductCount = Number(productCount || 0);
+  const hasActiveMirror = Boolean(store?.activeMirrorBatchId);
+  const hasCompletedSync = latestCompletedSync?.status === "completed";
   const productsSynced =
-    latestCompletedSync?.status === "completed" &&
-    safeProductCount > 0;
+    hasActiveMirror &&
+    (
+      hasCompletedSync ||
+      store?.shopifyBulkJobCompleted === true ||
+      Boolean(store?.lastProductSyncAt)
+    );
 
   return {
     productCount: safeProductCount,
     productsSynced,
-    syncNeeded: !latestCompletedSync || safeProductCount === 0,
-    mirrorReady: Boolean(mirrorReady),
+    syncNeeded: !hasActiveMirror,
+    mirrorReady: Boolean(mirrorReady) && hasActiveMirror,
     emptyMirror: safeProductCount === 0,
     latestCompletedSync: latestCompletedSync
       ? {
@@ -156,10 +178,10 @@ export async function getSyncStatusDetailForShop(shop) {
     getLatestProductSyncByShop(shop),
     getLatestCompletedProductSyncByShop(shop),
   ]);
-  const productCount = await getActiveProductCountByShop(shop, store?.activeMirrorBatchId);
+  const productCount = await resolveActiveProductCount(shop, store);
 
   const syncDetails = toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCount);
-  if (store) {
+  if (store && !isActiveStoreSyncState(store)) {
     await setCache(cacheKey, syncDetails, 300);
   }
 
@@ -187,10 +209,11 @@ export async function getSyncStatusSummaryForShop(shop) {
     getLatestProductSyncSummaryByShop(shop),
     getLatestCompletedProductSyncByShop(shop),
   ]);
+  const activeSync = isActiveStoreSyncState(store);
 
-  const productCount = await getActiveProductCountByShop(shop, store?.activeMirrorBatchId);
+  const productCount = await resolveActiveProductCount(shop, store);
   const syncSummary = toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productCount);
-  if (store) {
+  if (store && !activeSync) {
     await setCache(cacheKey, syncSummary, 60);
   }
 
@@ -220,21 +243,6 @@ export async function getTrackedProductSyncStatus({ session, shop }) {
 
   const totalProducts = storeDetails.storeTotalProducts || 0;
 
-  if (
-    storeDetails.isProductSyncing === false &&
-    storeDetails.isProductInitialySyning === false
-  ) {
-    return {
-      success: true,
-      message: "Product syncing completed.",
-      status: "completed",
-      stage: "IDLE",
-      totalProducts,
-      processedProducts: totalProducts,
-      progress: 100,
-    };
-  }
-
   if (latestSync?.status === "failed") {
     return {
       success: false,
@@ -250,6 +258,35 @@ export async function getTrackedProductSyncStatus({ session, shop }) {
               100,
             )
           : 0,
+    };
+  }
+
+  if (
+    storeDetails.isProductSyncing === false &&
+    storeDetails.isProductInitialySyning === false
+  ) {
+    if (!storeDetails.activeMirrorBatchId) {
+      return {
+        success: false,
+        message:
+          storeDetails.lastSyncErrorSummary ||
+          "No active product mirror is available. Run product sync to load products.",
+        status: "sync_needed",
+        stage: "IDLE",
+        totalProducts,
+        processedProducts: 0,
+        progress: 0,
+      };
+    }
+
+    return {
+      success: true,
+      message: "Product syncing completed.",
+      status: "completed",
+      stage: "IDLE",
+      totalProducts,
+      processedProducts: totalProducts,
+      progress: 100,
     };
   }
 

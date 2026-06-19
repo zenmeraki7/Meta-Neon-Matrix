@@ -8,6 +8,7 @@ import {
 import { startProductSync } from "../services/sync/SyncCommandService.js";
 import { normalizeSyncStartCommand } from "../normalizers/syncStartCommandNormalizer.js";
 import { toSyncCommandResponseDto } from "../dtos/syncCommandResponseDto.js";
+import { setPrivateNoStore } from "../http/cacheHeaders.js";
 
 export const syncProductData = async (req, res) => {
   const session = res.locals?.shopify?.session;
@@ -59,6 +60,7 @@ export const getSyncStatus = async (req, res) => {
       return res.status(statusCode).json(body);
     }
 
+    setPrivateNoStore(res);
     const response = await getSyncStatusDetailForShop(shop);
     return res.status(200).json(response);
   } catch (error) {
@@ -92,6 +94,7 @@ export const getSyncStatusSummary = async (req, res) => {
       return res.status(statusCode).json(body);
     }
 
+    setPrivateNoStore(res);
     const response = await getSyncStatusSummaryForShop(shop);
     return res.status(200).json(response);
   } catch (error) {
@@ -124,6 +127,7 @@ export const trackProductSync = async (req, res) => {
       return res.status(statusCode).json(body);
     }
 
+    setPrivateNoStore(res);
     const response = await getTrackedProductSyncStatus({ session, shop });
     return res.status(200).json(response);
   } catch (error) {

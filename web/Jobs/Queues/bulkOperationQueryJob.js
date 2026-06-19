@@ -1,6 +1,7 @@
 import { bulkOperationQueryQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 import {
   buildDefaultJobOptions,
+  joinSafeJobId,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
 
@@ -18,7 +19,7 @@ export async function addbulkOperatonQueryJob(data, options = {}) {
 
   const jobId =
     options.jobId ||
-    `bulk-op-query-finish:${data?.shop}:${entityId}`;
+    joinSafeJobId("bulk-op-query-finish", data?.shop, entityId);
 
   return bulkOperationQueryQueue.add(
     "bulk-operation-query",

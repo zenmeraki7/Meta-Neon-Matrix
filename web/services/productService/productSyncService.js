@@ -32,6 +32,51 @@ function getSuspiciousPartialSyncThreshold() {
   return Math.max(0, Math.min(1, parsed));
 }
 
+function getProductSyncIngestBatchSize() {
+  const parsed = Number(process.env.PRODUCT_SYNC_INGEST_BATCH_SIZE || 2500);
+  if (!Number.isFinite(parsed)) return 2500;
+  return Math.max(250, Math.min(10000, Math.trunc(parsed)));
+}
+
+function getProductSyncProgressIntervalMs() {
+  const parsed = Number(process.env.PRODUCT_SYNC_PROGRESS_INTERVAL_MS || 15000);
+  if (!Number.isFinite(parsed)) return 15000;
+  return Math.max(1000, Math.trunc(parsed));
+}
+
+function getProductSyncProgressProductInterval() {
+  const parsed = Number(process.env.PRODUCT_SYNC_PROGRESS_PRODUCT_INTERVAL || 10000);
+  if (!Number.isFinite(parsed)) return 10000;
+  return Math.max(1000, Math.trunc(parsed));
+}
+
+function getProductSyncStreamStallTimeoutMs() {
+  const parsed = Number(process.env.PRODUCT_SYNC_STREAM_STALL_TIMEOUT_MS || 120_000);
+  if (!Number.isFinite(parsed)) return 120_000;
+  return Math.max(30_000, Math.trunc(parsed));
+}
+
+function createSyncStageTimer(shop, syncBatchId) {
+  const startedAt = Date.now();
+  const marks = new Map();
+
+  return {
+    mark(stage, details = {}) {
+      const now = Date.now();
+      const previous = marks.get(stage) || now;
+      marks.set(stage, now);
+      console.info("[sync:stage_timing]", {
+        shop,
+        syncBatchId,
+        stage,
+        elapsedMs: now - startedAt,
+        stageDeltaMs: now - previous,
+        ...details,
+      });
+    },
+  };
+}
+
 function parseTypedMetafieldValue(rawType, rawValue) {
   const valueType = typeof rawType === "string" ? rawType.trim() : "";
   const textValue = rawValue === null || rawValue === undefined ? null : String(rawValue);
@@ -123,6 +168,7 @@ export async function formatAndSyncProductsToDB({
   }
 
   console.log(`[sync:stream_start] shop=${shop} syncBatchId=${syncBatchId} syncHistoryId=${syncHistoryId}`);
+  const stageTimer = createSyncStageTimer(shop, syncBatchId);
 
   let metaobjectLookup = new Map();
 
@@ -133,12 +179,18 @@ export async function formatAndSyncProductsToDB({
       status: "FILE_DOWNLOADED",
     });
 
-    const PRODUCT_BATCH_SIZE = 1000;
+    const PRODUCT_BATCH_SIZE = getProductSyncIngestBatchSize();
+    const PROGRESS_INTERVAL_MS = getProductSyncProgressIntervalMs();
+    const PROGRESS_PRODUCT_INTERVAL = getProductSyncProgressProductInterval();
+    const STREAM_STALL_TIMEOUT_MS = getProductSyncStreamStallTimeoutMs();
     let productBatch = [];
     let totalProductsProcessed = 0;
     let totalVariantsProcessed = 0;
     let lineCount = 0;
     let currentProduct = null;
+    let lastProgressWriteAt = 0;
+    let lastProgressProductCount = 0;
+    let lastInitialProgressProductCount = 0;
     const pendingMetaobjectIds = new Set();
 
     const collectMetaobjectRefsFromMetafields = (metafields = []) => {
@@ -182,6 +234,7 @@ export async function formatAndSyncProductsToDB({
 
     const flushProductsAndVariants = async () => {
       if (productBatch.length === 0) return;
+      const flushStartedAt = Date.now();
       await flushMetaobjectLookup();
 
       const currentProducts = productBatch;
@@ -291,19 +344,40 @@ export async function formatAndSyncProductsToDB({
       totalProductsProcessed += productRows.length;
       totalVariantsProcessed += variantRows.length;
 
-      console.log(`[sync:flush] shop=${shop} totalProductsProcessed=${totalProductsProcessed} totalVariantsProcessed=${totalVariantsProcessed}`);
-      await markMirrorBatchStatus({
-        shop,
-        syncBatchId,
-        status: "INGESTING_TO_STAGING_BATCH",
-        counts: {
-          actualProducts: totalProductsProcessed,
-          actualVariants: totalVariantsProcessed,
-        },
-      });
+      const now = Date.now();
+      const shouldWriteProgress =
+        now - lastProgressWriteAt >= PROGRESS_INTERVAL_MS ||
+        totalProductsProcessed - lastProgressProductCount >= PROGRESS_PRODUCT_INTERVAL;
 
-      if (totalProductsProcessed > 0 && totalProductsProcessed % 5000 === 0) {
+      if (shouldWriteProgress) {
+        console.info("[sync:flush]", {
+          shop,
+          syncBatchId,
+          productsInBatch: productRows.length,
+          variantsInBatch: variantRows.length,
+          totalProductsProcessed,
+          totalVariantsProcessed,
+          durationMs: now - flushStartedAt,
+        });
+        await markMirrorBatchStatus({
+          shop,
+          syncBatchId,
+          status: "INGESTING_TO_STAGING_BATCH",
+          counts: {
+            actualProducts: totalProductsProcessed,
+            actualVariants: totalVariantsProcessed,
+          },
+        });
+        lastProgressWriteAt = now;
+        lastProgressProductCount = totalProductsProcessed;
+      }
+
+      if (
+        totalProductsProcessed > 0 &&
+        totalProductsProcessed - lastInitialProgressProductCount >= 5000
+      ) {
         await updateInitialSyncProgress({ shop, totalProductsProcessed });
+        lastInitialProgressProductCount = totalProductsProcessed;
       }
     };
 
@@ -311,10 +385,25 @@ export async function formatAndSyncProductsToDB({
       input: dataStream,
       crlfDelay: Infinity,
     });
+    let streamStallTimer = null;
+    const armStreamStallTimer = () => {
+      if (streamStallTimer) clearTimeout(streamStallTimer);
+      streamStallTimer = setTimeout(() => {
+        dataStream.destroy(
+          new Error(
+            `Product sync JSONL stream stalled for ${STREAM_STALL_TIMEOUT_MS}ms after ${lineCount} lines`,
+          ),
+        );
+      }, STREAM_STALL_TIMEOUT_MS);
+      streamStallTimer.unref?.();
+    };
+    armStreamStallTimer();
 
     console.log(`[sync:staging_start] shop=${shop} syncBatchId=${syncBatchId}`);
+    stageTimer.mark("staging_start", { batchSize: PRODUCT_BATCH_SIZE });
     await stageProductMirrorBatch({ shop, syncBatchId, syncHistoryId });
     console.log(`[sync:staging_done] shop=${shop}`);
+    stageTimer.mark("staging_ready");
 
     const finalizeCurrentProduct = async () => {
       if (!currentProduct) return;
@@ -326,12 +415,18 @@ export async function formatAndSyncProductsToDB({
     };
 
     for await (const line of rl) {
+      armStreamStallTimer();
       if (!line.trim()) continue;
       lineCount++;
 
-      // Log every 10k lines so you can see the stream is moving
-      if (lineCount % 10000 === 0) {
-        console.log(`[sync:stream_reading] shop=${shop} linesRead=${lineCount} totalProductsProcessed=${totalProductsProcessed} pendingProducts=${productBatch.length}`);
+      if (lineCount <= 10 || lineCount % 1000 === 0) {
+        console.info("[sync:stream_reading]", {
+          shop,
+          syncBatchId,
+          linesRead: lineCount,
+          totalProductsProcessed,
+          pendingProducts: productBatch.length,
+        });
       }
 
       let json;
@@ -398,9 +493,25 @@ export async function formatAndSyncProductsToDB({
           break;
       }
     }
+    if (streamStallTimer) clearTimeout(streamStallTimer);
     await finalizeCurrentProduct();
     await flushProductsAndVariants();
     console.log(`[sync:stream_done] shop=${shop} totalLinesRead=${lineCount} totalProducts=${totalProductsProcessed}`);
+    stageTimer.mark("stream_parsed", {
+      lineCount,
+      totalProductsProcessed,
+      totalVariantsProcessed,
+    });
+
+    await markMirrorBatchStatus({
+      shop,
+      syncBatchId,
+      status: "INGESTING_TO_STAGING_BATCH",
+      counts: {
+        actualProducts: totalProductsProcessed,
+        actualVariants: totalVariantsProcessed,
+      },
+    });
 
     console.log(`[sync:activating] shop=${shop} syncBatchId=${syncBatchId} totalProductsProcessed=${totalProductsProcessed}`);
 
@@ -458,6 +569,10 @@ export async function formatAndSyncProductsToDB({
         actualVariants: totalVariantsProcessed,
       },
     });
+    stageTimer.mark("validated", {
+      totalProductsProcessed,
+      totalVariantsProcessed,
+    });
 
     await markMirrorBatchStatus({
       shop,
@@ -468,6 +583,7 @@ export async function formatAndSyncProductsToDB({
         actualVariants: totalVariantsProcessed,
       },
     });
+    stageTimer.mark("activation_start");
 
 
     await activateProductMirrorBatch({
@@ -479,6 +595,10 @@ export async function formatAndSyncProductsToDB({
     });
 
     console.log(`[sync:complete] shop=${shop} syncBatchId=${syncBatchId} totalProductsProcessed=${totalProductsProcessed} totalVariantsProcessed=${totalVariantsProcessed}`);
+    stageTimer.mark("complete", {
+      totalProductsProcessed,
+      totalVariantsProcessed,
+    });
 
 
     return {

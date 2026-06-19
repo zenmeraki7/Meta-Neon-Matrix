@@ -7,6 +7,7 @@ import { getSession } from "../../utils/sessionHandler.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 import { addbulkEditResultIngestJob } from "../Queues/bulkEditResultIngestJob.js";
 import { addbulkUndoResultIngestJob } from "../Queues/bulkUndoResultIngestJob.js";
+import { addbulkOperatonQueryJob } from "../Queues/bulkOperationQueryJob.js";
 import {
   acquireRedisLock,
   releaseRedisLock,
@@ -73,7 +74,8 @@ function isTerminalStatus(status) {
 async function pollMissedBulkOperations() {
   const cutoff = new Date(Date.now() - 2 * 60 * 1000);
 
-  const candidates = await db.editHistory.findMany({
+  const [candidates, productSyncCandidates] = await Promise.all([
+    db.editHistory.findMany({
     where: {
       OR: [
         {
@@ -108,7 +110,31 @@ async function pollMissedBulkOperations() {
     },
     take: 50,
     orderBy: { updatedAt: "asc" },
-  });
+    }),
+    db.syncHistory.findMany({
+      where: {
+        operationType: "Product",
+        status: "processing",
+        bulkOperationId: { not: null },
+        stage: {
+          in: [
+            "SHOPIFY_BULK_RUNNING",
+            "MIRROR_DOWNLOAD_STARTED",
+            "MIRROR_STAGING",
+            "INGESTING_TO_STAGING_BATCH",
+          ],
+        },
+        updatedAt: { lt: cutoff },
+      },
+      select: {
+        id: true,
+        shop: true,
+        bulkOperationId: true,
+      },
+      take: 50,
+      orderBy: { updatedAt: "asc" },
+    }),
+  ]);
 
   let scanned = 0;
   let enqueued = 0;
@@ -175,6 +201,52 @@ async function pollMissedBulkOperations() {
         worker: "missedBulkOperationPollingWorker",
         historyId: history.id,
         shop: history.shop,
+        bulkOperationId,
+        message: error?.message || String(error),
+      });
+    }
+  }
+
+  for (const sync of productSyncCandidates) {
+    scanned += 1;
+    const bulkOperationId = String(sync.bulkOperationId || "");
+    if (!sync.shop || !bulkOperationId) {
+      skipped += 1;
+      continue;
+    }
+
+    const cooldownKey = buildPollCooldownKey(sync.shop, bulkOperationId);
+    const claimed = await connection.set(cooldownKey, String(Date.now()), "NX", "PX", POLL_COOLDOWN_MS);
+    if (claimed !== "OK") {
+      skipped += 1;
+      continue;
+    }
+
+    try {
+      const op = await fetchBulkOperationStatus({
+        shop: sync.shop,
+        bulkOperationId,
+      });
+
+      if (!isTerminalStatus(op.status)) {
+        skipped += 1;
+        continue;
+      }
+
+      await addbulkOperatonQueryJob({
+        shop: sync.shop,
+        admin_graphql_api_id: bulkOperationId,
+        id: bulkOperationId,
+        type: "QUERY",
+        source: "missed_webhook_polling",
+      });
+      enqueued += 1;
+    } catch (error) {
+      skipped += 1;
+      logger.error("Missed product sync bulk operation polling failed", {
+        worker: "missedBulkOperationPollingWorker",
+        syncHistoryId: sync.id,
+        shop: sync.shop,
         bulkOperationId,
         message: error?.message || String(error),
       });

@@ -113,7 +113,8 @@ export async function markFullSyncStarted(shop, tx = db) {
       syncProgressStage: "SHOPIFY_BULK_RUNNING",
       shopifyBulkJobCompleted: false,
       staleReason: MIRROR_STALE_REASONS.FULL_SYNC_RUNNING,
-      lastProductSyncAt: new Date(),
+      productSyncStartedAt: new Date(),
+      lastProductSyncAttemptAt: new Date(),
     },
   });
   return tx.store.findUnique({ where: { shopUrl: shop } });

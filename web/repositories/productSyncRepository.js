@@ -10,6 +10,7 @@ import {
 } from "../services/mirrorHealthService.js";
 
 const ACTIVATION_PRESERVE_CHUNK_SIZE = 500;
+const PRODUCT_SYNC_CACHE_KEYS = [":sync_details", ":sync_summary"];
 
 function chunk(items, size = ACTIVATION_PRESERVE_CHUNK_SIZE) {
   const rows = Array.isArray(items) ? items : [];
@@ -163,8 +164,9 @@ export async function queueProductSyncStart({
 }
 
 export async function clearProductSyncCache(shop) {
-  await clearKeyCaches(`${shop}:sync_details`);
-  await clearKeyCaches(`${shop}:sync_summary`);
+  await Promise.all(
+    PRODUCT_SYNC_CACHE_KEYS.map((suffix) => clearKeyCaches(`${shop}${suffix}`)),
+  );
 }
 
 export async function stageProductMirrorBatch({
@@ -248,6 +250,9 @@ export async function stageProductMirrorBatch({
         mirrorBatchId: syncBatchId,
       },
     });
+  }, {
+    maxWait: 10_000,
+    timeout: 60_000,
   });
 }
 
@@ -260,46 +265,52 @@ export async function insertProductMirrorBatch({
   metafieldRows,
   syncBatchId,
 }) {
+  const operations = [];
+
   if (productRows.length > 0) {
-    await prisma.product.createMany({
+    operations.push(prisma.product.createMany({
       data: productRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
       skipDuplicates: true,
-    });
+    }));
   }
 
   if (variantRows.length > 0) {
-    await prisma.variant.createMany({
+    operations.push(prisma.variant.createMany({
       data: variantRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
       skipDuplicates: true,
-    });
+    }));
   }
 
   if (Array.isArray(inventoryItemRows) && inventoryItemRows.length > 0) {
-    await prisma.inventoryItemMirror.createMany({
+    operations.push(prisma.inventoryItemMirror.createMany({
       data: inventoryItemRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
       skipDuplicates: true,
-    });
+    }));
   }
 
   if (Array.isArray(inventoryLevelRows) && inventoryLevelRows.length > 0) {
-    await prisma.inventoryLevelMirror.createMany({
+    operations.push(prisma.inventoryLevelMirror.createMany({
       data: inventoryLevelRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
       skipDuplicates: true,
-    });
+    }));
   }
 
   if (Array.isArray(productCollectionRows) && productCollectionRows.length > 0) {
-    await prisma.productCollection.createMany({
+    operations.push(prisma.productCollection.createMany({
       data: productCollectionRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
       skipDuplicates: true,
-    });
+    }));
   }
 
   if (Array.isArray(metafieldRows) && metafieldRows.length > 0) {
-    await prisma.metafieldMirror.createMany({
+    operations.push(prisma.metafieldMirror.createMany({
       data: metafieldRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
       skipDuplicates: true,
-    });
+    }));
+  }
+
+  if (operations.length > 0) {
+    await prisma.$transaction(operations);
   }
 }
 
@@ -324,7 +335,7 @@ export async function markSyncHistoryFailed({
           where: {
             id: syncHistoryId,
             shop: syncHistory.shop,
-            status: { in: ["processing", "queued"] },
+            status: "processing",
             stage: {
               in: [
                 "SHOPIFY_BULK_RUNNING",
@@ -362,16 +373,6 @@ export async function markSyncHistoryFailed({
             where: {
               id: syncHistory.syncBatchId,
               shop: syncHistory.shop,
-              status: {
-                in: [
-                  "SYNC_REQUESTED",
-                  "BULK_OPERATION_STARTED",
-                  "FILE_DOWNLOADED",
-                  "INGESTING_TO_STAGING_BATCH",
-                  "VALIDATING_BATCH",
-                  "ACTIVATING_BATCH",
-                ],
-              },
             },
             data: {
               status: "FAILED",
@@ -404,6 +405,7 @@ export async function markSyncHistoryFailed({
           isProductSyncing: false,
           isProductInitialySyning: false,
           syncProgressStage: "IDLE",
+          shopifyBulkJobCompleted: false,
           mirrorHealthState: "UNSAFE",
           staleReason: "FULL_SYNC_FAILED",
           repairRequired: true,
@@ -623,6 +625,8 @@ async function preserveNewerPreviousBatchProducts(tx, {
 export async function activateProductMirrorBatch({
   shop,
   syncBatchId,
+  totalProductsProcessed = null,
+  totalVariantsProcessed = null,
   syncHistoryId,
 }) {
   const store = await ensureStoreForShop({ shop });
@@ -644,8 +648,13 @@ export async function activateProductMirrorBatch({
       });
     }
 
-    const finalProductCount = await tx.product.count({ where: { shop, mirrorBatchId: syncBatchId } });
-    const finalVariantCount = await tx.variant.count({ where: { shop, mirrorBatchId: syncBatchId } });
+    const shouldCountFinalRows = Boolean(previousBatchId && previousBatchId !== syncBatchId);
+    const finalProductCount = shouldCountFinalRows || typeof totalProductsProcessed !== "number"
+      ? await tx.product.count({ where: { shop, mirrorBatchId: syncBatchId } })
+      : totalProductsProcessed;
+    const finalVariantCount = shouldCountFinalRows || typeof totalVariantsProcessed !== "number"
+      ? await tx.variant.count({ where: { shop, mirrorBatchId: syncBatchId } })
+      : totalVariantsProcessed;
 
     logStoreMutation("activateProductMirrorBatch.store.updateMany", {
       shop,
@@ -688,7 +697,7 @@ export async function activateProductMirrorBatch({
         where: {
           id: syncHistoryId,
           shop,
-          status: { in: ["processing", "queued"] },
+          status: "processing",
           stage: {
             in: ["MIRROR_STAGING", "INGESTING_TO_STAGING_BATCH", "VALIDATING_BATCH", "ACTIVATING_BATCH"],
           },
@@ -799,6 +808,9 @@ export async function activateProductMirrorBatch({
         updatedAt: completedAt,
       },
     });
+  }, {
+    maxWait: 10_000,
+    timeout: 60_000,
   });
   await clearProductSyncCache(shop);
 }

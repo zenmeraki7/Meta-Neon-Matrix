@@ -73,7 +73,10 @@ export const getCache = async (key) => {
 // Clear all product caches
 export const clearAllCachesForShop = async (shop) => {
   try {
-    const keys = await redis.keys(`${shop}*`);
+    const keys = [];
+    for await (const key of redis.scanIterator({ MATCH: `${shop}*`, COUNT: 500 })) {
+      keys.push(key);
+    }
     if (keys.length > 0) {
       await redis.del(keys);
       // logger.info(`Cleared ${keys.length} cache keys`);
@@ -88,8 +91,10 @@ export const clearAllCachesForShop = async (shop) => {
 // Clear all product caches
 export const clearKeyCaches = async (key) => {
   try {
-    // Get all keys starting with 
-    const keys = await redis.keys(`${key}*`);
+    const keys = [];
+    for await (const redisKey of redis.scanIterator({ MATCH: `${key}*`, COUNT: 500 })) {
+      keys.push(redisKey);
+    }
 
     if (keys.length > 0) {
       await redis.del(keys);
