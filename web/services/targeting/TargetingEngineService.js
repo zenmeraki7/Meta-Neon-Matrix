@@ -10,7 +10,10 @@ import {
 import { assertQueryShapeGuardrails } from "./validate/queryShapeGuardrails.js";
 import { compileFilterAst } from "./compile/compileFilterAst.js";
 import { compileRelationAwareAstWhereSql } from "./compile/relationAwareSqlResolver.js";
-import { enforceMirrorScope, enforceMirrorScopeSql } from "./enforceMirrorScope.js";
+import {
+  enforceMirrorScope,
+  enforceMirrorScopeSql,
+} from "./enforceMirrorScope.js";
 import { hashFilterAst } from "./hashFilterAst.js";
 import { getTargetingVersionBundle } from "./versioning.js";
 import { TargetingValidationError } from "./errors/TargetingValidationError.js";
@@ -42,10 +45,16 @@ const OWNER_MODEL_MAP = Object.freeze({
   [TARGET_SNAPSHOT_OWNER_TYPES.RECURRING_EDIT_RUN]: "recurringEditRun",
   [TARGET_SNAPSHOT_OWNER_TYPES.RECURRING_EDIT]: "recurringEdit",
   [TARGET_SNAPSHOT_OWNER_TYPES.AUTOMATIC_PRODUCT_RULE]: "automaticProductRule",
-  [TARGET_SNAPSHOT_OWNER_TYPES.AUTOMATIC_PRODUCT_RULE_RUN]: "automaticProductRuleRun",
+  [TARGET_SNAPSHOT_OWNER_TYPES.AUTOMATIC_PRODUCT_RULE_RUN]:
+    "automaticProductRuleRun",
 });
 
-function resolveInputAst({ filterAst, legacyFilterParams, targetGranularity, source }) {
+function resolveInputAst({
+  filterAst,
+  legacyFilterParams,
+  targetGranularity,
+  source,
+}) {
   if (filterAst) return filterAst;
   return adaptLegacyFilterParamsToAst({
     filterParams: legacyFilterParams || [],
@@ -58,7 +67,10 @@ function countFilterNodes(node) {
   if (!node || typeof node !== "object") return 0;
   const rules = Array.isArray(node.rules) ? node.rules : [];
   const groups = Array.isArray(node.groups) ? node.groups : [];
-  return rules.length + groups.reduce((sum, child) => sum + countFilterNodes(child), 0);
+  return (
+    rules.length +
+    groups.reduce((sum, child) => sum + countFilterNodes(child), 0)
+  );
 }
 
 function collectPredicateFields(node, acc = new Set()) {
@@ -73,7 +85,6 @@ function collectPredicateFields(node, acc = new Set()) {
   }
   return acc;
 }
-
 
 function collectPredicates(node, acc = []) {
   if (!node || typeof node !== "object") return acc;
@@ -100,7 +111,9 @@ function hasNodeWithNot(node) {
   if (!node || typeof node !== "object") return false;
   if (node.not === true) return true;
   if (node.nodeType === "group") {
-    return (Array.isArray(node.children) ? node.children : []).some((child) => hasNodeWithNot(child));
+    return (Array.isArray(node.children) ? node.children : []).some((child) =>
+      hasNodeWithNot(child)
+    );
   }
   return false;
 }
@@ -108,8 +121,14 @@ function hasNodeWithNot(node) {
 function hasGroupLogic(node, logic) {
   if (!node || typeof node !== "object") return false;
   if (node.nodeType === "group") {
-    if (String(node.logic || "").toUpperCase() === String(logic || "").toUpperCase()) return true;
-    return (Array.isArray(node.children) ? node.children : []).some((child) => hasGroupLogic(child, logic));
+    if (
+      String(node.logic || "").toUpperCase() ===
+      String(logic || "").toUpperCase()
+    )
+      return true;
+    return (Array.isArray(node.children) ? node.children : []).some((child) =>
+      hasGroupLogic(child, logic)
+    );
   }
   return false;
 }
@@ -129,12 +148,20 @@ function shouldRunTargetingParity({ freeze, normalizedFilterAst }) {
   if (!freeze) return false;
   const predicates = collectPredicates(normalizedFilterAst?.root, []);
   if (!predicates.length) return false;
-  const hasRelation = predicates.some((p) => String(getFieldSpecOrThrow(p.field).pathKind || "") === "relation");
-  const hasVariant = predicates.some((p) => String(getFieldSpecOrThrow(p.field).model || "") === "Variant");
-  const hasProduct = predicates.some((p) => String(getFieldSpecOrThrow(p.field).model || "") === "Product");
+  const hasRelation = predicates.some(
+    (p) => String(getFieldSpecOrThrow(p.field).pathKind || "") === "relation"
+  );
+  const hasVariant = predicates.some(
+    (p) => String(getFieldSpecOrThrow(p.field).model || "") === "Variant"
+  );
+  const hasProduct = predicates.some(
+    (p) => String(getFieldSpecOrThrow(p.field).model || "") === "Product"
+  );
   const hasOr = hasGroupLogic(normalizedFilterAst?.root, "OR");
   const hasNot = hasNodeWithNot(normalizedFilterAst?.root);
-  return hasRelation || hasVariant || (hasProduct && hasVariant) || hasOr || hasNot;
+  return (
+    hasRelation || hasVariant || (hasProduct && hasVariant) || hasOr || hasNot
+  );
 }
 
 function buildTargetingParityError({
@@ -176,40 +203,64 @@ async function computeOrderedTargetIdentityDigestFromSql({
   let cursorProductId = null;
   let cursorVariantId = null;
 
-  const targetIdentityExpr = targetType === "VARIANT"
-    ? `('VARIANT:' || v."id") AS "targetIdentity"`
-    : `('PRODUCT:' || p."id") AS "targetIdentity"`;
+  const targetIdentityExpr =
+    targetType === "VARIANT"
+      ? `('VARIANT:' || v."id") AS "targetIdentity"`
+      : `('PRODUCT:' || p."id") AS "targetIdentity"`;
   const productExpr = targetType === "VARIANT" ? `v."productId"` : `p."id"`;
   const variantExpr = targetType === "VARIANT" ? `v."id"` : `NULL`;
-  const baseFrom = targetType === "VARIANT"
-    ? `FROM "Variant" v
+  const baseFrom =
+    targetType === "VARIANT"
+      ? `FROM "Variant" v
        INNER JOIN "Product" p
          ON p."shop" = v."shop"
         AND p."mirrorBatchId" = v."mirrorBatchId"
         AND p."id" = v."productId"
        WHERE v."shop" = $1 AND v."mirrorBatchId" = $2 AND (${whereSql})`
-    : `FROM "Product" p
+      : `FROM "Product" p
        WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})`;
 
   while (true) {
-    const cursorClause = targetType === "VARIANT"
-      ? (cursorVariantId
-        ? ` AND (${productExpr} > $${params.length + 1} OR (${productExpr} = $${params.length + 1} AND ${variantExpr} > $${params.length + 2}))`
-        : "")
-      : (cursorProductId ? ` AND ${productExpr} > $${params.length + 1}` : "");
-    const orderBy = targetType === "VARIANT"
-      ? `ORDER BY ${productExpr} ASC, ${variantExpr} ASC`
-      : `ORDER BY ${productExpr} ASC`;
+    const cursorClause =
+      targetType === "VARIANT"
+        ? cursorVariantId
+          ? ` AND (${productExpr} > $${
+              params.length + 1
+            } OR (${productExpr} = $${
+              params.length + 1
+            } AND ${variantExpr} > $${params.length + 2}))`
+          : ""
+        : cursorProductId
+        ? ` AND ${productExpr} > $${params.length + 1}`
+        : "";
+    const orderBy =
+      targetType === "VARIANT"
+        ? `ORDER BY ${productExpr} ASC, ${variantExpr} ASC`
+        : `ORDER BY ${productExpr} ASC`;
     const sql = `
       SELECT ${productExpr} AS "productId", ${variantExpr} AS "variantId", ${targetIdentityExpr}
       ${baseFrom}
       ${cursorClause}
       ${orderBy}
-      LIMIT $${params.length + (targetType === "VARIANT" ? (cursorVariantId ? 3 : 1) : (cursorProductId ? 2 : 1))}
+      LIMIT $${
+        params.length +
+        (targetType === "VARIANT"
+          ? cursorVariantId
+            ? 3
+            : 1
+          : cursorProductId
+          ? 2
+          : 1)
+      }
     `;
-    const bindParams = targetType === "VARIANT"
-      ? (cursorVariantId ? [...params, cursorProductId, cursorVariantId, PAGE_SIZE] : [...params, PAGE_SIZE])
-      : (cursorProductId ? [...params, cursorProductId, PAGE_SIZE] : [...params, PAGE_SIZE]);
+    const bindParams =
+      targetType === "VARIANT"
+        ? cursorVariantId
+          ? [...params, cursorProductId, cursorVariantId, PAGE_SIZE]
+          : [...params, PAGE_SIZE]
+        : cursorProductId
+        ? [...params, cursorProductId, PAGE_SIZE]
+        : [...params, PAGE_SIZE];
     const rows = await db.$queryRawUnsafe(sql, ...bindParams);
     if (!rows?.length) break;
     for (const row of rows) {
@@ -224,7 +275,8 @@ async function computeOrderedTargetIdentityDigestFromSql({
     }
     const last = rows[rows.length - 1];
     cursorProductId = String(last?.productId || "");
-    cursorVariantId = targetType === "VARIANT" ? String(last?.variantId || "") : null;
+    cursorVariantId =
+      targetType === "VARIANT" ? String(last?.variantId || "") : null;
     if (rows.length < PAGE_SIZE) break;
   }
 
@@ -246,10 +298,15 @@ function buildTargetingExplain({
 }) {
   const fieldsUsed = [...collectPredicateFields(normalizedAst?.root)];
   const joinsUsed = [];
-  if (compiled?.targetModel === "Variant" || fieldsUsed.some((field) => field.toLowerCase().includes("variant"))) {
+  if (
+    compiled?.targetModel === "Variant" ||
+    fieldsUsed.some((field) => field.toLowerCase().includes("variant"))
+  ) {
     joinsUsed.push("Variant");
   }
-  const antiJoinsUsed = fieldsUsed.some((field) => field.toLowerCase().includes("collection"))
+  const antiJoinsUsed = fieldsUsed.some((field) =>
+    field.toLowerCase().includes("collection")
+  )
     ? ["Collection"]
     : [];
   return {
@@ -273,7 +330,10 @@ function hashValues(values = []) {
   return hash.digest("hex");
 }
 
-function getOrderedSampleIds({ sampleProducts = [], sampleVariants = [] } = {}) {
+function getOrderedSampleIds({
+  sampleProducts = [],
+  sampleVariants = [],
+} = {}) {
   const ids = [];
   for (const row of Array.isArray(sampleProducts) ? sampleProducts : []) {
     ids.push(`PRODUCT:${String(row?.id || "")}`);
@@ -362,7 +422,9 @@ function getTargetingStatementTimeoutMs({ flow, freeze }) {
 async function withTargetingStatementTimeout(db, timeoutMs) {
   if (!db || typeof db.$executeRaw !== "function") return;
   try {
-    await db.$executeRaw`SET LOCAL statement_timeout = ${`${Number(timeoutMs)}ms`}`;
+    await db.$executeRaw`SET LOCAL statement_timeout = ${`${Number(
+      timeoutMs
+    )}ms`}`;
   } catch (_error) {
     // SET LOCAL requires transaction scope in Postgres; ignore when unavailable.
   }
@@ -371,7 +433,11 @@ async function withTargetingStatementTimeout(db, timeoutMs) {
 function isStatementTimeoutError(error) {
   const code = String(error?.code || "");
   const message = String(error?.message || "").toLowerCase();
-  return code === "57014" || message.includes("statement timeout") || message.includes("canceling statement");
+  return (
+    code === "57014" ||
+    message.includes("statement timeout") ||
+    message.includes("canceling statement")
+  );
 }
 
 function buildFreezeKey({
@@ -398,12 +464,16 @@ async function evaluateBroadTargetSet({
   normalizedFilterAst,
   resolvedCount,
 }) {
-  const nodeCount = countFilterNodes(normalizedFilterAst?.root || normalizedFilterAst);
+  const nodeCount = countFilterNodes(
+    normalizedFilterAst?.root || normalizedFilterAst
+  );
   const totalInBatch = await db.product.count({
     where: { shop, mirrorBatchId },
   });
-  const ratio = totalInBatch > 0 ? Number(resolvedCount) / Number(totalInBatch) : 0;
-  const isBroad = nodeCount === 0 || (Number(resolvedCount) >= 1000 && ratio >= 0.8);
+  const ratio =
+    totalInBatch > 0 ? Number(resolvedCount) / Number(totalInBatch) : 0;
+  const isBroad =
+    nodeCount === 0 || (Number(resolvedCount) >= 1000 && ratio >= 0.8);
   return {
     requiresConfirmation: isBroad,
     reason: isBroad ? "BROAD_TARGET_SET" : null,
@@ -427,7 +497,7 @@ function assertCanonicalAstForFreeze({
   if (Array.isArray(legacyFilterParams) && legacyFilterParams.length > 0) {
     throw new TargetingValidationError(
       "Canonical filterAst is required for new writes in freeze flows",
-      { code: "CANONICAL_AST_REQUIRED" },
+      { code: "CANONICAL_AST_REQUIRED" }
     );
   }
 }
@@ -448,13 +518,14 @@ function assertLegacyAdapterAllowed({
   flags,
 }) {
   if (filterAst) return;
-  if (!Array.isArray(legacyFilterParams) || legacyFilterParams.length === 0) return;
+  if (!Array.isArray(legacyFilterParams) || legacyFilterParams.length === 0)
+    return;
 
   if (!flags.ENABLE_TARGETING_LEGACY_ADAPTER_READONLY) return;
   if (freeze && allowLegacyFilterParams !== true) {
     throw new TargetingValidationError(
       "Legacy filterParams adapter is read-only; filterAst is required for writes",
-      { code: "LEGACY_FILTER_ADAPTER_READONLY" },
+      { code: "LEGACY_FILTER_ADAPTER_READONLY" }
     );
   }
 }
@@ -473,7 +544,8 @@ function normalizeAndValidate({
     source,
   });
   const normalizedFilterAst = normalizeFilterAst(inputAst);
-  const effectiveGranularity = normalizedFilterAst?.options?.targetGranularity || targetGranularity;
+  const effectiveGranularity =
+    normalizedFilterAst?.options?.targetGranularity || targetGranularity;
 
   if (strictValidation) {
     validateFilterAstOrThrow(normalizedFilterAst, {
@@ -586,7 +658,9 @@ async function persistTargetingMetadata({
     targetingCompilerVersion: persistVersions
       ? payload.versions.targetingCompilerVersion
       : null,
-    fieldRegistryVersion: persistVersions ? payload.versions.fieldRegistryVersion : null,
+    fieldRegistryVersion: persistVersions
+      ? payload.versions.fieldRegistryVersion
+      : null,
     operatorRegistryVersion: persistVersions
       ? payload.versions.operatorRegistryVersion
       : null,
@@ -653,20 +727,28 @@ async function resolveAndMaybeFreeze({
   });
 
   if (freeze && (!ownerType || !ownerId)) {
-    throw new TargetingValidationError("ownerType and ownerId are required when freeze=true", {
-      code: "OWNER_REQUIRED_FOR_FREEZE",
-    });
+    throw new TargetingValidationError(
+      "ownerType and ownerId are required when freeze=true",
+      {
+        code: "OWNER_REQUIRED_FOR_FREEZE",
+      }
+    );
   }
 
-  if (!isEngineV2EnabledForFlow(flags, flow)) {
-    const legacyAst = Array.isArray(legacyFilterParams) && legacyFilterParams.length
-      ? adaptLegacyFilterParamsToAst({
-        filterParams: legacyFilterParams,
-        targetGranularity,
-        source,
-      })
+  // Canonical AST requests cannot safely use the legacy resolver: that path
+  // only understands legacyFilterParams and would lose the filter hash.
+  if (!isEngineV2EnabledForFlow(flags, flow) && !filterAst) {
+    const legacyAst =
+      Array.isArray(legacyFilterParams) && legacyFilterParams.length
+        ? adaptLegacyFilterParamsToAst({
+            filterParams: legacyFilterParams,
+            targetGranularity,
+            source,
+          })
+        : null;
+    const legacyFilterHash = legacyAst
+      ? hashFilterAst(normalizeFilterAst(legacyAst))
       : null;
-    const legacyFilterHash = legacyAst ? hashFilterAst(normalizeFilterAst(legacyAst)) : null;
     const resolved = await resolveCanonicalTarget({
       shop,
       targetType,
@@ -686,7 +768,8 @@ async function resolveAndMaybeFreeze({
         where: resolved.where,
         mirrorBatchId: resolved.mirrorBatchId,
         filterHash:
-          legacyFilterHash || `legacy:${ownerType || "UNKNOWN"}:${ownerId || "UNKNOWN"}`,
+          legacyFilterHash ||
+          `legacy:${ownerType || "UNKNOWN"}:${ownerId || "UNKNOWN"}`,
         targetType,
         targetGranularity,
         db,
@@ -702,36 +785,40 @@ async function resolveAndMaybeFreeze({
       const modelName = OWNER_MODEL_MAP[ownerType];
       if (modelName && db[modelName]) {
         const resolvedAt = new Date();
-        await db[modelName].updateMany({
-          where: { id: ownerId, shop },
-          data: {
-            filterHash: legacyFilterHash,
-            targetGranularity: String(targetGranularity || "PRODUCT").toUpperCase(),
-            targetResolvedAt: resolvedAt,
-            targetingSnapshotMeta: {
-              shop,
-              source,
-              mirrorBatchId: resolved.mirrorBatchId,
-              targetCount: frozenCount,
+        await db[modelName]
+          .updateMany({
+            where: { id: ownerId, shop },
+            data: {
               filterHash: legacyFilterHash,
-              snapshotChecksum,
-              resolvedAt,
-              legacyEngine: true,
+              targetGranularity: String(
+                targetGranularity || "PRODUCT"
+              ).toUpperCase(),
+              targetResolvedAt: resolvedAt,
+              targetingSnapshotMeta: {
+                shop,
+                source,
+                mirrorBatchId: resolved.mirrorBatchId,
+                targetCount: frozenCount,
+                filterHash: legacyFilterHash,
+                snapshotChecksum,
+                resolvedAt,
+                legacyEngine: true,
+              },
+              ...(ownerType === "EXPORT_JOB"
+                ? {
+                    targetMirrorBatchId: resolved.mirrorBatchId,
+                    filterQuery: JSON.stringify(resolved.where || {}),
+                  }
+                : {}),
+              ...(ownerType === "EDIT_HISTORY"
+                ? {
+                    targetMirrorBatchId: resolved.mirrorBatchId,
+                    queryFilter: JSON.stringify(resolved.where || {}),
+                  }
+                : {}),
             },
-            ...(ownerType === "EXPORT_JOB"
-              ? {
-                targetMirrorBatchId: resolved.mirrorBatchId,
-                filterQuery: JSON.stringify(resolved.where || {}),
-              }
-              : {}),
-            ...(ownerType === "EDIT_HISTORY"
-              ? {
-                targetMirrorBatchId: resolved.mirrorBatchId,
-                queryFilter: JSON.stringify(resolved.where || {}),
-              }
-              : {}),
-          },
-        }).catch(() => {});
+          })
+          .catch(() => {});
       }
     }
 
@@ -780,26 +867,28 @@ async function resolveAndMaybeFreeze({
   });
   const queryShape = assertQueryShapeGuardrails(normalized.normalizedFilterAst);
   const filterHash = hashFilterAst(normalized.normalizedFilterAst);
-  const hasRelationPredicates = hasRelationFieldPredicates(normalized.normalizedFilterAst);
+  const hasRelationPredicates = hasRelationFieldPredicates(
+    normalized.normalizedFilterAst
+  );
   const shouldRunParity = shouldRunTargetingParity({
     freeze,
     normalizedFilterAst: normalized.normalizedFilterAst,
   });
   const compiled = hasRelationPredicates
     ? {
-      where: null,
-      targetModel: targetType === "VARIANT" ? "Variant" : "Product",
-      targetGranularity: normalized.targetGranularity,
-      orderBy: [{ id: "asc" }],
-    }
+        where: null,
+        targetModel: targetType === "VARIANT" ? "Variant" : "Product",
+        targetGranularity: normalized.targetGranularity,
+        orderBy: [{ id: "asc" }],
+      }
     : compileWithScope({
-      normalizedFilterAst: normalized.normalizedFilterAst,
-      targetGranularity: normalized.targetGranularity,
-      source,
-      shop,
-      mirrorBatchId,
-      dialect: "db",
-    });
+        normalizedFilterAst: normalized.normalizedFilterAst,
+        targetGranularity: normalized.targetGranularity,
+        source,
+        shop,
+        mirrorBatchId,
+        dialect: "db",
+      });
 
   const whereWithoutScope = compiled.where?.AND?.[0] || compiled.where;
   const timeoutMs = getTargetingStatementTimeoutMs({ flow, freeze });
@@ -818,7 +907,7 @@ async function resolveAndMaybeFreeze({
           targetGranularity: normalized.targetGranularity,
           shop,
           mirrorBatchId,
-        },
+        }
       );
       paritySqlText = whereSql;
       paritySqlParams = params;
@@ -827,7 +916,7 @@ async function resolveAndMaybeFreeze({
           `SELECT COUNT(*)::bigint AS count
            FROM "Product" p
            WHERE p."shop" = $1 AND p."mirrorBatchId" = $2 AND (${whereSql})`,
-          ...params,
+          ...params
         );
         const sampleRows = await db.$queryRawUnsafe(
           `SELECT p."id", p."title", p."status", p."productType", p."vendor", p."totalInventory",
@@ -838,7 +927,7 @@ async function resolveAndMaybeFreeze({
            ORDER BY p."id" ASC
            LIMIT $${params.length + 1}`,
           ...params,
-          Number(sampleLimit || 20),
+          Number(sampleLimit || 20)
         );
         resolved = {
           mirrorBatchId,
@@ -857,7 +946,7 @@ async function resolveAndMaybeFreeze({
             AND p."mirrorBatchId" = v."mirrorBatchId"
             AND p."id" = v."productId"
            WHERE v."shop" = $1 AND v."mirrorBatchId" = $2 AND (${whereSql})`,
-          ...params,
+          ...params
         );
         const sampleRows = await db.$queryRawUnsafe(
           `SELECT v."id", v."productId", v."title", v."sku", v."barcode", v."price",
@@ -871,7 +960,7 @@ async function resolveAndMaybeFreeze({
            ORDER BY v."id" ASC
            LIMIT $${params.length + 1}`,
           ...params,
-          Number(sampleLimit || 20),
+          Number(sampleLimit || 20)
         );
         resolved = {
           mirrorBatchId,
@@ -907,7 +996,7 @@ async function resolveAndMaybeFreeze({
     if (isStatementTimeoutError(error)) {
       throw new TargetingValidationError(
         "Targeting query timed out. Narrow the filter and retry.",
-        { code: "TARGETING_QUERY_TIMEOUT" },
+        { code: "TARGETING_QUERY_TIMEOUT" }
       );
     }
     throw error;
@@ -930,8 +1019,11 @@ async function resolveAndMaybeFreeze({
       lastIds: canonicalSampleIds.slice(-20),
     };
     if (
-      Number(canonicalResult.count) !== Number(alternateResult.count)
-      || JSON.stringify(canonicalResult.firstIds) !== JSON.stringify(alternateResult.firstIds.slice(0, canonicalResult.firstIds.length))
+      Number(canonicalResult.count) !== Number(alternateResult.count) ||
+      JSON.stringify(canonicalResult.firstIds) !==
+        JSON.stringify(
+          alternateResult.firstIds.slice(0, canonicalResult.firstIds.length)
+        )
     ) {
       throw buildTargetingParityError({
         shop,
@@ -962,7 +1054,11 @@ async function resolveAndMaybeFreeze({
     targetCount: Number(resolved.count || 0),
     totalCatalogCount: Number(broadTargetAssessment.totalInBatch || 0),
   });
-    if (requireBroadTargetConfirmation && broadTargetAssessment.requiresConfirmation && !confirmBroadTarget) {
+  if (
+    requireBroadTargetConfirmation &&
+    broadTargetAssessment.requiresConfirmation &&
+    !confirmBroadTarget
+  ) {
     throw new TargetingValidationError("BROAD_TARGET_SET", {
       code: "BROAD_TARGET_SET",
       meta: {
@@ -1014,9 +1110,12 @@ async function resolveAndMaybeFreeze({
         SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS locked
       `;
       if (!rows?.[0]?.locked) {
-        throw new TargetingValidationError("Target freeze is already in progress", {
-          code: "TARGET_FREEZE_LOCK_CONFLICT",
-        });
+        throw new TargetingValidationError(
+          "Target freeze is already in progress",
+          {
+            code: "TARGET_FREEZE_LOCK_CONFLICT",
+          }
+        );
       }
     }
     const modelName = OWNER_MODEL_MAP[ownerType];
@@ -1041,8 +1140,10 @@ async function resolveAndMaybeFreeze({
       if (
         existingFreezeKey === freezeKey &&
         Number(existingSnapshotCount || 0) > 0 &&
-        String(existingSnapshotMeta?.mirrorBatchId || "") === String(resolved.mirrorBatchId || "") &&
-        String(existingSnapshotMeta?.filterHash || "") === String(filterHash || "")
+        String(existingSnapshotMeta?.mirrorBatchId || "") ===
+          String(resolved.mirrorBatchId || "") &&
+        String(existingSnapshotMeta?.filterHash || "") ===
+          String(filterHash || "")
       ) {
         reusedSnapshot = {
           resolvedCount: Number(resolved.count),
@@ -1070,10 +1171,12 @@ async function resolveAndMaybeFreeze({
           targetGranularity: normalized.targetGranularity,
           shop,
           mirrorBatchId: resolved.mirrorBatchId,
-        },
+        }
       );
       while (true) {
-        const cursorClause = cursor ? ` AND t."id" > $${params.length + 1}` : "";
+        const cursorClause = cursor
+          ? ` AND t."id" > $${params.length + 1}`
+          : "";
         const rows = await db.$queryRawUnsafe(
           targetType === "PRODUCT"
             ? `SELECT t."id"
@@ -1092,19 +1195,35 @@ async function resolveAndMaybeFreeze({
                  AND (${whereSql})${cursorClause}
                ORDER BY t."id" ASC
                LIMIT $${params.length + (cursor ? 2 : 1)}`,
-          ...(cursor ? [...params, cursor, BATCH_SIZE] : [...params, BATCH_SIZE]),
+          ...(cursor
+            ? [...params, cursor, BATCH_SIZE]
+            : [...params, BATCH_SIZE])
         );
         if (!rows?.length) break;
         const ids = rows.map((r) => String(r.id));
         if (targetType === "PRODUCT") {
           const products = await db.product.findMany({
-            where: { shop, mirrorBatchId: resolved.mirrorBatchId, id: { in: ids } },
-            select: { id: true, title: true, status: true, vendor: true, productType: true, handle: true },
+            where: {
+              shop,
+              mirrorBatchId: resolved.mirrorBatchId,
+              id: { in: ids },
+            },
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              vendor: true,
+              productType: true,
+              handle: true,
+            },
             orderBy: { id: "asc" },
           });
           await db.targetSnapshot.createMany({
             data: products.map((p, idx) => ({
-              ownerType, ownerId, shop, mirrorBatchId: resolved.mirrorBatchId,
+              ownerType,
+              ownerId,
+              shop,
+              mirrorBatchId: resolved.mirrorBatchId,
               targetType: TARGET_TYPES.PRODUCT,
               targetGranularity: normalized.targetGranularity,
               source,
@@ -1127,18 +1246,41 @@ async function resolveAndMaybeFreeze({
           ordinal += products.length;
         } else {
           const variants = await db.variant.findMany({
-            where: { shop, mirrorBatchId: resolved.mirrorBatchId, id: { in: ids } },
+            where: {
+              shop,
+              mirrorBatchId: resolved.mirrorBatchId,
+              id: { in: ids },
+            },
             select: {
-              id: true, productId: true, title: true, sku: true, barcode: true, price: true,
-              compareAtPrice: true, inventoryQuantity: true, inventoryItemId: true, inventoryPolicy: true,
-              taxable: true, taxCode: true, cost: true, tracked: true, physicalProduct: true,
-              option1Value: true, option2Value: true, option3Value: true, weight: true, weightUnit: true,
+              id: true,
+              productId: true,
+              title: true,
+              sku: true,
+              barcode: true,
+              price: true,
+              compareAtPrice: true,
+              inventoryQuantity: true,
+              inventoryItemId: true,
+              inventoryPolicy: true,
+              taxable: true,
+              taxCode: true,
+              cost: true,
+              tracked: true,
+              physicalProduct: true,
+              option1Value: true,
+              option2Value: true,
+              option3Value: true,
+              weight: true,
+              weightUnit: true,
             },
             orderBy: { id: "asc" },
           });
           await db.targetSnapshot.createMany({
             data: variants.map((v, idx) => ({
-              ownerType, ownerId, shop, mirrorBatchId: resolved.mirrorBatchId,
+              ownerType,
+              ownerId,
+              shop,
+              mirrorBatchId: resolved.mirrorBatchId,
               targetType: TARGET_TYPES.VARIANT,
               targetGranularity: normalized.targetGranularity,
               source,
@@ -1148,13 +1290,24 @@ async function resolveAndMaybeFreeze({
               ordinal: ordinal + idx,
               filterHash,
               beforeValues: {
-                title: v.title ?? null, sku: v.sku ?? null, barcode: v.barcode ?? null,
-                price: v.price?.toString?.() ?? null, compareAtPrice: v.compareAtPrice?.toString?.() ?? null,
-                inventoryQuantity: v.inventoryQuantity ?? null, inventoryItemId: v.inventoryItemId ?? null,
-                inventoryPolicy: v.inventoryPolicy ?? null, taxable: v.taxable ?? null, taxCode: v.taxCode ?? null,
-                cost: v.cost?.toString?.() ?? null, tracked: v.tracked ?? null, physicalProduct: v.physicalProduct ?? null,
-                option1Value: v.option1Value ?? null, option2Value: v.option2Value ?? null, option3Value: v.option3Value ?? null,
-                weight: v.weight ?? null, weightUnit: v.weightUnit ?? null,
+                title: v.title ?? null,
+                sku: v.sku ?? null,
+                barcode: v.barcode ?? null,
+                price: v.price?.toString?.() ?? null,
+                compareAtPrice: v.compareAtPrice?.toString?.() ?? null,
+                inventoryQuantity: v.inventoryQuantity ?? null,
+                inventoryItemId: v.inventoryItemId ?? null,
+                inventoryPolicy: v.inventoryPolicy ?? null,
+                taxable: v.taxable ?? null,
+                taxCode: v.taxCode ?? null,
+                cost: v.cost?.toString?.() ?? null,
+                tracked: v.tracked ?? null,
+                physicalProduct: v.physicalProduct ?? null,
+                option1Value: v.option1Value ?? null,
+                option2Value: v.option2Value ?? null,
+                option3Value: v.option3Value ?? null,
+                weight: v.weight ?? null,
+                weightUnit: v.weightUnit ?? null,
               },
             })),
             skipDuplicates: true,
@@ -1166,7 +1319,12 @@ async function resolveAndMaybeFreeze({
         if (rows.length < BATCH_SIZE) break;
       }
       const finalSnapshotCount = await db.targetSnapshot.count({
-        where: { shop, ownerType, ownerId, mirrorBatchId: resolved.mirrorBatchId },
+        where: {
+          shop,
+          ownerType,
+          ownerId,
+          mirrorBatchId: resolved.mirrorBatchId,
+        },
       });
       freezeStats = {
         resolvedCount: Number(resolved.count || 0),
@@ -1176,19 +1334,21 @@ async function resolveAndMaybeFreeze({
         finalSnapshotCount,
       };
     } else {
-      freezeStats = reusedSnapshot || await freezeTargetSnapshot({
-        ownerType,
-        ownerId,
-        shop,
-        source,
-        where: resolved.where,
-        mirrorBatchId: resolved.mirrorBatchId,
-        filterHash,
-        targetType,
-        targetGranularity: normalized.targetGranularity,
-        returnStats: true,
-        db,
-      });
+      freezeStats =
+        reusedSnapshot ||
+        (await freezeTargetSnapshot({
+          ownerType,
+          ownerId,
+          shop,
+          source,
+          where: resolved.where,
+          mirrorBatchId: resolved.mirrorBatchId,
+          filterHash,
+          targetType,
+          targetGranularity: normalized.targetGranularity,
+          returnStats: true,
+          db,
+        }));
     }
     freezeStats.resolvedCount = Number(resolved.count);
     freezeStats.snapshotChecksum = await computeTargetSnapshotChecksum({
@@ -1206,7 +1366,9 @@ async function resolveAndMaybeFreeze({
           resolvedCount: Number(resolved.count),
           attemptedInsertCount: Number(freezeStats.attemptedInsertCount || 0),
           insertedCount: Number(freezeStats.insertedCount || 0),
-          existingDuplicateCount: Number(freezeStats.existingDuplicateCount || 0),
+          existingDuplicateCount: Number(
+            freezeStats.existingDuplicateCount || 0
+          ),
           finalSnapshotCount: Number(freezeStats.finalSnapshotCount || 0),
           shop,
           ownerType,
@@ -1222,8 +1384,9 @@ async function resolveAndMaybeFreeze({
       ownerId,
       mirrorBatchId: resolved.mirrorBatchId,
     });
-    const distributionTotal = Number(targetTypeDistribution.PRODUCT || 0)
-      + Number(targetTypeDistribution.VARIANT || 0);
+    const distributionTotal =
+      Number(targetTypeDistribution.PRODUCT || 0) +
+      Number(targetTypeDistribution.VARIANT || 0);
     if (distributionTotal !== Number(freezeStats.finalSnapshotCount || 0)) {
       throw new TargetingValidationError("TARGET_TYPE_DISTRIBUTION_MISMATCH", {
         code: "TARGET_TYPE_DISTRIBUTION_MISMATCH",
@@ -1282,7 +1445,11 @@ async function resolveAndMaybeFreeze({
     });
   }
 
-  if (!freeze && Array.isArray(legacyFilterParams) && legacyFilterParams.length > 0) {
+  if (
+    !freeze &&
+    Array.isArray(legacyFilterParams) &&
+    legacyFilterParams.length > 0
+  ) {
     try {
       const legacyResolved = await resolveCanonicalTarget({
         shop,
@@ -1425,7 +1592,8 @@ export const TargetingEngineService = {
       flow: "EXECUTION",
       freeze: true,
       allowLegacyFilterParams: false,
-      requireBroadTargetConfirmation: input?.requireBroadTargetConfirmation === true,
+      requireBroadTargetConfirmation:
+        input?.requireBroadTargetConfirmation === true,
       confirmBroadTarget: input?.confirmBroadTarget === true,
       ...input,
     });
@@ -1436,7 +1604,8 @@ export const TargetingEngineService = {
       flow: "EXPORT",
       freeze: true,
       allowLegacyFilterParams: false,
-      targetingModeOverride: input?.targetingModeOverride || TARGETING_MODES.DYNAMIC_AT_RUN,
+      targetingModeOverride:
+        input?.targetingModeOverride || TARGETING_MODES.DYNAMIC_AT_RUN,
       targetingSnapshotMetaOverride: input?.targetingSnapshotMetaOverride || {
         source: input?.source || "EXPORT",
         semantics: TARGETING_MODES.DYNAMIC_AT_RUN,
@@ -1460,7 +1629,8 @@ export const TargetingEngineService = {
   },
 
   async resolveAndFreezeRecurringRunTargets(input) {
-    const allowLegacyForRecurring = !input?.filterAst && Array.isArray(input?.legacyFilterParams);
+    const allowLegacyForRecurring =
+      !input?.filterAst && Array.isArray(input?.legacyFilterParams);
     return resolveAndMaybeFreeze({
       flow: "RECURRING",
       freeze: true,
@@ -1474,4 +1644,3 @@ export const TargetingEngineService = {
     });
   },
 };
-

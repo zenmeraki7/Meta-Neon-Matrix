@@ -272,6 +272,7 @@ export async function getStoreSyncDetailsByShop(shop) {
       storeTotalProducts: true,
       isProductSyncing: true,
       lastProductSyncAt: true,
+      productSyncStartedAt: true,
       activeMirrorBatchId: true,
     },
   });
@@ -288,6 +289,7 @@ export async function getStoreSyncSummaryByShop(shop) {
       storeTotalProducts: true,
       isProductSyncing: true,
       lastProductSyncAt: true,
+      productSyncStartedAt: true,
       activeMirrorBatchId: true,
     },
   });
@@ -307,6 +309,7 @@ export async function getStoreTrackedProductSyncByShop(shop) {
       syncProgressStage: true,
       lastSyncErrorSummary: true,
       lastProductSyncAt: true,
+      productSyncStartedAt: true,
     },
   });
 }

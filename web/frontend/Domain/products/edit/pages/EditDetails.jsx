@@ -648,8 +648,7 @@ const undoBadge = undoStatus
       ? "warning"
       : "primary"
   }
-/>={primaryStatus.key === "failed" ? "critical" : primaryStatus.key === "partial" ? "warning" : "primary"}
-                />
+/>
 
                 <InlineStack align="space-between">
                   <Text tone="subdued">

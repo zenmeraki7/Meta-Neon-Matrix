@@ -681,6 +681,8 @@ export async function activateProductMirrorBatch({
         storeTotalProducts: finalProductCount,
         productInitialSyncProgress: finalProductCount,
         lastProductSyncAt: completedAt,
+        productSyncStartedAt: null,
+        productSyncRecoveryRequired: false,
       },
     });
     if (storeActivated.count !== 1) {
@@ -706,6 +708,7 @@ export async function activateProductMirrorBatch({
           status: "completed",
           stage: "MIRROR_ACTIVATED",
           recordCount: finalProductCount,
+          completedAt,
           updatedAt: completedAt,
         },
       });
@@ -804,7 +807,7 @@ export async function activateProductMirrorBatch({
       where: { shop, status: "pending" },
       data: {
         status: "resolved",
-        resolvedAt: completedAt,
+        reconciledAt: completedAt,
         updatedAt: completedAt,
       },
     });

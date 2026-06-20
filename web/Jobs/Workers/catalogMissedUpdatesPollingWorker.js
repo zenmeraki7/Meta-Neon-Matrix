@@ -208,7 +208,7 @@ async function getPollingReadiness() {
   for (const table of REQUIRED_TABLES) {
     // eslint-disable-next-line no-await-in-loop
     const rows = await db.$queryRaw`
-      SELECT to_regclass(${`public.${table}`}) AS regclass
+      SELECT to_regclass(${`public.${table}`})::text AS regclass
     `;
     if (!rows?.[0]?.regclass) {
       missingTables.push(table);
@@ -276,7 +276,12 @@ async function registerRepeatableTick() {
   }
 }
 
-await registerRepeatableTick();
+await registerRepeatableTick().catch((error) => {
+  logger.error("Catalog missed-updates polling scheduler registration failed", {
+    worker: "catalogMissedUpdatesPollingWorker",
+    message: error?.message || String(error),
+  });
+});
 
 export default catalogMissedUpdatesPollingWorker;
 

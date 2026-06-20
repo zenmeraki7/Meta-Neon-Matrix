@@ -310,3 +310,56 @@ export const targetFreezeQueue = new Queue(process.env.TARGET_FREEZE_QUEUE || "t
     removeOnFail: { age: 30 * 24 * 3600, count: 10_000 },
   }),
 });
+
+export const bulkEditItemApplyQueue = new Queue(
+  process.env.BULK_EDIT_ITEM_APPLY_QUEUE || "bulk-edit-item-apply",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 5,
+      priority: 7,
+      backoffDelay: 2_000,
+      removeOnComplete: { age: 24 * 3600, count: 2_000 },
+      removeOnFail: { age: 14 * 24 * 3600, count: 10_000 },
+    }),
+  },
+);
+
+export const bulkEditItemApplyDlqQueue = new Queue(
+  process.env.BULK_EDIT_ITEM_APPLY_DLQ_QUEUE || "bulk-edit-item-apply-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
+
+export const bulkEditPipelineDlqQueue = new Queue(
+  process.env.BULK_EDIT_PIPELINE_DLQ_QUEUE || "bulk-edit-pipeline-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);
+
+export const bulkEditVerificationDlqQueue = new Queue(
+  process.env.BULK_EDIT_VERIFICATION_DLQ_QUEUE || "bulk-edit-verification-dlq",
+  {
+    connection,
+    defaultJobOptions: buildDefaultJobOptions({
+      attempts: 1,
+      backoffDelay: 0,
+      removeOnComplete: { age: 7 * 24 * 3600, count: 5_000 },
+      removeOnFail: { age: 30 * 24 * 3600, count: 20_000 },
+    }),
+  },
+);

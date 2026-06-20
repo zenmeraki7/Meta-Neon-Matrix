@@ -166,6 +166,9 @@ export async function markFullSyncCompleted({
       shopifyBulkJobCompleted: true,
       storeTotalProducts: productCount,
       productInitialSyncProgress: productCount,
+      lastProductSyncAt: reconciliationAt,
+      productSyncStartedAt: null,
+      productSyncRecoveryRequired: false,
     },
   });
   return tx.store.findUnique({ where: { shopUrl: shop } });

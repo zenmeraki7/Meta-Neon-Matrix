@@ -12,9 +12,10 @@
     "start:worker": "cross-env WORKER_PROCESS=true node worker.js",
     "worker": "npm run start:worker",
     "debug": "node --inspect-brk index.js",
-    "dev": "cross-env NODE_ENV=development nodemon index.js --ignore ./frontend",
-    "serve": "cross-env NODE_ENV=production node server.js"
-    ,
+    "dev": "concurrently -k -n web,worker \"npm:dev:web\" \"npm:dev:worker\"",
+    "dev:web": "cross-env NODE_ENV=development WEB_PROCESS=true nodemon index.js --ignore ./frontend",
+    "dev:worker": "cross-env NODE_ENV=development WORKER_PROCESS=true nodemon worker.js --ignore ./frontend",
+    "serve": "cross-env NODE_ENV=production node server.js",
     "migrate:deploy": "prisma migrate deploy --schema=./prisma/schema.prisma",
     "migrate:deploy:safe": "node ./scripts/migrateWithNeonBackup.js"
   },
@@ -93,6 +94,7 @@
     "zod": "^3.25.55"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
     "nodemon": "^3.1.7",

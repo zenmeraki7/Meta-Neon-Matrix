@@ -31,8 +31,8 @@
     "@shopify/i18next-shopify": "^0.2.9",
     "@shopify/polaris": "^13.9.5",
     "@shopify/polaris-icons": "^9.3.1",
-    "@tanstack/react-virtual": "^3.10.8",
     "@tanstack/react-query": "^5.85.5",
+    "@tanstack/react-virtual": "^3.10.8",
     "dotenv": "^16.4.5",
     "i18next": "^23.16.8",
     "i18next-browser-languagedetector": "^8.2.0",
@@ -55,6 +55,7 @@
   "devDependencies": {
     "@babel/preset-flow": "^7.27.1",
     "@shopify/stylelint-polaris": "^12.0.0",
+    "@types/express": "^5.0.6",
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^4.7.0",
     "eslint": "^9.31.0",

@@ -16,6 +16,7 @@ import {
   normalizeProductsBootstrapQuery,
 } from "../normalizers/bootstrapQueryNormalizer.js";
 import { toBootstrapSummaryDto } from "../dtos/bootstrapDto.js";
+import { setPrivateNoStore } from "../http/cacheHeaders.js";
 
 function isRecoverableProductListBootstrapError(error) {
   const message = String(error?.message || "");
@@ -70,6 +71,7 @@ export async function getProductsBootstrap(req, res) {
   try {
     session = requireShopifySession(res);
     const actor = buildAuthenticatedActor(req, session);
+    setPrivateNoStore(res);
     const query = normalizeProductsBootstrapQuery(req, session);
     const { limit } = query;
 
@@ -119,6 +121,7 @@ export async function getDashboardBootstrap(req, res) {
   try {
     session = requireShopifySession(res);
     const query = normalizeDashboardBootstrapQuery(session);
+    setPrivateNoStore(res);
     const { shop } = query;
 
     const [storeDetails, syncSummaryResponse, operationSummary, planSnapshot] = await Promise.all([

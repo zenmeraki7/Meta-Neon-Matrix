@@ -1246,6 +1246,60 @@ model ChangeRecord {
   @@unique([shop, editHistoryId, batchId, targetIdentity], map: "uniq_change_record_shop_history_batch_target")
 }
 
+model BulkApplyRequest {
+  id             String   @id @default(cuid())
+  shop           String
+  bulkJobId      String
+  idempotencyKey String
+  status         String   @default("QUEUED")
+
+  totalCount     Int      @default(0)
+  appliedCount   Int      @default(0)
+  failedCount    Int      @default(0)
+  cancelledCount Int      @default(0)
+  skippedCount   Int      @default(0)
+
+  lastError      String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([shop, bulkJobId, idempotencyKey])
+  @@index([shop, bulkJobId])
+  @@index([shop, status])
+}
+
+model BulkApplyItem {
+  id         String   @id @default(cuid())
+  shop       String
+  bulkJobId  String
+  productId  String
+  status     String   @default("PENDING")
+  error      String?
+  attempt    Int      @default(0)
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([shop, bulkJobId, productId])
+  @@index([shop, bulkJobId])
+  @@index([shop, status])
+}
+
+model ProductApplySnapshot {
+  id        String   @id @default(cuid())
+  shop      String
+  bulkJobId String
+  productId String
+  before    Json
+  createdAt DateTime @default(now())
+
+  @@unique([shop, bulkJobId, productId])
+  @@index([shop, bulkJobId])
+}
+
 model BulkSubmission {
   id                 String   @id @default(cuid())
   shop               String

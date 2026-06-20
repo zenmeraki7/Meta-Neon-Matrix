@@ -37,6 +37,7 @@ const DEFAULT_STORE_SYNC_STATE = Object.freeze({
   storeTotalProducts: 0,
   isProductSyncing: false,
   lastProductSyncAt: null,
+  productSyncStartedAt: null,
   activeMirrorBatchId: null,
 });
 
@@ -117,6 +118,7 @@ function toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCo
     storeTotalProducts: storeState.storeTotalProducts,
     isProductSyncing: storeState.isProductSyncing,
     lastProductSyncAt: storeState.lastProductSyncAt,
+    productSyncStartedAt: storeState.productSyncStartedAt,
     activeMirrorBatchId: storeState.activeMirrorBatchId,
     latestSync,
     ...buildProductSyncTruth({
@@ -139,6 +141,7 @@ function toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productC
     storeTotalProducts: storeState.storeTotalProducts,
     isProductSyncing: storeState.isProductSyncing,
     lastProductSyncAt: storeState.lastProductSyncAt,
+    productSyncStartedAt: storeState.productSyncStartedAt,
     activeMirrorBatchId: storeState.activeMirrorBatchId,
     latestSync: latestSync
       ? {

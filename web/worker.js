@@ -20,7 +20,6 @@ const requiredEnv = [
   "SHOPIFY_API_SECRET",
   "HOST",
   "DATABASE_URL",
-  "SCOPES",
 ];
 
 const missing = requiredEnv.filter((key) => !process.env[key]);
@@ -61,6 +60,7 @@ const workerModulePaths = [
   "./Jobs/Workers/productDeleteWorker.js",
   "./Jobs/Workers/productSyncWorker.js",
   "./Jobs/Workers/productSyncClearProductTypesWorker.js",
+  "./Jobs/Workers/metafieldBulkWriteWorker.js",
   "./Jobs/Workers/operationEnqueueIntentRecoveryWorker.js",
   "./Jobs/Workers/recurringEditExecutionWorker.js",
   "./Jobs/Workers/recurringEditSchedulerWorker.js",

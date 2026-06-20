@@ -1,9 +1,7 @@
 import { Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
-import {
-  AUTOMATIC_PRODUCT_RULE_EXECUTION_QUEUE,
-  executeAutomaticProductRuleRun,
-} from "../../services/automaticProductRuleExecutionService.js";
+import { executeAutomaticProductRuleRun } from "../../services/automaticProductRuleExecutionService.js";
+import { AUTOMATIC_PRODUCT_RULE_EXECUTION_QUEUE } from "../../queues/adapters/automaticRuleQueueAdapter.js";
 import logger from "../../utils/loggerUtils.js";
 import {
   getJobAttempt,

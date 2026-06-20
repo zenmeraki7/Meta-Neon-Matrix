@@ -1,25 +1,26 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "6c1a39944a4ab6bdd6e4428ccceb028b"
-name = "new"
-application_url = "https://appreciate-explosion-abc-allows.trycloudflare.com"
+client_id = "6f9d8710bcea15a9a7814c24bb5404be"
+application_url = "https://deviation-phd-surgery-lands.trycloudflare.com/"
 embedded = true
-handle = "new-270"
+name = "new"
 
 [webhooks]
-api_version = "2025-10"
+api_version = "2026-01"
 
   [[webhooks.subscriptions]]
-  topics = [ "products/create", "bulk_operations/finish" ]
   uri = "/api/webhooks"
+  topics = [ "bulk_operations/finish" ]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_inventory,read_locations,read_metaobjects,read_products,write_products"
+scopes = "read_inventory,read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://appreciate-explosion-abc-allows.trycloudflare.com/api/auth/callback"
+  "https://deviation-phd-surgery-lands.trycloudflare.com/auth/callback",
+  "https://deviation-phd-surgery-lands.trycloudflare.com/auth/shopify/callback",
+  "https://deviation-phd-surgery-lands.trycloudflare.com/api/auth/callback"
 ]
 
 [build]

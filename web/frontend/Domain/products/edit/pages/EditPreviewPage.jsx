@@ -1,9 +1,4 @@
-import React, {
-  useState,
-  useCallback,
-  useMemo,
-  useEffect,
-} from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import {
   Page,
   Layout,
@@ -15,7 +10,6 @@ import {
   Banner,
   InlineStack,
   Badge,
-  Modal,
   TextField,
   IndexTable,
   Pagination,
@@ -105,7 +99,7 @@ function getProductRowId(product) {
       product?.adminGraphqlApiId ||
       product?.gid ||
       product?.id ||
-      "",
+      ""
   ).trim();
 }
 
@@ -140,7 +134,9 @@ function getCurrentFieldValue(product, field) {
     case "status":
       return product?.status;
     case "tags":
-      return Array.isArray(product?.tags) ? product.tags.join(", ") : product?.tags;
+      return Array.isArray(product?.tags)
+        ? product.tags.join(", ")
+        : product?.tags;
     default:
       return product?.[field];
   }
@@ -183,7 +179,9 @@ function MatchingProductsTable({
       const currentVariants = Array.isArray(variantsByProductId?.[productId])
         ? variantsByProductId[productId]
         : [];
-      const sourceVariants = previewVariants.length ? previewVariants : currentVariants;
+      const sourceVariants = previewVariants.length
+        ? previewVariants
+        : currentVariants;
 
       if (!sourceVariants.length) {
         rows.push({
@@ -197,12 +195,18 @@ function MatchingProductsTable({
       }
 
       for (const variant of sourceVariants) {
-        const variantId = String(variant?.variantId || variant?.id || "").trim();
+        const variantId = String(
+          variant?.variantId || variant?.id || ""
+        ).trim();
         rows.push({
           key: variantId || `${productId}:variant-${rows.length}`,
           product,
           variantTitle: variant?.title || "Default Title",
-          currentValue: variant?.oldValue?.displayText ?? variant?.oldValue ?? variant?.price ?? null,
+          currentValue:
+            variant?.oldValue?.displayText ??
+            variant?.oldValue ??
+            variant?.price ??
+            null,
           newValue: variant?.newValue?.displayText ?? variant?.newValue ?? null,
         });
       }
@@ -279,8 +283,12 @@ function MatchingProductsTable({
                     ) : null}
                   </BlockStack>
                 </IndexTable.Cell>
-                <IndexTable.Cell>{formatCellValue(row.currentValue)}</IndexTable.Cell>
-                <IndexTable.Cell>{formatCellValue(row.newValue)}</IndexTable.Cell>
+                <IndexTable.Cell>
+                  {formatCellValue(row.currentValue)}
+                </IndexTable.Cell>
+                <IndexTable.Cell>
+                  {formatCellValue(row.newValue)}
+                </IndexTable.Cell>
               </IndexTable.Row>
             ))}
           </IndexTable>
@@ -327,7 +335,11 @@ function MatchingProductsTable({
           const rowId = getProductRowId(product);
           const previewRow = previewByProductId.get(rowId);
           return (
-            <IndexTable.Row id={rowId || `product-${index}`} key={rowId || index} position={index}>
+            <IndexTable.Row
+              id={rowId || `product-${index}`}
+              key={rowId || index}
+              position={index}
+            >
               <IndexTable.Cell>
                 <ProductCell
                   title={product?.title || ""}
@@ -342,13 +354,23 @@ function MatchingProductsTable({
               <IndexTable.Cell>
                 <StatusBadge status={product?.status} />
               </IndexTable.Cell>
-              <IndexTable.Cell>{formatCellValue(product?.totalInventory)}</IndexTable.Cell>
-              <IndexTable.Cell>{formatCellValue(product?.productType)}</IndexTable.Cell>
-              <IndexTable.Cell>{formatCellValue(product?.vendor)}</IndexTable.Cell>
               <IndexTable.Cell>
-                {formatCellValue(previewRow?.oldValue ?? getCurrentFieldValue(product, field))}
+                {formatCellValue(product?.totalInventory)}
               </IndexTable.Cell>
-              <IndexTable.Cell>{formatCellValue(previewRow?.newValue)}</IndexTable.Cell>
+              <IndexTable.Cell>
+                {formatCellValue(product?.productType)}
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                {formatCellValue(product?.vendor)}
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                {formatCellValue(
+                  previewRow?.oldValue ?? getCurrentFieldValue(product, field)
+                )}
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                {formatCellValue(previewRow?.newValue)}
+              </IndexTable.Cell>
             </IndexTable.Row>
           );
         })}
@@ -403,13 +425,17 @@ function resolveEditTypeSelection(selectedField, selection) {
 function getDefaultEditTypeValue(field) {
   const actions = Array.isArray(field?.actions) ? field.actions : [];
   if (!actions.length) return null;
-  const preferred = actions.find((action) => action?.value === "Set to fixed value");
+  const preferred = actions.find(
+    (action) => action?.value === "Set to fixed value"
+  );
   return (preferred || actions[0])?.value || null;
 }
 
 function getRunEditHistoryId(response) {
   const data =
-    response?.data && typeof response.data === "object" && !Array.isArray(response.data)
+    response?.data &&
+    typeof response.data === "object" &&
+    !Array.isArray(response.data)
       ? response.data
       : {};
   const candidate =
@@ -444,9 +470,11 @@ export default function EditPreviewPage() {
     filterRegistryFallbackReason === "error" ||
     filterRegistryFallbackReason === "malformed";
 
-  const [selectedField, setSelectedField] = useState(getFieldDefinition("price"));
+  const [selectedField, setSelectedField] = useState(
+    getFieldDefinition("price")
+  );
   const [editTypeValue, setEditTypeValue] = useState(() =>
-    getDefaultEditTypeValue(getFieldDefinition("price")),
+    getDefaultEditTypeValue(getFieldDefinition("price"))
   );
   const [rounding, setRounding] = useState("NONE");
   const [draftInputValue, setDraftInputValue] = useState(null);
@@ -475,9 +503,6 @@ export default function EditPreviewPage() {
     scheduleEdit: false,
     recurringEdit: false,
   });
-  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
-  const [confirmText, setConfirmText] = useState("");
-  const [pendingConfirmRun, setPendingConfirmRun] = useState(false);
   const debouncedInputValue = useDebouncedValue(draftInputValue, {
     delay: 600,
   });
@@ -527,32 +552,33 @@ export default function EditPreviewPage() {
     setPagination((current) => ({ ...current, page: 1 }));
   }, [selectedField]);
 
-  const handleFieldChange = useCallback(
-    (nextField) => {
-      const resolvedField = resolveFieldSelection(nextField);
-      setSelectedField(resolvedField);
-      setEditTypeValue(getDefaultEditTypeValue(resolvedField));
-      setRounding("NONE");
-      setDraftInputValue(null);
-      setInputValue(null);
-      setSupportValue(null);
-      setDraftSearchReplace({ search: "", replace: "" });
-      setSearchReplace({ search: "", replace: "" });
-      setLocationValue("");
-      setDestructiveConfirmationValue("");
-      setLimitWarning(null);
-      setPagination((current) => ({ ...current, page: 1 }));
-    },
-    [],
-  );
+  const handleFieldChange = useCallback((nextField) => {
+    const resolvedField = resolveFieldSelection(nextField);
+    setSelectedField(resolvedField);
+    setEditTypeValue(getDefaultEditTypeValue(resolvedField));
+    setRounding("NONE");
+    setDraftInputValue(null);
+    setInputValue(null);
+    setSupportValue(null);
+    setDraftSearchReplace({ search: "", replace: "" });
+    setSearchReplace({ search: "", replace: "" });
+    setLocationValue("");
+    setDestructiveConfirmationValue("");
+    setLimitWarning(null);
+    setPagination((current) => ({ ...current, page: 1 }));
+  }, []);
 
   const editType = useMemo(
     () => resolveEditTypeSelection(selectedField, editTypeValue),
-    [editTypeValue, selectedField],
+    [editTypeValue, selectedField]
   );
 
-  const handleEditTypeChange = useCallback((nextEditTypeValue) => {
-      const nextEditType = resolveEditTypeSelection(selectedField, nextEditTypeValue);
+  const handleEditTypeChange = useCallback(
+    (nextEditTypeValue) => {
+      const nextEditType = resolveEditTypeSelection(
+        selectedField,
+        nextEditTypeValue
+      );
       if (!nextEditType) {
         setEditTypeValue(null);
         return;
@@ -568,7 +594,9 @@ export default function EditPreviewPage() {
       setDestructiveConfirmationValue("");
       setLimitWarning(null);
       setPagination((current) => ({ ...current, page: 1 }));
-    }, [selectedField]);
+    },
+    [selectedField]
+  );
 
   const isPercentage = editType?.valueKind === ValueKind.PERCENTAGE;
   const isFixedValue =
@@ -584,12 +612,12 @@ export default function EditPreviewPage() {
         numericKind,
         maxPercentage,
       }),
-    [isPercentage, isFixedValue, maxPercentage, numericKind],
+    [isPercentage, isFixedValue, maxPercentage, numericKind]
   );
 
   const submitError = useFieldValidation(
     draftInputValue,
-    submitValidationRules,
+    submitValidationRules
   );
 
   const shouldHideEditTypeSelector =
@@ -602,7 +630,7 @@ export default function EditPreviewPage() {
         filters,
         searchQuery: search,
       }),
-    [filters, location.state, search],
+    [filters, location.state, search]
   );
 
   const effectiveFilters = productTargeting.filters;
@@ -619,7 +647,7 @@ export default function EditPreviewPage() {
   });
   const matchingProductIds = useMemo(
     () => matchingProductsQuery.products.map(getProductRowId).filter(Boolean),
-    [matchingProductsQuery.products],
+    [matchingProductsQuery.products]
   );
   const variantsQuery = useQuery({
     queryKey: ["edit-matching-variants", matchingProductIds.join("|")],
@@ -631,7 +659,7 @@ export default function EditPreviewPage() {
           limit: 500,
           productIds: matchingProductIds,
         },
-        { signal },
+        { signal }
       ),
     staleTime: 10_000,
     retry: 1,
@@ -685,11 +713,11 @@ export default function EditPreviewPage() {
   });
   const currentPreviewSignature = useMemo(
     () => createEditPreviewPayloadHash(previewQueryPayload),
-    [previewQueryPayload],
+    [previewQueryPayload]
   );
   const currentPreviewRequestKey = useMemo(
     () => createEditPreviewRequestKey(previewQueryPayload),
-    [previewQueryPayload],
+    [previewQueryPayload]
   );
 
   const previewQuery = useEditPreviewQuery({
@@ -702,20 +730,24 @@ export default function EditPreviewPage() {
   });
   const previewValidationErrors = useMemo(
     () => extractFieldErrors(previewQuery.error),
-    [previewQuery.error],
+    [previewQuery.error]
   );
 
   useEffect(() => {
     if (previewQuery.error) {
       const fieldError = previewValidationErrors[0]?.message;
-      showError(fieldError || toSafeErrorMessage(t, previewQuery.error, "common.errors.generic"));
+      showError(
+        fieldError ||
+          toSafeErrorMessage(t, previewQuery.error, "common.errors.generic")
+      );
     }
   }, [previewQuery.error, previewValidationErrors, showError, t]);
 
   const previewData = previewQuery.data || null;
   const products = useMemo(
-    () => (Array.isArray(previewData?.rows) ? previewData.rows : EMPTY_PREVIEW_ROWS),
-    [previewData?.rows],
+    () =>
+      Array.isArray(previewData?.rows) ? previewData.rows : EMPTY_PREVIEW_ROWS,
+    [previewData?.rows]
   );
   const isVariant = previewData?.isVariant === true;
   const loading = previewQuery.isLoading || previewQuery.isFetching;
@@ -741,7 +773,9 @@ export default function EditPreviewPage() {
     }
     setPagination((current) => {
       const nextPage = Number(previewData.pagination.page || current.page || 1);
-      const nextLimit = Number(previewData.pagination.limit || current.limit || 10);
+      const nextLimit = Number(
+        previewData.pagination.limit || current.limit || 10
+      );
       if (nextPage === current.page && nextLimit === current.limit) {
         return current;
       }
@@ -768,29 +802,40 @@ export default function EditPreviewPage() {
   }, [editType, draftInputValue, searchReplace?.search, selectedField]);
   const hasFreshPreview = Boolean(
     previewFingerprint?.previewId &&
+      previewFingerprint?.filterHash &&
+      previewFingerprint?.mirrorBatchId &&
+      previewRegistryVersion?.fieldRegistryVersion &&
+      previewRegistryVersion?.operatorRegistryVersion &&
       previewRequestKey &&
-      previewRequestKey === currentPreviewRequestKey,
+      previewRequestKey === currentPreviewRequestKey
   );
   const shouldShowPreviewStale = hasGeneratedPreview && !hasFreshPreview;
   const matchingTotal = Number(matchingProductsQuery.totalCount || 0);
-  const displayedMatchingTotal = hasGeneratedPreview ? previewTotal : matchingTotal;
+  const displayedMatchingTotal = hasGeneratedPreview
+    ? previewTotal
+    : matchingTotal;
   const hasBlockedPreviewRows = useMemo(
     () =>
       products.some((product) => {
         const productStatus = String(product?.status || "").toUpperCase();
-        if (["BLOCKED", "ERROR"].includes(productStatus) || Boolean(product?.warning)) {
+        if (
+          ["BLOCKED", "ERROR"].includes(productStatus) ||
+          Boolean(product?.warning)
+        ) {
           return true;
         }
 
         return (
           Array.isArray(product?.variants) &&
-          product.variants.some((variant) =>
-            ["BLOCKED", "ERROR"].includes(String(variant?.status || "").toUpperCase()) ||
-            Boolean(variant?.warning),
+          product.variants.some(
+            (variant) =>
+              ["BLOCKED", "ERROR"].includes(
+                String(variant?.status || "").toUpperCase()
+              ) || Boolean(variant?.warning)
           )
         );
       }),
-    [products],
+    [products]
   );
   const hasRunnablePreviewRows = useMemo(
     () =>
@@ -802,11 +847,11 @@ export default function EditPreviewPage() {
         return (
           Array.isArray(product?.variants) &&
           product.variants.some(
-            (variant) => String(variant?.status || "").toUpperCase() === "READY",
+            (variant) => String(variant?.status || "").toUpperCase() === "READY"
           )
         );
       }),
-    [products],
+    [products]
   );
   const hasPreviewRegistryMismatch = Boolean(
     previewRegistryVersion &&
@@ -814,45 +859,56 @@ export default function EditPreviewPage() {
       (String(previewRegistryVersion.fieldRegistryVersion || "") !==
         String(filterRegistryVersions.fieldRegistryVersion || "") ||
         String(previewRegistryVersion.operatorRegistryVersion || "") !==
-          String(filterRegistryVersions.operatorRegistryVersion || "")),
+          String(filterRegistryVersions.operatorRegistryVersion || ""))
   );
-  const requiresLocationSelection = editType?.inputType === InputType.LOCATION_SELECT;
-  const hasRequiredLocation = !requiresLocationSelection || Boolean(locationValue);
+  const requiresLocationSelection =
+    editType?.inputType === InputType.LOCATION_SELECT;
+  const hasRequiredLocation =
+    !requiresLocationSelection || Boolean(locationValue);
 
   const executeBulkEdit = useCallback(
     async (confirmBroadTarget) => {
       const json = await api.post(
         `/api/products/update?lang=${i18n.language}`,
         {
-        field: selectedField.value,
-        operation: toCanonicalEditOperation(editType.value),
-        value: inputValue,
-        ...(searchReplace.search ? { searchKey: searchReplace.search } : {}),
-        ...(searchReplace.replace ? { replaceText: searchReplace.replace } : {}),
-        location: locationValue,
-        rounding,
-        filterParams: effectiveFilters,
-        previewId: previewFingerprint?.previewId || null,
-        previewFilterHash: previewFingerprint?.filterHash || null,
-        previewMirrorBatchId: previewFingerprint?.mirrorBatchId || null,
-        previewFieldRegistryVersion: previewRegistryVersion?.fieldRegistryVersion || null,
-        previewOperatorRegistryVersion: previewRegistryVersion?.operatorRegistryVersion || null,
-        previewSignature,
-        confirmBroadTarget,
-        ...(supportValue !== null && supportValue !== undefined ? { supportValue } : {}),
+          field: selectedField.value,
+          operation: toCanonicalEditOperation(editType.value),
+          value: inputValue,
+          ...(searchReplace.search ? { searchKey: searchReplace.search } : {}),
+          ...(searchReplace.replace
+            ? { replaceText: searchReplace.replace }
+            : {}),
+          location: locationValue,
+          rounding,
+          filterParams: effectiveFilters,
+          previewId: previewFingerprint?.previewId || null,
+          previewFilterHash: previewFingerprint?.filterHash || null,
+          previewMirrorBatchId: previewFingerprint?.mirrorBatchId || null,
+          previewFieldRegistryVersion:
+            previewRegistryVersion?.fieldRegistryVersion || null,
+          previewOperatorRegistryVersion:
+            previewRegistryVersion?.operatorRegistryVersion || null,
+          previewSignature,
+          confirmBroadTarget,
+          ...(supportValue !== null && supportValue !== undefined
+            ? { supportValue }
+            : {}),
         },
-        { idempotent: true },
+        { idempotent: true }
       );
       showSuccess(
-        t("bulkEditStartedToast", { defaultValue: "Bulk edit started" }),
+        t("bulkEditStartedToast", { defaultValue: "Bulk edit started" })
       );
       const historyId = getRunEditHistoryId(json);
       if (!historyId) {
-        console.error("[bulk-edit] missing history id in update response", json);
+        console.error(
+          "[bulk-edit] missing history id in update response",
+          json
+        );
         showError(
           t("bulkEditMissingHistoryIdError", {
             defaultValue: "Edit started, but no history ID was returned.",
-          }),
+          })
         );
         return;
       }
@@ -879,7 +935,7 @@ export default function EditPreviewPage() {
       showError,
       supportValue,
       t,
-    ],
+    ]
   );
 
   const handleRunEdit = async () => {
@@ -896,15 +952,16 @@ export default function EditPreviewPage() {
       editType?.inputType === InputType.SEARCH_REPLACE &&
       !draftSearchReplace.search?.trim()
     ) {
-      showError(t("bulkEditSearchReplaceSearchRequired"))
+      showError(t("bulkEditSearchReplaceSearchRequired"));
       return;
     }
 
     if (!hasRequiredLocation) {
       showError(
         t("bulkEditLocationRequiredError", {
-          defaultValue: "Select a location before running this inventory update.",
-        }),
+          defaultValue:
+            "Select a location before running this inventory update.",
+        })
       );
       return;
     }
@@ -914,7 +971,7 @@ export default function EditPreviewPage() {
         t("errors.confirmationMismatch", {
           phrase: fieldConfirmationPhrase,
           defaultValue: "You must type {{phrase}} exactly.",
-        }),
+        })
       );
       return;
     }
@@ -926,12 +983,14 @@ export default function EditPreviewPage() {
       previewTotal < 1 ||
       !hasRunnablePreviewRows ||
       hasBlockedPreviewRows
-    ) return;
+    )
+      return;
     if (hasPreviewRegistryMismatch) {
       showError(
         t("bulkEditPreviewRegistryChangedError", {
-          defaultValue: "Filter registry changed. Refresh preview before executing.",
-        }),
+          defaultValue:
+            "Filter registry changed. Refresh preview before executing.",
+        })
       );
       return;
     }
@@ -940,18 +999,9 @@ export default function EditPreviewPage() {
     setLimitWarning(null);
 
     try {
-      if (requiresBroadConfirmation) {
-        setConfirmModalOpen(true);
-        setSubmitting(false);
-        return;
-      }
-      await executeBulkEdit(false);
+      await executeBulkEdit(requiresBroadConfirmation);
     } catch (err) {
-      const safeMessage = toSafeErrorMessage(
-        t,
-        err,
-        "common.errors.generic",
-      );
+      const safeMessage = toSafeErrorMessage(t, err, "common.errors.generic");
       if (err?.status === 400 && safeMessage.toLowerCase().includes("plan")) {
         setLimitWarning(safeMessage);
         showError(safeMessage, { duration: 6000 });
@@ -963,23 +1013,6 @@ export default function EditPreviewPage() {
     }
   };
 
-  const handleConfirmAndRun = useCallback(async () => {
-    if (confirmText.trim().toUpperCase() !== "CONFIRM") return;
-    setPendingConfirmRun(true);
-    try {
-      await executeBulkEdit(true);
-      setConfirmModalOpen(false);
-      setConfirmText("");
-    } catch (err) {
-      showError(
-        toSafeErrorMessage(t, err, "common.errors.generic"),
-      );
-    } finally {
-      setPendingConfirmRun(false);
-      setSubmitting(false);
-    }
-  }, [confirmText, executeBulkEdit]);
-
   const handleHideScheduleModal = useCallback(() => {
     setModalState((current) => ({ ...current, scheduleEdit: false }));
   }, []);
@@ -988,19 +1021,19 @@ export default function EditPreviewPage() {
     setModalState((current) => ({ ...current, recurringEdit: false }));
   }, []);
 
-const summaryText = useMemo(() => {
-  if (loading) {
-    return t("loadingProductsPreview");
-  }
+  const summaryText = useMemo(() => {
+    if (loading) {
+      return t("loadingProductsPreview");
+    }
 
-  if (displayedMatchingTotal > 0) {
-    return hasGeneratedPreview
-      ? `${displayedMatchingTotal} ${t("productsReadyToEdit")}`
-      : `${displayedMatchingTotal} matching products`;
-  }
+    if (displayedMatchingTotal > 0) {
+      return hasGeneratedPreview
+        ? `${displayedMatchingTotal} ${t("productsReadyToEdit")}`
+        : `${displayedMatchingTotal} matching products`;
+    }
 
-  return t("noProductsMatch");
-}, [displayedMatchingTotal, hasGeneratedPreview, loading, t]);
+    return t("noProductsMatch");
+  }, [displayedMatchingTotal, hasGeneratedPreview, loading, t]);
 
   return (
     <Page
@@ -1023,16 +1056,17 @@ const summaryText = useMemo(() => {
           !canRunEdit ||
           !hasFreshPreview ||
           previewTotal < 1 ||
-      !hasRunnablePreviewRows ||
-      hasPreviewRegistryMismatch ||
-      hasBlockedPreviewRows ||
-      !hasRequiredLocation ||
+          !hasRunnablePreviewRows ||
+          hasPreviewRegistryMismatch ||
+          hasBlockedPreviewRows ||
+          !hasRequiredLocation ||
           !hasRequiredConfirmation,
       }}
       secondaryActions={[
         {
           content: t("ScheduleEdit"),
-          onAction: () => setModalState((current) => ({ ...current, scheduleEdit: true })),
+          onAction: () =>
+            setModalState((current) => ({ ...current, scheduleEdit: true })),
           disabled:
             isSyncInProgress ||
             isFilterRegistryDegraded ||
@@ -1047,7 +1081,8 @@ const summaryText = useMemo(() => {
         },
         {
           content: t("RecurringEdit"),
-          onAction: () => setModalState((current) => ({ ...current, recurringEdit: true })),
+          onAction: () =>
+            setModalState((current) => ({ ...current, recurringEdit: true })),
           disabled:
             isSyncInProgress ||
             isFilterRegistryDegraded ||
@@ -1062,11 +1097,11 @@ const summaryText = useMemo(() => {
           <Layout.Section>
             <Banner
               tone={POLARIS_TONE_INFO}
-              title={t("syncInProgressTitle", { defaultValue: "Sync in progress" })}
+              title={t("syncInProgressTitle", {
+                defaultValue: "Sync in progress",
+              })}
             >
-              <p>
-                {t("bulkEditSyncBlockingMessage",)}
-              </p>
+              <p>{t("bulkEditSyncBlockingMessage")}</p>
             </Banner>
           </Layout.Section>
         )}
@@ -1095,10 +1130,14 @@ const summaryText = useMemo(() => {
             <Box paddingBlockEnd={PADDING_BLOCK_END_300}>
               <Banner
                 tone={POLARIS_TONE_WARNING}
-                title={t("planLimitReachedTitle", { defaultValue: "Plan limit reached" })}
+                title={t("planLimitReachedTitle", {
+                  defaultValue: "Plan limit reached",
+                })}
                 onDismiss={() => setLimitWarning(null)}
                 action={{
-                  content: t("upgradePlanButton", { defaultValue: "Upgrade plan" }),
+                  content: t("upgradePlanButton", {
+                    defaultValue: "Upgrade plan",
+                  }),
                   onAction: () => navigate("/pricing"),
                 }}
               >
@@ -1112,7 +1151,7 @@ const summaryText = useMemo(() => {
               <BlockStack gap={GAP_400}>
                 <BlockStack gap={GAP_100}>
                   <Text as={TEXT_AS_H2} variant={TEXT_HEADING_MD}>
-                    {t("bulkEditSetupTitle",)}
+                    {t("bulkEditSetupTitle")}
                   </Text>
 
                   <Text
@@ -1120,16 +1159,16 @@ const summaryText = useMemo(() => {
                     variant={TEXT_BODY_SM}
                     tone={POLARIS_TONE_SUBDUED}
                   >
-                    {t("bulkEditSetupText",)}
+                    {t("bulkEditSetupText")}
                   </Text>
                 </BlockStack>
 
                 <FormLayout>
                   <FormLayout.Group condensed>
-                      <FieldSelector
-                        selectedField={selectedField}
-                        onFieldChange={handleFieldChange}
-                      />
+                    <FieldSelector
+                      selectedField={selectedField}
+                      onFieldChange={handleFieldChange}
+                    />
 
                     {!shouldHideEditTypeSelector && (
                       <EditTypeSelector
@@ -1154,46 +1193,50 @@ const summaryText = useMemo(() => {
                     onConfirmationChange={setDestructiveConfirmationValue}
                   />
 
-                  {requiresFieldConfirmation && !requiresDestructiveConfirmation && (
-                    <BlockStack gap={GAP_200}>
-                      <Banner
-                        tone={
-                          selectedField?.riskLevel === "DESTRUCTIVE"
-                            ? POLARIS_TONE_CRITICAL
-                            : POLARIS_TONE_WARNING
-                        }
-                        title={t("products:fieldConfirmationRequiredTitle", {
-                          defaultValue: "Confirm high-risk field edit",
-                        })}
-                      >
-                        <p>
-                          {t("products:fieldConfirmationRequiredMessage", {
-                            field: selectedField?.label || selectedField?.value,
-                            phrase: fieldConfirmationPhrase,
-                            defaultValue:
-                              "This field can affect storefront identity or product availability. Type {{phrase}} before previewing or running edits to {{field}}.",
+                  {requiresFieldConfirmation &&
+                    !requiresDestructiveConfirmation && (
+                      <BlockStack gap={GAP_200}>
+                        <Banner
+                          tone={
+                            selectedField?.riskLevel === "DESTRUCTIVE"
+                              ? POLARIS_TONE_CRITICAL
+                              : POLARIS_TONE_WARNING
+                          }
+                          title={t("products:fieldConfirmationRequiredTitle", {
+                            defaultValue: "Confirm high-risk field edit",
                           })}
-                        </p>
-                      </Banner>
-                      <TextField
-                        label={t("typeConfirm", {
-                          defaultValue: "Type CONFIRM to continue",
-                        })}
-                        value={destructiveConfirmationValue}
-                        onChange={setDestructiveConfirmationValue}
-                        error={
-                          destructiveConfirmationValue &&
-                          destructiveConfirmationValue !== fieldConfirmationPhrase
-                            ? t("errors.confirmationMismatch", {
-                                phrase: fieldConfirmationPhrase,
-                                defaultValue: "You must type {{phrase}} exactly.",
-                              })
-                            : undefined
-                        }
-                        autoComplete={AUTOCOMPLETE_OFF}
-                      />
-                    </BlockStack>
-                  )}
+                        >
+                          <p>
+                            {t("products:fieldConfirmationRequiredMessage", {
+                              field:
+                                selectedField?.label || selectedField?.value,
+                              phrase: fieldConfirmationPhrase,
+                              defaultValue:
+                                "This field can affect storefront identity or product availability. Type {{phrase}} before previewing or running edits to {{field}}.",
+                            })}
+                          </p>
+                        </Banner>
+                        <TextField
+                          label={t("typeConfirm", {
+                            defaultValue: "Type CONFIRM to continue",
+                          })}
+                          value={destructiveConfirmationValue}
+                          onChange={setDestructiveConfirmationValue}
+                          error={
+                            destructiveConfirmationValue &&
+                            destructiveConfirmationValue !==
+                              fieldConfirmationPhrase
+                              ? t("errors.confirmationMismatch", {
+                                  phrase: fieldConfirmationPhrase,
+                                  defaultValue:
+                                    "You must type {{phrase}} exactly.",
+                                })
+                              : undefined
+                          }
+                          autoComplete={AUTOCOMPLETE_OFF}
+                        />
+                      </BlockStack>
+                    )}
                 </FormLayout>
               </BlockStack>
             </Box>
@@ -1205,7 +1248,7 @@ const summaryText = useMemo(() => {
             <Box padding={PADDING_500}>
               <BlockStack gap={GAP_300}>
                 <Text as={TEXT_AS_H3} variant={TEXT_HEADING_MD}>
-                  {t("bulkEditPreviewSummaryTitle",)}
+                  {t("bulkEditPreviewSummaryTitle")}
                 </Text>
                 <InlineStack
                   gap={GAP_200}
@@ -1218,14 +1261,14 @@ const summaryText = useMemo(() => {
                         : POLARIS_TONE_ATTENTION
                     }
                   >
-  {displayedMatchingTotal || 0}
-</Badge>
+                    {displayedMatchingTotal || 0}
+                  </Badge>
                   <Text
                     as={TEXT_AS_SPAN}
                     variant={TEXT_BODY_SM}
                     tone={POLARIS_TONE_SUBDUED}
                   >
-                    {t("bulkEditMatchingProductsLabel",)}
+                    {t("bulkEditMatchingProductsLabel")}
                   </Text>
                 </InlineStack>
                 <Text
@@ -1239,11 +1282,14 @@ const summaryText = useMemo(() => {
                 {!hasGeneratedPreview && (
                   <Banner
                     tone={POLARIS_TONE_INFO}
-                    title={t("bulkEditPreviewNotReadyTitle", { defaultValue: "Preview not ready" })}
+                    title={t("bulkEditPreviewNotReadyTitle", {
+                      defaultValue: "Preview not ready",
+                    })}
                   >
                     <p>
                       {t("bulkEditPreviewNotReadyMessage", {
-                        defaultValue: "Choose an edit and wait for preview before running it.",
+                        defaultValue:
+                          "Choose an edit and wait for preview before running it.",
                       })}
                     </p>
                   </Banner>
@@ -1251,11 +1297,14 @@ const summaryText = useMemo(() => {
                 {hasGeneratedPreview && hasFreshPreview && (
                   <Banner
                     tone={POLARIS_TONE_INFO}
-                    title={t("bulkEditPreviewReadyTitle", { defaultValue: "Preview ready" })}
+                    title={t("bulkEditPreviewReadyTitle", {
+                      defaultValue: "Preview ready",
+                    })}
                   >
                     <p>
                       {t("bulkEditPreviewReadyMessage", {
-                        defaultValue: "This preview matches the current edit and can be run.",
+                        defaultValue:
+                          "This preview matches the current edit and can be run.",
                       })}
                     </p>
                   </Banner>
@@ -1263,11 +1312,14 @@ const summaryText = useMemo(() => {
                 {shouldShowPreviewStale && (
                   <Banner
                     tone={POLARIS_TONE_WARNING}
-                    title={t("bulkEditPreviewStaleTitle", { defaultValue: "Preview is stale" })}
+                    title={t("bulkEditPreviewStaleTitle", {
+                      defaultValue: "Preview is stale",
+                    })}
                   >
                     <p>
                       {t("bulkEditPreviewStaleMessage", {
-                        defaultValue: "Run preview again before executing this edit.",
+                        defaultValue:
+                          "Run preview again before executing this edit.",
                       })}
                     </p>
                   </Banner>
@@ -1290,7 +1342,8 @@ const summaryText = useMemo(() => {
                   <Banner
                     tone={POLARIS_TONE_CRITICAL}
                     title={t("bulkEditPreviewInvalidatedTitle", {
-                      defaultValue: "Preview invalidated by filter registry change",
+                      defaultValue:
+                        "Preview invalidated by filter registry change",
                     })}
                   >
                     <p>
@@ -1341,7 +1394,7 @@ const summaryText = useMemo(() => {
                   variant={TEXT_BODY_SM}
                   tone={POLARIS_TONE_SUBDUED}
                 >
-                  {t("bulkEditPreviewSummaryText",)}
+                  {t("bulkEditPreviewSummaryText")}
                 </Text>
               </BlockStack>
             </Box>
@@ -1353,12 +1406,22 @@ const summaryText = useMemo(() => {
             loading={matchingProductsQuery.loading}
             products={matchingProductsQuery.products}
             pagination={matchingProductsQuery.pagination}
-            onNext={() => setMatchingCursor(matchingProductsQuery.pagination?.nextCursor || null)}
-            onPrev={() => setMatchingCursor(matchingProductsQuery.pagination?.prevCursor || null)}
+            onNext={() =>
+              setMatchingCursor(
+                matchingProductsQuery.pagination?.nextCursor || null
+              )
+            }
+            onPrev={() =>
+              setMatchingCursor(
+                matchingProductsQuery.pagination?.prevCursor || null
+              )
+            }
             field={selectedField.value}
             previewRows={products}
             variantsByProductId={variantsQuery.data?.variantsByProductId || {}}
-            variantsLoading={variantsQuery.isLoading || variantsQuery.isFetching}
+            variantsLoading={
+              variantsQuery.isLoading || variantsQuery.isFetching
+            }
             variantsError={variantsQuery.error}
           />
         </Layout.Section>
@@ -1370,7 +1433,9 @@ const summaryText = useMemo(() => {
               products={products}
               pagination={pagination}
               isVariant={isVariant}
-              onPageChange={(page) => setPagination((current) => ({ ...current, page }))}
+              onPageChange={(page) =>
+                setPagination((current) => ({ ...current, page }))
+              }
               field={selectedField.value}
             />
           </Layout.Section>
@@ -1406,52 +1471,6 @@ const summaryText = useMemo(() => {
           supportValue={supportValue}
         />
       )}
-      <Modal
-        open={confirmModalOpen}
-        title={t("bulkEditConfirmBroadTargetTitle", {
-          defaultValue: "Confirm broad target edit",
-        })}
-        onClose={() => {
-          if (pendingConfirmRun) return;
-          setConfirmModalOpen(false);
-          setConfirmText("");
-          setSubmitting(false);
-        }}
-        primaryAction={{
-          content: t("bulkEditConfirmAndRun", { defaultValue: "Confirm and run" }),
-          onAction: handleConfirmAndRun,
-          loading: pendingConfirmRun,
-          disabled: confirmText.trim().toUpperCase() !== "CONFIRM",
-        }}
-        secondaryActions={[
-          {
-            content: t("cancel", { defaultValue: "Cancel" }),
-            onAction: () => {
-              setConfirmModalOpen(false);
-              setConfirmText("");
-              setSubmitting(false);
-            },
-          },
-        ]}
-      >
-        <Modal.Section>
-          <BlockStack gap={GAP_300}>
-            <Text as={TEXT_AS_P} variant={TEXT_BODY_MD}>
-              {t("bulkEditConfirmBroadTargetMessage", {
-                count: previewTotal,
-                defaultValue:
-                  "This edit targets {{count}} items. Type CONFIRM to proceed.",
-              })}
-            </Text>
-            <TextField
-              autoComplete={AUTOCOMPLETE_OFF}
-              label={t("bulkEditTypeConfirmLabel", { defaultValue: "Type CONFIRM" })}
-              value={confirmText}
-              onChange={setConfirmText}
-            />
-          </BlockStack>
-        </Modal.Section>
-      </Modal>
     </Page>
   );
 }

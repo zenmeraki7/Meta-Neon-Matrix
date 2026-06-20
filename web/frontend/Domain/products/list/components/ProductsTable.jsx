@@ -11,12 +11,10 @@ import {
 } from "@shopify/polaris";
 import { memo, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { useSelector } from "react-redux";
 import ProductCell from "./ProductCell";
 import StatusBadge from "./StatusBadge";
 import TableErrorBoundary from "../../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../../components/Error/CellErrorBoundary";
-import { makeSelectProductRowViewModel } from "../../../../store/slices/productSlice";
 
 const SKELETON_ROWS = 6;
 const TABLE_SHELL_MIN_HEIGHT = "420px";
@@ -45,30 +43,26 @@ const LoadingTable = memo(function LoadingTable() {
   );
 });
 
-const ProductRow = memo(function ProductRow({ rowId, index }) {
-  const selectRowViewModel = useMemo(makeSelectProductRowViewModel, []);
-  const row = useSelector((state) => selectRowViewModel(state, rowId));
-  if (!row) {
-    return (
-      <IndexTable.Row id={rowId} key={rowId} position={index}>
-        <IndexTable.Cell>
-          <SkeletonBodyText lines={1} />
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <SkeletonBodyText lines={1} />
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <SkeletonBodyText lines={1} />
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <SkeletonBodyText lines={1} />
-        </IndexTable.Cell>
-        <IndexTable.Cell>
-          <SkeletonBodyText lines={1} />
-        </IndexTable.Cell>
-      </IndexTable.Row>
-    );
-  }
+function toRow(product) {
+  const rowId = String(product?.__rowId || product?.id || "").trim();
+  if (!rowId) return null;
+  return {
+    id: rowId,
+    title: product?.title ?? "",
+    handle: product?.handle ?? "",
+    featuredImageUrl:
+      product?.featuredImageUrl ||
+      product?.featuredMedia?.preview?.image?.url ||
+      "/images/fallback-2.png",
+    status: product?.status ?? null,
+    totalInventory: product?.totalInventory ?? "-",
+    productType: product?.productType || "-",
+    vendor: product?.vendor || "-",
+  };
+}
+
+const ProductRow = memo(function ProductRow({ row, index }) {
+  const rowId = row.id;
 
   return (
     <IndexTable.Row id={rowId} key={rowId} position={index}>
@@ -90,7 +84,7 @@ const ProductRow = memo(function ProductRow({ rowId, index }) {
 });
 
 const ProductsTable = memo(function ProductsTable({
-  productIds = [],
+  products = [],
   loading,
   pagination,
   onNext,
@@ -119,9 +113,9 @@ const ProductsTable = memo(function ProductsTable({
     [t],
   );
 
-  const validIds = useMemo(
-    () => productIds.filter(Boolean).map((id) => String(id)),
-    [productIds],
+  const rows = useMemo(
+    () => (Array.isArray(products) ? products : []).map(toRow).filter(Boolean),
+    [products],
   );
   const paginationSummary = pagination
     ? t("paginationSummary", {
@@ -133,7 +127,7 @@ const ProductsTable = memo(function ProductsTable({
 
   if (loading) return <LoadingTable />;
 
-  if (!validIds.length) {
+  if (!rows.length) {
     return (
       <Box padding="1200" minHeight={TABLE_SHELL_MIN_HEIGHT}>
         <EmptyState heading={emptyHeading || t("filteredProductsEmptyHeading", "No products found")}>
@@ -165,12 +159,12 @@ const ProductsTable = memo(function ProductsTable({
       <TableErrorBoundary>
         <IndexTable
           resourceName={resourceName}
-          itemCount={validIds.length}
+          itemCount={rows.length}
           selectable={false}
           headings={headings}
         >
-          {validIds.map((rowId, index) => (
-            <ProductRow rowId={rowId} index={index} key={rowId} />
+          {rows.map((row, index) => (
+            <ProductRow row={row} index={index} key={row.id} />
           ))}
         </IndexTable>
       </TableErrorBoundary>

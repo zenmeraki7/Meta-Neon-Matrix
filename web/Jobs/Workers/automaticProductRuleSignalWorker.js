@@ -1,9 +1,7 @@
 import { Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
-import {
-  AUTOMATIC_PRODUCT_RULE_SIGNAL_QUEUE,
-  reserveAutomaticProductRuleRunFromSignal,
-} from "../../services/automaticProductRuleExecutionService.js";
+import { reserveAutomaticProductRuleRunFromSignal } from "../../services/automaticProductRuleExecutionService.js";
+import { AUTOMATIC_PRODUCT_RULE_SIGNAL_QUEUE } from "../../queues/adapters/automaticRuleQueueAdapter.js";
 import logger from "../../utils/loggerUtils.js";
 
 const automaticProductRuleSignalWorker = new Worker(

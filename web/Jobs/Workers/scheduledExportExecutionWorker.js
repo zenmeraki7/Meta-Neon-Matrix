@@ -1,9 +1,7 @@
 import { Worker } from "bullmq";
 import { connection } from "../../config/redis.js";
-import {
-  executeScheduledExportRun,
-  SCHEDULED_EXPORT_EXECUTION_QUEUE,
-} from "../../services/scheduledExportExecutionService.js";
+import { executeScheduledExportRun } from "../../services/scheduledExportExecutionService.js";
+import { SCHEDULED_EXPORT_EXECUTION_QUEUE } from "../../queues/adapters/scheduledExportQueueAdapter.js";
 import logger from "../../utils/loggerUtils.js";
 import {
   getJobAttempt,

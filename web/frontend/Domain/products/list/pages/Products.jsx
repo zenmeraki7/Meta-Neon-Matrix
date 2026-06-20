@@ -31,7 +31,6 @@ import {
   selectFilters,
   selectCursor,
   selectCursorFilterHash,
-  selectProductIds,
   applyFilterHashAndResetCursor,
   setCursorForFilterHash,
 } from "../../../../store/slices/productSlice";
@@ -57,7 +56,6 @@ export default function ProductsPage() {
   const queryClient = useQueryClient();
 
   const filterState = useSelector(selectFilters);
-  const productIds = useSelector(selectProductIds);
   const cursor = useSelector(selectCursor);
   const cursorFilterHash = useSelector(selectCursorFilterHash);
   const { t } = useTranslation();
@@ -221,23 +219,14 @@ export default function ProductsPage() {
   }, [bootstrapStoreDetails, queryClient]);
 
   useEffect(() => {
-    const safeProducts = Array.isArray(products) ? products : [];
-
-    const nextSignature = safeProducts
-      .map(getStableProductId)
-      .filter(Boolean)
-      .join("|");
-
-    if (lastProductsSignatureRef.current === nextSignature) {
-      return;
-    }
-
-    lastProductsSignatureRef.current = nextSignature;
-    dispatch(setProducts(safeProducts));
+    // React Query owns the server response. Redux is only a compatibility copy
+    // for edit/export flows, so always hydrate it from the current response.
+    // Comparing IDs alone hid changed rows and could leave the table empty when
+    // Redux was reset while React Query retained the same page.
+    dispatch(setProducts(Array.isArray(products) ? products : []));
   }, [dispatch, products]);
 
   const wasSyncingRef = useRef(false);
-  const lastProductsSignatureRef = useRef("");
 
   const applyAtomicFilterCursorReset = useCallback(
     (nextFilters, nextSearch) => {
@@ -581,7 +570,7 @@ export default function ProductsPage() {
               </Box>
             ) : null}
             <ProductsTable
-              productIds={productIds}
+              products={products}
               loading={shouldShowLoadingState}
               pagination={pagination}
               onNext={handleNextPage}

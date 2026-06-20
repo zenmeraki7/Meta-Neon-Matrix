@@ -16,6 +16,7 @@ const defaultJobOptions = buildDefaultJobOptions({
 const TARGET_FREEZE_JOB_ID_STAGE = "bulk-edit-pipeline-freeze";
 const MUTATION_PLAN_JOB_ID_STAGE = "bulk-edit-pipeline-plan";
 const EXECUTE_JOB_ID_STAGE = "bulk-edit-pipeline-execute";
+const ITEM_APPLY_JOB_ID_STAGE = "bulk-edit-pipeline-item-apply";
 
 export async function enqueueBulkEditTargetFreezeJob(data, options = {}) {
   if (!data?.historyId || !data?.shop || !data?.executionId) {
@@ -74,6 +75,30 @@ export async function enqueueBulkEditExecuteStageJob(data, options = {}) {
           shop: data.shop,
           operationId: data.historyId,
           stage: EXECUTE_JOB_ID_STAGE,
+          executionId: data.executionId,
+        }),
+    }),
+  );
+}
+
+export async function enqueueBulkEditItemApplyDispatchJob(data, options = {}) {
+  if (!data?.historyId || !data?.shop || !data?.executionId) {
+    throw new Error(
+      "item.apply.dispatch job requires historyId, shop, and executionId",
+    );
+  }
+
+  return bulkEditPipelineQueue.add(
+    "item.apply.dispatch",
+    data,
+    mergeJobOptions(defaultJobOptions, {
+      ...options,
+      jobId:
+        options.jobId ||
+        buildBulkPipelineStageJobId({
+          shop: data.shop,
+          operationId: data.historyId,
+          stage: ITEM_APPLY_JOB_ID_STAGE,
           executionId: data.executionId,
         }),
     }),

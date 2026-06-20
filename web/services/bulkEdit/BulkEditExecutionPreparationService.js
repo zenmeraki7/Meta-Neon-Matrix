@@ -9,12 +9,25 @@ import {
   resolveTargetGranularityFromRules,
 } from "./bulkEditRuleUtils.js";
 
-function assertExecutableHistory({ history, historyId, executionId }) {
+const MAX_BATCH_JSONL_BYTES = Number.parseInt(
+  process.env.BULK_EDIT_MAX_BATCH_JSONL_BYTES || `${15 * 1024 * 1024}`,
+  10,
+);
+
+function assertExecutableHistory({ history, historyId, executionId, sessionShop }) {
   if (!history) {
     throw new Error("Edit history not found");
   }
 
-  if (executionId && history.executionIdentity && executionId !== history.executionIdentity) {
+  if (sessionShop && history.shop !== sessionShop) {
+    throw new Error("SHOP_MISMATCH");
+  }
+
+  if (
+    executionId &&
+    history.executionIdentity &&
+    executionId !== history.executionIdentity
+  ) {
     throw new Error("STALE_EXECUTION_JOB");
   }
 
@@ -33,9 +46,13 @@ function assertExecutableHistory({ history, historyId, executionId }) {
   if (!history.targetMirrorBatchId) {
     throw new Error("TARGET_MIRROR_BATCH_ID_REQUIRED");
   }
+
   const snapshotSetId = String(
-    history?.snapshotSetId || history?.batch?.targetSnapshotRef?.snapshotSetId || "",
+    history?.snapshotSetId ||
+      history?.batch?.targetSnapshotRef?.snapshotSetId ||
+      "",
   ).trim();
+
   if (!snapshotSetId) {
     throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED");
   }
@@ -54,13 +71,45 @@ function assertExecutableHistory({ history, historyId, executionId }) {
 }
 
 function assertExecutionStageUsesFrozenPlan({ history }) {
-  const hasDynamicTargetingInputs =
-    Array.isArray(history?.batch?.filterParams) ||
-    Boolean(history?.batch?.filterAst) ||
-    Boolean(history?.queryFilter);
-  if (hasDynamicTargetingInputs) {
-    // freeze metadata may keep these for audit only; execute path must not consume them.
-    return;
+  const snapshotSetId = String(
+    history?.snapshotSetId ||
+      history?.batch?.targetSnapshotRef?.snapshotSetId ||
+      "",
+  ).trim();
+
+  if (!snapshotSetId) {
+    throw new Error("FROZEN_SNAPSHOT_SET_REQUIRED");
+  }
+
+  const executionPlan =
+    history?.batch?.executionPlan &&
+    typeof history.batch.executionPlan === "object" &&
+    !Array.isArray(history.batch.executionPlan);
+
+  if (!executionPlan) {
+    throw new Error("EXECUTION_PLAN_REQUIRED");
+  }
+}
+
+function assertFrozenSnapshotSetMatchesHistory({
+  frozenSnapshotSet,
+  history,
+  expectedOperationId,
+}) {
+  if (!frozenSnapshotSet) {
+    throw new Error("FROZEN_SNAPSHOT_SET_NOT_FOUND");
+  }
+
+  if (frozenSnapshotSet.shop && frozenSnapshotSet.shop !== history.shop) {
+    throw new Error("SNAPSHOT_SHOP_MISMATCH");
+  }
+
+  if (
+    expectedOperationId &&
+    frozenSnapshotSet.operationId &&
+    frozenSnapshotSet.operationId !== expectedOperationId
+  ) {
+    throw new Error("SNAPSHOT_OPERATION_MISMATCH");
   }
 }
 
@@ -74,7 +123,7 @@ function buildBatchId({
   retryCursorIndex,
 }) {
   return crypto
-    .createHash("sha1")
+    .createHash("sha256")
     .update(
       [
         executionIdentity || historyId,
@@ -119,25 +168,59 @@ function getCursorOrdinal(history) {
     return cursor;
   }
 
+  if (typeof cursor === "string" && cursor.trim()) {
+    return cursor.trim();
+  }
+
   return null;
 }
 
-function extractPlannedMutationJsonlRow(plannedMutation) {
-  if (!plannedMutation || typeof plannedMutation !== "object" || Array.isArray(plannedMutation)) {
-    return null;
+function assertPlannedMutationShape(plannedMutation, rowId) {
+  if (
+    !plannedMutation ||
+    typeof plannedMutation !== "object" ||
+    Array.isArray(plannedMutation)
+  ) {
+    throw new Error(`FROZEN_MUTATION_PLAN_INVALID:${rowId}`);
   }
-  const direct = typeof plannedMutation.jsonlRow === "string"
-    ? plannedMutation.jsonlRow.trim()
-    : "";
+
+  const hasJsonlRow =
+    typeof plannedMutation.jsonlRow === "string" &&
+    plannedMutation.jsonlRow.trim();
+
+  const hasStructuredMutation =
+    plannedMutation.productSet ||
+    plannedMutation.input ||
+    plannedMutation.id;
+
+  if (!hasJsonlRow && !hasStructuredMutation) {
+    throw new Error(`FROZEN_MUTATION_PLAN_MISSING:${rowId}`);
+  }
+}
+
+function extractPlannedMutationJsonlRow(plannedMutation, rowId) {
+  assertPlannedMutationShape(plannedMutation, rowId);
+
+  const direct =
+    typeof plannedMutation.jsonlRow === "string"
+      ? plannedMutation.jsonlRow.trim()
+      : "";
+
   if (direct) return direct;
-  if (plannedMutation.productSet || plannedMutation.input || plannedMutation.id) {
-    try {
-      return JSON.stringify(plannedMutation);
-    } catch {
-      return null;
-    }
+
+  try {
+    return JSON.stringify(plannedMutation);
+  } catch {
+    throw new Error(`FROZEN_MUTATION_PLAN_UNSERIALIZABLE:${rowId}`);
   }
-  return null;
+}
+
+function assertPayloadSize(payload) {
+  const size = Buffer.byteLength(payload || "", "utf8");
+
+  if (size > MAX_BATCH_JSONL_BYTES) {
+    throw new Error("JSONL_BATCH_TOO_LARGE");
+  }
 }
 
 export class BulkEditExecutionPreparationService {
@@ -162,7 +245,13 @@ export class BulkEditExecutionPreparationService {
       },
     });
 
-    assertExecutableHistory({ history, historyId, executionId });
+    assertExecutableHistory({
+      history,
+      historyId,
+      executionId,
+      sessionShop: this.session?.shop || null,
+    });
+
     assertExecutionStageUsesFrozenPlan({ history });
 
     const rules = normalizeRules({
@@ -175,23 +264,43 @@ export class BulkEditExecutionPreparationService {
     const targetGranularity = getTargetGranularity(history);
 
     const retryFailedOnly = Boolean(history.batch?.retryFailedOnly);
-    const retryTargetIdentities = Array.isArray(history.batch?.retryTargetIdentities)
-      ? history.batch.retryTargetIdentities.filter(Boolean)
-      : [];
+
+    const retryTargetIdentities = [
+      ...new Set(
+        Array.isArray(history.batch?.retryTargetIdentities)
+          ? history.batch.retryTargetIdentities
+              .map((item) => String(item || "").trim())
+              .filter(Boolean)
+          : [],
+      ),
+    ];
 
     const retryCursorIndex = Number.isInteger(history.batch?.retryCursorIndex)
       ? history.batch.retryCursorIndex
       : 0;
+
     const frozenSnapshotSetId = String(
-      history.snapshotSetId || history.batch?.targetSnapshotRef?.snapshotSetId || "",
+      history.snapshotSetId ||
+        history.batch?.targetSnapshotRef?.snapshotSetId ||
+        "",
     ).trim();
+
     const frozenSnapshotSetOperationId = String(
-      history.batch?.targetSnapshotRef?.operationId || history.executionIdentity || "",
+      history.batch?.targetSnapshotRef?.operationId ||
+        history.executionIdentity ||
+        "",
     ).trim();
+
     const frozenSnapshotSet = await getFrozenSnapshotSetForExecution({
       shop: history.shop,
       snapshotSetId: frozenSnapshotSetId,
       operationId: frozenSnapshotSetOperationId || undefined,
+    });
+
+    assertFrozenSnapshotSetMatchesHistory({
+      frozenSnapshotSet,
+      history,
+      expectedOperationId: frozenSnapshotSetOperationId,
     });
 
     let rows = [];
@@ -217,6 +326,7 @@ export class BulkEditExecutionPreparationService {
           targetKeys: pageIdentities,
           limit,
         });
+
         rows = retryPage.rows.map((row) => ({
           id: row.id,
           productId: row.productId,
@@ -225,6 +335,7 @@ export class BulkEditExecutionPreparationService {
           targetIdentity: row.targetKey,
           plannedMutation: row.plannedMutation,
         }));
+
         lastProductId = retryPage.cursorTargetKey;
       }
     } else {
@@ -238,6 +349,7 @@ export class BulkEditExecutionPreparationService {
         limit,
         targetType: targetGranularity === "VARIANT" ? "VARIANT" : "PRODUCT",
       });
+
       rows = frozenTargetPage.rows.map((row) => ({
         id: row.id,
         productId: row.productId,
@@ -246,6 +358,7 @@ export class BulkEditExecutionPreparationService {
         targetIdentity: row.targetKey,
         plannedMutation: row.plannedMutation,
       }));
+
       lastProductId = frozenTargetPage.cursorTargetKey;
       hasMore = frozenTargetPage.hasMore;
     }
@@ -261,6 +374,19 @@ export class BulkEditExecutionPreparationService {
     });
 
     if (!rows.length) {
+      if (!retryFailedOnly && Number(history.targetSnapshotCount || 0) > 0) {
+        return {
+          formattedProducts: "",
+          changes: [],
+          batchId,
+          batchTargetCount: 0,
+          lastProductId: null,
+          hasMore: false,
+          nextRetryCursorIndex,
+          fields,
+        };
+      }
+
       return {
         formattedProducts: "",
         changes: [],
@@ -275,8 +401,12 @@ export class BulkEditExecutionPreparationService {
 
     const isCsvFrozenExecution =
       history.isSpreadsheetEdit === true || history.batch?.csvImport === true;
+
     if (isCsvFrozenExecution) {
-      const productIds = [...new Set(rows.map((row) => row.productId).filter(Boolean))];
+      const productIds = [
+        ...new Set(rows.map((row) => row.productId).filter(Boolean)),
+      ];
+
       const csvRecords = await db.changeRecord.findMany({
         where: {
           editHistoryId: historyId,
@@ -288,26 +418,44 @@ export class BulkEditExecutionPreparationService {
           options: true,
         },
       });
+
       const csvRowByProductId = new Map();
+
       for (const record of csvRecords) {
         const options =
-          record?.options && typeof record.options === "object" && !Array.isArray(record.options)
+          record?.options &&
+          typeof record.options === "object" &&
+          !Array.isArray(record.options)
             ? record.options
             : {};
-        const csvMutationRow = typeof options.csvMutationRow === "string"
-          ? options.csvMutationRow.trim()
-          : "";
+
+        const csvMutationRow =
+          typeof options.csvMutationRow === "string"
+            ? options.csvMutationRow.trim()
+            : "";
+
         if (csvMutationRow && record.productId) {
           csvRowByProductId.set(record.productId, csvMutationRow);
         }
       }
 
-      const formattedRows = rows
-        .map((row) => csvRowByProductId.get(row.productId))
-        .filter(Boolean);
+      const formattedRows = [];
+
+      for (const row of rows) {
+        const csvRow = csvRowByProductId.get(row.productId);
+
+        if (!csvRow) {
+          throw new Error(`CSV_MUTATION_ROW_MISSING:${row.productId}`);
+        }
+
+        formattedRows.push(csvRow);
+      }
+
+      const formattedProducts = formattedRows.join("\n");
+      assertPayloadSize(formattedProducts);
 
       return {
-        formattedProducts: formattedRows.join("\n"),
+        formattedProducts,
         changes: [],
         batchId,
         batchTargetCount: formattedRows.length,
@@ -328,17 +476,45 @@ export class BulkEditExecutionPreparationService {
       }
     }
 
-    const formattedRows = [];
-    for (const row of rows) {
-      const mutationRow = extractPlannedMutationJsonlRow(row.plannedMutation);
-      if (!mutationRow) {
-        throw new Error(`FROZEN_MUTATION_PLAN_MISSING:${row.id}`);
+    if (targetGranularity === "PRODUCT") {
+      const hasMismatch = rows.some(
+        (row) => String(row?.targetType || "").toUpperCase() !== "PRODUCT",
+      );
+
+      if (hasMismatch) {
+        throw new Error("Frozen target type mismatch: expected PRODUCT targets");
       }
+    }
+
+    const seenTargetIdentities = new Set();
+    const formattedRows = [];
+
+    for (const row of rows) {
+      const targetIdentity = String(row?.targetIdentity || "").trim();
+
+      if (!targetIdentity) {
+        throw new Error(`FROZEN_TARGET_IDENTITY_MISSING:${row.id}`);
+      }
+
+      if (seenTargetIdentities.has(targetIdentity)) {
+        throw new Error(`FROZEN_TARGET_DUPLICATE:${targetIdentity}`);
+      }
+
+      seenTargetIdentities.add(targetIdentity);
+
+      const mutationRow = extractPlannedMutationJsonlRow(
+        row.plannedMutation,
+        row.id,
+      );
+
       formattedRows.push(mutationRow);
     }
 
+    const formattedProducts = formattedRows.join("\n");
+    assertPayloadSize(formattedProducts);
+
     return {
-      formattedProducts: formattedRows.join("\n"),
+      formattedProducts,
       changes: [],
       batchId,
       batchTargetCount: rows.length,
@@ -349,4 +525,3 @@ export class BulkEditExecutionPreparationService {
     };
   }
 }
-

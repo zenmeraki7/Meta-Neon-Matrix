@@ -2,6 +2,7 @@ import crypto from "crypto";
 import shopify from "../../shopify.js";
 import { db } from "../../repositories/repositoryDb.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
+import logger from "../../utils/loggerUtils.js";
 import {
   buildActorContext,
   buildEntitlementSnapshot,
@@ -40,10 +41,15 @@ const PREVIEW_EXECUTE_TTL_MS = Math.max(
   10 * 60 * 1000,
   Number.parseInt(process.env.PREVIEW_EXECUTE_TTL_MS || "3600000", 10),
 );
+
+const DIRECT_EXECUTION_ENABLED =
+  process.env.BULK_EDIT_DIRECT_EXECUTION_ENABLED === "true";
+
 const DIRECT_EXECUTION_LIMIT = Math.max(
   0,
   Number.parseInt(process.env.BULK_EDIT_DIRECT_EXECUTION_LIMIT || "100", 10),
 );
+
 const DIRECT_VARIANT_BULK_UPDATE_FIELDS = new Set([
   "barcode",
   "compareAtPrice",
@@ -79,20 +85,30 @@ function buildCodedError(message, code) {
   return error;
 }
 
+function safeShopifyErrorMessage(error) {
+  return String(error?.message || error || "Shopify mutation failed")
+    .trim()
+    .slice(0, 300);
+}
+
 function getPreviewFreshUntil(previewRecord) {
   const expiresAtMs = previewRecord?.expiresAt
     ? new Date(previewRecord.expiresAt).getTime()
     : 0;
+
   const updatedAtMs = previewRecord?.updatedAt
     ? new Date(previewRecord.updatedAt).getTime()
     : 0;
+
   const createdAtMs = previewRecord?.createdAt
     ? new Date(previewRecord.createdAt).getTime()
     : 0;
+
   const activityMs = Math.max(updatedAtMs, createdAtMs, 0);
-  const activityFreshUntil = activityMs > 0
-    ? activityMs + PREVIEW_EXECUTE_TTL_MS
-    : 0;
+
+  const activityFreshUntil =
+    activityMs > 0 ? activityMs + PREVIEW_EXECUTE_TTL_MS : 0;
+
   return Math.max(expiresAtMs, activityFreshUntil);
 }
 
@@ -107,10 +123,13 @@ function getReadyPreviewRows(fingerprint = {}) {
     : Array.isArray(fingerprint.rows)
       ? fingerprint.rows
       : [];
-  return rows.filter((row) => String(row?.status || "").toUpperCase() === "READY");
+
+  return rows.filter(
+    (row) => String(row?.status || "").toUpperCase() === "READY",
+  );
 }
 
-function assertExecutablePreviewRows({ rows, field }) {
+function assertExecutablePreviewRows({ rows }) {
   if (!Array.isArray(rows) || rows.length === 0) {
     throw buildCodedError(
       "Preview data is incomplete. Run preview again before applying this edit.",
@@ -120,6 +139,7 @@ function assertExecutablePreviewRows({ rows, field }) {
 
   const incomplete = rows.find((row) => {
     const targetType = String(row?.targetType || "").toUpperCase();
+
     return (
       !row?.productId ||
       !row?.targetIdentity ||
@@ -131,6 +151,7 @@ function assertExecutablePreviewRows({ rows, field }) {
       !row?.plannedMutation?.jsonlRow
     );
   });
+
   if (incomplete) {
     throw buildCodedError(
       "Preview data is incomplete. Run preview again before applying this edit.",
@@ -143,26 +164,34 @@ function getDirectPreviewRowsFromHistoryData(historyData = {}) {
   const rows = Array.isArray(historyData?.batch?.previewRows)
     ? historyData.batch.previewRows
     : [];
-  return rows.filter((row) => String(row?.status || "").toUpperCase() === "READY");
+
+  return rows.filter(
+    (row) => String(row?.status || "").toUpperCase() === "READY",
+  );
 }
 
 function shouldExecuteDirectly(historyData = {}) {
+  if (!DIRECT_EXECUTION_ENABLED) return false;
+
   const rows = getDirectPreviewRowsFromHistoryData(historyData);
   const field = String(historyData?.rules?.[0]?.field || "").trim();
   const mode = String(process.env.BULK_EDIT_EXECUTION_MODE || "").toLowerCase();
+
   const isDirectSupported =
     DIRECT_EXECUTION_LIMIT > 0 &&
     DIRECT_VARIANT_BULK_UPDATE_FIELDS.has(field) &&
-    rows.every((row) =>
-      String(row?.targetType || "").toUpperCase() === "VARIANT" &&
-      String(row?.productId || "").trim() &&
-      String(row?.variantId || "").trim());
-  return isDirectSupported && rows.length > 0 && (mode === "direct" || rows.length <= DIRECT_EXECUTION_LIMIT);
-}
+    rows.every(
+      (row) =>
+        String(row?.targetType || "").toUpperCase() === "VARIANT" &&
+        String(row?.productId || "").trim() &&
+        String(row?.variantId || "").trim(),
+    );
 
-function safeShopifyErrorMessage(error) {
-  const message = String(error?.message || error || "Shopify mutation failed").trim();
-  return message.slice(0, 300);
+  return (
+    isDirectSupported &&
+    rows.length > 0 &&
+    (mode === "direct" || rows.length <= DIRECT_EXECUTION_LIMIT)
+  );
 }
 
 function normalizeDirectStatus({ successCount, failedCount, totalCount }) {
@@ -176,6 +205,7 @@ function normalizeDirectStatus({ successCount, failedCount, totalCount }) {
       ),
     };
   }
+
   if (successCount > 0 && failedCount > 0) {
     return {
       status: "completed_with_errors",
@@ -186,6 +216,7 @@ function normalizeDirectStatus({ successCount, failedCount, totalCount }) {
       ),
     };
   }
+
   return {
     status: "failed",
     statusNormalized: normalizeEditHistoryStatus("failed"),
@@ -197,18 +228,34 @@ function normalizeDirectStatus({ successCount, failedCount, totalCount }) {
 }
 
 function getDirectVariantPayload({ row, field }) {
-  const plannedVariant =
-    Array.isArray(row?.plannedMutation?.productSet?.variants)
-      ? row.plannedMutation.productSet.variants.find((variant) =>
-        String(variant?.id || "").trim() === String(row?.variantId || "").trim())
-      : null;
-  const plannedValue = plannedVariant && Object.prototype.hasOwnProperty.call(plannedVariant, field)
-    ? plannedVariant[field]
-    : row?.newValue;
+  const plannedVariant = Array.isArray(row?.plannedMutation?.productSet?.variants)
+    ? row.plannedMutation.productSet.variants.find(
+        (variant) =>
+          String(variant?.id || "").trim() ===
+          String(row?.variantId || "").trim(),
+      )
+    : null;
+
+  const plannedValue =
+    plannedVariant && Object.prototype.hasOwnProperty.call(plannedVariant, field)
+      ? plannedVariant[field]
+      : row?.newValue;
+
   return {
     id: String(row?.variantId || "").trim(),
-    [field]: String(plannedValue),
+    [field]: plannedValue,
   };
+}
+
+function assertNoShopifyGraphqlErrors(response) {
+  const errors = response?.body?.errors || response?.errors;
+
+  if (Array.isArray(errors) && errors.length > 0) {
+    const message = errors[0]?.message || "SHOPIFY_GRAPHQL_ERROR";
+    const error = new Error(`SHOPIFY_GRAPHQL_ERROR:${message}`);
+    error.retryable = true;
+    throw error;
+  }
 }
 
 export class BulkEditCommandService {
@@ -218,12 +265,17 @@ export class BulkEditCommandService {
   }
 
   async createManualBulkEditOperation(input = {}) {
-    if (input && typeof input === "object" && Object.prototype.hasOwnProperty.call(input, "body")) {
+    if (
+      input &&
+      typeof input === "object" &&
+      Object.prototype.hasOwnProperty.call(input, "body")
+    ) {
       throw new Error("RAW_REQ_SHAPE_FORBIDDEN");
     }
 
     const command = input.command || {};
     const idempotencyKey = String(input.idempotencyKey || "").trim();
+
     if (!idempotencyKey) {
       const error = new Error("IDEMPOTENCY_KEY_REQUIRED");
       error.code = "VALIDATION_FAILED";
@@ -239,81 +291,98 @@ export class BulkEditCommandService {
         command,
       }),
     });
+
     if (begin.mode === "replay") {
       return begin.response;
     }
 
-    const actor = input.actor || buildActorContext({
-        req: { body: command, query: {}, headers: {} },
-        session: this.session,
-        fallbackType: "MERCHANT_ADMIN",
-      });
+    try {
+      const actor =
+        input.actor ||
+        buildActorContext({
+          req: { body: command, query: {}, headers: {} },
+          session: this.session,
+          fallbackType: "MERCHANT_ADMIN",
+        });
 
-    const authoritativeSubscription = await loadAuthoritativeSubscriptionForShop(
-      this.session.shop,
-    );
+      const authoritativeSubscription =
+        await loadAuthoritativeSubscriptionForShop(this.session.shop);
 
-    const effectiveSubscription = input.subscription || authoritativeSubscription;
+      const effectiveSubscription = input.subscription || authoritativeSubscription;
 
-    const historyData = await this.#buildManualHistoryData(
-      command,
-      effectiveSubscription,
-      {
-        actor,
-        entitlementSnapshot: buildEntitlementSnapshot(effectiveSubscription),
-      },
-    );
+      const historyData = await this.#buildManualHistoryData(
+        command,
+        effectiveSubscription,
+        {
+          actor,
+          entitlementSnapshot: buildEntitlementSnapshot(effectiveSubscription),
+        },
+      );
 
-    const { historyId, historyShop, executionIdentity } =
-      await createManualEditHistoryWithImmutableCommand({
-        historyData,
-        buildImmutableEditCommandForHistory: (history) =>
-          buildImmutableEditCommand({
-            operationType: "BULK_PRODUCT_EDIT",
-            shop: history.shop,
-            actorUserId: history.actorId || null,
-            edit: buildEditIntentFromRules(history.rules),
-            targetSnapshotSetId: `EDIT_HISTORY:${history.id}`,
-          }),
-      });
+      const { historyId, historyShop, executionIdentity } =
+        await createManualEditHistoryWithImmutableCommand({
+          historyData,
+          buildImmutableEditCommandForHistory: (history) =>
+            buildImmutableEditCommand({
+              operationType: "BULK_PRODUCT_EDIT",
+              shop: history.shop,
+              actorUserId: history.actorId || null,
+              edit: buildEditIntentFromRules(history.rules),
+              targetSnapshotSetId: `EDIT_HISTORY:${history.id}`,
+            }),
+        });
 
-    await clearKeyCaches(`${historyShop}:fetchHistories`);
+      await clearKeyCaches(`${historyShop}:fetchHistories`);
 
-    if (shouldExecuteDirectly(historyData)) {
-      const directResult = await this.#executePreviewRowsDirectly({
+      if (shouldExecuteDirectly(historyData)) {
+        const directResult = await this.#executePreviewRowsDirectly({
+          historyId,
+          historyShop,
+          executionIdentity,
+          historyData,
+        });
+
+        await this.idempotencyStore.complete({
+          recordId: begin.recordId,
+          response: directResult,
+        });
+
+        return directResult;
+      }
+
+      await enqueueBulkEditTargetFreezeJob({
         historyId,
-        historyShop,
-        executionIdentity,
-        historyData,
+        shop: historyShop,
+        source: "manual_bulk_edit_pipeline",
+        executionId: executionIdentity,
       });
+
+      const response = {
+        success: true,
+        id: historyId,
+        operationId: historyId,
+        historyId,
+        jobId: historyId,
+        status: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+        message: "Bulk edit has been queued.",
+      };
+
       await this.idempotencyStore.complete({
         recordId: begin.recordId,
-        response: directResult,
+        response,
       });
-      return directResult;
+
+      return response;
+    } catch (error) {
+      if (typeof this.idempotencyStore.fail === "function") {
+        await this.idempotencyStore.fail({
+          recordId: begin.recordId,
+          error: safeShopifyErrorMessage(error),
+        }).catch(() => {});
+      }
+
+      throw error;
     }
-
-    await enqueueBulkEditTargetFreezeJob({
-      historyId,
-      shop: historyShop,
-      source: "manual_bulk_edit_pipeline",
-      executionId: executionIdentity,
-    });
-
-    const response = {
-      success: true,
-      id: historyId,
-      operationId: historyId,
-      historyId,
-      jobId: historyId,
-      status: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
-      message: "Bulk edit has been queued.",
-    };
-    await this.idempotencyStore.complete({
-      recordId: begin.recordId,
-      response,
-    });
-    return response;
   }
 
   async createEditHistoryPayload(body, subscription, operationContext = {}) {
@@ -327,18 +396,15 @@ export class BulkEditCommandService {
   async #buildManualHistoryData(body, subscription, operationContext = {}) {
     const locationId = body.locationId ?? body.location ?? null;
     const previewContractId = body.previewContractId ?? body.previewId;
+
     const {
       editedField,
-      filterParams,
-      filterAst,
       previewFilterHash,
       previewMirrorBatchId,
       previewSignature,
       confirmBroadTarget,
       criticalConfirmationText,
       operationKey,
-      queryWhere,
-      productIds,
       title: explicitTitle,
     } = body;
 
@@ -357,12 +423,14 @@ export class BulkEditCommandService {
         "PREVIEW_NOT_FOUND",
       );
     }
+
     if (isPreviewContractExpired(previewRecord)) {
       throw buildCodedError(
         "Preview is stale. Run preview again before applying this edit.",
         "PREVIEW_STALE",
       );
     }
+
     await extendPreviewContractExpiry({
       previewContractId,
       shop: this.session.shop,
@@ -370,13 +438,16 @@ export class BulkEditCommandService {
     });
 
     const fingerprint = previewRecord.value || {};
+
     const previewShop = String(
-      previewRecord.shop
-      || fingerprint.shop
-      || fingerprint.owner?.shop
-      || "",
+      previewRecord.shop ||
+        fingerprint.shop ||
+        fingerprint.owner?.shop ||
+        "",
     ).trim();
+
     const authenticatedShop = String(this.session.shop || "").trim();
+
     if (!previewShop || previewShop !== authenticatedShop) {
       throw buildCodedError(
         "Run preview again before applying this edit.",
@@ -386,12 +457,20 @@ export class BulkEditCommandService {
 
     const resolvedEditedField = editedField ?? fingerprint.field;
     const resolvedEditType = body.editType ?? fingerprint.editType;
+
     const resolvedEditValue =
       body.editValue !== undefined ? body.editValue : fingerprint.editValue;
-    const resolvedSearchKey = body.searchKey ?? fingerprint.searchKey ?? null;
-    const resolvedReplaceText = body.replaceText ?? fingerprint.replaceText ?? null;
+
+    const resolvedSearchKey =
+      body.searchKey ?? fingerprint.searchKey ?? null;
+
+    const resolvedReplaceText =
+      body.replaceText ?? fingerprint.replaceText ?? null;
+
     const resolvedSupportValue =
-      body.supportValue !== undefined ? body.supportValue : fingerprint.supportValue;
+      body.supportValue !== undefined
+        ? body.supportValue
+        : fingerprint.supportValue;
 
     const rules = normalizeRules({
       ...body,
@@ -408,14 +487,16 @@ export class BulkEditCommandService {
     }
 
     const previewActorId = String(
-      previewRecord.userId
-      || previewRecord?.value?.actorId
-      || previewRecord?.value?.owner?.actorId
-      || "",
+      previewRecord.userId ||
+        previewRecord?.value?.actorId ||
+        previewRecord?.value?.owner?.actorId ||
+        "",
     ).trim();
+
     const executionActorId = String(
       operationContext.actor?.actorId || "",
     ).trim();
+
     if (previewActorId && executionActorId && executionActorId !== previewActorId) {
       throw buildCodedError(
         "Preview is stale. Run preview again before applying this edit.",
@@ -425,16 +506,16 @@ export class BulkEditCommandService {
 
     const expectedHash = String(fingerprint.filterHash || "");
     const expectedBatch = String(fingerprint.mirrorBatchId || "");
-    const expectedSignature = String(fingerprint.previewSignature || "").trim();
+    const expectedSignature = String(
+      fingerprint.previewSignature || "",
+    ).trim();
 
     if (
-      (previewFilterHash && String(previewFilterHash || "") !== expectedHash)
-      || (previewMirrorBatchId && String(previewMirrorBatchId || "") !== expectedBatch)
-      || (
-        previewSignature
-        && expectedSignature
-        && String(previewSignature || "").trim() !== expectedSignature
-      )
+      (previewFilterHash && String(previewFilterHash || "") !== expectedHash) ||
+      (previewMirrorBatchId && String(previewMirrorBatchId || "") !== expectedBatch) ||
+      (previewSignature &&
+        expectedSignature &&
+        String(previewSignature || "").trim() !== expectedSignature)
     ) {
       throw buildCodedError(
         "Preview is stale. Run preview again before applying this edit.",
@@ -443,28 +524,27 @@ export class BulkEditCommandService {
     }
 
     const targetGranularity =
-      String(fingerprint.targetGranularity || "").trim()
-      || resolveTargetGranularityFromRules(rules);
+      String(fingerprint.targetGranularity || "").trim() ||
+      resolveTargetGranularityFromRules(rules);
 
     const previewWhere =
       fingerprint.where && typeof fingerprint.where === "object"
         ? fingerprint.where
         : null;
+
     const previewCount = Number(fingerprint.count);
-    const previewFilterAst =
-      fingerprint.filterAst && typeof fingerprint.filterAst === "object"
-        ? fingerprint.filterAst
-        : null;
+
     const previewBroadTargetAssessment =
-      fingerprint.broadTargetAssessment
-      && typeof fingerprint.broadTargetAssessment === "object"
+      fingerprint.broadTargetAssessment &&
+      typeof fingerprint.broadTargetAssessment === "object"
         ? fingerprint.broadTargetAssessment
         : null;
+
     const readyPreviewRows = getReadyPreviewRows(fingerprint);
-    console.info("[products-update] preview snapshot", {
+
+    logger.info("[products-update] preview snapshot", {
       previewId: previewContractId,
       shop: this.session.shop,
-      headerFound: true,
       rowsLoaded: Array.isArray(fingerprint.rows) ? fingerprint.rows.length : 0,
       readyRows: readyPreviewRows.length,
       incompleteReason: readyPreviewRows.length ? null : "NO_READY_PREVIEW_ROWS",
@@ -477,14 +557,15 @@ export class BulkEditCommandService {
           "NO_MATCHING_TARGETS",
         );
       }
+
       throw buildCodedError(
         "Preview data is incomplete. Run preview again before applying this edit.",
         "PREVIEW_SNAPSHOT_INCOMPLETE",
       );
     }
+
     assertExecutablePreviewRows({
       rows: readyPreviewRows,
-      field: resolvedEditedField,
     });
 
     const count = readyPreviewRows.length || previewCount;
@@ -546,10 +627,12 @@ export class BulkEditCommandService {
     return {
       shop: this.session.shop,
       title,
-      queryFilter: JSON.stringify(previewWhere || {
-        previewId: previewContractId,
-        source: "PERSISTED_PREVIEW_ROWS",
-      }),
+      queryFilter: JSON.stringify(
+        previewWhere || {
+          previewId: previewContractId,
+          source: "PERSISTED_PREVIEW_ROWS",
+        },
+      ),
       rules,
       startedAt: new Date(),
       status: "pending",
@@ -573,7 +656,6 @@ export class BulkEditCommandService {
         previewCount: count,
         currentBatchTargetCount: 0,
         queuedAt: new Date().toISOString(),
-        // Execute must reuse preview snapshot targeting material only.
         filterParams: [],
         filterAst: null,
         previewRows: readyPreviewRows,
@@ -584,7 +666,7 @@ export class BulkEditCommandService {
           filterHash: expectedHash,
           mirrorBatchId: expectedBatch,
         },
-        previewSignature: String(previewSignature || "").trim() || null,
+        previewSignature: expectedSignature || null,
         maxBulkEditTargets,
         executionPlan,
         operationKey: executionPlan.operationKey,
@@ -622,7 +704,7 @@ export class BulkEditCommandService {
     const batchId = `direct:${historyId}`;
     const field = String(historyData?.rules?.[0]?.field || "").trim();
 
-    console.info("[bulk-edit-execute] start", {
+    logger.info("[bulk-edit-execute] start", {
       historyId,
       shop: historyShop,
       loadedItems: rows.length,
@@ -680,12 +762,15 @@ export class BulkEditCommandService {
     for (const row of rows) {
       const variantId = String(row?.variantId || "").trim();
       const newValue = row?.newValue;
-      let status = "succeeded";
+      let status = "failed";
       let failureMessage = null;
+      let failureCode = null;
       let afterValues = { [field]: newValue };
 
       try {
         const variantInput = getDirectVariantPayload({ row, field });
+
+        // eslint-disable-next-line no-await-in-loop
         const result = await client.query({
           data: {
             query: PRODUCT_VARIANTS_BULK_UPDATE_MUTATION,
@@ -695,37 +780,58 @@ export class BulkEditCommandService {
             },
           },
         });
-        const payload = result?.body?.data?.productVariantsBulkUpdate
-          || result?.data?.productVariantsBulkUpdate
-          || null;
+
+        assertNoShopifyGraphqlErrors(result);
+
+        const payload =
+          result?.body?.data?.productVariantsBulkUpdate ||
+          result?.data?.productVariantsBulkUpdate ||
+          null;
+
         const userErrors = Array.isArray(payload?.userErrors)
           ? payload.userErrors
           : [];
+
         if (userErrors.length) {
-          throw new Error(userErrors.map((item) => item?.message).filter(Boolean).join("; "));
+          const error = new Error(
+            userErrors.map((item) => item?.message).filter(Boolean).join("; "),
+          );
+          error.nonRetryable = true;
+          throw error;
         }
+
         const updatedVariant = Array.isArray(payload?.productVariants)
-          ? payload.productVariants.find((variant) => String(variant?.id || "").trim() === variantId)
+          ? payload.productVariants.find(
+              (variant) => String(variant?.id || "").trim() === variantId,
+            )
           : null;
+
         afterValues = {
           [field]: updatedVariant?.[field] ?? variantInput[field] ?? newValue,
         };
+
+        status = "succeeded";
         successCount += 1;
-        console.info("[bulk-edit-execute] variant update success", {
+
+        logger.info("[bulk-edit-execute] variant update success", {
           historyId,
           variantId,
         });
       } catch (error) {
-        status = "failed";
         failureMessage = safeShopifyErrorMessage(error);
+        failureCode = error?.retryable
+          ? "SHOPIFY_RETRYABLE_ERROR"
+          : "SHOPIFY_USER_ERROR";
         failedCount += 1;
-        console.warn("[bulk-edit-execute] variant update failed", {
+
+        logger.warn("[bulk-edit-execute] variant update failed", {
           historyId,
           variantId,
-          code: error?.code || null,
+          code: failureCode,
         });
       }
 
+      // eslint-disable-next-line no-await-in-loop
       await db.changeRecord.create({
         data: {
           editHistoryId: historyId,
@@ -735,9 +841,11 @@ export class BulkEditCommandService {
           variantId,
           shop: historyShop,
           mirrorBatchId: historyData.targetMirrorBatchId || null,
-          beforeValues: row?.beforeValues || { [field]: row?.currentValue ?? null },
+          beforeValues: row?.beforeValues || {
+            [field]: row?.currentValue ?? null,
+          },
           afterValues,
-          failureCode: failureMessage ? "SHOPIFY_USER_ERROR" : null,
+          failureCode,
           failureMessage,
           options: {
             productTitle: row?.productTitle || null,
@@ -768,11 +876,13 @@ export class BulkEditCommandService {
     const totalCount = rows.length;
     const skippedCount = 0;
     const processedCount = successCount + failedCount + skippedCount;
+
     const finalState = normalizeDirectStatus({
       successCount,
       failedCount,
       totalCount,
     });
+
     const completedAt = new Date();
 
     await db.editHistory.updateMany({
@@ -808,7 +918,8 @@ export class BulkEditCommandService {
     });
 
     await clearKeyCaches(`${historyShop}:fetchHistories`);
-    console.info("[bulk-edit-execute] finalized", {
+
+    logger.info("[bulk-edit-execute] finalized", {
       historyId,
       status: finalState.status,
       success: successCount,

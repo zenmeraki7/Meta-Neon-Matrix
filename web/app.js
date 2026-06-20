@@ -30,6 +30,8 @@ import filterCombinationRoutes from "./routes/filterCombinationRoutes.js";
 import rumRoutes from "./routes/rumRoutes.js";
 import bootstrapRoutes from "./routes/bootstrapRoutes.js";
 import variantsRoutes from "./routes/variants.js";
+import { bulkEditApplyRouter } from "./routes/bulkEditApply.route.js";
+import { bulkEditCancelRouter } from "./routes/bulkEditCancel.route.js";
 
 // Socket
 import { initSocket } from "./socket.js";
@@ -198,6 +200,8 @@ export const buildApp = (_server, io) => {
   app.use("/api/sync", SyncRoutes);
   app.use("/api/intelligence", intelligenceRoutes);
   app.use("/api/bootstrap", bootstrapRoutes);
+  app.use(bulkEditApplyRouter);
+  app.use(bulkEditCancelRouter);
   app.use("/api/admin", AdminRoutes);
   app.use("/api", filterCombinationRoutes);
   app.use("/metrics", metricsRoute);
