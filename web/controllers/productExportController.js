@@ -105,7 +105,6 @@ if (active) {
       data: newExportHistory,
     });
   } catch (err) {
-    console.log(err.message);
     await logApiError({
       shop: session?.shop,
       err,

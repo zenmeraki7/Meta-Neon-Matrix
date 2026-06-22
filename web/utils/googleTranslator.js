@@ -50,7 +50,6 @@ export const createMultiLanguage = async (originalTitle) => {
 };
 
 export const createMultiLanguageForFileEdit =  (originalTitle) => {
-  console.log("OGTitle:",originalTitle)
   const translated = { en: originalTitle };
   for (const lang of LANGUAGES) {
     if (lang === "en") continue;
@@ -61,7 +60,7 @@ export const createMultiLanguageForFileEdit =  (originalTitle) => {
       // throw new Error(`Translation failed for ${lang}: ${err.message}`);
     }
   }
- console.log(translated)
+//  console.log(translated)
 
   return translated;
 };

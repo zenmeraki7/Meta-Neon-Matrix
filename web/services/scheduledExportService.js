@@ -212,11 +212,7 @@ export async function createScheduledExport({ shop, body, subscription }) {
     filename,
     nextRunAt,
   });
-console.log("🧪 Creating scheduled export:", {
-  status,
-  nextRunAt,
-  now: new Date().toISOString(),
-});
+
 
   logger.info("Scheduled export created", {
     shop,

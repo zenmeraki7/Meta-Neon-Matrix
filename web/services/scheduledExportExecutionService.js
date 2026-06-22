@@ -209,7 +209,6 @@ const debugAll = await prisma.scheduledExport.findMany({
 
     for (const { id } of dueIds) {
       try {
-        console.log("🔁 Processing scheduledExportId:", id);
         const reservation = await prisma.$transaction(async (tx) => {
           const locked = await tryAdvisoryLock(tx, `scheduled-export:${id}`, true);
           if (!locked) {
