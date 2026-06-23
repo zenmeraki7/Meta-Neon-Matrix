@@ -1,38 +1,41 @@
-client_id = "0d2faed5eadc2b3043d4da7d9dc6e290"
-name = "MetaMatrix Bulk Product Editor"
-handle = "metamatrix"
-application_url = "https://metamatrix-a1cccaa914e8.herokuapp.com"
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "8080a194096cb602f516d4bb1841df93"
+name = "test-meta-new"
+application_url = "https://occasion-particular-warning-santa.trycloudflare.com"
 embedded = true
+handle = "test-meta-new"
 
 [webhooks]
 api_version = "2024-07"
 
-[[webhooks.subscriptions]]
-topics = [
-  "bulk_operations/finish",
+  [[webhooks.subscriptions]]
+  topics = [
   "app/uninstalled",
+  "products/delete",
   "products/create",
   "products/update",
-  "products/delete"
+  "bulk_operations/finish"
 ]
-uri = "/api/webhooks"
-
-[[webhooks.subscriptions]]
-compliance_topics = [
-  "customers/data_request",
-  "customers/redact",
-  "shop/redact"
-]
-uri = "/api/webhooks"
+  uri = "/api/webhooks"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
 [access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_inventory,read_locations,read_metaobjects,read_products,write_products"
-optional_scopes = []
+optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/callback",
-  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/shopify/callback",
-  "https://metamatrix-a1cccaa914e8.herokuapp.com/api/auth/callback"
+  "https://occasion-particular-warning-santa.trycloudflare.com/auth/callback",
+  "https://occasion-particular-warning-santa.trycloudflare.com/auth/shopify/callback"
 ]
+
+[app_proxy]
+url = "https://automatic-learners-excluded-decorative.trycloudflare.com/storefront/subscription"
+subpath = "proxy"
+prefix = "apps"
+
+[build]
+automatically_update_urls_on_dev = true
