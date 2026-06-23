@@ -204,10 +204,11 @@ export async function applyMirrorFromSuccessfulChangeRecords({
     where: {
       shop,
       editHistoryId: historyId,
-      status: "SUCCESS",
+      status: { in: ["SUCCESS", "VERIFIED"] },
     },
     select: {
       id: true,
+      targetIdentity: true,
       productId: true,
       variantId: true,
       productFieldChanges: true,

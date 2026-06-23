@@ -37,6 +37,8 @@ import {
 } from "../../repositories/bulkEditExecutionRepository.js";
 import { toWorkerOperationStatusDto } from "../../dtos/workerOperationStatusDto.js";
 import { bulkEditExecuteDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
+import { db } from "../../repositories/repositoryDb.js";
 
 const WORKER_NAME = "bulkEditExecuteWorker";
 const OPERATION_QUEUE_NAMES = {
@@ -316,6 +318,51 @@ async function countRemainingFrozenTargets({ snapshotSetId, shop, cursorTargetKe
   return countRemainingSnapshotItems({ snapshotSetId, shop, cursorTargetKey });
 }
 
+async function materializePendingChangeRecords({
+  historyId,
+  shop,
+  mirrorBatchId,
+  batchId,
+  changes,
+}) {
+  const rows = Array.isArray(changes) ? changes : [];
+  if (!rows.length) return;
+
+  await db.changeRecord.createMany({
+    data: rows.map((change) => {
+      const plannedMutation = change?.plannedMutation || {};
+      const productFieldChanges = Array.isArray(plannedMutation.productFieldChanges)
+        ? plannedMutation.productFieldChanges
+        : [];
+      const variantFieldChanges = Array.isArray(plannedMutation.variantFieldChanges)
+        ? plannedMutation.variantFieldChanges
+        : [];
+
+      return {
+        editHistoryId: historyId,
+        targetType: String(change?.targetType || "PRODUCT").toUpperCase(),
+        targetIdentity: String(change?.targetIdentity || ""),
+        productId: String(change?.productId || ""),
+        variantId: change?.variantId ? String(change.variantId) : null,
+        shop,
+        mirrorBatchId: mirrorBatchId || null,
+        beforeValues: change?.beforeValues || {},
+        afterValues: { productFieldChanges, variantFieldChanges },
+        options: {
+          shopifyBulkLineNumber: Number(change?.shopifyBulkLineNumber || 0),
+        },
+        productFieldChanges,
+        variantFieldChanges,
+        title: change?.beforeValues?.productTitle || "Untitled product",
+        scope: change?.variantId ? "variant" : "product",
+        status: "pending",
+        batchId,
+      };
+    }),
+    skipDuplicates: true,
+  });
+}
+
 async function resolveEmptyBatchCursorOrdinal({
   historyId,
   shop,
@@ -454,7 +501,13 @@ async function requeueForShopifySlot({
     },
     {
       delay: delayMs,
-      jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}:waiting-shopify-slot`,
+      jobId: joinSafeJobId(
+        "bulk-edit-execute",
+        shop,
+        historyId,
+        executionId,
+        "waiting-shopify-slot",
+      ),
       attempts: 6,
       backoff: { type: "exponential", delay: 5000 },
       removeOnComplete: { age: 86400, count: 1000 },
@@ -531,7 +584,13 @@ async function processBulkEditExecuteJob(job) {
         },
         {
           delay: delayMs,
-          jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}:shopify-slot`,
+          jobId: joinSafeJobId(
+            "bulk-edit-execute",
+            shop,
+            historyId,
+            executionId,
+            "shopify-slot",
+          ),
           attempts: 6,
           backoff: { type: "exponential", delay: 5000 },
           removeOnComplete: { age: 86400, count: 1000 },
@@ -566,7 +625,13 @@ async function processBulkEditExecuteJob(job) {
         },
         {
           delay: delayMs,
-          jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}:execute-lease`,
+          jobId: joinSafeJobId(
+            "bulk-edit-execute",
+            shop,
+            historyId,
+            executionId,
+            "execute-lease",
+          ),
           attempts: 6,
           backoff: { type: "exponential", delay: 5000 },
           removeOnComplete: { age: 86400, count: 1000 },
@@ -693,6 +758,14 @@ async function processBulkEditExecuteJob(job) {
       shop,
       historyId,
       leaseOwnerId: executeLeaseOwnerId,
+    });
+
+    await materializePendingChangeRecords({
+      historyId,
+      shop,
+      mirrorBatchId: history.targetMirrorBatchId,
+      batchId: preparedBatch.batchId,
+      changes: preparedBatch.changes,
     });
 
     let submission;

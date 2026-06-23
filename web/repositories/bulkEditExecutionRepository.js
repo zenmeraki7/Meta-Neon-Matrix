@@ -19,6 +19,7 @@ export async function findExecutionHistory(historyId, shop) {
       snapshotSetId: true,
       cancelRequestedAt: true,
       targetSnapshotCount: true,
+      targetMirrorBatchId: true,
       processedCount: true,
       totalItems: true,
     },

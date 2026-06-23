@@ -113,6 +113,11 @@ test("products filter builder supports searchable fields, enum status, and scope
   assert.match(valueInput, /ChoiceList/);
 
   assert.match(commandService, /FILTER_UI_OVERRIDES/);
+  assert.match(
+    commandService,
+    /title:\s*\{[^}]*isSearchable:\s*false[^}]*\}/,
+    "title must remain a free-text filter unless a title suggestions API is configured",
+  );
   assert.match(commandService, /status:\s*\{/);
   assert.match(commandService, /values:\s*\["ACTIVE",\s*"DRAFT",\s*"ARCHIVED"\]/);
   assert.match(commandService, /api:\s*"\/api\/products\/filter-values\/vendor"/);

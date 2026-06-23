@@ -333,6 +333,7 @@ export class BulkEditExecutionPreparationService {
           variantId: row.variantId,
           targetType: row.targetType,
           targetIdentity: row.targetKey,
+          beforeValues: row.beforeValues,
           plannedMutation: row.plannedMutation,
         }));
 
@@ -356,6 +357,7 @@ export class BulkEditExecutionPreparationService {
         variantId: row.variantId,
         targetType: row.targetType,
         targetIdentity: row.targetKey,
+        beforeValues: row.beforeValues,
         plannedMutation: row.plannedMutation,
       }));
 
@@ -515,7 +517,15 @@ export class BulkEditExecutionPreparationService {
 
     return {
       formattedProducts,
-      changes: [],
+      changes: rows.map((row, shopifyBulkLineNumber) => ({
+        productId: row.productId,
+        variantId: row.variantId,
+        targetType: row.targetType,
+        targetIdentity: row.targetIdentity,
+        beforeValues: row.beforeValues || {},
+        plannedMutation: row.plannedMutation || {},
+        shopifyBulkLineNumber,
+      })),
       batchId,
       batchTargetCount: rows.length,
       lastProductId,

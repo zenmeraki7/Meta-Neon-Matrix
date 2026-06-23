@@ -17,6 +17,7 @@ import {
   releaseOperationLease,
 } from "../../services/operationLeaseService.js";
 import { bulkEditResultIngestDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
 
 const QUEUE_NAME = process.env.BULK_EDIT_RESULT_INGEST_QUEUE || "bulk-edit-result-ingest";
 const MAX_RESULT_URL_RETRIES = Number.parseInt(
@@ -128,7 +129,12 @@ async function enqueueVerification({ historyId, shop, executionId }) {
       source: "bulk_edit_result_ingest",
     },
     {
-      jobId: `bulk-edit-verify:${shop}:${historyId}:${executionId || "default"}`,
+      jobId: joinSafeJobId(
+        "bulk-edit-verify",
+        shop,
+        historyId,
+        executionId || "default",
+      ),
     },
   );
 }
@@ -342,35 +348,6 @@ async function processBulkEditResultIngest(job) {
     };
   }
 
-    const ingesting = await transitionOperation({
-      shop,
-      operationId: history.id,
-      expectedExecutionStates: [
-        OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
-        OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
-        OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-      ],
-      expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
-      nextExecutionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-      transitionKey: "bulk_result_ingest_started",
-      actor: { type: "worker", id: WORKER_NAME },
-      reasonCode: "RESULT_INGESTION_STARTED",
-      metadata: { bulkOperationId, webhookStatus },
-      db,
-    });
-    if (!ingesting?.ok) {
-      throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_INGESTING_RESULTS");
-    }
-
-    await upsertOperationStageProgress({
-    shop,
-    operationType: "BULK_EDIT",
-    operationId: history.id,
-    executionId,
-    stageKey: "RESULT_INGESTION",
-    stageStatus: "RUNNING",
-  });
-
     const fetched = await fetchBulkOperationResultUrl({ shop, bulkOperationId });
     const status = String(fetched.status || "").toUpperCase();
     const resultUrl =
@@ -378,6 +355,76 @@ async function processBulkEditResultIngest(job) {
     || fetched.url
     || fetched.partialDataUrl
     || null;
+
+    const shopifyCompleted = ["COMPLETED", "COMPLETED_WITH_ERRORS"].includes(status);
+    if (
+      shopifyCompleted
+      && ![
+        OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+        OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+      ].includes(history.executionState)
+    ) {
+      const markedShopifyCompleted = await transitionOperation({
+        shop,
+        operationId: history.id,
+        expectedExecutionStates: [
+          OPERATION_LIFECYCLE_STATES.RECONCILE_SUBMITTED,
+          OPERATION_LIFECYCLE_STATES.SHOPIFY_BULK_SUBMITTED,
+          OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
+        ],
+        expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+        nextExecutionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+        transitionKey: "bulk_result_ingest_shopify_completed",
+        actor: { type: "worker", id: WORKER_NAME },
+        reasonCode: "SHOPIFY_BULK_OPERATION_COMPLETED",
+        metadata: { bulkOperationId, status, webhookStatus },
+        dataPatch: {
+          batch: mergeBatch(history.batch, {
+            shopifyBulkOperation: {
+              ...(history.batch?.shopifyBulkOperation || {}),
+              id: bulkOperationId,
+              status,
+              webhookStatus: webhookStatus || null,
+              completedAt: new Date().toISOString(),
+            },
+          }),
+        },
+        db,
+      });
+      if (!markedShopifyCompleted?.ok) {
+        throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_SHOPIFY_COMPLETED");
+      }
+    }
+
+    if (shopifyCompleted) {
+      const ingesting = await transitionOperation({
+        shop,
+        operationId: history.id,
+        expectedExecutionStates: [
+          OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
+          OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+        ],
+        expectedFenceToken: Number(history.batch?.executeLeaseFencingToken || 0),
+        nextExecutionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+        transitionKey: "bulk_result_ingest_started",
+        actor: { type: "worker", id: WORKER_NAME },
+        reasonCode: "RESULT_INGESTION_STARTED",
+        metadata: { bulkOperationId, webhookStatus },
+        db,
+      });
+      if (!ingesting?.ok) {
+        throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_INGESTING_RESULTS");
+      }
+
+      await upsertOperationStageProgress({
+        shop,
+        operationType: "BULK_EDIT",
+        operationId: history.id,
+        executionId,
+        stageKey: "RESULT_INGESTION",
+        stageStatus: "RUNNING",
+      });
+    }
 
   if (status && ["FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(status)) {
     const cancelled = ["CANCELED", "CANCELLED"].includes(status);
@@ -530,6 +577,7 @@ async function processBulkEditResultIngest(job) {
       bulkOperationId,
       resultUrl,
       attempt: job.attemptsMade + 1,
+      existingLeaseOwnerId: ingestLeaseOwnerId,
     });
     await upsertOperationStageProgress({
       shop,

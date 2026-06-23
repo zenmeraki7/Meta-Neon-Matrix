@@ -45,6 +45,32 @@ const CAS_MUTABLE_EXECUTION_STATES = [
   OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
 ];
 
+function buildSubmitFenceWhere(submitFence) {
+  const leaseOwnerId = String(submitFence?.leaseOwnerId || "").trim();
+  const fencingToken = Number(submitFence?.fencingToken || 0);
+
+  if (!leaseOwnerId || !Number.isFinite(fencingToken) || fencingToken <= 0) {
+    return {};
+  }
+
+  return {
+    AND: [
+      {
+        batch: {
+          path: ["executeLeaseOwnerId"],
+          equals: leaseOwnerId,
+        },
+      },
+      {
+        batch: {
+          path: ["executeLeaseFencingToken"],
+          equals: fencingToken,
+        },
+      },
+    ],
+  };
+}
+
 function determineMutationMode(fields = []) {
   const normalizedFields = Array.isArray(fields) ? fields.filter(Boolean) : [];
 
@@ -437,10 +463,7 @@ export class ShopifyBulkMutationService {
           id: historyId,
           shop: this.session.shop,
           executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-          batch: {
-            path: ["shopifyBulkOperation", "id"],
-            equals: null,
-          },
+          ...buildSubmitFenceWhere(submitFence),
         },
         data: {
           executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
@@ -526,10 +549,7 @@ export class ShopifyBulkMutationService {
             id: historyId,
             shop: this.session.shop,
             executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-            batch: {
-              path: ["shopifyBulkOperation", "id"],
-              equals: null,
-            },
+            ...buildSubmitFenceWhere(submitFence),
           },
           data: {
             executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
@@ -660,10 +680,7 @@ export class ShopifyBulkMutationService {
         id: historyId,
         shop: this.session.shop,
         executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-        batch: {
-          path: ["shopifyBulkOperation", "id"],
-          equals: null,
-        },
+        ...buildSubmitFenceWhere(submitFence),
       },
       data: {
         batch: mergeBatch(history.batch, {
@@ -859,10 +876,7 @@ export class ShopifyBulkMutationService {
           shop: this.session.shop,
           executionIdentity: history.executionIdentity || null,
           executionState: { in: CAS_MUTABLE_EXECUTION_STATES },
-          batch: {
-            path: ["shopifyBulkOperation", "id"],
-            equals: null,
-          },
+          ...buildSubmitFenceWhere(submitFence),
         },
         data: {
           executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,

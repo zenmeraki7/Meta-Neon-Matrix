@@ -25,6 +25,15 @@ test("worker boot starts autorun-disabled bulk edit execute worker", () => {
   assert.ok(workerBootSource.includes("startBulkEditExecuteWorker()"));
 });
 
+test("worker boot starts autorun-disabled bulk edit pipeline worker", () => {
+  const workerBootSource = read("web/worker.js");
+  const pipelineWorkerSource = read("web/Jobs/Workers/bulkEditPipelineWorker.js");
+
+  assert.ok(pipelineWorkerSource.includes("autorun: false"));
+  assert.ok(pipelineWorkerSource.includes("export function startBulkEditPipelineWorker()"));
+  assert.ok(workerBootSource.includes("startBulkEditPipelineWorker()"));
+});
+
 test("scheduled edit worker does not call legacy updateProducts path", () => {
   const source = read("web/Jobs/Workers/scheduledEditWorker.js");
   assert.ok(!source.includes("updateProducts("));

@@ -25,17 +25,21 @@ function normalizeTargetIdentity(row) {
   ).trim() || null;
 }
 
-function extractRowResult(row = {}) {
+function extractRowResult(row = {}, fallbackTargetIdentity = null) {
+  const payload = row?.data && typeof row.data === "object" ? row.data : row;
+  const productSet = payload?.productSet || null;
   const userErrors =
-    row?.userErrors
-    || row?.productSet?.userErrors
-    || row?.product?.userErrors
+    payload?.userErrors
+    || productSet?.userErrors
+    || productSet?.productSetOperation?.userErrors
+    || payload?.product?.userErrors
     || [];
   const normalizedErrors = Array.isArray(userErrors) ? userErrors : [];
 
-  const targetIdentity = normalizeTargetIdentity(row);
-  const productIdRaw = row?.productId || row?.id || row?.product?.id || null;
-  const variantIdRaw = row?.variantId || row?.variant?.id || null;
+  const targetIdentity = normalizeTargetIdentity(row) || fallbackTargetIdentity;
+  const product = productSet?.product || payload?.product || null;
+  const productIdRaw = payload?.productId || payload?.id || product?.id || null;
+  const variantIdRaw = payload?.variantId || payload?.variant?.id || null;
 
   return {
     targetIdentity,
@@ -97,25 +101,31 @@ export class BulkEditResultIngestionService {
     bulkOperationId,
     resultUrl,
     attempt = 1,
+    existingLeaseOwnerId = null,
   }) {
-    const leaseOwnerId = buildLeaseOwnerId("bulk-edit-result-ingest");
-    const lease = await acquireOperationLease({
-      shop,
-      namespace: "BULK_EDIT_RESULT_INGEST",
-      resourceId: String(historyId),
-      ownerId: leaseOwnerId,
-    });
-    if (!lease?.acquired) {
-      throw new Error("RESULT_INGEST_LEASE_CONFLICT");
-    }
-    const leaseHeartbeat = setInterval(() => {
-      heartbeatOperationLease({
+    const ownsLease = !existingLeaseOwnerId;
+    const leaseOwnerId = existingLeaseOwnerId || buildLeaseOwnerId("bulk-edit-result-ingest");
+    if (ownsLease) {
+      const lease = await acquireOperationLease({
         shop,
         namespace: "BULK_EDIT_RESULT_INGEST",
         resourceId: String(historyId),
         ownerId: leaseOwnerId,
-      }).catch(() => {});
-    }, 30_000);
+      });
+      if (!lease?.acquired) {
+        throw new Error("RESULT_INGEST_LEASE_CONFLICT");
+      }
+    }
+    const leaseHeartbeat = ownsLease
+      ? setInterval(() => {
+        heartbeatOperationLease({
+          shop,
+          namespace: "BULK_EDIT_RESULT_INGEST",
+          resourceId: String(historyId),
+          ownerId: leaseOwnerId,
+        }).catch(() => {});
+      }, 30_000)
+      : null;
     try {
     const history = await db.editHistory.findUnique({
       where: { id: historyId },
@@ -245,6 +255,13 @@ export class BulkEditResultIngestionService {
       update: {
         attempt: Number(attempt || 1),
         status: "IN_PROGRESS",
+        rowOffset: Number(checkpoint.rowOffset || 0),
+        rowCount,
+        successCount,
+        failureCount,
+        unmappedRowCount,
+        malformedRowCount,
+        rollingChecksum: checkpoint.rollingChecksum,
         metadata: {
           bulkOperationId,
           batchId,
@@ -254,6 +271,31 @@ export class BulkEditResultIngestionService {
 
     const pendingUpdates = [];
     const FLUSH_SIZE = 500;
+    const batchChangeRecords = await db.changeRecord.findMany({
+      where: {
+        editHistoryId: historyId,
+        shop,
+        ...(batchId ? { batchId } : {}),
+      },
+      select: {
+        targetIdentity: true,
+        status: true,
+        options: true,
+      },
+    });
+    const targetIdentityByLineNumber = new Map(
+      batchChangeRecords.map((record, index) => {
+        const configured = Number(record?.options?.shopifyBulkLineNumber);
+        const lineNumber = Number.isInteger(configured) ? configured : index;
+        return [lineNumber, record.targetIdentity];
+      }),
+    );
+    const changeRecordByTargetIdentity = new Map(
+      batchChangeRecords.map((record) => [record.targetIdentity, record]),
+    );
+    const snapshotSetId = String(
+      history.batch?.targetSnapshotRef?.snapshotSetId || "",
+    ).trim();
 
     const flushCheckpoint = async () => {
       checkpoint.rowOffset = rowCount;
@@ -291,33 +333,73 @@ export class BulkEditResultIngestionService {
     const flushPending = async () => {
       if (!pendingUpdates.length) return;
       const updates = pendingUpdates.splice(0, pendingUpdates.length);
-      const txOps = updates.map((item) => db.changeRecord.updateMany({
-        where: {
-          editHistoryId: historyId,
-          shop,
-          ...(batchId ? { batchId } : {}),
-          targetIdentity: item.targetIdentity,
-          status: { in: ["pending", "PENDING", "failed", "FAILED"] },
-        },
-        data: {
-          status: item.status,
-          failureCode: item.status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
-          failureMessage: item.status === "FAILED"
-            ? JSON.stringify(item.shopifyUserErrors || [])
-            : null,
-          options: {
-            attempt,
-            shopifyUserErrors: item.shopifyUserErrors || [],
+      const txOps = updates.map((item) => {
+        const existingRecord = changeRecordByTargetIdentity.get(item.targetIdentity);
+        return db.changeRecord.updateMany({
+          where: {
+            editHistoryId: historyId,
+            shop,
+            ...(batchId ? { batchId } : {}),
+            targetIdentity: item.targetIdentity,
+            status: { in: ["pending", "PENDING", "failed", "FAILED"] },
           },
-        },
-      }));
+          data: {
+            status: item.status,
+            failureCode: item.status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
+            failureMessage: item.status === "FAILED"
+              ? JSON.stringify(item.shopifyUserErrors || [])
+              : null,
+            options: {
+              ...(existingRecord?.options && typeof existingRecord.options === "object"
+                ? existingRecord.options
+                : {}),
+              attempt,
+              shopifyUserErrors: item.shopifyUserErrors || [],
+            },
+          },
+        });
+      });
       const results = await db.$transaction(txOps);
       for (let i = 0; i < results.length; i += 1) {
         const count = Number(results[i]?.count || 0);
         const row = updates[i];
         if (!count) {
+          const existingStatus = String(
+            changeRecordByTargetIdentity.get(row.targetIdentity)?.status || "",
+          ).toUpperCase();
+          if (
+            row.status === "SUCCESS"
+            && ["SUCCESS", "SUCCEEDED", "VERIFIED"].includes(existingStatus)
+          ) {
+            // A previous attempt may have committed the row before its history/checkpoint
+            // write. Treat that durable success as idempotent instead of data corruption.
+            successCount += 1;
+            continue;
+          }
           unmappedRowCount += 1;
           continue;
+        }
+        changeRecordByTargetIdentity.set(row.targetIdentity, {
+          ...(changeRecordByTargetIdentity.get(row.targetIdentity) || {}),
+          status: row.status,
+        });
+        if (snapshotSetId) {
+          // eslint-disable-next-line no-await-in-loop
+          await db.targetSnapshotItem.updateMany({
+            where: {
+              shop,
+              snapshotSetId,
+              targetKey: row.targetIdentity,
+            },
+            data: {
+              executionStatus: row.status === "SUCCESS" ? "SUCCEEDED" : "FAILED",
+              shopifyErrorCode: row.status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
+              shopifyErrorMessage: row.status === "FAILED"
+                ? JSON.stringify(row.shopifyUserErrors || []).slice(0, 1000)
+                : null,
+              executedAt: new Date(),
+            },
+          });
         }
         if (row.status === "SUCCESS") successCount += count;
         else failureCount += count;
@@ -339,7 +421,13 @@ export class BulkEditResultIngestionService {
         await flushCheckpoint();
         return;
       }
-      const item = extractRowResult(parsed);
+      const lineNumber = Number.isInteger(Number(parsed?.__lineNumber))
+        ? Number(parsed.__lineNumber)
+        : rowCount - 1;
+      const item = extractRowResult(
+        parsed,
+        targetIdentityByLineNumber.get(lineNumber) || null,
+      );
       if (!item.targetIdentity) {
         unmappedRowCount += 1;
         checkpoint.rollingChecksum = checkpointChecksum(
@@ -479,10 +567,16 @@ export class BulkEditResultIngestionService {
       historyId,
     });
 
+    // completedUpdate persisted resultIngestion above. Merge mirror metadata into the
+    // latest batch value so this follow-up write cannot erase the ingestion marker.
+    const latestHistoryForMirrorApply = await db.editHistory.findFirst({
+      where: { id: historyId, shop },
+      select: { batch: true },
+    });
     await db.editHistory.updateMany({
       where: { id: historyId, shop },
       data: {
-        batch: mergeBatch(history.batch, {
+        batch: mergeBatch(latestHistoryForMirrorApply?.batch, {
           mirrorApply: {
             status: "APPLIED_PENDING_RECONCILE",
             attemptedRows: Number(mirrorApplyResult?.attemptedRows || 0),
@@ -550,13 +644,15 @@ export class BulkEditResultIngestionService {
       rollingChecksum: checkpoint.rollingChecksum,
     };
     } finally {
-      clearInterval(leaseHeartbeat);
-      await releaseOperationLease({
-        shop,
-        namespace: "BULK_EDIT_RESULT_INGEST",
-        resourceId: String(historyId),
-        ownerId: leaseOwnerId,
-      });
+      if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+      if (ownsLease) {
+        await releaseOperationLease({
+          shop,
+          namespace: "BULK_EDIT_RESULT_INGEST",
+          resourceId: String(historyId),
+          ownerId: leaseOwnerId,
+        });
+      }
     }
   }
 }

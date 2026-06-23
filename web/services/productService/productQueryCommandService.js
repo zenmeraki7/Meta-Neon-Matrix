@@ -233,6 +233,7 @@ function mapOperatorToLegacyLabel(operator) {
 const FILTER_UI_OVERRIDES = Object.freeze({
   title: {
     label: "Product title",
+    isSearchable: false,
     searchAliases: ["product", "name"],
   },
   vendor: {

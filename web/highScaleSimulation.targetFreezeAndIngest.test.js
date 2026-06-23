@@ -41,6 +41,13 @@ test("result ingestion persists checkpoint and checksum fields for resumability"
   assert.ok(src.includes("UNMAPPED_RESULT_ROWS"));
 });
 
+test("result ingestion preserves its terminal marker and accepts committed row retries", () => {
+  const src = read("web/services/bulkEdit/BulkEditResultIngestionService.js");
+  assert.ok(src.includes("latestHistoryForMirrorApply?.batch"));
+  assert.ok(src.includes('["SUCCESS", "SUCCEEDED", "VERIFIED"].includes(existingStatus)'));
+  assert.ok(src.includes("existingRecord.options"));
+});
+
 test("prisma schema defines dedicated ingestion checkpoint model keyed by shop/history/run", () => {
   const schema = read("web/prisma/schema.prisma");
   assert.ok(schema.includes("model EditHistoryIngestionCheckpoint"));

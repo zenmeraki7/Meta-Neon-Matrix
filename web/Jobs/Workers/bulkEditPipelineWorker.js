@@ -440,7 +440,6 @@ async function processBulkEditExecute(jobData) {
       executionId,
     },
     {
-      jobId: `bulk-edit-execute:${shop}:${historyId}:${executionId}`,
       attempts: 6,
       backoff: { type: "exponential", delay: 5000 },
       removeOnComplete: { age: 86400, count: 1000 },
