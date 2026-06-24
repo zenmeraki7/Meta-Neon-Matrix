@@ -91,6 +91,9 @@ for (const modPath of workerModulePaths) {
   if (typeof mod?.startBulkEditExecuteWorker === "function") {
     mod.startBulkEditExecuteWorker();
   }
+  if (typeof mod?.startBulkEditVerificationWorker === "function") {
+    mod.startBulkEditVerificationWorker();
+  }
   for (const value of Object.values(mod || {})) {
     if (value && typeof value.close === "function") {
       closables.push(value);

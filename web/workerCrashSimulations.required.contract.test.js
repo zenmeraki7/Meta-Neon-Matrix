@@ -68,7 +68,7 @@ test("7) duplicate webhook x10 guarded by ingest lease/CAS", () => {
   const src = read(SRC.ingestService);
   assert.ok(src.includes("BULK_EDIT_RESULT_INGEST"));
   assert.ok(src.includes('path: ["resultIngestion", "ingestedAt"]'));
-  assert.ok(src.includes("equals: null"));
+  assert.ok(src.includes("equals: Prisma.DbNull"));
 });
 
 test("8) ingestion crash halfway has chunked progression and resumable updates", () => {

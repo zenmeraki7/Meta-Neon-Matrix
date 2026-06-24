@@ -394,6 +394,7 @@ export async function markSyncHistoryFailed({
 
     if (shop) {
       const store = await ensureStoreForShop({ shop }, tx);
+      const hasActivatedMirror = Boolean(store.activeMirrorBatchId);
       logStoreMutation("markSyncHistoryFailed.store.updateMany", {
         shop,
         storeId: store.id,
@@ -406,10 +407,13 @@ export async function markSyncHistoryFailed({
           isProductInitialySyning: false,
           syncProgressStage: "IDLE",
           shopifyBulkJobCompleted: false,
-          mirrorHealthState: "UNSAFE",
+          // A failed refresh never activates its staging batch. Keep the last
+          // successfully activated batch available for read-only previews.
+          mirrorHealthState: hasActivatedMirror ? "DEGRADED" : "UNSAFE",
           staleReason: "FULL_SYNC_FAILED",
-          repairRequired: true,
-          mirrorUnsafeSince: new Date(),
+          repairRequired: !hasActivatedMirror,
+          mirrorUnsafeSince: hasActivatedMirror ? null : new Date(),
+          productSyncRecoveryRequired: true,
           lastSyncErrorSummary: errorMessage,
         },
       });

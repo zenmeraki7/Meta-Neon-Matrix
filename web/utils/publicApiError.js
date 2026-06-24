@@ -4,6 +4,7 @@ const DEFAULT_MESSAGES = Object.freeze({
   UNAUTHENTICATED: "Authentication required.",
   UNAUTHORIZED: "Authentication required.",
   FORBIDDEN: "You are not allowed to perform this action",
+  UPGRADE_REQUIRED: "This feature requires an active paid plan.",
   CONFLICT: "Operation cannot be completed in the current state",
   VALIDATION_FAILED: "Request validation failed",
   NOT_FOUND: "Requested resource was not found",
@@ -36,6 +37,7 @@ function statusFromCode(code = "INTERNAL_ERROR") {
   if (code === "UNAUTHENTICATED") return 401;
   if (code === "UNAUTHORIZED") return 403;
   if (code === "FORBIDDEN") return 403;
+  if (code === "UPGRADE_REQUIRED") return 403;
   if (code === "NOT_FOUND") return 404;
   if (code === "CONFLICT") return 409;
   if (code === "RATE_LIMITED") return 429;
@@ -165,6 +167,9 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
   }
   if (raw.includes("PREMIUM_FEATURE_REQUIRED") || raw.includes("FORBIDDEN")) {
     return { code: "FORBIDDEN", message: DEFAULT_MESSAGES.FORBIDDEN };
+  }
+  if (raw.includes("UPGRADE_REQUIRED")) {
+    return { code: "UPGRADE_REQUIRED", message: DEFAULT_MESSAGES.UPGRADE_REQUIRED };
   }
   if (
     raw.includes("STALE")

@@ -13,6 +13,7 @@ import {
   enqueueStuckBulkMutationRecoveryJob,
   enqueueStuckBulkMutationRecoveryTick,
 } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
+import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
 
 const QUEUE_NAME = "stuck-bulk-mutation-recovery";
 const RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
@@ -52,6 +53,7 @@ async function recoverStuckBulkMutations() {
       shop: true,
       status: true,
       executionState: true,
+      executionIdentity: true,
       bulkOperationId: true,
       batch: true,
       undo: true,
@@ -118,11 +120,24 @@ async function recoverStuckBulkMutations() {
           source: "stuck_bulk_mutation_recovery",
         });
       } else {
-        await addbulkEditResultIngestJob({
-          shop: history.shop,
-          bulkOperationId,
-          source: "stuck_bulk_mutation_recovery",
-        });
+        await addbulkEditResultIngestJob(
+          {
+            shop: history.shop,
+            bulkOperationId,
+            executionId: history.executionIdentity || null,
+            source: "stuck_bulk_mutation_recovery",
+          },
+          {
+            // A retained completed job with the default deterministic ID would
+            // prevent BullMQ from running this recovery attempt.
+            jobId: joinSafeJobId(
+              "stuck-bulk-edit-result-ingest",
+              history.shop,
+              history.id,
+              Math.floor(Date.now() / RECOVERY_COOLDOWN_MS),
+            ),
+          },
+        );
       }
 
       recovered += 1;

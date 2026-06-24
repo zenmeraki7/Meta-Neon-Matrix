@@ -2,6 +2,7 @@ import readline from "node:readline";
 import { Readable } from "node:stream";
 import crypto from "crypto";
 import { db } from "../../repositories/repositoryDb.js";
+import { Prisma } from "../../repositories/prismaTypes.js";
 import {
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
@@ -16,6 +17,7 @@ import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
 import { transitionOperation } from "../operationTransitionService.js";
 import { applyMirrorFromSuccessfulChangeRecords } from "./BulkEditMirrorApplyService.js";
 import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
+import { clearKeyCaches } from "../../utils/cacheUtils.js";
 
 function normalizeTargetIdentity(row) {
   return String(
@@ -521,7 +523,10 @@ export class BulkEditResultIngestionService {
       extraWhere: {
         batch: {
           path: ["resultIngestion", "ingestedAt"],
-          equals: null,
+          // A never-ingested JSON path is SQL NULL (DbNull), not JSON null.
+          // Using plain null makes the CAS match zero rows and strands the
+          // operation in INGESTING_RESULTS after its item writes succeed.
+          equals: Prisma.DbNull,
         },
       },
       data: {
@@ -561,6 +566,8 @@ export class BulkEditResultIngestionService {
         rowCount: 0,
       };
     }
+
+    await clearKeyCaches(`${shop}:historyChanges:${historyId}:`).catch(() => {});
 
     const mirrorApplyResult = await applyMirrorFromSuccessfulChangeRecords({
       shop,

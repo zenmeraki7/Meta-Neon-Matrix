@@ -9,6 +9,7 @@ import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js
 import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
 import { upsertOperationStageProgress } from "../operationStageProgressService.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
+import { clearKeyCaches } from "../../utils/cacheUtils.js";
 
 const VERIFY_MODES = Object.freeze({
   NONE: "NONE",
@@ -1036,6 +1037,8 @@ export class BulkEditVerificationService {
     if (!historyUpdate) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFICATION_RESULT");
     }
+
+    await clearKeyCaches(`${shop}:historyChanges:${historyId}:`).catch(() => {});
 
     await schedulePostMutationMirrorReconciliation({
       shop,

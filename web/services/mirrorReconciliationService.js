@@ -2,6 +2,7 @@ import { db } from "../repositories/repositoryDb.js";
 import crypto from "crypto";
 import {
   markRepairRequired,
+  markTargetedReconciliationPending,
   MIRROR_STALE_REASONS,
 } from "./mirrorHealthService.js";
 import { addShopSyncJob } from "../Jobs/Queues/shopSyncJob.js";
@@ -90,11 +91,10 @@ export async function schedulePostMutationMirrorReconciliation({
     }
   });
 
-  await markRepairRequired({
+  await markTargetedReconciliationPending({
     shop,
     reason: MIRROR_STALE_REASONS.PARTIAL_MIRROR_DETECTED,
     summary: "Bulk mutation completed; mirror marked stale until targeted reconciliation runs.",
-    severity: "medium",
     details: {
       ownerType,
       ownerId,

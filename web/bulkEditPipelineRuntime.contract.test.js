@@ -14,6 +14,7 @@ test("worker boot imports execute, ingest, and verification workers", () => {
   assert.ok(source.includes("./Jobs/Workers/bulkEditExecuteWorker.js"));
   assert.ok(source.includes("./Jobs/Workers/bulkEditResultIngestWorker.js"));
   assert.ok(source.includes("./Jobs/Workers/bulkEditVerificationWorker.js"));
+  assert.ok(source.includes("startBulkEditVerificationWorker"));
 });
 
 test("worker boot starts autorun-disabled bulk edit execute worker", () => {

@@ -115,6 +115,7 @@ function ScheduleEdit({
     setUndoStartEditTime("");
     setConfirmText("");
     setError(null);
+    setUpgradeWarning(null);
   }, []);
 
   // Handle schedule edit submission
@@ -123,17 +124,19 @@ function ScheduleEdit({
 
     setSubmitting(true);
     setError(null);
+    setUpgradeWarning(null);
 
     try {
       const scheduledAt = zonedDateTimeToUtcIso(startEditDate, startEditTime, resolvedTimezone);
       const scheduledAtMs = new Date(scheduledAt).getTime();
 
       if (!Number.isFinite(scheduledAtMs) || scheduledAtMs <= Date.now()) {
-        throw new Error(
-          t("scheduledTimeMustBeFuture", {
-            defaultValue: "Scheduled edit time must be in the future.",
-          }),
-        );
+        const message = t("scheduledTimeMustBeFuture", {
+          defaultValue: "Scheduled edit time must be in the future.",
+        });
+        setError(message);
+        showError(message);
+        return;
       }
 
       const scheduledUndoAt =
@@ -145,11 +148,12 @@ function ScheduleEdit({
         scheduledUndoAt &&
         new Date(scheduledUndoAt).getTime() <= new Date(scheduledAt).getTime()
       ) {
-        throw new Error(
-          t("undoTimeMustBeLater", {
-            defaultValue: "Undo time must be later than the scheduled edit time",
-          }),
-        );
+        const message = t("undoTimeMustBeLater", {
+          defaultValue: "Undo time must be later than the scheduled edit time",
+        });
+        setError(message);
+        showError(message);
+        return;
       }
 
       const payload = {
@@ -183,7 +187,12 @@ function ScheduleEdit({
       }, 1000);
     } catch (error) {
       const detail = error?.details || null;
-      if (detail?.code === "PRODUCT_LIMIT_EXCEEDED" || detail?.code === "UPGRADE_REQUIRED") {
+      const errorCode = String(error?.code || detail?.code || "").toUpperCase();
+      if (
+        errorCode === "PRODUCT_LIMIT_EXCEEDED"
+        || errorCode === "UPGRADE_REQUIRED"
+        || errorCode === "FORBIDDEN"
+      ) {
         setUpgradeWarning(toSafeErrorMessage(t, error, "common.errors.code.PLAN_LIMIT_REACHED"));
         return;
       }

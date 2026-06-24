@@ -12,7 +12,7 @@ test("result ingestion uses lease plus CAS guard before terminal counter write",
   assert.ok(source.includes('acquireOperationLease'));
   assert.ok(source.includes('namespace: "BULK_EDIT_RESULT_INGEST"'));
   assert.ok(source.includes('path: ["resultIngestion", "ingestedAt"]'));
-  assert.ok(source.includes('equals: null'));
+  assert.ok(source.includes('equals: Prisma.DbNull'));
   assert.ok(source.includes('processedCount: {'));
   assert.ok(source.includes('increment: successCount'));
   const normalizeStart = source.indexOf("function normalizeTargetIdentity");
@@ -80,6 +80,31 @@ test("scheduled edit creation requires approved preview contract and rejects leg
   assert.equal(modal.includes("buildFilterAstFromLegacyFilters"), false);
 });
 
+test("paid feature denial is returned as an upgrade requirement and schedule UI offers pricing", () => {
+  const middleware = read("web/middleware/subscriptionMiddleware.js");
+  const publicErrors = read("web/utils/publicApiError.js");
+  const modal = read("web/frontend/Domain/products/edit/components/ScheduleEdit.jsx");
+
+  assert.ok(middleware.includes('{ code: "UPGRADE_REQUIRED" }'));
+  assert.ok(publicErrors.includes('UPGRADE_REQUIRED: "This feature requires an active paid plan."'));
+  assert.ok(modal.includes('errorCode === "UPGRADE_REQUIRED"'));
+  assert.ok(modal.includes('onAction: () => navigate("/pricing")'));
+  assert.ok(modal.includes('defaultValue: "Scheduled edit time must be in the future."'));
+  assert.equal(modal.includes('throw new Error(\n          t("scheduledTimeMustBeFuture"'), false);
+});
+
+test("history changes bypass stale empty cache and invalidate after ingestion and verification", () => {
+  const history = read("web/services/historyService/historyService.js");
+  const ingestion = read("web/services/bulkEdit/BulkEditResultIngestionService.js");
+  const verification = read("web/services/bulkEdit/BulkEditVerificationService.js");
+
+  assert.ok(history.includes("cachedTotalCount > 0 || cacheData?.changes?.length > 0"));
+  assert.ok(history.includes("batch.resultIngestion.ingestedAt"));
+  assert.ok(history.includes("row.beforeValues?.productTitle || row.targetKey"));
+  assert.ok(ingestion.includes("clearKeyCaches(`${shop}:historyChanges:${historyId}:`)"));
+  assert.ok(verification.includes("clearKeyCaches(`${shop}:historyChanges:${historyId}:`)"));
+});
+
 test("execute worker persists and verifies execute lease fencing metadata", () => {
   const source = read("web/Jobs/Workers/bulkEditExecuteWorker.js");
   assert.ok(source.includes('namespace: "BULK_EDIT_EXECUTE"'));
@@ -109,6 +134,8 @@ test("stuck recovery worker uses per-history cooldown dedupe key", () => {
   assert.ok(source.includes("stuck-recovery-cooldown:"));
   assert.ok(source.includes("RECOVERY_COOLDOWN_MS"));
   assert.ok(source.includes('connection.set('));
+  assert.ok(source.includes('"stuck-bulk-edit-result-ingest"'));
+  assert.ok(source.includes("joinSafeJobId"));
   assert.ok(source.includes("bulkOperationId"));
 });
 

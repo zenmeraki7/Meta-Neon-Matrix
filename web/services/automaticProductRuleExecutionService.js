@@ -50,6 +50,7 @@ import {
 } from "../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
 import { reserveAutomaticRuleApplications as reserveAutomaticRuleApplicationsViaService } from "./automaticRuleApplicationReservationService.js";
+import { RUN_STATUS } from "./automaticProductRule/automaticProductRuleConstants.js";
 import {
   computeTargetSnapshotChecksum,
   freezeExplicitTargetSnapshot,
@@ -231,7 +232,7 @@ export async function reserveAutomaticRuleApplications({
 }
 
 function isTerminalRunStatus(status) {
-  return ["SUCCESS", "FAILED", "SKIPPED"].includes(status);
+  return [RUN_STATUS.SUCCEEDED, RUN_STATUS.FAILED, RUN_STATUS.CANCELLED].includes(status);
 }
 
 function isRunWindowEligible(rule, now = new Date()) {
@@ -334,7 +335,7 @@ async function reserveScheduledRun(ruleId, now) {
         source: "SCHEDULE",
       }),
       scheduledFor,
-      status: "PENDING",
+      status: RUN_STATUS.TARGET_FREEZE_QUEUED,
       executionKey,
       ruleSnapshot: buildRunRuleSnapshot(rule),
       conditionsSnapshot: Array.isArray(rule.conditions) ? rule.conditions : [],
@@ -516,7 +517,7 @@ export async function reserveAutomaticProductRuleRunFromSignal({
     try {
       const existingRun = await automaticProductRuleRunRepository.findByExecutionKeyForShop(executionKey, shop);
       if (existingRun) {
-        if (existingRun.status === "PENDING") {
+        if (existingRun.status === RUN_STATUS.TARGET_FREEZE_QUEUED) {
           await enqueueExecutionRun(existingRun.id, shop);
         }
         reusedRuns += 1;
@@ -536,7 +537,7 @@ export async function reserveAutomaticProductRuleRunFromSignal({
           productIds,
           source: triggerSource,
         }),
-        status: "PENDING",
+        status: RUN_STATUS.TARGET_FREEZE_QUEUED,
         executionKey,
         ruleSnapshot: buildRunRuleSnapshot(rule),
         conditionsSnapshot: Array.isArray(rule.conditions) ? rule.conditions : [],
@@ -550,7 +551,7 @@ export async function reserveAutomaticProductRuleRunFromSignal({
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const existingRun = await automaticProductRuleRunRepository.findByExecutionKeyForShop(executionKey, shop);
-        if (existingRun?.status === "PENDING") {
+        if (existingRun?.status === RUN_STATUS.TARGET_FREEZE_QUEUED) {
           await enqueueExecutionRun(existingRun.id, shop).catch(() => {});
         }
         reusedRuns += 1;
@@ -642,7 +643,7 @@ export async function createManualAutomaticProductRuleRun({ rule, requestKey = n
       triggerReference: "manual",
       source: "MANUAL",
     }),
-    status: "PENDING",
+    status: RUN_STATUS.TARGET_FREEZE_QUEUED,
     executionKey: buildManualExecutionKey(rule.id, requestKey),
     ruleSnapshot: buildRunRuleSnapshot(rule),
     conditionsSnapshot: Array.isArray(rule.conditions) ? rule.conditions : [],
@@ -832,7 +833,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
       }
       run = {
         ...run,
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         startedAt: run.startedAt || new Date(),
         processingToken,
       };
@@ -971,7 +972,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
     }
     run = {
       ...run,
-      status: "PROCESSING",
+      status: RUN_STATUS.EXECUTING,
       startedAt: run.startedAt || new Date(),
       processingToken,
     };
@@ -1286,7 +1287,7 @@ export async function executeAutomaticProductRuleRun(runId, shopFromJob = null) 
       throw error;
     }
 
-    if (run?.automaticProductRule && run.status === "PROCESSING" && !run.editHistoryId) {
+    if (run?.automaticProductRule && run.status === RUN_STATUS.EXECUTING && !run.editHistoryId) {
       await markRunFailed({
         run,
         rule: run.automaticProductRule,
@@ -1343,9 +1344,9 @@ export async function finalizeAutomaticProductRuleRunFromHistory({
 
   const completedAt = history.completedAt || new Date();
   const normalizedStatus =
-    status === "SUCCESS"
-      ? "SUCCESS"
-      : "FAILED";
+    status === "SUCCESS" || status === RUN_STATUS.SUCCEEDED
+      ? RUN_STATUS.SUCCEEDED
+      : RUN_STATUS.FAILED;
 
   const tokenForTransition = processingToken || run.processingToken || null;
   if (!tokenForTransition) {
@@ -1366,7 +1367,7 @@ export async function finalizeAutomaticProductRuleRunFromHistory({
       processingToken: tokenForTransition,
       data: {
         completedAt,
-        errorMessage: normalizedStatus === "FAILED"
+        errorMessage: normalizedStatus === RUN_STATUS.FAILED
           ? errorMessage || "Automatic rule run failed"
           : null,
       },
@@ -1380,7 +1381,7 @@ export async function finalizeAutomaticProductRuleRunFromHistory({
   await automaticProductRuleRepository.updateByIdForShop(history.automaticProductRuleId, run.shop, {
     runCount: { increment: 1 },
     lastRunAt: completedAt,
-    ...(normalizedStatus === "SUCCESS"
+    ...(normalizedStatus === RUN_STATUS.SUCCEEDED
       ? {
           lastSuccessAt: completedAt,
           lastFailureReason: null,
@@ -1391,7 +1392,7 @@ export async function finalizeAutomaticProductRuleRunFromHistory({
         }),
   });
 
-  if (normalizedStatus === "SUCCESS") {
+  if (normalizedStatus === RUN_STATUS.SUCCEEDED) {
     const appliedStateUpdates = Array.isArray(history.batch?.automaticRuleStateUpdates)
       ? history.batch.automaticRuleStateUpdates
       : [];

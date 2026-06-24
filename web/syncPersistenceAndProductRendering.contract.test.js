@@ -93,3 +93,17 @@ test("mirror activation resolves reconciliation signals with the Prisma schema f
   assert.match(repository, /recordCount:\s*finalProductCount,[\s\S]*completedAt/);
   assert.match(repository, /lastProductSyncAt:\s*completedAt,[\s\S]*productSyncStartedAt:\s*null/);
 });
+
+test("failed refresh preserves an activated mirror for read-only product previews", () => {
+  const syncRepository = read("web/repositories/productSyncRepository.js");
+  const storeRepository = read("web/repositories/storeRepository.js");
+  const productPage = read("web/frontend/Domain/products/list/pages/Products.jsx");
+
+  assert.match(syncRepository, /mirrorHealthState:\s*hasActivatedMirror \? "DEGRADED" : "UNSAFE"/);
+  assert.match(syncRepository, /repairRequired:\s*!hasActivatedMirror/);
+  assert.match(storeRepository, /recoverFailedProductSyncActivatedMirror\.updateMany/);
+  assert.match(storeRepository, /restoredActivatedMirrorPreview:\s*true/);
+  assert.match(productPage, /shouldShowMirrorUnavailableState/);
+  assert.match(productPage, /Product mirror needs repair/);
+  assert.match(productPage, /!isProductMirrorUnavailable/);
+});

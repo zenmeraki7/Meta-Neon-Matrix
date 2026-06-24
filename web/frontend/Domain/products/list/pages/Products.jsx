@@ -374,20 +374,26 @@ export default function ProductsPage() {
     syncNeeded &&
     emptyMirror;
 
+  const shouldShowMirrorUnavailableState =
+    !shouldShowLoadingState &&
+    !pageError &&
+    hasFetched &&
+    (!isSyncInProgress || isSyncStale) &&
+    Boolean(productUnavailableReason);
+
   const shouldShowFilteredEmptyState =
     !shouldShowLoadingState &&
     !pageError &&
     hasFetched &&
     !isSyncInProgress &&
+    !isProductMirrorUnavailable &&
     backendProductCount > 0 &&
     products.length === 0;
 
   const shouldShowProductStatusRail =
     Boolean(pageError) ||
     shouldShowSyncNeededState ||
-    (isProductMirrorUnavailable &&
-      (!isSyncInProgress || isSyncStale) &&
-      backendProductCount === 0) ||
+    shouldShowMirrorUnavailableState ||
     (isSyncInProgress && !isSyncStale && !products.length) ||
     shouldShowFilteredEmptyState;
 
@@ -497,10 +503,16 @@ export default function ProductsPage() {
               <Banner tone="critical" title="Products could not be loaded">
                 <p>{pageError}</p>
               </Banner>
-            ) : shouldShowSyncNeededState || (isProductMirrorUnavailable && (!isSyncInProgress || isSyncStale) && backendProductCount === 0) ? (
+            ) : shouldShowSyncNeededState || shouldShowMirrorUnavailableState ? (
               <Banner
                 tone="warning"
-                title={isSyncStale ? "Product sync is stuck" : "Product sync needed"}
+                title={
+                  isSyncStale
+                    ? "Product sync is stuck"
+                    : shouldShowMirrorUnavailableState
+                      ? "Product mirror needs repair"
+                      : "Product sync needed"
+                }
               >
                 <p>
                   {productUnavailableReason ||
@@ -578,6 +590,8 @@ export default function ProductsPage() {
               emptyHeading={
                 shouldShowSyncNeededState
                   ? "Sync products to show rows"
+                  : shouldShowMirrorUnavailableState
+                    ? "Products temporarily unavailable"
                   : shouldShowFilteredEmptyState
                     ? "No products match the current filters"
                   : undefined
@@ -585,6 +599,8 @@ export default function ProductsPage() {
               emptyText={
                 shouldShowSyncNeededState
                   ? "The product mirror does not have an active batch yet. Run product sync, then this table will fill automatically."
+                  : shouldShowMirrorUnavailableState
+                    ? productUnavailableReason
                   : shouldShowFilteredEmptyState
                     ? "Try changing or clearing filters to broaden the product set."
                   : undefined

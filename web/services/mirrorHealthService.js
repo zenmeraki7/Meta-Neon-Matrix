@@ -253,6 +253,45 @@ export async function markInventoryReconciliationPending(shop) {
   });
 }
 
+export async function markTargetedReconciliationPending({
+  shop,
+  reason = MIRROR_STALE_REASONS.PARTIAL_MIRROR_DETECTED,
+  summary,
+  details = null,
+}) {
+  const store = await ensureStoreForShop({ shop });
+  logStoreMutation("markTargetedReconciliationPending.updateMany", {
+    shop,
+    storeId: store.id,
+  });
+  await db.store.updateMany({
+    where: { shopUrl: shop },
+    data: {
+      // The active batch remains readable after a verified targeted mutation.
+      // DEGRADED blocks new executions while reconciliation is pending, but
+      // unlike UNSAFE it does not hide the existing product table.
+      mirrorHealthState: "DEGRADED",
+      staleReason: reason,
+      repairRequired: false,
+      mirrorUnsafeSince: null,
+      ...(summary ? { lastSyncErrorSummary: summary } : {}),
+    },
+  });
+
+  await recordMirrorAnomaly({
+    shop,
+    severity: "medium",
+    type: "targeted_reconciliation_pending",
+    entityType: "store",
+    entityId: shop,
+    message: summary || reason,
+    details: {
+      reason,
+      ...(details || {}),
+    },
+  });
+}
+
 export async function markRepairRequired({
   shop,
   reason,

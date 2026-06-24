@@ -1,4 +1,5 @@
 import { prisma } from "../config/database.js";
+import { RUN_STATUS } from "../services/automaticProductRule/automaticProductRuleConstants.js";
 
 function getClient(db) {
   return db || prisma;
@@ -28,7 +29,11 @@ function clampLimit(limit, fallback = 50, max = 100) {
   return Math.min(parsed, max);
 }
 
-const TERMINAL_RUN_STATUSES = new Set(["SUCCESS", "FAILED", "SKIPPED"]);
+const TERMINAL_RUN_STATUSES = new Set([
+  RUN_STATUS.SUCCEEDED,
+  RUN_STATUS.FAILED,
+  RUN_STATUS.CANCELLED,
+]);
 
 function assertTerminalStatus(status) {
   if (!TERMINAL_RUN_STATUSES.has(status)) {
@@ -114,7 +119,7 @@ export const automaticProductRuleRunRepository = {
     return getClient(db).automaticProductRuleRun.create({
       data: {
         ...pickRunCreateData(data),
-        status: "PENDING",
+        status: RUN_STATUS.TARGET_FREEZE_QUEUED,
         startedAt: null,
         completedAt: null,
       },
@@ -176,8 +181,8 @@ export const automaticProductRuleRunRepository = {
     assertId(id);
     assertShop(shop);
     return getClient(db).automaticProductRuleRun.updateMany({
-      where: { id, shop, status: "PENDING" },
-      data: { status: "PROCESSING", startedAt: new Date() },
+      where: { id, shop, status: RUN_STATUS.TARGET_FREEZE_QUEUED },
+      data: { status: RUN_STATUS.EXECUTING, startedAt: new Date() },
     });
   },
 
@@ -192,9 +197,9 @@ export const automaticProductRuleRunRepository = {
     assertString(processingToken, "processingToken");
     const now = new Date();
     return getClient(db).automaticProductRuleRun.updateMany({
-      where: { id, shop, status: "PENDING" },
+      where: { id, shop, status: RUN_STATUS.TARGET_FREEZE_QUEUED },
       data: {
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         startedAt: now,
         processingStartedAt: now,
         heartbeatAt: now,
@@ -210,8 +215,12 @@ export const automaticProductRuleRunRepository = {
     assertId(id);
     assertShop(shop);
     return getClient(db).automaticProductRuleRun.updateMany({
-      where: { id, shop, status: "PENDING" },
-      data: { ...pickTransitionData(data), status: "SKIPPED", completedAt: new Date() },
+      where: { id, shop, status: RUN_STATUS.TARGET_FREEZE_QUEUED },
+      data: {
+        ...pickTransitionData(data),
+        status: RUN_STATUS.CANCELLED,
+        completedAt: new Date(),
+      },
     });
   },
 
@@ -227,7 +236,7 @@ export const automaticProductRuleRunRepository = {
       where: {
         id,
         shop,
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         processingToken,
       },
       data: {
@@ -251,7 +260,7 @@ export const automaticProductRuleRunRepository = {
       where: {
         id,
         shop,
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         processingToken,
         OR: [
           { editHistoryId: null },
@@ -296,7 +305,7 @@ export const automaticProductRuleRunRepository = {
       where: {
         id,
         shop,
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         ...(processingToken ? { processingToken } : {}),
       },
       data,
@@ -311,7 +320,7 @@ export const automaticProductRuleRunRepository = {
       where: {
         id,
         shop,
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         processingToken,
       },
       data: {
@@ -327,7 +336,7 @@ export const automaticProductRuleRunRepository = {
       where: {
         id,
         shop,
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         editHistoryId: null,
       },
       data: {
@@ -390,7 +399,7 @@ export const automaticProductRuleRunRepository = {
   async listPendingRunsWithoutHistory(limit = 100, db = prisma) {
     return getClient(db).automaticProductRuleRun.findMany({
       where: {
-        status: "PENDING",
+        status: RUN_STATUS.TARGET_FREEZE_QUEUED,
         editHistoryId: null,
         automaticProductRule: {
           isDeleted: false,
@@ -419,7 +428,7 @@ export const automaticProductRuleRunRepository = {
 
     return getClient(db).automaticProductRuleRun.findMany({
       where: {
-        status: "PROCESSING",
+        status: RUN_STATUS.EXECUTING,
         editHistoryId: null,
         startedAt: { lt: threshold },
         automaticProductRule: {

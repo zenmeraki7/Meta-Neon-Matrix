@@ -140,8 +140,8 @@ export const requirePaidPlanMiddleware = (req, res, next) => {
     // Block FREE plan
     if (planKey === "FREE") {
       const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "FORBIDDEN" },
-        "FORBIDDEN",
+        { code: "UPGRADE_REQUIRED" },
+        "UPGRADE_REQUIRED",
       );
       return res.status(statusCode).json(body);
     }
@@ -149,8 +149,8 @@ export const requirePaidPlanMiddleware = (req, res, next) => {
     // Optional: Also ensure subscription is ACTIVE
     if (status !== "ACTIVE") {
       const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "FORBIDDEN" },
-        "FORBIDDEN",
+        { code: "UPGRADE_REQUIRED" },
+        "UPGRADE_REQUIRED",
       );
       return res.status(statusCode).json(body);
     }

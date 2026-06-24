@@ -24,25 +24,35 @@ function toNonNegativeInt(value, fallback = 0) {
 }
 
 function buildIngestionSummaryFields(batch, targetSnapshotCount, processedCount) {
-  const source = batch && typeof batch === "object" && batch.ingestionSummary
+  const initialSource = batch && typeof batch === "object" && batch.ingestionSummary
     && typeof batch.ingestionSummary === "object"
     ? batch.ingestionSummary
     : {};
+  const completedSource = batch && typeof batch === "object" && batch.resultIngestion
+    && typeof batch.resultIngestion === "object" && batch.resultIngestion.ingestedAt
+    ? batch.resultIngestion
+    : null;
 
   const totalTargets = toNonNegativeInt(
-    source.totalTargets,
+    initialSource.totalTargets,
     toNonNegativeInt(targetSnapshotCount || 0, 0),
   );
   const submittedCount = toNonNegativeInt(
-    source.submittedCount,
-    toNonNegativeInt(processedCount || 0, 0),
+    completedSource?.rowCount,
+    toNonNegativeInt(initialSource.submittedCount, toNonNegativeInt(processedCount || 0, 0)),
   );
-  const successCount = toNonNegativeInt(source.successCount, 0);
-  const failedCount = toNonNegativeInt(source.failedCount, 0);
-  const retryableFailureCount = toNonNegativeInt(source.retryableFailureCount, 0);
-  const permanentFailureCount = toNonNegativeInt(source.permanentFailureCount, 0);
+  const successCount = toNonNegativeInt(
+    completedSource?.successCount,
+    toNonNegativeInt(initialSource.successCount, 0),
+  );
+  const failedCount = toNonNegativeInt(
+    completedSource?.failureCount,
+    toNonNegativeInt(initialSource.failedCount, 0),
+  );
+  const retryableFailureCount = toNonNegativeInt(initialSource.retryableFailureCount, 0);
+  const permanentFailureCount = toNonNegativeInt(initialSource.permanentFailureCount, 0);
   const skippedCount = toNonNegativeInt(
-    source.skippedCount,
+    completedSource ? Math.max(totalTargets - submittedCount, 0) : initialSource.skippedCount,
     Math.max(totalTargets - submittedCount, 0),
   );
 
@@ -729,7 +739,8 @@ export class EditHistoryService {
       const cacheKey = `${this.session.shop}:historyChanges:${id}:cursor${cursor || "start"}:limit${limitNum}`;
       const cacheData = await getCache(cacheKey);
 
-      if (cacheData) {
+      const cachedTotalCount = toNonNegativeInt(cacheData?.totalCount, 0);
+      if (cacheData && (cachedTotalCount > 0 || cacheData?.changes?.length > 0)) {
         return {
           changes: cacheData.changes,
           pageInfo: cacheData.pageInfo,
@@ -792,6 +803,7 @@ export class EditHistoryService {
             beforeValues: true,
             executionStatus: true,
             productId: true,
+            variantId: true,
             createdAt: true,
           },
           orderBy: { targetKey: "desc" },
@@ -808,12 +820,13 @@ export class EditHistoryService {
 
         const changes = pageRows.map((row) => ({
           id: row.targetKey,
-          title: row.targetKey,
+          title: row.beforeValues?.productTitle || row.targetKey,
           productFieldChanges: row.plannedMutation?.productFieldChanges || [],
           variantFieldChanges: row.plannedMutation?.variantFieldChanges || [],
           status: row.executionStatus,
-          image: null,
+          image: row.beforeValues?.image || null,
           productId: row.productId,
+          variantId: row.variantId,
           createdAt: row.createdAt,
         }));
 
@@ -828,7 +841,9 @@ export class EditHistoryService {
           message: "Fetched history changes successfully.",
         };
 
-        await setCache(cacheKey, result, 300);
+        if (totalCount > 0) {
+          await setCache(cacheKey, result, 300);
+        }
         return result;
       }
 

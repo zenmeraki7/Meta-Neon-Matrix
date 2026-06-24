@@ -97,6 +97,10 @@ export async function recoverStaleProductSyncStateByShop(shop) {
         shopifyBulkJobCompleted: true,
         syncProgressStage: true,
         productSyncStartedAt: true,
+        productSyncRecoveryRequired: true,
+        mirrorHealthState: true,
+        staleReason: true,
+        repairRequired: true,
         mirrorUnsafeSince: true,
         updatedAt: true,
       },
@@ -128,6 +132,41 @@ export async function recoverStaleProductSyncStateByShop(shop) {
       },
     }),
   ]);
+
+  const canRestoreActivatedMirrorPreview = Boolean(
+    store?.activeMirrorBatchId &&
+    store?.isProductSyncing !== true &&
+    store?.isProductInitialySyning !== true &&
+    String(store?.staleReason || "").toUpperCase() === "FULL_SYNC_FAILED" &&
+    ["UNSAFE", "REPAIR_REQUIRED"].includes(
+      String(store?.mirrorHealthState || "").toUpperCase(),
+    ),
+  );
+
+  if (canRestoreActivatedMirrorPreview && !latestRunningSync) {
+    logStoreMutation("recoverFailedProductSyncActivatedMirror.updateMany", {
+      shop: resolvedShop,
+      storeId: store.shopUrl,
+      syncBatchId: store.activeMirrorBatchId,
+    });
+    await prisma.store.updateMany({
+      where: {
+        shopUrl: resolvedShop,
+        activeMirrorBatchId: store.activeMirrorBatchId,
+        isProductSyncing: false,
+        isProductInitialySyning: false,
+        staleReason: "FULL_SYNC_FAILED",
+      },
+      data: {
+        mirrorHealthState: "DEGRADED",
+        repairRequired: false,
+        mirrorUnsafeSince: null,
+        productSyncRecoveryRequired: true,
+        updatedAt: new Date(),
+      },
+    });
+    return { recovered: true, restoredActivatedMirrorPreview: true };
+  }
 
   if (!isStaleProductSyncStore(store, cutoff) && !latestRunningSync) {
     return { recovered: false };
