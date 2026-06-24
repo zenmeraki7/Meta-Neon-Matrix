@@ -59,24 +59,57 @@ async function reserveWebhookDelivery({
   const payloadHash = createPayloadHash(payload);
 
   try {
-    await prisma.webhookDelivery.create({
-      data: {
-        id,
-        topic,
-        shop,
-        webhookId: webhookId || null,
-        entityId: entityId || null,
-        dedupeKey,
-        payloadHash,
-        status: "RECEIVED",
-        attemptCount: 1,
-      },
+  await prisma.webhookDelivery.create({
+    data: {
+      id,
+      topic,
+      shop,
+      webhookId: webhookId || null,
+      entityId: entityId || null,
+      dedupeKey,
+      payloadHash,
+      status: "RECEIVED",
+      attemptCount: 1,
+    },
+  });
+
+  return {
+    accepted: true,
+    deliveryId: id,
+    payloadHash,
+  };
+} catch (error) {
+  // Duplicate webhook
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  ) {
+    logger.info("Duplicate webhook ignored", {
+      deliveryId: id,
+      webhookId,
+      topic,
+      shop,
     });
 
-    return { accepted: true, deliveryId: id, payloadHash };
-  } catch (error) {
-    return { accepted: false, deliveryId: id, payloadHash };
+    return {
+      accepted: false,
+      duplicate: true,
+      deliveryId: id,
+      payloadHash,
+    };
   }
+
+  // Real DB error -> fail loudly
+  logger.error("Failed to reserve webhook delivery", {
+    deliveryId: id,
+    webhookId,
+    topic,
+    shop,
+    error: error.message,
+  });
+
+  throw error;
+}
 }
 
 async function markWebhookQueued(deliveryId) {
