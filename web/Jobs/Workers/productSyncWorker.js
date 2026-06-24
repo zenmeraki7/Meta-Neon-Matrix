@@ -76,7 +76,7 @@ export const productSyncWorker = new Worker(
   },
   {
     connection,
-    concurrency: 3,
+    concurrency: 1,
     limiter: {
       max: 10,
       duration: 60000,

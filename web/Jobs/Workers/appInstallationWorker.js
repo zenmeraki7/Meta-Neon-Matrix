@@ -161,7 +161,7 @@ const appInstallationWorker = new Worker(
   },
   {
     connection,
-    concurrency: 3,
+    concurrency: 1,
   },
 );
 

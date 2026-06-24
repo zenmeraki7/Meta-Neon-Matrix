@@ -23,7 +23,7 @@ const automaticProductRuleExecutionWorker = new Worker(
   },
   {
     connection,
-    concurrency: 3,
+    concurrency: 1,
   },
 );
 

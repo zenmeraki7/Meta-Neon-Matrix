@@ -11,7 +11,7 @@ const automaticProductRuleSignalWorker = new Worker(
   async (job) => reserveAutomaticProductRuleRunFromSignal(job.data),
   {
     connection,
-    concurrency: 5,
+    concurrency: 1,
   },
 );
 
