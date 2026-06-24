@@ -39,23 +39,23 @@ import { connection as redis } from "./config/redis.js";
 import { initSocket } from "./socket.js";
 
 // Workers
-// import "./Jobs/Workers/bulkEditWorker.js";
-// import "./Jobs/Workers/bulkExportWorker.js";
-// import "./Jobs/Workers/bulkUndoWorker.js";
-// import "./Jobs/Workers/bulkOperationMutationWorker.js";
-// import "./Jobs/Workers/bulkOperationQueryWorker.js";
-// import "./Jobs/Workers/appInstallationWorker.js";
-// import "./Jobs/Workers/scheduledEditWorker.js";
-// import "./Jobs/Workers/appUninstallWorker.js";
-// import "./Jobs/Workers/bulkImportEditWorker.js";
-// import "./Jobs/Workers/shopSyncWorker.js";
-// import "./Jobs/Workers/recurringEditExecutionWorker.js";
-// import "./Jobs/Workers/recurringEditSchedulerWorker.js";
-// import "./Jobs/Workers/scheduledExportExecutionWorker.js";
-// import "./Jobs/Workers/scheduledExportSchedulerWorker.js";
-// import "./Jobs/Workers/automaticProductRuleExecutionWorker.js";
-// import "./Jobs/Workers/automaticProductRuleSchedulerWorker.js";
-// import "./Jobs/Workers/automaticProductRuleSignalWorker.js";
+import "./Jobs/Workers/bulkEditWorker.js";
+import "./Jobs/Workers/bulkExportWorker.js";
+import "./Jobs/Workers/bulkUndoWorker.js";
+import "./Jobs/Workers/bulkOperationMutationWorker.js";
+import "./Jobs/Workers/bulkOperationQueryWorker.js";
+import "./Jobs/Workers/appInstallationWorker.js";
+import "./Jobs/Workers/scheduledEditWorker.js";
+import "./Jobs/Workers/appUninstallWorker.js";
+import "./Jobs/Workers/bulkImportEditWorker.js";
+import "./Jobs/Workers/shopSyncWorker.js";
+import "./Jobs/Workers/recurringEditExecutionWorker.js";
+import "./Jobs/Workers/recurringEditSchedulerWorker.js";
+import "./Jobs/Workers/scheduledExportExecutionWorker.js";
+import "./Jobs/Workers/scheduledExportSchedulerWorker.js";
+import "./Jobs/Workers/automaticProductRuleExecutionWorker.js";
+import "./Jobs/Workers/automaticProductRuleSchedulerWorker.js";
+import "./Jobs/Workers/automaticProductRuleSignalWorker.js";
 
 
 // Utils / Middleware
