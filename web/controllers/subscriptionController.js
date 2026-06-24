@@ -76,9 +76,9 @@ export const createSubscriptionController = async (req, res) => {
       });
 
       if (existingSub && existingSub.subscriptionId && existingSub.status === "ACTIVE") {
-        console.log(
-          `[BILLING] Cancelling subscription to switch to FREE: ${existingSub.subscriptionId}`,
-        );
+        // console.log(
+        //   `[BILLING] Cancelling subscription to switch to FREE: ${existingSub.subscriptionId}`,
+        // );
 
         const client = new shopify.api.clients.Graphql({ session });
         const cancelMutation = `
@@ -219,9 +219,9 @@ export const createSubscriptionController = async (req, res) => {
       }
     `;
 const returnUrlToUse = `https://${session.shop}/admin/apps/${process.env.SHOPIFY_API_KEY}/pricing`;
-console.log("[BILLING] returnUrl:", returnUrlToUse);
-console.log("[BILLING] session.shop:", session.shop);
-console.log("[BILLING] SHOPIFY_API_KEY:", process.env.SHOPIFY_API_KEY);
+// console.log("[BILLING] returnUrl:", returnUrlToUse);
+// console.log("[BILLING] session.shop:", session.shop);
+// console.log("[BILLING] SHOPIFY_API_KEY:", process.env.SHOPIFY_API_KEY);
     const result = await client.query({
       data: {
         query: mutation,
@@ -274,9 +274,9 @@ console.log("[BILLING] SHOPIFY_API_KEY:", process.env.SHOPIFY_API_KEY);
       });
     }
 
-    console.log(
-      `[BILLING] Created pending subscription: ${data.appSubscription.id} for plan: ${plan.name}`,
-    );
+    // console.log(
+    //   `[BILLING] Created pending subscription: ${data.appSubscription.id} for plan: ${plan.name}`,
+    // );
 
     return res.status(200).json({
       success: true,
