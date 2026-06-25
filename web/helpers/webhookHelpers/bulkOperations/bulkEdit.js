@@ -47,34 +47,45 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function hasValue(value) {
-  return value !== undefined && value !== null;
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object ?? {}, key);
 }
 
-function preferIncomingOrExisting(incoming, existing) {
-  return hasValue(incoming) ? incoming : existing;
+function preferIncomingFieldOrExisting(incoming, key, existing) {
+  return hasOwn(incoming, key) && incoming[key] !== undefined
+    ? incoming[key]
+    : existing;
 }
 
-function preferNonEmptyStringOrExisting(incoming, existing) {
-  if (typeof incoming === "string") {
-    return incoming.trim() === "" ? existing : incoming;
+function preferIncomingStringFieldOrExisting(incoming, key, existing) {
+  if (!hasOwn(incoming, key) || incoming[key] === undefined) {
+    return existing;
   }
-  return hasValue(incoming) ? incoming : existing;
+
+  const value = incoming[key];
+  if (typeof value === "string" && value.trim() === "") {
+    return existing;
+  }
+
+  return value;
 }
 
 function toNullableFloat(value) {
+  if (value === undefined) return undefined;
   if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 }
 
 function toNullableInt(value) {
+  if (value === undefined) return undefined;
   if (value == null || value === "") return null;
   const num = Number(value);
   return Number.isInteger(num) ? num : null;
 }
 
 function toNullableBoolean(value) {
+  if (value === undefined) return undefined;
   if (typeof value === "boolean") return value;
   if (value == null || value === "") return null;
   return Boolean(value);
@@ -91,38 +102,72 @@ function mergeProductForBulkMirror(existing, incoming) {
   return {
     shop: existing?.shop ?? incoming.shop,
     id: existing?.id ?? incoming.id,
-    title: preferNonEmptyStringOrExisting(incoming.title, existing?.title ?? ""),
-    handle: preferIncomingOrExisting(incoming.handle, existing?.handle ?? null),
-    status: preferIncomingOrExisting(incoming.status, existing?.status ?? "ACTIVE"),
-    productType: preferIncomingOrExisting(incoming.productType, existing?.productType ?? null),
-    vendor: preferIncomingOrExisting(incoming.vendor, existing?.vendor ?? null),
+    title: preferIncomingStringFieldOrExisting(incoming, "title", existing?.title ?? ""),
+    handle: preferIncomingFieldOrExisting(incoming, "handle", existing?.handle ?? null),
+    status: preferIncomingFieldOrExisting(incoming, "status", existing?.status ?? "ACTIVE"),
+    productType: preferIncomingFieldOrExisting(incoming, "productType", existing?.productType ?? null),
+    vendor: preferIncomingFieldOrExisting(incoming, "vendor", existing?.vendor ?? null),
     tags: Array.isArray(incoming.tags)
       ? incoming.tags
       : Array.isArray(existing?.tags)
         ? existing.tags
         : [],
-    templateSuffix: preferIncomingOrExisting(incoming.templateSuffix, existing?.templateSuffix ?? null),
-    descriptionHtml: preferIncomingOrExisting(incoming.descriptionHtml, existing?.descriptionHtml ?? null),
-    descriptionText: preferIncomingOrExisting(incoming.descriptionText, existing?.descriptionText ?? null),
+    templateSuffix: preferIncomingFieldOrExisting(incoming, "templateSuffix", existing?.templateSuffix ?? null),
+    descriptionHtml: preferIncomingFieldOrExisting(incoming, "descriptionHtml", existing?.descriptionHtml ?? null),
+    descriptionText: preferIncomingFieldOrExisting(incoming, "descriptionText", existing?.descriptionText ?? null),
 
-    createdAt: preferIncomingOrExisting(incoming.createdAt, existing?.createdAt ?? null),
-    updatedAt: preferIncomingOrExisting(incoming.updatedAt, existing?.updatedAt ?? null),
-    publishedAt: preferIncomingOrExisting(incoming.publishedAt, existing?.publishedAt ?? null),
-    seoTitle: preferIncomingOrExisting(incoming.seoTitle, existing?.seoTitle ?? null),
-    seoDescription: preferIncomingOrExisting(incoming.seoDescription, existing?.seoDescription ?? null),
-    totalInventory: preferIncomingOrExisting(incoming.totalInventory, existing?.totalInventory ?? null),
-    categoryId: preferIncomingOrExisting(incoming.categoryId, existing?.categoryId ?? null),
-    categoryName: preferIncomingOrExisting(incoming.categoryName, existing?.categoryName ?? null),
-    featuredImageUrl: preferIncomingOrExisting(incoming.featuredImageUrl, existing?.featuredImageUrl ?? null),
-    featuredImageAltText: preferIncomingOrExisting(incoming.featuredImageAltText, existing?.featuredImageAltText ?? null),
-    optionsJson: preferIncomingOrExisting(incoming.optionsJson, existing?.optionsJson ?? null),
-    collectionsJson: preferIncomingOrExisting(incoming.collectionsJson, existing?.collectionsJson ?? null),
-    option1Name: preferIncomingOrExisting(incoming.option1Name, existing?.option1Name ?? null),
-    option2Name: preferIncomingOrExisting(incoming.option2Name, existing?.option2Name ?? null),
-    option3Name: preferIncomingOrExisting(incoming.option3Name, existing?.option3Name ?? null),
-    variantCount: preferIncomingOrExisting(incoming.variantCount, existing?.variantCount ?? null),
-    visibleOnlineStore: preferIncomingOrExisting(incoming.visibleOnlineStore, existing?.visibleOnlineStore ?? null),
+    createdAt: preferIncomingFieldOrExisting(incoming, "createdAt", existing?.createdAt ?? null),
+    updatedAt: preferIncomingFieldOrExisting(incoming, "updatedAt", existing?.updatedAt ?? null),
+    publishedAt: preferIncomingFieldOrExisting(incoming, "publishedAt", existing?.publishedAt ?? null),
+    seoTitle: preferIncomingFieldOrExisting(incoming, "seoTitle", existing?.seoTitle ?? null),
+    seoDescription: preferIncomingFieldOrExisting(incoming, "seoDescription", existing?.seoDescription ?? null),
+    totalInventory: preferIncomingFieldOrExisting(incoming, "totalInventory", existing?.totalInventory ?? null),
+    categoryId: preferIncomingFieldOrExisting(incoming, "categoryId", existing?.categoryId ?? null),
+    categoryName: preferIncomingFieldOrExisting(incoming, "categoryName", existing?.categoryName ?? null),
+    featuredImageUrl: preferIncomingFieldOrExisting(incoming, "featuredImageUrl", existing?.featuredImageUrl ?? null),
+    featuredImageAltText: preferIncomingFieldOrExisting(incoming, "featuredImageAltText", existing?.featuredImageAltText ?? null),
+    optionsJson: preferIncomingFieldOrExisting(incoming, "optionsJson", existing?.optionsJson ?? null),
+    collectionsJson: preferIncomingFieldOrExisting(incoming, "collectionsJson", existing?.collectionsJson ?? null),
+    option1Name: preferIncomingFieldOrExisting(incoming, "option1Name", existing?.option1Name ?? null),
+    option2Name: preferIncomingFieldOrExisting(incoming, "option2Name", existing?.option2Name ?? null),
+    option3Name: preferIncomingFieldOrExisting(incoming, "option3Name", existing?.option3Name ?? null),
+    variantCount: preferIncomingFieldOrExisting(incoming, "variantCount", existing?.variantCount ?? null),
+    visibleOnlineStore: preferIncomingFieldOrExisting(incoming, "visibleOnlineStore", existing?.visibleOnlineStore ?? null),
   };
+}
+
+function hasProductMirrorDetails(product) {
+  if (!product || typeof product !== "object") return false;
+
+  return [
+    product.title,
+    product.handle,
+    product.productType,
+    product.vendor,
+    product.templateSuffix,
+    product.descriptionHtml,
+    product.descriptionText,
+    product.createdAt,
+    product.updatedAt,
+    product.publishedAt,
+    product.seoTitle,
+    product.seoDescription,
+    product.categoryId,
+    product.categoryName,
+    product.featuredImageUrl,
+    product.featuredImageAltText,
+    product.totalInventory,
+    product.optionsJson,
+    product.collectionsJson,
+    product.option1Name,
+    product.option2Name,
+    product.option3Name,
+    product.visibleOnlineStore,
+  ].some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === "string") return value.trim() !== "";
+    return value !== undefined && value !== null;
+  });
 }
 
 function toVariantNestedCreateInput(variant) {
@@ -165,7 +210,7 @@ function toProductCreateInput(product, variants, mirrorBatchId = "legacy") {
     vendor: product.vendor ?? null,
     tags: asArray(product.tags),
     templateSuffix: product.templateSuffix ?? null,
-     descriptionHtml: product.descriptionHtml ?? null,
+    descriptionHtml: product.descriptionHtml ?? null,
     descriptionText: product.descriptionText ?? null,
     createdAt: product.createdAt ?? null,
     updatedAt: product.updatedAt ?? null,
@@ -325,7 +370,8 @@ async function applyBulkMirrorUpdates(history, bulkOperation) {
     select: { activeMirrorBatchId: true },
   });
 
-  const batchId = store?.activeMirrorBatchId || "legacy";
+  const batchId =
+    history.targetMirrorBatchId || store?.activeMirrorBatchId || "legacy";
 
   const records = await fetchBulkOperationData(bulkOperation.url, history.shop);
   if (!records.length) {
@@ -373,81 +419,90 @@ async function applyBulkMirrorUpdates(history, bulkOperation) {
           },
         });
 
+        if (!existing && !hasProductMirrorDetails(product)) {
+          const error = new Error(
+            `Bulk mutation result only included product id ${product.id}, but no mirror product exists in batch ${batchId}`,
+          );
+          error.code = "bulk_mirror_product_missing_for_partial_result";
+          throw error;
+        }
+
         const mergedProduct = mergeProductForBulkMirror(existing, product);
 
-        await tx.product.upsert({
-          where: {
-            shop_id_mirrorBatchId: {
-              shop: product.shop,
-              id: product.id,
-              mirrorBatchId: batchId,
+        if (existing || hasProductMirrorDetails(product)) {
+          await tx.product.upsert({
+            where: {
+              shop_id_mirrorBatchId: {
+                shop: product.shop,
+                id: product.id,
+                mirrorBatchId: batchId,
+              },
             },
-          },
-          create: {
-            shop: String(mergedProduct.shop),
-            id: String(mergedProduct.id),
-            mirrorBatchId: batchId,
-            title: mergedProduct.title ?? "",
-            handle: mergedProduct.handle ?? null,
-            status: mergedProduct.status ?? "ACTIVE",
-            productType: mergedProduct.productType ?? null,
-            vendor: mergedProduct.vendor ?? null,
-            tags: asArray(mergedProduct.tags),
-            templateSuffix: mergedProduct.templateSuffix ?? null,
-            descriptionHtml: mergedProduct.descriptionHtml ?? null,
-            descriptionText: mergedProduct.descriptionText ?? null,
-            createdAt: mergedProduct.createdAt ?? null,
-            updatedAt: mergedProduct.updatedAt ?? null,
-            publishedAt: mergedProduct.publishedAt ?? null,
-            seoTitle: mergedProduct.seoTitle ?? null,
-            seoDescription: mergedProduct.seoDescription ?? null,
-            totalInventory: toNullableInt(mergedProduct.totalInventory),
-            categoryId: mergedProduct.categoryId ?? null,
-            categoryName: mergedProduct.categoryName ?? null,
-            featuredImageUrl: mergedProduct.featuredImageUrl ?? null,
-            featuredImageAltText: mergedProduct.featuredImageAltText ?? null,
-            optionsJson: mergedProduct.optionsJson ?? null,
-            collectionsJson: mergedProduct.collectionsJson ?? null,
-            option1Name: mergedProduct.option1Name ?? null,
-            option2Name: mergedProduct.option2Name ?? null,
-            option3Name: mergedProduct.option3Name ?? null,
-            variantCount: toNullableInt(mergedProduct.variantCount),
-            visibleOnlineStore: toNullableBoolean(
-              mergedProduct.visibleOnlineStore,
-            ),
-          },
-          update: {
-            title: mergedProduct.title ?? undefined,
-            handle: mergedProduct.handle ?? undefined,
-            status: mergedProduct.status ?? undefined,
-            productType: mergedProduct.productType ?? undefined,
-            vendor: mergedProduct.vendor ?? undefined,
-            tags: asArray(mergedProduct.tags),
-            templateSuffix: mergedProduct.templateSuffix ?? undefined,
-            descriptionHtml: mergedProduct.descriptionHtml ?? undefined,
-            descriptionText: mergedProduct.descriptionText ?? undefined,
-            updatedAt: mergedProduct.updatedAt ?? undefined,
-            publishedAt: mergedProduct.publishedAt ?? undefined,
-            seoTitle: mergedProduct.seoTitle ?? undefined,
-            seoDescription: mergedProduct.seoDescription ?? undefined,
-            totalInventory: toNullableInt(mergedProduct.totalInventory),
-            categoryId: mergedProduct.categoryId ?? undefined,
-            categoryName: mergedProduct.categoryName ?? undefined,
-            featuredImageUrl: mergedProduct.featuredImageUrl ?? undefined,
-            featuredImageAltText:
-              mergedProduct.featuredImageAltText ?? undefined,
-            optionsJson: mergedProduct.optionsJson ?? undefined,
-            collectionsJson: mergedProduct.collectionsJson ?? undefined,
-            option1Name: mergedProduct.option1Name ?? undefined,
-            option2Name: mergedProduct.option2Name ?? undefined,
-            option3Name: mergedProduct.option3Name ?? undefined,
-            variantCount: toNullableInt(mergedProduct.variantCount),
-            visibleOnlineStore:
-              mergedProduct.visibleOnlineStore === undefined
-                ? undefined
-                : toNullableBoolean(mergedProduct.visibleOnlineStore),
-          },
-        });
+            create: {
+              shop: String(mergedProduct.shop),
+              id: String(mergedProduct.id),
+              mirrorBatchId: batchId,
+              title: mergedProduct.title ?? "",
+              handle: mergedProduct.handle ?? null,
+              status: mergedProduct.status ?? "ACTIVE",
+              productType: mergedProduct.productType ?? null,
+              vendor: mergedProduct.vendor ?? null,
+              tags: asArray(mergedProduct.tags),
+              templateSuffix: mergedProduct.templateSuffix ?? null,
+              descriptionHtml: mergedProduct.descriptionHtml ?? null,
+              descriptionText: mergedProduct.descriptionText ?? null,
+              createdAt: mergedProduct.createdAt ?? null,
+              updatedAt: mergedProduct.updatedAt ?? null,
+              publishedAt: mergedProduct.publishedAt ?? null,
+              seoTitle: mergedProduct.seoTitle ?? null,
+              seoDescription: mergedProduct.seoDescription ?? null,
+              totalInventory: toNullableInt(mergedProduct.totalInventory),
+              categoryId: mergedProduct.categoryId ?? null,
+              categoryName: mergedProduct.categoryName ?? null,
+              featuredImageUrl: mergedProduct.featuredImageUrl ?? null,
+              featuredImageAltText: mergedProduct.featuredImageAltText ?? null,
+              optionsJson: mergedProduct.optionsJson ?? null,
+              collectionsJson: mergedProduct.collectionsJson ?? null,
+              option1Name: mergedProduct.option1Name ?? null,
+              option2Name: mergedProduct.option2Name ?? null,
+              option3Name: mergedProduct.option3Name ?? null,
+              variantCount: toNullableInt(mergedProduct.variantCount),
+              visibleOnlineStore: toNullableBoolean(
+                mergedProduct.visibleOnlineStore,
+              ),
+            },
+            update: {
+              title: mergedProduct.title ?? "",
+              handle: mergedProduct.handle ?? null,
+              status: mergedProduct.status ?? "ACTIVE",
+              productType: mergedProduct.productType ?? null,
+              vendor: mergedProduct.vendor ?? null,
+              tags: asArray(mergedProduct.tags),
+              templateSuffix: mergedProduct.templateSuffix ?? null,
+              descriptionHtml: mergedProduct.descriptionHtml ?? null,
+              descriptionText: mergedProduct.descriptionText ?? null,
+              updatedAt: mergedProduct.updatedAt ?? null,
+              publishedAt: mergedProduct.publishedAt ?? null,
+              seoTitle: mergedProduct.seoTitle ?? null,
+              seoDescription: mergedProduct.seoDescription ?? null,
+              totalInventory: toNullableInt(mergedProduct.totalInventory),
+              categoryId: mergedProduct.categoryId ?? null,
+              categoryName: mergedProduct.categoryName ?? null,
+              featuredImageUrl: mergedProduct.featuredImageUrl ?? null,
+              featuredImageAltText:
+                mergedProduct.featuredImageAltText ?? null,
+              optionsJson: mergedProduct.optionsJson ?? null,
+              collectionsJson: mergedProduct.collectionsJson ?? null,
+              option1Name: mergedProduct.option1Name ?? null,
+              option2Name: mergedProduct.option2Name ?? null,
+              option3Name: mergedProduct.option3Name ?? null,
+              variantCount: toNullableInt(mergedProduct.variantCount),
+              visibleOnlineStore: toNullableBoolean(
+                mergedProduct.visibleOnlineStore,
+              ),
+            },
+          });
+        }
 
         if (variants.length > 0) {
           for (const variant of variants) {
@@ -468,28 +523,28 @@ async function applyBulkMirrorUpdates(history, bulkOperation) {
                 mirrorBatchId: batchId,
               },
               update: {
-                title: variantData.title ?? undefined,
-                sku: variantData.sku ?? undefined,
-                barcode: variantData.barcode ?? undefined,
-                price: variantData.price ?? undefined,
-                compareAtPrice: variantData.compareAtPrice ?? undefined,
-                inventoryQuantity: variantData.inventoryQuantity ?? undefined,
-                inventoryPolicy: variantData.inventoryPolicy ?? undefined,
-                taxable: variantData.taxable ?? undefined,
-                taxCode: variantData.taxCode ?? undefined,
-                position: variantData.position ?? undefined,
-                selectedOptionsJson: variantData.selectedOptionsJson ?? undefined,
-                cost: variantData.cost ?? undefined,
-                countryOfOrigin: variantData.countryOfOrigin ?? undefined,
-                hsTariffCode: variantData.hsTariffCode ?? undefined,
-                weight: variantData.weight ?? undefined,
-                weightUnit: variantData.weightUnit ?? undefined,
-                option1Value: variantData.option1Value ?? undefined,
-                option2Value: variantData.option2Value ?? undefined,
-                option3Value: variantData.option3Value ?? undefined,
-                physicalProduct: variantData.physicalProduct ?? undefined,
-                profitMargin: variantData.profitMargin ?? undefined,
-                tracked: variantData.tracked ?? undefined,
+                title: variantData.title,
+                sku: variantData.sku,
+                barcode: variantData.barcode,
+                price: variantData.price,
+                compareAtPrice: variantData.compareAtPrice,
+                inventoryQuantity: variantData.inventoryQuantity,
+                inventoryPolicy: variantData.inventoryPolicy,
+                taxable: variantData.taxable,
+                taxCode: variantData.taxCode,
+                position: variantData.position,
+                selectedOptionsJson: variantData.selectedOptionsJson,
+                cost: variantData.cost,
+                countryOfOrigin: variantData.countryOfOrigin,
+                hsTariffCode: variantData.hsTariffCode,
+                weight: variantData.weight,
+                weightUnit: variantData.weightUnit,
+                option1Value: variantData.option1Value,
+                option2Value: variantData.option2Value,
+                option3Value: variantData.option3Value,
+                physicalProduct: variantData.physicalProduct,
+                profitMargin: variantData.profitMargin,
+                tracked: variantData.tracked,
               },
             });
           }
@@ -899,63 +954,113 @@ export async function fetchBulkOperationData(url, shop) {
           position: node.position != null ? Number(node.position) : null,
           selectedOptionsJson: node.selectedOptions ?? null,
           cost:
-            node.inventoryItem?.unitCost?.amount != null
-              ? Number(node.inventoryItem.unitCost.amount)
-              : null,
-          countryOfOrigin: node.inventoryItem?.countryCodeOfOrigin ?? null,
-          hsTariffCode: node.inventoryItem?.harmonizedSystemCode ?? null,
+            node.inventoryItem
+              ? node.inventoryItem.unitCost?.amount != null
+                ? Number(node.inventoryItem.unitCost.amount)
+                : null
+              : undefined,
+          countryOfOrigin: node.inventoryItem
+            ? node.inventoryItem.countryCodeOfOrigin ?? null
+            : undefined,
+          hsTariffCode: node.inventoryItem
+            ? node.inventoryItem.harmonizedSystemCode ?? null
+            : undefined,
           weight:
-            node.inventoryItem?.measurement?.weight?.value != null
-              ? Number(node.inventoryItem.measurement.weight.value)
-              : null,
-          weightUnit: node.inventoryItem?.measurement?.weight?.unit ?? null,
+            node.inventoryItem
+              ? node.inventoryItem.measurement?.weight?.value != null
+                ? Number(node.inventoryItem.measurement.weight.value)
+                : null
+              : undefined,
+          weightUnit: node.inventoryItem
+            ? node.inventoryItem.measurement?.weight?.unit ?? null
+            : undefined,
           option1Value: node.selectedOptions?.[0]?.value ?? null,
           option2Value: node.selectedOptions?.[1]?.value ?? null,
           option3Value: node.selectedOptions?.[2]?.value ?? null,
-          physicalProduct: node.inventoryItem?.requiresShipping ?? null,
-          tracked: node.inventoryItem?.tracked ?? null,
-          profitMargin: null,
+          physicalProduct: node.inventoryItem
+            ? node.inventoryItem.requiresShipping ?? null
+            : undefined,
+          tracked: node.inventoryItem
+            ? node.inventoryItem.tracked ?? null
+            : undefined,
+          profitMargin: undefined,
         }));
 
       operations.push({
         product: {
           shop,
           id: product.id,
-          title: product.title ?? null,
-          handle: product.handle ?? null,
-          status: product.status ?? "ACTIVE",
-          productType: product.productType ?? null,
-          vendor: product.vendor ?? null,
-          templateSuffix: product.templateSuffix ?? null,
-          descriptionHtml: product.descriptionHtml ?? null,
-          descriptionText: product.descriptionHtml
+          title: hasOwn(product, "title") ? product.title ?? null : undefined,
+          handle: hasOwn(product, "handle") ? product.handle ?? null : undefined,
+          status: hasOwn(product, "status") ? product.status ?? null : undefined,
+          productType: hasOwn(product, "productType")
+            ? product.productType ?? null
+            : undefined,
+          vendor: hasOwn(product, "vendor") ? product.vendor ?? null : undefined,
+          templateSuffix: hasOwn(product, "templateSuffix")
+            ? product.templateSuffix ?? null
+            : undefined,
+          descriptionHtml: hasOwn(product, "descriptionHtml")
+            ? product.descriptionHtml ?? null
+            : undefined,
+          descriptionText: hasOwn(product, "descriptionHtml") && product.descriptionHtml
             ? product.descriptionHtml
                 .replace(/<[^>]*>/g, " ")
                 .replace(/\s{2,}/g, " ")
                 .trim() || null
-            : null,
-          createdAt: product.createdAt ? new Date(product.createdAt) : null,
-          updatedAt: product.updatedAt ? new Date(product.updatedAt) : null,
-          publishedAt: product.publishedAt ? new Date(product.publishedAt) : null,
-          tags: Array.isArray(product.tags) ? product.tags : [],
-          categoryId: product.category?.id ?? null,
-          categoryName: product.category?.name ?? null,
-          seoTitle: product.seo?.title ?? null,
-          seoDescription: product.seo?.description ?? null,
+            : hasOwn(product, "descriptionHtml")
+              ? null
+              : undefined,
+          createdAt: hasOwn(product, "createdAt")
+            ? product.createdAt ? new Date(product.createdAt) : null
+            : undefined,
+          updatedAt: hasOwn(product, "updatedAt")
+            ? product.updatedAt ? new Date(product.updatedAt) : null
+            : undefined,
+          publishedAt: hasOwn(product, "publishedAt")
+            ? product.publishedAt ? new Date(product.publishedAt) : null
+            : undefined,
+          tags: Array.isArray(product.tags) ? product.tags : undefined,
+          categoryId: hasOwn(product, "category")
+            ? product.category?.id ?? null
+            : undefined,
+          categoryName: hasOwn(product, "category")
+            ? product.category?.name ?? null
+            : undefined,
+          seoTitle: hasOwn(product, "seo")
+            ? product.seo?.title ?? null
+            : undefined,
+          seoDescription: hasOwn(product, "seo")
+            ? product.seo?.description ?? null
+            : undefined,
           totalInventory:
-            product.totalInventory != null ? Number(product.totalInventory) : null,
-          featuredImageUrl: product.featuredImage?.url ?? null,
-          featuredImageAltText: product.featuredImage?.altText ?? null,
-          optionsJson: product.options ?? null,
-          collectionsJson: asArray(product?.collections?.edges).map(({ node }) => ({
-            id: node?.id ?? null,
-            title: node?.title ?? null,
-          })),
-          option1Name: product.options?.[0]?.name ?? null,
-          option2Name: product.options?.[1]?.name ?? null,
-          option3Name: product.options?.[2]?.name ?? null,
-          variantCount: variants.length,
-          visibleOnlineStore: null,
+            hasOwn(product, "totalInventory")
+              ? product.totalInventory != null ? Number(product.totalInventory) : null
+              : undefined,
+          featuredImageUrl: hasOwn(product, "featuredImage")
+            ? product.featuredImage?.url ?? null
+            : undefined,
+          featuredImageAltText: hasOwn(product, "featuredImage")
+            ? product.featuredImage?.altText ?? null
+            : undefined,
+          optionsJson: hasOwn(product, "options") ? product.options ?? null : undefined,
+          collectionsJson: product?.collections
+            ? asArray(product.collections.edges).map(({ node }) => ({
+                id: node?.id ?? null,
+                title: node?.title ?? null,
+              }))
+            : undefined,
+          option1Name: hasOwn(product, "options")
+            ? product.options?.[0]?.name ?? null
+            : undefined,
+          option2Name: hasOwn(product, "options")
+            ? product.options?.[1]?.name ?? null
+            : undefined,
+          option3Name: hasOwn(product, "options")
+            ? product.options?.[2]?.name ?? null
+            : undefined,
+          variantCount: hasOwn(product, "variants") ? variants.length : undefined,
+          visibleOnlineStore: undefined,
         },
         variants,
       });
