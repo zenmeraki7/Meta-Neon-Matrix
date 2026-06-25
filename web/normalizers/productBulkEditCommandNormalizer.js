@@ -505,8 +505,32 @@ function normalizeDateString(value, fieldName, required = false) {
   return date.toISOString();
 }
 
-function normalizeFutureDateString(value, fieldName, required = false) {
-  const iso = normalizeDateString(value, fieldName, required);
+function normalizeUtcIsoDateString(value, fieldName, required = false) {
+  const text = normalizeText(value, fieldName, 80);
+
+  if (!text) {
+    if (required) {
+      throw buildRequestError(`${fieldName} is required`);
+    }
+
+    return null;
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.test(text)) {
+    throw buildRequestError(`Invalid ${fieldName}: must be a UTC ISO string`);
+  }
+
+  const date = new Date(text);
+
+  if (Number.isNaN(date.getTime())) {
+    throw buildRequestError(`Invalid ${fieldName}`);
+  }
+
+  return date.toISOString();
+}
+
+function normalizeFutureUtcIsoDateString(value, fieldName, required = false) {
+  const iso = normalizeUtcIsoDateString(value, fieldName, required);
 
   if (!iso) {
     return null;
@@ -517,6 +541,18 @@ function normalizeFutureDateString(value, fieldName, required = false) {
   }
 
   return iso;
+}
+
+function normalizeScheduleTimezone(value) {
+  const timezone = normalizeRequiredText(value, "timezone", 120);
+
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+  } catch {
+    throw buildRequestError("Invalid timezone");
+  }
+
+  return timezone;
 }
 
 function normalizeFreezeMode(value) {
@@ -806,13 +842,15 @@ export function buildScheduledEditCommand({
   const safeBody = assertPlainObject(body, "body");
   assertNoLegacySchedulePayload(safeBody);
 
-  const scheduledAt = normalizeFutureDateString(
+  const timezone = normalizeScheduleTimezone(safeBody.timezone);
+
+  const scheduledAt = normalizeFutureUtcIsoDateString(
     safeBody.scheduledAt,
     "scheduledAt",
     true,
   );
 
-  const scheduledUndoAt = normalizeFutureDateString(
+  const scheduledUndoAt = normalizeFutureUtcIsoDateString(
     safeBody.scheduledUndoAt,
     "scheduledUndoAt",
     false,
@@ -859,7 +897,7 @@ export function buildScheduledEditCommand({
       "previewSignature",
       500,
     ),
-    timezone: normalizeText(safeBody.timezone, "timezone", 120),
+    timezone,
     scheduleConfirmationText: normalizeText(
       safeBody.scheduleConfirmationText,
       "scheduleConfirmationText",

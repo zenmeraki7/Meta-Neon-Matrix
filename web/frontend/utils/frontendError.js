@@ -3,6 +3,7 @@ const ERROR_KEY_BY_CODE = Object.freeze({
   REAUTH_REQUIRED: "common.errors.code.REAUTH_REQUIRED",
   ENTITLEMENT_DENIED: "common.errors.code.ENTITLEMENT_DENIED",
   PLAN_LIMIT_REACHED: "common.errors.code.PLAN_LIMIT_REACHED",
+  UPGRADE_REQUIRED: "common.errors.code.UPGRADE_REQUIRED",
   INVALID_INPUT: "common.errors.code.INVALID_INPUT",
   CONFLICT_DETECTED: "common.errors.code.CONFLICT_DETECTED",
 });

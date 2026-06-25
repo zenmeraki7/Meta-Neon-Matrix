@@ -54,7 +54,7 @@ import {
   updateScheduledExportController,
 } from "../controllers/scheduledExportController.js";
 
-import { subscriptionMiddleware, requirePaidPlanMiddleware } from "../middleware/subscriptionMiddleware.js";
+import { subscriptionMiddleware, requireScheduledEditPlanMiddleware } from "../middleware/subscriptionMiddleware.js";
 import productQuerySchema from "../validations/productQuerySchema.js";
 import { validateBody, validateQuery } from "../middleware/validateQuery.js";
 // import {
@@ -158,7 +158,7 @@ router.delete("/delete-recurring-edit/:id", subscriptionMiddleware, deleteRecurr
 router.post(
   "/schedule-task",
   subscriptionMiddleware,
-  requirePaidPlanMiddleware,
+  requireScheduledEditPlanMiddleware,
   createScheduledEdit
 );
 

@@ -94,6 +94,7 @@ export class ScheduledEditService {
     const {
       scheduledAt: rawScheduledAt,
       scheduledUndoAt: rawScheduledUndoAt,
+      timezone: rawTimezone,
       freezeMode,
       previewContractId,
       previewId,
@@ -110,6 +111,16 @@ export class ScheduledEditService {
     ).toUpperCase();
     if (normalizedFreezeMode !== "STATIC_AT_SCHEDULE_CREATE") {
       throw new Error("STATIC_SCHEDULE_FREEZE_REQUIRED");
+    }
+
+    const timezone = String(rawTimezone || "").trim();
+    if (!timezone) {
+      throw new Error("timezone is required");
+    }
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    } catch {
+      throw new Error("Invalid timezone");
     }
 
     const resolvedPreviewContractId = String(
@@ -210,12 +221,18 @@ export class ScheduledEditService {
     if (Number.isNaN(scheduledAt.getTime())) {
       throw new Error("Invalid scheduledAt");
     }
+    if (scheduledAt.getTime() <= Date.now()) {
+      throw new Error("Scheduled time must be in the future");
+    }
 
     let scheduledUndoAt = null;
     if (rawScheduledUndoAt) {
       const parsedUndoAt = new Date(rawScheduledUndoAt);
       if (Number.isNaN(parsedUndoAt.getTime())) {
         throw new Error("Invalid scheduledUndoAt");
+      }
+      if (parsedUndoAt.getTime() <= Date.now()) {
+        throw new Error("Undo time must be in the future");
       }
       scheduledUndoAt = parsedUndoAt;
     }
@@ -316,9 +333,6 @@ export class ScheduledEditService {
       );
     }
     const delay = scheduledAt.getTime() - Date.now();
-    if (delay <= 0) {
-      throw new Error("Scheduled time must be in the future");
-    }
 
     const history = await db.editHistory.create({
       data: {

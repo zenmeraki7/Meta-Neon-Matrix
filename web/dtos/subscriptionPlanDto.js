@@ -23,13 +23,30 @@ function safePlan(plan = {}, currentPlanKey = "FREE") {
 
 export function toSubscriptionPlanSnapshotDto(snapshot = {}) {
   const currentPlanKey = String(snapshot?.currentPlanKey || "FREE").trim() || "FREE";
+  const planName = String(snapshot?.planName || "").trim() || "Free Plan";
   const plans = Array.isArray(snapshot?.plans)
     ? snapshot.plans.map((plan) => safePlan(plan, currentPlanKey))
     : [];
+  const capabilities =
+    snapshot?.capabilities && typeof snapshot.capabilities === "object"
+      ? {
+        canScheduleEdits: snapshot.capabilities.canScheduleEdits === true,
+        planName: String(snapshot.capabilities.planName || planName).trim() || planName,
+        upgradeUrl: String(snapshot.capabilities.upgradeUrl || "/pricing").trim() || "/pricing",
+        billingUrl: String(snapshot.capabilities.billingUrl || "/pricing").trim() || "/pricing",
+      }
+      : {
+        canScheduleEdits: currentPlanKey !== "FREE",
+        planName,
+        upgradeUrl: "/pricing",
+        billingUrl: "/pricing",
+      };
 
   return {
     success: true,
     currentPlanKey,
+    planName,
+    capabilities,
     plans,
   };
 }

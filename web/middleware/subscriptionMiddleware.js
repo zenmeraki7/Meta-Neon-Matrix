@@ -4,6 +4,11 @@ import { PLANS } from "../services/SubscriptionService/SubscriptionService.js";
 
 import { db } from "../repositories/repositoryDb.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import {
+  buildScheduleEditCapability,
+  SCHEDULED_EDITS_FEATURE,
+  SCHEDULED_EDITS_UPGRADE_MESSAGE,
+} from "../services/entitlement/scheduledEditEntitlement.js";
 
 
 export const subscriptionMiddleware = async (req, res, next) => {
@@ -158,6 +163,44 @@ export const requirePaidPlanMiddleware = (req, res, next) => {
     next();
   } catch (error) {
     console.error("[REQUIRE_PAID_PLAN] Error:", error);
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      error,
+      "INTERNAL_ERROR",
+    );
+    return res.status(statusCode).json(body);
+  }
+};
+
+export const requireScheduledEditPlanMiddleware = (req, res, next) => {
+  try {
+    if (!req.subscription) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        { code: "INTERNAL_ERROR" },
+        "INTERNAL_ERROR",
+      );
+      return res.status(statusCode).json(body);
+    }
+
+    const capability = buildScheduleEditCapability(req.subscription);
+    if (!capability.canScheduleEdits) {
+      const { statusCode, body } = buildPublicApiErrorResponse(
+        {
+          code: "UPGRADE_REQUIRED",
+          message: SCHEDULED_EDITS_UPGRADE_MESSAGE,
+          details: {
+            feature: SCHEDULED_EDITS_FEATURE,
+            upgradeRequired: true,
+            billingUrl: capability.billingUrl,
+          },
+        },
+        "UPGRADE_REQUIRED",
+      );
+      return res.status(statusCode).json(body);
+    }
+
+    next();
+  } catch (error) {
+    console.error("[REQUIRE_SCHEDULED_EDIT_PLAN] Error:", error);
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
       "INTERNAL_ERROR",

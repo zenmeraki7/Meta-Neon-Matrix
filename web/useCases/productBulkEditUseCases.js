@@ -67,6 +67,7 @@ function assertScheduledCommand(command) {
   command = assertMutationCommand(command);
 
   assertRequiredString(command.scheduledAt, "scheduledAt");
+  assertRequiredString(command.timezone, "timezone");
   assertRequiredString(command.freezeMode, "freezeMode");
   if (String(command.freezeMode || "") !== "STATIC_AT_SCHEDULE_CREATE") {
     throw buildUseCaseError(

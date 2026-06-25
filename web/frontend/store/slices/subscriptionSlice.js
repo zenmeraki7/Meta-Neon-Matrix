@@ -36,6 +36,7 @@ export const createSubscription = createAsyncThunk(
 const initialState = {
   plans: [],
   activePlan: null,
+  capabilities: null,
   isActivePlan: false,
   selectedPlan: null,
   plansStatus: "idle", // 'idle' | 'loading' | 'succeeded' | 'failed'
@@ -72,6 +73,7 @@ const subscriptionSlice = createSlice({
       const snapshot = action.payload || {};
       state.plans = Array.isArray(snapshot.plans) ? snapshot.plans : [];
       state.activePlan = snapshot.currentPlanKey || "FREE";
+      state.capabilities = snapshot.capabilities || null;
       state.isActivePlan = (snapshot.currentPlanKey || "FREE") !== "FREE";
       state.plansStatus = "succeeded";
       state.activePlanStatus = "succeeded";
@@ -90,6 +92,7 @@ const subscriptionSlice = createSlice({
       state.activePlanStatus = "succeeded"; // ← sync
       state.plans = action.payload?.plans || [];
       state.activePlan = action.payload?.currentPlanKey || "FREE"; // ← populate activePlan
+      state.capabilities = action.payload?.capabilities || null;
       state.isActivePlan = action.payload?.currentPlanKey !== "FREE"; // ← populate isActivePlan
       state.plansError = null;
       state.activePlanError = null;
@@ -131,6 +134,8 @@ export const {
 // Export selectors
 export const selectSubscriptionPlans = (state) => state.subscription.plans;
 export const selectActivePlan = (state) => state.subscription.activePlan;
+export const selectSubscriptionCapabilities = (state) =>
+  state.subscription.capabilities;
 export const isActivePlan = (state) => state.subscription.isActivePlan;
 export const selectSelectedPlan = (state) => state.subscription.selectedPlan;
 export const selectPlansStatus = (state) => state.subscription.plansStatus;

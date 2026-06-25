@@ -1371,6 +1371,7 @@
   "common.errors.code.REAUTH_REQUIRED": "Authentication required. Please re-open the app from Shopify Admin.",
   "common.errors.code.ENTITLEMENT_DENIED": "Your current plan does not allow this action.",
   "common.errors.code.PLAN_LIMIT_REACHED": "Plan limit reached. Upgrade your plan to continue.",
+  "common.errors.code.UPGRADE_REQUIRED": "This feature requires an active paid plan.",
   "common.errors.code.INVALID_INPUT": "Some inputs are invalid. Review the form and try again.",
   "common.errors.code.CONFLICT_DETECTED": "Conflict detected. Refresh and try again.",
   "common.errors.statusClass.401": "Authentication required. Please re-open the app from Shopify Admin.",

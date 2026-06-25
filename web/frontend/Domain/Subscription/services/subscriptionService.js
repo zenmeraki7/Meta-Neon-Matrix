@@ -2,6 +2,12 @@ import { protectedApiGet, protectedApiPost } from "../../../api/protectedApiClie
 import { getDefaultPricingPlans } from "../config/pricingPlans";
 
 const SUBSCRIPTION_PLANS_PATH = "/api/subscription/get-plans";
+const FALLBACK_CAPABILITIES = Object.freeze({
+  canScheduleEdits: false,
+  planName: "Free Plan",
+  upgradeUrl: "/pricing",
+  billingUrl: "/pricing",
+});
 
 export const subscriptionService = {
   async getSubscriptionPlans() {
@@ -13,6 +19,7 @@ export const subscriptionService = {
       return {
         success: true,
         plans: getDefaultPricingPlans(),
+        capabilities: FALLBACK_CAPABILITIES,
         fallback: true,
         message: error?.message || "Using default pricing plans because billing data could not be loaded.",
       };
@@ -22,6 +29,7 @@ export const subscriptionService = {
       return {
         success: true,
         plans: getDefaultPricingPlans(),
+        capabilities: FALLBACK_CAPABILITIES,
         fallback: true,
         message: data?.message || data?.error || "Failed to load subscription plans",
       };
@@ -31,6 +39,7 @@ export const subscriptionService = {
       return {
         success: true,
         plans: getDefaultPricingPlans(),
+        capabilities: FALLBACK_CAPABILITIES,
         fallback: true,
         message: "Subscription plans response was invalid",
       };
@@ -40,6 +49,7 @@ export const subscriptionService = {
       return {
         success: true,
         plans: getDefaultPricingPlans(),
+        capabilities: FALLBACK_CAPABILITIES,
         fallback: true,
         message: "No pricing plans were returned by the server.",
       };

@@ -169,7 +169,12 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
     return { code: "FORBIDDEN", message: DEFAULT_MESSAGES.FORBIDDEN };
   }
   if (raw.includes("UPGRADE_REQUIRED")) {
-    return { code: "UPGRADE_REQUIRED", message: DEFAULT_MESSAGES.UPGRADE_REQUIRED };
+    return {
+      code: "UPGRADE_REQUIRED",
+      message: error?.message
+        ? String(error.message)
+        : DEFAULT_MESSAGES.UPGRADE_REQUIRED,
+    };
   }
   if (
     raw.includes("STALE")
@@ -200,6 +205,9 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
 export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERROR") {
   const mapped = mapErrorToPublicContract(error, fallbackCode);
   const statusCode = statusFromCode(mapped.code);
+  const details = error?.details && typeof error.details === "object"
+    ? error.details
+    : {};
   const fields = Array.isArray(error?.fields) ? error.fields : [];
   const errors = fields.reduce((acc, fieldError) => {
     const field = String(fieldError?.field || "body").trim() || "body";
@@ -223,7 +231,14 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
       message: mapped.message,
       errorId: generateErrorId(),
       rootCause: error?.message ? String(error.message) : mapped.message,
-      ...(error?.details && typeof error.details === "object" ? { details: error.details } : {}),
+      ...(mapped.code === "UPGRADE_REQUIRED"
+        ? {
+          feature: String(details.feature || "scheduled_edits"),
+          upgradeRequired: true,
+          billingUrl: String(details.billingUrl || "/pricing"),
+        }
+        : {}),
+      ...(Object.keys(details).length ? { details } : {}),
       ...(process.env.NODE_ENV !== "production" && error?.stack ? { stack: String(error.stack) } : {}),
       ...(error?.action ? { action: String(error.action) } : {}),
       ...(Object.keys(errors).length ? { errors } : {}),

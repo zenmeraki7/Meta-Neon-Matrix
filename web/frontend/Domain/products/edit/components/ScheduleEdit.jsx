@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   Modal,
   FormLayout,
@@ -14,8 +15,15 @@ import { useTranslation } from "react-i18next";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 import { useShopTimezone } from "../../../../hooks/useShopTimezone";
-import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
+import {
+  getDateInputInTimezone,
+  getScheduleDateTimeValidation,
+} from "../../../../utils/timezoneDateTime";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
+
+const SCHEDULED_EDITS_UPGRADE_MESSAGE =
+  "Scheduled edits require an active paid plan.";
+const DEFAULT_BILLING_URL = "/pricing";
 
 function ScheduleEdit({
   onHide,
@@ -33,6 +41,12 @@ function ScheduleEdit({
   const { shopTimezone } = useShopTimezone();
   const resolvedTimezone = shopTimezone || "UTC";
   const { showSuccess, showError } = useAppToast();
+  const scheduleCapabilityQuery = useQuery({
+    queryKey: ["subscription-capabilities", "scheduled-edits"],
+    queryFn: async () => api.get("/api/subscription/get-plans"),
+    enabled: show === true,
+    staleTime: 30_000,
+  });
   // State for form fields
   const [startEditChecked, setStartEditChecked] = useState(false);
   const [undoStartEditChecked, setUndoStartEditChecked] = useState(false);
@@ -42,6 +56,7 @@ function ScheduleEdit({
   const [undoStartEditTime, setUndoStartEditTime] = useState("");
   const [confirmText, setConfirmText] = useState("");
   const [upgradeWarning, setUpgradeWarning] = useState(null);
+  const [upgradeBillingUrl, setUpgradeBillingUrl] = useState(null);
 
 
   // State for UI
@@ -60,6 +75,24 @@ function ScheduleEdit({
     Boolean(previewContractId) &&
     hasFreshPreview === true &&
     hasPreviewRegistryMismatch !== true;
+  const scheduleCapability = scheduleCapabilityQuery.data?.capabilities || null;
+  const scheduleCapabilityLoading =
+    scheduleCapabilityQuery.isLoading || scheduleCapabilityQuery.isFetching;
+  const canScheduleEdits = scheduleCapability?.canScheduleEdits === true;
+  const scheduleUpgradeRequired =
+    scheduleCapabilityLoading === false && canScheduleEdits !== true;
+  const scheduleUpgradeMessage = upgradeWarning || (
+    scheduleUpgradeRequired
+      ? t("scheduledEditsUpgradeRequired", {
+        defaultValue: SCHEDULED_EDITS_UPGRADE_MESSAGE,
+      })
+      : null
+  );
+  const resolvedBillingUrl =
+    upgradeBillingUrl ||
+    scheduleCapability?.billingUrl ||
+    scheduleCapability?.upgradeUrl ||
+    DEFAULT_BILLING_URL;
 
   // Check if the form is valid
   const isFormValid =
@@ -68,7 +101,35 @@ function ScheduleEdit({
     startEditTime &&
     isUndoValid &&
     isPreviewValid &&
+    canScheduleEdits &&
     confirmationValid;
+
+  const getScheduleValidationMessage = useCallback((validation) => {
+    switch (validation?.code) {
+      case "MISSING_DATE":
+        return t("scheduleDateRequired", {
+          defaultValue: "Choose a schedule date.",
+        });
+      case "MISSING_TIME":
+        return t("scheduleTimeRequired", {
+          defaultValue: "Choose a schedule time.",
+        });
+      case "MISSING_TIMEZONE":
+      case "INVALID_TIMEZONE":
+        return t("scheduleTimezoneUnavailable", {
+          defaultValue: "Shop timezone is unavailable. Refresh and try again.",
+        });
+      case "PAST_DATETIME":
+        return t("scheduledTimeMustBeFuture", {
+          defaultValue: "Scheduled edit time must be in the future.",
+        });
+      case "INVALID_DATETIME":
+      default:
+        return t("invalidScheduledDateTime", {
+          defaultValue: "Enter a valid schedule date and time.",
+        });
+    }
+  }, [t]);
 
   // Handle date input changes
   const handleDateChange = useCallback((value, type) => {
@@ -116,10 +177,20 @@ function ScheduleEdit({
     setConfirmText("");
     setError(null);
     setUpgradeWarning(null);
+    setUpgradeBillingUrl(null);
   }, []);
 
   // Handle schedule edit submission
   const handleScheduleEdit = useCallback(async () => {
+    if (!canScheduleEdits) {
+      setUpgradeWarning(
+        t("scheduledEditsUpgradeRequired", {
+          defaultValue: SCHEDULED_EDITS_UPGRADE_MESSAGE,
+        }),
+      );
+      return;
+    }
+
     if (!isFormValid) return;
 
     setSubmitting(true);
@@ -127,22 +198,49 @@ function ScheduleEdit({
     setUpgradeWarning(null);
 
     try {
-      const scheduledAt = zonedDateTimeToUtcIso(startEditDate, startEditTime, resolvedTimezone);
-      const scheduledAtMs = new Date(scheduledAt).getTime();
+      const scheduleValidation = getScheduleDateTimeValidation({
+        date: startEditDate,
+        time: startEditTime,
+        timeZone: resolvedTimezone,
+      });
 
-      if (!Number.isFinite(scheduledAtMs) || scheduledAtMs <= Date.now()) {
-        const message = t("scheduledTimeMustBeFuture", {
-          defaultValue: "Scheduled edit time must be in the future.",
+      if (import.meta.env?.DEV) {
+        console.log({
+          rawDate: startEditDate,
+          rawTime: startEditTime,
+          shopTimezone: resolvedTimezone,
+          parsedShopTime: scheduleValidation.valid
+            ? `${startEditDate} ${startEditTime} ${resolvedTimezone}`
+            : null,
+          parsedUtc: scheduleValidation.utcIso || null,
+          nowUtc: new Date().toISOString(),
         });
+      }
+
+      if (!scheduleValidation.valid) {
+        const message = getScheduleValidationMessage(scheduleValidation);
         setError(message);
-        showError(message);
         return;
       }
 
-      const scheduledUndoAt =
-        undoStartEditChecked && undoStartEditDate && undoStartEditTime
-          ? zonedDateTimeToUtcIso(undoStartEditDate, undoStartEditTime, resolvedTimezone)
-          : null;
+      const scheduledAt = scheduleValidation.utcIso;
+
+      let scheduledUndoAt = null;
+      if (undoStartEditChecked) {
+        const undoValidation = getScheduleDateTimeValidation({
+          date: undoStartEditDate,
+          time: undoStartEditTime,
+          timeZone: resolvedTimezone,
+        });
+
+        if (!undoValidation.valid) {
+          const message = getScheduleValidationMessage(undoValidation);
+          setError(message);
+          return;
+        }
+
+        scheduledUndoAt = undoValidation.utcIso;
+      }
 
       if (
         scheduledUndoAt &&
@@ -152,7 +250,6 @@ function ScheduleEdit({
           defaultValue: "Undo time must be later than the scheduled edit time",
         });
         setError(message);
-        showError(message);
         return;
       }
 
@@ -193,6 +290,22 @@ function ScheduleEdit({
         || errorCode === "UPGRADE_REQUIRED"
         || errorCode === "FORBIDDEN"
       ) {
+        if (errorCode === "UPGRADE_REQUIRED") {
+          console.warn("Scheduled edit upgrade required", {
+            errorId: detail?.errorId || error?.payload?.errorId || error?.errorId || null,
+            feature: detail?.feature || error?.payload?.feature || null,
+          });
+          setUpgradeBillingUrl(
+            detail?.billingUrl || error?.payload?.billingUrl || DEFAULT_BILLING_URL,
+          );
+          setUpgradeWarning(
+            t("scheduledEditsUpgradeRequired", {
+              defaultValue: SCHEDULED_EDITS_UPGRADE_MESSAGE,
+            }),
+          );
+          return;
+        }
+
         setUpgradeWarning(toSafeErrorMessage(t, error, "common.errors.code.PLAN_LIMIT_REACHED"));
         return;
       }
@@ -205,6 +318,7 @@ function ScheduleEdit({
     }
   }, [
     isFormValid,
+    canScheduleEdits,
     startEditDate,
     startEditTime,
     undoStartEditChecked,
@@ -216,7 +330,9 @@ function ScheduleEdit({
     previewSignature,
     requiresTypedConfirm,
     confirmText,
+    resolvedTimezone,
     api,
+    getScheduleValidationMessage,
     resetForm,
     onHide,
     navigate,
@@ -238,7 +354,11 @@ function ScheduleEdit({
           content: t("schedule"),
           onAction: handleScheduleEdit,
           loading: submitting,
-          disabled: !isFormValid || submitting,
+          disabled:
+            scheduleCapabilityLoading ||
+            scheduleUpgradeRequired ||
+            !isFormValid ||
+            submitting,
         }}
         secondaryActions={[
           {
@@ -252,17 +372,17 @@ function ScheduleEdit({
       >
         <Modal.Section>
           <FormLayout>
-    {upgradeWarning && (
+    {scheduleUpgradeMessage && (
   <Banner
     tone="warning"
     title={t("upgradeRequiredTitle", { defaultValue: "Upgrade Required" })}
-    onDismiss={() => setUpgradeWarning(null)}
+    onDismiss={scheduleUpgradeRequired ? undefined : () => setUpgradeWarning(null)}
     action={{
       content: t("upgradePlanButton", { defaultValue: "Upgrade plan" }),
-      onAction: () => navigate("/pricing"),
+      onAction: () => navigate(resolvedBillingUrl),
     }}
   >
-    <p>{upgradeWarning}</p>
+    <p>{scheduleUpgradeMessage}</p>
   </Banner>
 )}
 

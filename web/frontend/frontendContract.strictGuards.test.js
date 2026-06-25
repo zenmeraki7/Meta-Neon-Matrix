@@ -160,3 +160,32 @@ test("frontend strict guard: critical write calls include idempotent protection"
     `Critical write calls must include idempotent: true nearby: ${offenders.join(", ")}`,
   );
 });
+
+test("schedule edit modal disables paid-only scheduling and handles upgrade responses", () => {
+  const modalPath = path.join(
+    FRONTEND_ROOT,
+    "Domain/products/edit/components/ScheduleEdit.jsx",
+  );
+  const source = fs.readFileSync(modalPath, "utf8");
+
+  assert.ok(source.includes('api.get("/api/subscription/get-plans")'));
+  assert.ok(source.includes("canScheduleEdits"));
+  assert.ok(source.includes("scheduleUpgradeRequired"));
+  assert.ok(source.includes("Scheduled edits require an active paid plan."));
+  assert.ok(source.includes("disabled:"));
+  assert.ok(source.includes("scheduleUpgradeRequired ||"));
+  assert.ok(source.includes('onAction: () => navigate(resolvedBillingUrl)'));
+
+  const guardIndex = source.indexOf("if (!canScheduleEdits)");
+  const postIndex = source.indexOf('api.post("/api/products/schedule-task"');
+  assert.ok(guardIndex >= 0, "Schedule submit must guard on canScheduleEdits");
+  assert.ok(postIndex >= 0, "Schedule submit must still call schedule-task for eligible shops");
+  assert.ok(
+    guardIndex < postIndex,
+    "Schedule submit must return before schedule-task when canScheduleEdits is false",
+  );
+
+  assert.ok(source.includes('errorCode === "UPGRADE_REQUIRED"'));
+  assert.ok(source.includes('console.warn("Scheduled edit upgrade required"'));
+  assert.ok(source.includes("errorId:"));
+});

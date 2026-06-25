@@ -82,13 +82,18 @@ test("scheduled edit creation requires approved preview contract and rejects leg
 
 test("paid feature denial is returned as an upgrade requirement and schedule UI offers pricing", () => {
   const middleware = read("web/middleware/subscriptionMiddleware.js");
+  const routes = read("web/routes/productRoutes.js");
   const publicErrors = read("web/utils/publicApiError.js");
   const modal = read("web/frontend/Domain/products/edit/components/ScheduleEdit.jsx");
 
-  assert.ok(middleware.includes('{ code: "UPGRADE_REQUIRED" }'));
+  assert.ok(middleware.includes('code: "UPGRADE_REQUIRED"'));
+  assert.ok(middleware.includes("requireScheduledEditPlanMiddleware"));
+  assert.ok(middleware.includes("SCHEDULED_EDITS_UPGRADE_MESSAGE"));
+  assert.ok(routes.includes("requireScheduledEditPlanMiddleware"));
   assert.ok(publicErrors.includes('UPGRADE_REQUIRED: "This feature requires an active paid plan."'));
+  assert.ok(publicErrors.includes('feature: String(details.feature || "scheduled_edits")'));
   assert.ok(modal.includes('errorCode === "UPGRADE_REQUIRED"'));
-  assert.ok(modal.includes('onAction: () => navigate("/pricing")'));
+  assert.ok(modal.includes('onAction: () => navigate(resolvedBillingUrl)'));
   assert.ok(modal.includes('defaultValue: "Scheduled edit time must be in the future."'));
   assert.equal(modal.includes('throw new Error(\n          t("scheduledTimeMustBeFuture"'), false);
 });
