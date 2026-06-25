@@ -54,44 +54,56 @@ async function reserveWebhookDelivery({
   entityId,
   payload,
 }) {
-  const id = buildWebhookDeliveryId({ topic, shop, webhookId, entityId });
-  const dedupeKey = buildWebhookDedupeKey({ topic, shop, webhookId, entityId });
-  const payloadHash = createPayloadHash(payload);
-
- try {
-  await prisma.webhookDelivery.upsert({
-    where: {
-      id,
-    },
-    update: {}, // do nothing if already exists
-    create: {
-      id,
-      topic,
-      shop,
-      webhookId: webhookId || null,
-      entityId: entityId ? String(entityId) : null,
-      dedupeKey,
-      payloadHash,
-      status: "RECEIVED",
-      attemptCount: 1,
-    },
+  const id = buildWebhookDeliveryId({
+    topic,
+    shop,
+    webhookId,
+    entityId,
   });
 
-  return {
-    accepted: true,
-    deliveryId: id,
-    payloadHash,
-  };
-} catch (error) {
-  console.error("Failed to save webhook delivery:", error);
+  const dedupeKey = buildWebhookDedupeKey({
+    topic,
+    shop,
+    webhookId,
+    entityId,
+  });
 
-  return {
-    accepted: false,
-    deliveryId: id,
-    payloadHash,
-    error: error.message,
-  };
-}
+  const payloadHash = createPayloadHash(payload);
+
+  try {
+    await prisma.webhookDelivery.upsert({
+      where: {
+        id,
+      },
+      update: {},
+      create: {
+        id,
+        topic,
+        shop,
+        webhookId: webhookId || null,
+        entityId: entityId ? String(entityId) : null,
+        dedupeKey,
+        payloadHash,
+        status: "RECEIVED",
+        attemptCount: 1,
+      },
+    });
+
+    return {
+      accepted: true,
+      deliveryId: id,
+      payloadHash,
+    };
+  } catch (error) {
+    console.error("Failed to save webhook delivery:", error);
+
+    return {
+      accepted: false,
+      deliveryId: id,
+      payloadHash,
+      error: error.message,
+    };
+  }
 }
 
 async function markWebhookQueued(deliveryId) {
@@ -134,17 +146,21 @@ async function upsertReconcileSignal({
   payloadHash,
   webhookId,
 }) {
-  if (!shop || !entityType || !entityId) return;
+  if (!shop || !entityType || entityId == null) return;
 
-  const signalId = `${shop}:${entityType}:${entityId}`;
+  const normalizedEntityId = String(entityId);
+
+  const signalId =
+    `${shop}:${entityType}:${normalizedEntityId}`;
 
   await prisma.mirrorReconcileSignal.upsert({
     where: { id: signalId },
+
     create: {
       id: signalId,
       shop,
       entityType,
-      entityId,
+      entityId: normalizedEntityId,
       topic,
       status: "pending",
       signalCount: 1,
@@ -154,10 +170,13 @@ async function upsertReconcileSignal({
       latestSourceKind: topic,
       updatedAt: new Date(),
     },
+
     update: {
       topic,
       status: "pending",
-      signalCount: { increment: 1 },
+      signalCount: {
+        increment: 1,
+      },
       latestWebhookId: webhookId || null,
       latestPayloadHash: payloadHash || null,
       latestEventAt: new Date(),
@@ -191,7 +210,7 @@ async function queueProductWebhook({
     await upsertReconcileSignal({
       shop,
       entityType: "product",
-      entityId,
+      entityId : String(entityId),
       topic,
       payloadHash: reservation.payloadHash,
       webhookId,
