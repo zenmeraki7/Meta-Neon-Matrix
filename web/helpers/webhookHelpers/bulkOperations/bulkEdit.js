@@ -901,6 +901,13 @@ function extractProductSetUserErrors(parsed) {
 
   return [...directErrors, ...operationErrors].filter(Boolean);
 }
+
+function isCompletedProductSetOperation(parsed) {
+  const status = parsed?.data?.productSet?.productSetOperation?.status;
+  if (!status) return true;
+  return ["COMPLETE", "COMPLETED"].includes(status);
+}
+
 export async function fetchBulkOperationData(url, shop) {
   const response = await axios.get(url, {
     responseType: "text",
@@ -923,6 +930,19 @@ export async function fetchBulkOperationData(url, shop) {
       if (userErrors.length > 0) {
         rowErrors.push({
           userErrors,
+          row: parsed,
+        });
+        continue;
+      }
+
+      if (!isCompletedProductSetOperation(parsed)) {
+        rowErrors.push({
+          userErrors: [
+            {
+              field: ["productSetOperation", "status"],
+              message: `Product set operation did not complete: ${parsed?.data?.productSet?.productSetOperation?.status}`,
+            },
+          ],
           row: parsed,
         });
         continue;

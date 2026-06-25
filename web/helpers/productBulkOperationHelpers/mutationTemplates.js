@@ -20,7 +20,7 @@ mutation productDelete($id: ID!) {
 
 export const PRODUCT_SET_MUTATION = `
       mutation updateProductAsync($productSet: ProductSetInput!) {
-  productSet(input: $productSet) {
+  productSet(input: $productSet, synchronous: true) {
     product {
       id
       title
@@ -94,7 +94,7 @@ export const getProductSetMutation = (mode) => {
   }
   return `
 mutation updateProductAsync($productSet: ProductSetInput!) {
-  productSet(input: $productSet) {
+  productSet(input: $productSet, synchronous: true) {
     product {
       ${getProductFields(mode)}
     }
