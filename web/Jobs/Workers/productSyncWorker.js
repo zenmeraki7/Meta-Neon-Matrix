@@ -152,7 +152,7 @@ async function handlePrioritySync() {
 async function syncStore(shopUrl) {
   const lockAcquired = await acquireShopLock(shopUrl);
   if (!lockAcquired) {
-    // console.log(`[worker:sync_locked] shop=${shopUrl} reason=lock_not_acquired`);
+    console.log(`[worker:sync_locked] shop=${shopUrl} reason=lock_not_acquired`);
     return;
   }
 
@@ -166,7 +166,7 @@ async function syncStore(shopUrl) {
     });
 
     if (store?.isProductSyncing) {
-      // console.log(`[worker:sync_skipped] shop=${shopUrl} reason=already_syncing`);
+      console.log(`[worker:sync_skipped] shop=${shopUrl} reason=already_syncing`);
 
       return;
     }
@@ -183,17 +183,17 @@ async function syncStore(shopUrl) {
     );
 
     if (currentBulkOperation?.status === "RUNNING") {
-      // console.log(`[worker:sync_skipped] shop=${shopUrl} reason=bulk_op_running bulkOpId=${currentBulkOperation.id}`);
+      console.log(`[worker:sync_skipped] shop=${shopUrl} reason=bulk_op_running bulkOpId=${currentBulkOperation.id}`);
 
       return;
     }
-    // console.log(`[worker:sync_start] shop=${shopUrl}`);
+    console.log(`[worker:sync_start] shop=${shopUrl}`);
 
     await service.startBulkOperationToFetchProducts({
       session,
       isInitialSync: false,
     });
-    // console.log(`[worker:sync_triggered] shop=${shopUrl}`);
+    console.log(`[worker:sync_triggered] shop=${shopUrl}`);
 
   } catch (error) {
     console.error(`❌ Error syncing ${shopUrl}:`, error?.message || error);

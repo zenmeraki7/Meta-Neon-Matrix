@@ -19,7 +19,7 @@ export const syncProductData = async (req, res) => {
       });
     }
 
-        // console.log(`[api:sync_request] shop=${session.shop} force=${req.query.force || req.body?.force}`);
+        console.log(`[api:sync_request] shop=${session.shop} force=${req.query.force || req.body?.force}`);
 
     const currentBulkOperation = await getCurrentBulkOperationStatus(
       session,
@@ -27,7 +27,7 @@ export const syncProductData = async (req, res) => {
     );
 
      if (currentBulkOperation?.status === "RUNNING") {
-      // console.log(`[api:sync_blocked] shop=${session.shop} reason=bulk_op_running`);
+      console.log(`[api:sync_blocked] shop=${session.shop} reason=bulk_op_running`);
       return res.status(400).json({ message: "Another operation is running in background" });
     }
 
@@ -96,7 +96,7 @@ export const syncProductData = async (req, res) => {
       session,
       isInitialSync: false,
     });
-    // console.log(`[api:sync_triggered] shop=${session.shop} bulkOperationId=${result.bulkOperationId} syncHistoryId=${result.syncHistoryId}`);
+    console.log(`[api:sync_triggered] shop=${session.shop} bulkOperationId=${result.bulkOperationId} syncHistoryId=${result.syncHistoryId}`);
 
     await clearKeyCaches(`${session.shop}:sync_details`);
 

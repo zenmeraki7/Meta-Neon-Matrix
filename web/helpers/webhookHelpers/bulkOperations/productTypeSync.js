@@ -1,3 +1,4 @@
+//web/helpers/bulkOperations/productTypeSync.js
 import shopify from "../../../shopify.js";
 import axios from "axios";
 import readline from "readline";
