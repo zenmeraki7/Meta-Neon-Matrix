@@ -25,6 +25,41 @@ const QUEUE_NAME = process.env.SHOP_SYNC_QUEUE || "shop-sync-trigger";
 const productService = new Services();
 const collectionService = new CollectionService(shopify);
 
+// ---- NEW: simple wait-and-retry helper for the "bulk op already running" race ----
+// Instead of failing the instant Shopify says a bulk operation is running,
+// we wait a few seconds and check again, a handful of times, before giving up.
+const BULK_BUSY_RETRY_ATTEMPTS = 5; // how many times to check
+const BULK_BUSY_RETRY_DELAY_MS = 5_000; // wait 5s between checks (~25s total)
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForBulkOperationToBeFree(session) {
+  for (let attempt = 1; attempt <= BULK_BUSY_RETRY_ATTEMPTS; attempt++) {
+    const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
+
+    if (status !== "RUNNING") {
+      return { free: true, attempt };
+    }
+
+    logger.info("Bulk operation busy, waiting before retry", {
+      worker: "shopSyncWorker",
+      shop: session?.shop,
+      attempt,
+      maxAttempts: BULK_BUSY_RETRY_ATTEMPTS,
+    });
+
+    // Don't wait after the last attempt — just report busy and let the caller decide.
+    if (attempt < BULK_BUSY_RETRY_ATTEMPTS) {
+      await sleep(BULK_BUSY_RETRY_DELAY_MS);
+    }
+  }
+
+  return { free: false, attempt: BULK_BUSY_RETRY_ATTEMPTS };
+}
+// -----------------------------------------------------------------------------------
+
 async function tryAdvisoryLock(client, lockKey, transactional = true) {
   if (transactional) {
     const rows = await client.$queryRaw`
@@ -100,11 +135,22 @@ const shopSyncWorker = new Worker(
       }
 
       const session = await getSession(shop);
-      const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
 
-      if (status === "RUNNING") {
-        throw new Error("A Shopify query bulk operation is already running for this shop");
+      // ---- CHANGED: wait-and-retry instead of failing immediately ----
+      const { free, attempt } = await waitForBulkOperationToBeFree(session);
+
+      if (!free) {
+        // Still busy after several retries — this is a real, longer-running
+        // conflict (not just two webhooks landing a second apart), so we
+        // defer the job by re-throwing. BullMQ's existing retry/backoff
+        // config on this queue will pick it up again later, and because
+        // we never reached the point of mutating anything, there is no
+        // need to mark the mirror as unsafe for this case.
+        throw new Error(
+          `A Shopify query bulk operation is still running after ${attempt} checks; deferring this ${syncType} sync`,
+        );
       }
+      // ------------------------------------------------------------------
 
       if (syncType === "product") {
         await productService.startBulkOperationToFetchProducts({ session });

@@ -56,7 +56,7 @@ import "./Jobs/Workers/scheduledExportSchedulerWorker.js";
 import "./Jobs/Workers/automaticProductRuleExecutionWorker.js";
 import "./Jobs/Workers/automaticProductRuleSchedulerWorker.js";
 import "./Jobs/Workers/automaticProductRuleSignalWorker.js";
-
+import "./Jobs/Workers/mirrorBatchCleanupSchedulerWorker.js"
 
 // Utils / Middleware
 import logger from "./utils/loggerUtils.js";

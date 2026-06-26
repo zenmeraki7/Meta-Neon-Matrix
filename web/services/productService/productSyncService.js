@@ -22,6 +22,7 @@ import {
   fetchMetaobjectLookupByIds,
 } from "./productSyncMetaobjects.js";
 
+
 export async function startBulkOperationToFetchProducts({
   session,
   isInitialSync = false,

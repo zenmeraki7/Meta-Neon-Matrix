@@ -135,7 +135,13 @@ export async function markSyncHistoryFailed({
           isProductSyncing: false,
           isProductInitialySyning: false,
           syncProgressStage: "IDLE",
-          mirrorHealthState: "STALE",
+          // FIXED: "STALE" is not a valid MirrorHealthState enum value.
+          // Valid values are HEALTHY, DEGRADED, UNSAFE — a failed sync
+          // means the mirror can no longer be trusted, so UNSAFE is correct.
+          mirrorHealthState: "UNSAFE",
+          repairRequired: true,
+          mirrorUnsafeSince: new Date(),
+          staleReason: "FULL_SYNC_FAILED",
           lastSyncErrorSummary: errorMessage,
         },
       });

@@ -113,7 +113,9 @@ useEffect(() => {
     const neverSynced =
       !status?.shopifyBulkJobCompleted &&
       !status?.isProductSyncing &&
-      !status?.isProductInitialySyning;
+      !status?.isProductInitialySyning &&
+      !status?.lastProductSyncAt;   // ← add this check
+
     if (neverSynced) {
       fetch("/api/sync/products").catch(() => {});
     }

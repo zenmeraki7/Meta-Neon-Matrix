@@ -624,6 +624,90 @@ return JSON.stringify({
 });
 }
 
+function handleVariantCustomField(
+  product,
+  config,
+  value,
+  changes,
+  supportValue,
+  isTracking,
+  historyId,
+  shop,
+  batchId
+) {
+  const productId = product.id || product._id;
+  const variants = Array.isArray(product?.variants) ? product.variants : [];
+  const options = Array.isArray(product?.options) ? product.options : [];
+ 
+  const newValue = getNewValue(config.fieldName, value, supportValue);
+  const payloadValue = getPayloadNewValue(config.fieldName, value, supportValue);
+ 
+  if (isTracking) {
+    return {
+      productId,
+      title: product.title,
+      img: getProductImage(product),
+      variants: variants.map((variant) => ({
+        id: variant.id || variant._id,
+        title: variant.title || "Default",
+        oldValue: config.getValue(variant),
+        newValue,
+      })),
+    };
+  }
+ 
+  if (variants.length === 0) {
+    return null;
+  }
+ 
+  changes.push({
+    editHistoryId: historyId,
+    productId,
+    shop,
+    image: getProductImage(product),
+    title: product.title,
+    scope: "variant",
+    batchId,
+    options: options.map((op) => ({
+      id: op.id,
+      name: op.name,
+      values: op.values,
+    })),
+    variantFieldChanges: variants.map((variant) => ({
+      variantId: variant.id,
+      variantTitle: variant.title,
+      selectedOptions: (variant.selectedOptions ?? []).map((op) => ({
+        name: op.name,
+        value: op.value,
+      })),
+      changes: [
+        {
+          field: config.fieldName,
+          oldValue: config.getValue(variant),
+          newValue,
+        },
+      ],
+    })),
+    status: "pending",
+  });
+ 
+  return JSON.stringify({
+    productSet: {
+      id: productId,
+ 
+      productOptions: buildProductOptionsForProductSet(product, variants),
+ 
+      variants: variants.map((variant) => ({
+        id: variant.id,
+        optionValues: (variant.selectedOptions ?? []).map((op) => ({
+          optionName: op.name,
+          name: op.value,
+        })),
+        [config.fieldName]: payloadValue,
+      })),
+    },
+  });
+}
 
 function handleTagField(
   product,
