@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { buildCreateRecurringEditCommand } from "./normalizers/recurringEditCommandNormalizer.js";
 
 function read(file) {
   return fs.readFileSync(path.resolve(file), "utf8");
@@ -190,5 +191,71 @@ test("recurring edit submit builds payload safely before mutation", () => {
       modal.includes("payload = buildSubmitPayload();") &&
       modal.includes("recurringEditErrors.invalidSchedule"),
     "RecurringEditModal submit must catch payload build failures before mutation",
+  );
+});
+
+test("recurring edit normalizer accepts modal create payload contract", () => {
+  const command = buildCreateRecurringEditCommand({
+    shop: "demo-shop.myshopify.com",
+    actor: { type: "MERCHANT_ADMIN", userId: "staff-1" },
+    idempotencyKey: "recurring-edit:test",
+    subscription: { plan: "PRO_MONTHLY", status: "ACTIVE" },
+    body: {
+      title: "Daily price increase",
+      frequency: "DAILY",
+      timezone: "Asia/Kolkata",
+      timeToRun: "12:00 PM",
+      status: "ACTIVE",
+      editedField: "price",
+      editedBy: "increaseByPercentage",
+      operation: "INCREASE_PERCENT",
+      value: "20",
+      filterParams: [],
+      filterAst: {
+        version: 1,
+        targetGranularity: "PRODUCT",
+        source: "RECURRING_DEFINITION",
+        filters: [],
+      },
+      filterFingerprint: "filter-123",
+      targetingFingerprint: "target-123",
+      previewContractId: "preview-123",
+      previewId: "preview-123",
+      previewFilterHash: "filter-123",
+      previewSignature: "sig-123",
+      approvedPreviewCount: 3,
+    },
+  });
+
+  assert.equal(command.input.name, "Daily price increase");
+  assert.equal(command.input.title, "Daily price increase");
+  assert.equal(command.input.startAt, null);
+  assert.equal(command.input.timeToRun, "12:00");
+  assert.equal(command.input.runTime, "12:00");
+  assert.equal(command.input.timezone, "Asia/Kolkata");
+  assert.equal(command.input.editedField, "price");
+  assert.equal(command.input.editedBy, "increaseByPercentage");
+  assert.equal(command.input.operation, "INCREASE_PERCENT");
+  assert.equal(command.input.value, "20");
+  assert.deepEqual(command.input.editPayload, {});
+  assert.equal(command.input.status, "ACTIVE");
+  assert.equal(command.input.previewContractId, "preview-123");
+  assert.equal(command.input.previewFilterHash, "filter-123");
+  assert.equal(command.input.previewSignature, "sig-123");
+});
+
+test("recurring edit controller derives trusted actor instead of browser actor", () => {
+  const controller = read("web/controllers/recurringEditController.js");
+
+  assert.ok(
+    controller.includes('type: "MERCHANT_USER"') &&
+      controller.includes("userId") &&
+      controller.includes('source: "SHOPIFY_ADMIN"'),
+    "Recurring create actor must be derived from the authenticated Shopify session",
+  );
+  assert.equal(
+    controller.includes("actor: buildAuthenticatedActor(req, session)"),
+    false,
+    "Recurring controller must not use actor helpers that produce actorType/actorId for this normalizer",
   );
 });

@@ -150,7 +150,7 @@ export const buildApp = (_server, io) => {
   );
 
   // Normal API body parser after webhooks
-  app.use(express.json({ limit: "300kb" }));
+  app.use(express.json({ limit: "1mb" }));
   app.use(compression({ threshold: 1024 }));
 
   const rumLimiter = rateLimit({

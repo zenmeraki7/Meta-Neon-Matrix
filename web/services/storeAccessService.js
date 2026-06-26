@@ -8,6 +8,18 @@ import {
 
 const STORE_ACCESS_CACHE_TTL_SECONDS = 300;
 const STORE_TIMEZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
+const FALLBACK_SHOP_TIMEZONE = "Asia/Kolkata";
+
+function isValidTimezone(timezone) {
+  if (!timezone) return false;
+
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function resolveShopTimezone(session) {
   try {
@@ -23,21 +35,45 @@ async function resolveShopTimezone(session) {
         `,
       },
     });
-    return response?.body?.data?.shop?.ianaTimezone || "UTC";
+    const timezone = response?.body?.data?.shop?.ianaTimezone;
+    return isValidTimezone(timezone) ? timezone : null;
   } catch {
-    return "UTC";
+    return null;
   }
 }
 
 async function resolveShopTimezoneCached({ shop, session }) {
   const timezoneCacheKey = `${shop}:storeTimezone`;
   const cachedTimezone = await getCache(timezoneCacheKey);
-  if (cachedTimezone) {
+  if (isValidTimezone(cachedTimezone)) {
     return String(cachedTimezone);
   }
-  const timezone = await resolveShopTimezone(session);
+  const timezone = (await resolveShopTimezone(session)) || FALLBACK_SHOP_TIMEZONE;
   await setCache(timezoneCacheKey, timezone, STORE_TIMEZONE_CACHE_TTL_SECONDS);
   return timezone;
+}
+
+export async function resolveTrustedShopTimezone({
+  shop,
+  session,
+  requestedTimezone = null,
+  allowCachedTimezone = true,
+  allowRequestedTimezone = true,
+}) {
+  const shopTimezone = await resolveShopTimezone(session);
+  if (shopTimezone) return shopTimezone;
+
+  const timezoneCacheKey = `${shop}:storeTimezone`;
+  const cachedTimezone = await getCache(timezoneCacheKey);
+  if (allowCachedTimezone && isValidTimezone(cachedTimezone)) {
+    return String(cachedTimezone);
+  }
+
+  if (allowRequestedTimezone && isValidTimezone(requestedTimezone)) {
+    return String(requestedTimezone).trim();
+  }
+
+  return FALLBACK_SHOP_TIMEZONE;
 }
 
 export async function getStoreAccessDto({ session }) {

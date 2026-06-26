@@ -11,7 +11,14 @@ function safeString(value, fallback = null) {
 
 export function toRecurringEditCreatedDto(result) {
   return {
+    ok: true,
     success: true,
+    recurringEdit: {
+      id: safeString(result?.id),
+      title: safeString(result?.title),
+      timezone: safeString(result?.timezone),
+      nextRunAt: toIso(result?.nextRunAt),
+    },
     data: result || null,
     meta: { createdAt: toIso(result?.createdAt) },
   };

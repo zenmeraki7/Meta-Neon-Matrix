@@ -1,5 +1,5 @@
 import {
-  buildAuthenticatedActor,
+  buildControllerError,
   getIdempotencyKey,
   handleLoggedControllerError,
   requireShopifySession,
@@ -31,6 +31,44 @@ import {
   toRecurringEditStatusUpdatedDto,
   toRecurringEditUpdatedDto,
 } from "../dtos/recurringEditDto.js";
+import { resolveTrustedShopTimezone } from "../services/storeAccessService.js";
+
+function getAssociatedSessionUser(session) {
+  return session?.onlineAccessInfo?.associated_user || null;
+}
+
+function buildRecurringEditActorFromSession(session) {
+  const shop = String(session?.shop || "").trim();
+  const associatedUser = getAssociatedSessionUser(session);
+  const userId = associatedUser?.id
+    ? String(associatedUser.id)
+    : shop;
+
+  return Object.freeze({
+    type: "MERCHANT_USER",
+    userId,
+    shop,
+    source: "SHOPIFY_ADMIN",
+    email: associatedUser?.email || null,
+    name:
+      associatedUser?.name ||
+      [associatedUser?.first_name, associatedUser?.last_name]
+        .filter(Boolean)
+        .join(" ") ||
+      null,
+  });
+}
+
+function requireRecurringEditBodyObject(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw buildControllerError(
+      "INVALID_EDIT_PAYLOAD",
+      "Recurring edit payload must be an object",
+    );
+  }
+
+  return body;
+}
 
 function resolveRecurringEditFallbackCode(error, fallbackCode) {
   if (
@@ -48,11 +86,23 @@ export async function createRecurringEditController(req, res) {
 
   try {
     session = requireShopifySession(res);
+    const body = requireRecurringEditBodyObject(req.body);
+    const trustedTimezone = await resolveTrustedShopTimezone({
+      shop: session.shop,
+      session,
+      requestedTimezone: body.timezone,
+      allowCachedTimezone: false,
+      allowRequestedTimezone: false,
+    });
+    const actor = buildRecurringEditActorFromSession(session);
 
     const command = buildCreateRecurringEditCommand({
       shop: session.shop,
-      actor: buildAuthenticatedActor(req, session),
-      body: req.body,
+      actor,
+      body: {
+        ...body,
+        timezone: trustedTimezone,
+      },
       subscription: req.subscription || null,
       idempotencyKey: getIdempotencyKey(req),
     });
@@ -60,6 +110,7 @@ export async function createRecurringEditController(req, res) {
     const result = await createRecurringEdit({
       shop: command.shop,
       body: command.input,
+      actor: command.actor,
       subscription: command.subscription,
     });
 
@@ -87,7 +138,7 @@ export async function listRecurringEditsController(req, res) {
 
     const command = buildListRecurringEditsCommand({
       shop: session.shop,
-      actor: buildAuthenticatedActor(req, session),
+      actor: buildRecurringEditActorFromSession(session),
       query: req.query,
     });
 
@@ -117,7 +168,7 @@ export async function getRecurringEditByIdController(req, res) {
 
     const command = buildGetRecurringEditCommand({
       shop: session.shop,
-      actor: buildAuthenticatedActor(req, session),
+      actor: buildRecurringEditActorFromSession(session),
       params: req.params,
     });
 
@@ -147,7 +198,7 @@ export async function updateRecurringEditController(req, res) {
 
     const command = buildUpdateRecurringEditCommand({
       shop: session.shop,
-      actor: buildAuthenticatedActor(req, session),
+      actor: buildRecurringEditActorFromSession(session),
       params: req.params,
       body: req.body,
       subscription: req.subscription || null,
@@ -185,7 +236,7 @@ export async function toggleRecurringEditStatusController(req, res) {
 
     const command = buildToggleRecurringEditStatusCommand({
       shop: session.shop,
-      actor: buildAuthenticatedActor(req, session),
+      actor: buildRecurringEditActorFromSession(session),
       params: req.params,
       body: req.body,
       subscription: req.subscription || null,
@@ -218,7 +269,7 @@ export async function deleteRecurringEditController(req, res) {
 
     const command = buildDeleteRecurringEditCommand({
       shop: session.shop,
-      actor: buildAuthenticatedActor(req, session),
+      actor: buildRecurringEditActorFromSession(session),
       params: req.params,
       idempotencyKey: getIdempotencyKey(req),
     });

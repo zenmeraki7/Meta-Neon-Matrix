@@ -238,6 +238,34 @@ function normalizeSubscription(subscription) {
   });
 }
 
+function normalizeRunTime(value) {
+  const input = safeString(value, null, MAX_SHORT_STRING_LENGTH);
+
+  if (!input) return null;
+
+  let match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(input);
+  if (match) return `${match[1]}:${match[2]}`;
+
+  match = /^(0?[1-9]|1[0-2]):([0-5]\d)\s*([AaPp][Mm])$/.exec(input);
+  if (!match) {
+    throw buildCommandError(
+      "INVALID_RECURRING_RUN_TIME",
+      "Recurring edit run time must be a valid time",
+      { field: "runTime" },
+    );
+  }
+
+  const hour12 = Number(match[1]);
+  const hour =
+    match[3].toUpperCase() === "AM"
+      ? hour12 % 12
+      : hour12 === 12
+        ? 12
+        : hour12 + 12;
+
+  return `${String(hour).padStart(2, "0")}:${match[2]}`;
+}
+
 function normalizeDateString(value, fieldName) {
   const input = safeString(value, null, MAX_SHORT_STRING_LENGTH);
 
@@ -465,16 +493,34 @@ function resolveTimezone(body) {
   return body?.timezone || body?.schedule?.timezone || null;
 }
 
+function resolveTimeToRun(body) {
+  return (
+    body?.runTime ||
+    body?.timeToRun ||
+    body?.schedule?.runTime ||
+    body?.schedule?.timeToRun ||
+    body?.schedule?.time ||
+    null
+  );
+}
+
 function resolveIntervalMinutes(body) {
   return body?.intervalMinutes || body?.schedule?.intervalMinutes || null;
 }
 
 function resolveEditPayload(body) {
+  if (body?.editPayload !== undefined) return body.editPayload;
+  if (body?.editCommand !== undefined) return body.editCommand;
+  if (
+    body?.operation &&
+    typeof body.operation === "object" &&
+    !Array.isArray(body.operation)
+  ) {
+    return body.operation;
+  }
+  if (body?.bulkEdit !== undefined) return body.bulkEdit;
+
   return (
-    body?.editPayload ||
-    body?.editCommand ||
-    body?.operation ||
-    body?.bulkEdit ||
     {}
   );
 }
@@ -546,9 +592,13 @@ function normalizeRecurringEditBody(body, { partial = false } = {}) {
   assertNoConflictingScheduleFields(safeBody);
 
   const name =
-    safeBody.name === undefined
+    safeBody.name === undefined && safeBody.title === undefined
       ? null
-      : safeString(safeBody.name, null, MAX_SHORT_STRING_LENGTH);
+      : safeString(
+          safeBody.name ?? safeBody.title,
+          null,
+          MAX_SHORT_STRING_LENGTH,
+        );
 
   const startsAt = normalizeOptionalDateString(
     resolveStartsAt(safeBody),
@@ -578,13 +628,6 @@ function normalizeRecurringEditBody(body, { partial = false } = {}) {
     );
   }
 
-  if (!partial && !startsAt) {
-    throw buildCommandError(
-      "RECURRING_START_DATE_REQUIRED",
-      "Recurring edit start date is required",
-    );
-  }
-
   if (
     startsAt &&
     endsAt &&
@@ -598,19 +641,41 @@ function normalizeRecurringEditBody(body, { partial = false } = {}) {
 
   const normalized = {
     name,
+    title: name,
     description:
       safeBody.description === undefined
         ? null
         : safeString(safeBody.description, null, MAX_DESCRIPTION_LENGTH),
 
     frequency: frequency || null,
+    scheduleType: frequency || null,
     timezone,
+    timeToRun: normalizeRunTime(resolveTimeToRun(safeBody)),
+    runTime: normalizeRunTime(resolveTimeToRun(safeBody)),
     startsAt,
+    startAt: startsAt,
     endsAt,
+    endAt: endsAt,
     intervalMinutes: safeInteger(resolveIntervalMinutes(safeBody), null, {
       min: 1,
       max: 24 * 60,
     }),
+    status:
+      safeBody.status === undefined
+        ? null
+        : normalizeMutationStatus(safeBody.status),
+    uiFrequency:
+      safeBody.uiFrequency === undefined
+        ? null
+        : safeString(safeBody.uiFrequency, null, MAX_SHORT_STRING_LENGTH),
+    daysOfWeekToRun:
+      safeBody.daysOfWeekToRun === undefined
+        ? null
+        : sanitizeJsonValue(safeBody.daysOfWeekToRun),
+    dayOfMonthToRun:
+      safeBody.dayOfMonthToRun === undefined
+        ? null
+        : safeInteger(safeBody.dayOfMonthToRun, null, { min: 1, max: 31 }),
     approvedPreviewCount:
       safeBody.approvedPreviewCount === undefined
         ? null
@@ -626,6 +691,98 @@ function normalizeRecurringEditBody(body, { partial = false } = {}) {
       safeBody.targetingFingerprint === undefined
         ? null
         : safeString(safeBody.targetingFingerprint, null, MAX_ID_LENGTH),
+    previewContractId:
+      safeBody.previewContractId === undefined && safeBody.previewId === undefined
+        ? null
+        : safeString(
+            safeBody.previewContractId ?? safeBody.previewId,
+            null,
+            MAX_ID_LENGTH,
+          ),
+    previewId:
+      safeBody.previewContractId === undefined && safeBody.previewId === undefined
+        ? null
+        : safeString(
+            safeBody.previewId ?? safeBody.previewContractId,
+            null,
+            MAX_ID_LENGTH,
+          ),
+    previewFilterHash:
+      safeBody.previewFilterHash === undefined
+        ? null
+        : safeString(safeBody.previewFilterHash, null, MAX_ID_LENGTH),
+    previewMirrorBatchId:
+      safeBody.previewMirrorBatchId === undefined
+        ? null
+        : safeString(safeBody.previewMirrorBatchId, null, MAX_ID_LENGTH),
+    previewFieldRegistryVersion:
+      safeBody.previewFieldRegistryVersion === undefined
+        ? null
+        : safeString(
+            safeBody.previewFieldRegistryVersion,
+            null,
+            MAX_SHORT_STRING_LENGTH,
+          ),
+    previewOperatorRegistryVersion:
+      safeBody.previewOperatorRegistryVersion === undefined
+        ? null
+        : safeString(
+            safeBody.previewOperatorRegistryVersion,
+            null,
+            MAX_SHORT_STRING_LENGTH,
+          ),
+    previewSignature:
+      safeBody.previewSignature === undefined
+        ? null
+        : safeString(safeBody.previewSignature, null, MAX_ID_LENGTH),
+    operationKey:
+      safeBody.operationKey === undefined
+        ? null
+        : safeString(safeBody.operationKey, null, MAX_ID_LENGTH),
+    editedField:
+      safeBody.editedField === undefined
+        ? null
+        : safeString(safeBody.editedField, null, MAX_SHORT_STRING_LENGTH),
+    field:
+      safeBody.field === undefined
+        ? null
+        : safeString(safeBody.field, null, MAX_SHORT_STRING_LENGTH),
+    editedBy:
+      safeBody.editedBy === undefined
+        ? null
+        : safeString(safeBody.editedBy, null, MAX_SHORT_STRING_LENGTH),
+    operation:
+      safeBody.operation === undefined
+        ? null
+        : safeString(safeBody.operation, null, MAX_SHORT_STRING_LENGTH),
+    editType:
+      safeBody.editType === undefined
+        ? null
+        : safeString(safeBody.editType, null, MAX_SHORT_STRING_LENGTH),
+    editedType:
+      safeBody.editedType === undefined
+        ? null
+        : safeString(safeBody.editedType, null, MAX_SHORT_STRING_LENGTH),
+    value:
+      safeBody.value === undefined ? null : sanitizeJsonValue(safeBody.value),
+    searchKey:
+      safeBody.searchKey === undefined
+        ? null
+        : safeString(safeBody.searchKey, null, MAX_SHORT_STRING_LENGTH),
+    replaceText:
+      safeBody.replaceText === undefined
+        ? null
+        : safeString(safeBody.replaceText, null, MAX_STRING_LENGTH),
+    supportValue:
+      safeBody.supportValue === undefined
+        ? null
+        : sanitizeJsonValue(safeBody.supportValue),
+    locationId:
+      safeBody.locationId === undefined
+        ? null
+        : safeString(safeBody.locationId, null, MAX_ID_LENGTH),
+    rules:
+      safeBody.rules === undefined ? null : sanitizeJsonValue(safeBody.rules),
     createdAt:
       safeBody.createdAt === undefined
         ? null

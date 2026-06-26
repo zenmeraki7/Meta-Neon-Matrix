@@ -20,7 +20,6 @@ import {
 
 import { useTranslation } from "react-i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
-import { useShopTimezone } from "../../../../hooks/useShopTimezone";
 import {
   getDateInputInTimezone,
   zonedDateTimeToUtcIso,
@@ -30,12 +29,13 @@ import {
   mapCreateRecurringEditError,
   useCreateRecurringEditMutation,
 } from "../hooks/useCreateRecurringEditMutation";
+import { toCanonicalEditOperation } from "../hooks/useEditPreviewQuery";
 import { useEmbeddedNavigate } from "../../../../hooks/useEmbeddedNavigate";
 
 const DEFAULT_TIME = "12:00";
 const DEFAULT_DAY_OF_MONTH = "1";
 const ACTIVE_STATUS = "ACTIVE";
-const FALLBACK_TIMEZONE = "UTC";
+const FALLBACK_TIMEZONE = "Asia/Kolkata";
 const FREQUENCY = Object.freeze({
   HOURLY: "HOURLY",
   EVERY_2_HOURS: "EVERY_2_HOURS",
@@ -169,7 +169,27 @@ function createRecurringEditIdempotencyKey(payload, submissionKey) {
 }
 
 function isValidTime(value) {
-  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || ""));
+  return parseTimeTo24Hour(value) !== null;
+}
+
+function parseTimeTo24Hour(value) {
+  const text = String(value || "").trim();
+  let match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(text);
+
+  if (match) return `${match[1]}:${match[2]}`;
+
+  match = /^(0?[1-9]|1[0-2]):([0-5]\d)\s*([AaPp][Mm])$/.exec(text);
+  if (!match) return null;
+
+  const hour12 = Number(match[1]);
+  const hour =
+    match[3].toUpperCase() === "AM"
+      ? hour12 % 12
+      : hour12 === 12
+        ? 12
+        : hour12 + 12;
+
+  return `${String(hour).padStart(2, "0")}:${match[2]}`;
 }
 
 function validateFrequency(frequency) {
@@ -337,6 +357,8 @@ function buildRecurringEditPayload({
   endDate,
   endTime,
   approvedPreviewCount,
+  previewFingerprint,
+  previewSignature,
 }) {
   const filterAst = buildFilterAstFromLegacyFilters({
     filterParams: filters,
@@ -349,8 +371,14 @@ function buildRecurringEditPayload({
     source: "RECURRING_DEFINITION",
   });
   const schedulePayload = getSchedulePayloadForFrequency(frequency);
+  const normalizedRunTime = parseTimeTo24Hour(timeToRun);
+  const normalizedStartTime = parseTimeTo24Hour(startTime);
+  const normalizedEndTime = parseTimeTo24Hour(endTime);
+  const previewContractId = safeString(previewFingerprint?.previewId, null);
+  const canonicalOperation = toCanonicalEditOperation(editedBy);
 
   const payload = {
+    name: title.trim(),
     title: title.trim(),
     ...schedulePayload,
     uiFrequency: frequency,
@@ -362,8 +390,23 @@ function buildRecurringEditPayload({
     filterFingerprint: targetingFingerprint,
     approvedPreviewCount,
     createdAt: new Date().toISOString(),
+    previewContractId,
+    previewId: previewContractId,
+    previewFilterHash: safeString(previewFingerprint?.filterHash, null),
+    previewMirrorBatchId: safeString(previewFingerprint?.mirrorBatchId, null),
+    previewFieldRegistryVersion: safeString(
+      previewFingerprint?.fieldRegistryVersion,
+      null,
+    ),
+    previewOperatorRegistryVersion: safeString(
+      previewFingerprint?.operatorRegistryVersion,
+      null,
+    ),
+    previewSignature: safeString(previewSignature, null),
     editedField,
+    field: editedField,
     editedBy,
+    operation: canonicalOperation,
     value,
     searchKey,
     replaceText,
@@ -373,7 +416,8 @@ function buildRecurringEditPayload({
   };
 
   if (requiresTime) {
-    payload.timeToRun = timeToRun;
+    payload.timeToRun = normalizedRunTime;
+    payload.runTime = normalizedRunTime;
   }
 
   if (needsWeekdaySelection) {
@@ -387,7 +431,7 @@ function buildRecurringEditPayload({
   if (hasStartAt) {
     payload.startAt = safeZonedDateTimeToUtcIso(
       startDate,
-      startTime,
+      normalizedStartTime,
       resolvedTimezone
     );
   }
@@ -395,7 +439,7 @@ function buildRecurringEditPayload({
   if (hasEndAt) {
     payload.endAt = safeZonedDateTimeToUtcIso(
       endDate,
-      endTime,
+      normalizedEndTime,
       resolvedTimezone
     );
   }
@@ -685,14 +729,17 @@ function RecurringEditModal({
   location,
   filters,
   supportValue,
+  previewFingerprint,
+  previewSignature,
+  hasFreshPreview = false,
+  hasPreviewRegistryMismatch = false,
 }) {
   const { t } = useTranslation();
   const navigate = useEmbeddedNavigate();
-  const { shopTimezone } = useShopTimezone();
   const { showSuccess, showError } = useAppToast();
   const createRecurringEditMutation = useCreateRecurringEditMutation();
 
-  const resolvedTimezone = shopTimezone || FALLBACK_TIMEZONE;
+  const resolvedTimezone = FALLBACK_TIMEZONE;
   const safeProductCount = safeCount(count);
   const submitting = createRecurringEditMutation.isPending;
 
@@ -865,6 +912,12 @@ function RecurringEditModal({
       });
     }
 
+    if (!hasFreshPreview || hasPreviewRegistryMismatch || !previewFingerprint?.previewId) {
+      return t("recurringEditErrors.previewRequired", {
+        defaultValue: "Run preview again before saving this recurring edit.",
+      });
+    }
+
     if (requiresTime && !isValidTime(timeToRun)) {
       return t("recurringEditErrors.timeRequired", {
         defaultValue: "Enter a valid time.",
@@ -899,7 +952,7 @@ function RecurringEditModal({
 
     if (hasEndAt && !endDate) {
       return t("recurringEditErrors.endDateRequired", {
-        defaultValue: "End date is required.",
+        defaultValue: "End date is required when stop date is enabled.",
       });
     }
 
@@ -957,7 +1010,9 @@ function RecurringEditModal({
     endTime,
     frequency,
     hasEndAt,
+    hasFreshPreview,
     hasStartAt,
+    hasPreviewRegistryMismatch,
     needsDayOfMonthSelection,
     needsWeekdaySelection,
     requiresTime,
@@ -966,6 +1021,7 @@ function RecurringEditModal({
     startTime,
     timeToRun,
     title,
+    previewFingerprint?.previewId,
     t,
   ]);
 
@@ -995,6 +1051,8 @@ function RecurringEditModal({
       endDate,
       endTime,
       approvedPreviewCount: safeProductCount,
+      previewFingerprint,
+      previewSignature,
     });
   }, [
     dayOfMonthToRun,
@@ -1011,6 +1069,8 @@ function RecurringEditModal({
     needsDayOfMonthSelection,
     needsWeekdaySelection,
     replaceText,
+    previewFingerprint,
+    previewSignature,
     requiresTime,
     resolvedTimezone,
     searchKey,
@@ -1062,7 +1122,7 @@ function RecurringEditModal({
 
       showSuccess(
         t("recurringEditSuccess.created", {
-          defaultValue: "Recurring edit created.",
+          defaultValue: "Recurring edit saved successfully.",
         })
       );
 
@@ -1073,14 +1133,18 @@ function RecurringEditModal({
       navigate("/history");
     } catch (requestError) {
       const mappedError = mapCreateRecurringEditError(t, requestError);
+      const failureMessage = t("recurringEditErrors.saveFailed", {
+        defaultValue: "Recurring edit could not be saved: {{reason}}",
+        reason: mappedError.message,
+      });
 
       if (mappedError.isUpgradeRequired) {
-        setUpgradeWarning(mappedError.message);
+        setUpgradeWarning(failureMessage);
         return;
       }
 
-      setError(mappedError.message);
-      showError(mappedError.message);
+      setError(failureMessage);
+      showError(failureMessage);
     }
   }, [
     buildSubmitPayload,

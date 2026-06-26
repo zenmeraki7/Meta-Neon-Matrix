@@ -1087,6 +1087,11 @@ export default function EditPreviewPage() {
             isSyncInProgress ||
             isFilterRegistryDegraded ||
             !canRunEdit ||
+            !hasFreshPreview ||
+            previewTotal < 1 ||
+            !hasRunnablePreviewRows ||
+            hasPreviewRegistryMismatch ||
+            hasBlockedPreviewRows ||
             !hasRequiredLocation ||
             !hasRequiredConfirmation,
         },
@@ -1462,6 +1467,10 @@ export default function EditPreviewPage() {
           count={previewTotal}
           editedField={selectedField.value}
           editedBy={editType?.value}
+          previewFingerprint={previewFingerprint}
+          previewSignature={previewSignature}
+          hasFreshPreview={hasFreshPreview}
+          hasPreviewRegistryMismatch={hasPreviewRegistryMismatch}
           value={inputValue}
           searchKey={searchReplace.search}
           replaceText={searchReplace.replace}

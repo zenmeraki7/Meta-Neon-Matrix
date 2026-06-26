@@ -1,21 +1,26 @@
 import { useMemo } from "react";
 import { useStoreDetailsQuery } from "./useStoreDetailsQuery";
 
-function getBrowserTimezone() {
+const FALLBACK_SHOP_TIMEZONE = "Asia/Kolkata";
+
+function isValidTimezone(timezone) {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+    return true;
   } catch {
-    return "UTC";
+    return false;
   }
 }
 
 export function useShopTimezone() {
   const storeDetailsQuery = useStoreDetailsQuery();
-  const shopTimezone =
-    typeof storeDetailsQuery.data?.shopTimezone === "string" &&
-    storeDetailsQuery.data.shopTimezone.trim()
+  const storedTimezone =
+    typeof storeDetailsQuery.data?.shopTimezone === "string"
       ? storeDetailsQuery.data.shopTimezone.trim()
-      : getBrowserTimezone();
+      : "";
+  const shopTimezone = isValidTimezone(storedTimezone)
+    ? storedTimezone
+    : FALLBACK_SHOP_TIMEZONE;
 
   return useMemo(
     () => ({

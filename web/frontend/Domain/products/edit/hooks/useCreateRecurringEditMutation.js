@@ -32,12 +32,21 @@ export function mapCreateRecurringEditError(t, error) {
     error?.response?.data ||
     error?.data?.error ||
     error?.data ||
+    error?.payload ||
     null;
   const code = detail?.code || error?.code || null;
+  const serverMessage =
+    detail?.rootCause ||
+    detail?.message ||
+    detail?.errors?.body ||
+    error?.message ||
+    "";
 
   return {
     code,
-    message: toSafeErrorMessage(t, error, "common.errors.generic"),
+    message:
+      serverMessage ||
+      toSafeErrorMessage(t, error, "common.errors.generic"),
     isUpgradeRequired: UPGRADE_REQUIRED_CODES.has(code),
   };
 }

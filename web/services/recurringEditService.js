@@ -2,6 +2,7 @@ import { db } from "../repositories/repositoryDb.js";
 import { getUpdatedProducts } from "../helpers/productBulkOperationHelpers/productUpdateHandler.js";
 import { recurringEditRepository } from "../repositories/recurringEditRepository.js";
 import { recurringEditRunRepository } from "../repositories/recurringEditRunRepository.js";
+import { findPreviewContractRecord } from "../repositories/bulkEditCommandRepository.js";
 import {
   assertProRecurringEditAccess,
   assertRecurringEditActiveLimit,
@@ -23,6 +24,199 @@ const WEEKDAY_NAMES = [
   "Friday",
   "Saturday",
 ];
+
+const CANONICAL_FIELD_BY_UI_FIELD = Object.freeze({
+  price: "VARIANT_PRICE",
+  compareAtPrice: "VARIANT_COMPARE_AT_PRICE",
+  compare_at_price: "VARIANT_COMPARE_AT_PRICE",
+  cost: "VARIANT_COST",
+  sku: "VARIANT_SKU",
+  barcode: "VARIANT_BARCODE",
+  inventory: "VARIANT_INVENTORY",
+  title: "PRODUCT_TITLE",
+  description: "PRODUCT_DESCRIPTION",
+  descriptionHtml: "PRODUCT_DESCRIPTION",
+  vendor: "PRODUCT_VENDOR",
+  productType: "PRODUCT_TYPE",
+  status: "PRODUCT_STATUS",
+  tags: "PRODUCT_TAGS",
+});
+
+const CANONICAL_OPERATION_BY_LABEL = Object.freeze({
+  "Set to fixed value": "SET_FIXED",
+  "Changed by fixed amount": "INCREASE_FIXED",
+  "Increase by percent": "INCREASE_PERCENT",
+  "Decrease by percent": "DECREASE_PERCENT",
+  "Set to percentage of compare-at-price": "PERCENT_OF_COMPARE_AT_PRICE",
+});
+
+function buildRecurringServiceError(code, message = code, details = null) {
+  const error = new Error(message);
+  error.code = code;
+  error.details = details;
+  return error;
+}
+
+function resolveCanonicalField(field) {
+  const key = String(field || "").trim();
+  return CANONICAL_FIELD_BY_UI_FIELD[key] || key.toUpperCase();
+}
+
+function resolveCanonicalOperation(operation, editOption) {
+  const explicit = String(operation || "").trim();
+  if (explicit) return explicit.toUpperCase();
+
+  const label = String(editOption || "").trim();
+  return CANONICAL_OPERATION_BY_LABEL[label] || label.toUpperCase().replace(/\s+/g, "_");
+}
+
+function buildValueJson({ operation, value }) {
+  const numeric = Number(value);
+  const isNumeric = Number.isFinite(numeric);
+
+  if (operation === "INCREASE_PERCENT" || operation === "DECREASE_PERCENT") {
+    return {
+      type: "percent",
+      value: isNumeric ? numeric : value,
+    };
+  }
+
+  return {
+    type: isNumeric ? "number" : "literal",
+    value: isNumeric ? numeric : value,
+  };
+}
+
+function getPreviewFingerprint(previewRecord) {
+  return previewRecord?.value && typeof previewRecord.value === "object"
+    ? previewRecord.value
+    : {};
+}
+
+async function resolveTrustedPreviewContract({ shop, body, actor }) {
+  const previewContractId = String(body.previewContractId || body.previewId || "").trim();
+  if (!previewContractId) {
+    throw buildRecurringServiceError(
+      "FILTER_CONTRACT_REQUIRED",
+      "Run preview again before saving this recurring edit.",
+      { field: "previewContractId" },
+    );
+  }
+
+  const previewRecord = await findPreviewContractRecord(previewContractId, shop);
+  if (!previewRecord) {
+    throw buildRecurringServiceError(
+      "FILTER_CONTRACT_REQUIRED",
+      "Run preview again before saving this recurring edit.",
+      { field: "previewContractId" },
+    );
+  }
+
+  if (previewRecord.expiresAt && previewRecord.expiresAt < new Date()) {
+    throw buildRecurringServiceError(
+      "PREVIEW_STALE",
+      "Preview is stale. Run preview again before saving this recurring edit.",
+      { field: "previewContractId" },
+    );
+  }
+
+  const fingerprint = getPreviewFingerprint(previewRecord);
+  const previewShop = String(
+    previewRecord.shop || fingerprint.shop || fingerprint.owner?.shop || "",
+  ).trim();
+  if (!previewShop || previewShop !== shop) {
+    throw buildRecurringServiceError(
+      "FILTER_CONTRACT_REQUIRED",
+      "Run preview again before saving this recurring edit.",
+      { field: "previewContractId" },
+    );
+  }
+
+  const previewActorId = String(
+    previewRecord.userId ||
+      fingerprint.actorId ||
+      fingerprint.owner?.actorId ||
+      "",
+  ).trim();
+  const requestActorId = String(actor?.userId || "").trim();
+  if (previewActorId && requestActorId && previewActorId !== requestActorId) {
+    throw buildRecurringServiceError(
+      "PREVIEW_STALE",
+      "Preview is stale. Run preview again before saving this recurring edit.",
+      { field: "previewContractId" },
+    );
+  }
+
+  const expectedHash = String(fingerprint.filterHash || "").trim();
+  const actualHash = String(body.previewFilterHash || "").trim();
+  if (expectedHash && actualHash && actualHash !== expectedHash) {
+    throw buildRecurringServiceError(
+      "PREVIEW_STALE",
+      "Preview is stale. Run preview again before saving this recurring edit.",
+      { field: "previewFilterHash" },
+    );
+  }
+
+  const expectedSignature = String(fingerprint.previewSignature || "").trim();
+  const actualSignature = String(body.previewSignature || "").trim();
+  if (expectedSignature && actualSignature && actualSignature !== expectedSignature) {
+    throw buildRecurringServiceError(
+      "PREVIEW_STALE",
+      "Preview is stale. Run preview again before saving this recurring edit.",
+      { field: "previewSignature" },
+    );
+  }
+
+  const previewCount = Number(fingerprint.targetCount ?? previewRecord.previewResCount);
+  if (
+    Number.isFinite(previewCount) &&
+    body.approvedPreviewCount !== null &&
+    body.approvedPreviewCount !== undefined &&
+    Number(body.approvedPreviewCount) !== previewCount
+  ) {
+    throw buildRecurringServiceError(
+      "PREVIEW_STALE",
+      "Preview count changed. Run preview again before saving this recurring edit.",
+      { field: "approvedPreviewCount" },
+    );
+  }
+
+  return {
+    previewContractId,
+    previewRecord,
+    fingerprint,
+    previewCount: Number.isFinite(previewCount) ? previewCount : null,
+  };
+}
+
+function buildTrustedRecurringBodyFromPreview(body, previewContract) {
+  const fingerprint = previewContract.fingerprint;
+
+  return {
+    ...body,
+    previewContractId: previewContract.previewContractId,
+    previewId: previewContract.previewContractId,
+    editedField: fingerprint.field || body.editedField || body.field,
+    field: fingerprint.field || body.field || body.editedField,
+    editedBy: fingerprint.editType || body.editedBy || body.editType,
+    editType: fingerprint.editType || body.editType || body.editedBy,
+    operation: fingerprint.operation || body.operation,
+    value:
+      fingerprint.editValue !== undefined
+        ? fingerprint.editValue
+        : body.value,
+    searchKey: fingerprint.searchKey ?? body.searchKey ?? null,
+    replaceText: fingerprint.replaceText ?? body.replaceText ?? null,
+    supportValue:
+      fingerprint.supportValue !== undefined
+        ? fingerprint.supportValue
+        : body.supportValue,
+    locationId: fingerprint.locationId ?? body.locationId ?? null,
+    filterFingerprint: fingerprint.filterHash || body.filterFingerprint,
+    approvedPreviewCount:
+      previewContract.previewCount ?? body.approvedPreviewCount ?? null,
+  };
+}
 
 function normalizeStatus(rawStatus, fallback = "ACTIVE") {
   if (!rawStatus) return fallback;
@@ -50,12 +244,22 @@ function buildRulesFromBody(body = {}) {
   if (!body.editedField) {
     throw new Error("rules are required");
   }
+  const canonicalOperation = resolveCanonicalOperation(
+    body.operation,
+    body.editedBy ?? body.editType ?? body.editedType,
+  );
 
   return [
     {
       field: body.editedField,
+      canonicalField: resolveCanonicalField(body.editedField),
       value: body.value ?? null,
       editOption: body.editedBy ?? body.editType ?? body.editedType ?? null,
+      operation: canonicalOperation,
+      valueJson: buildValueJson({
+        operation: canonicalOperation,
+        value: body.value ?? null,
+      }),
       searchKey: body.searchKey ?? null,
       replaceText: body.replaceText ?? null,
       supportValue: body.supportValue ?? null,
@@ -297,43 +501,45 @@ async function getRecurringEditHydrated(id, shop) {
   };
 }
 
-export async function createRecurringEdit({ shop, body, subscription }) {
+export async function createRecurringEdit({ shop, body, actor = null, subscription }) {
   await assertProRecurringEditAccess(subscription);
 
-  const filterParams = Array.isArray(body.filterParams) ? body.filterParams : [];
+  const previewContract = await resolveTrustedPreviewContract({ shop, body, actor });
+  const trustedBody = buildTrustedRecurringBodyFromPreview(body, previewContract);
+  const filterParams = Array.isArray(trustedBody.filterParams) ? trustedBody.filterParams : [];
   assertCanonicalRecurringFilterSource({
-    filterAst: body.filterAst ?? null,
+    filterAst: trustedBody.filterAst ?? null,
     filterParams,
   });
   const filterParamsToPersist = [];
-  const rules = buildRulesFromBody(body);
+  const rules = buildRulesFromBody(trustedBody);
   const rule = validateRules(rules);
-  const status = normalizeStatus(body.status, "ACTIVE");
+  const status = normalizeStatus(trustedBody.status, "ACTIVE");
 
   if (status === "ACTIVE") {
     await assertRecurringEditActiveLimit({ shop });
   }
 
-  const scheduleInput = buildRecurringScheduleInput(body);
+  const scheduleInput = buildRecurringScheduleInput(trustedBody);
   const title = String(body.title || "").trim() || buildDefaultTitle(rule);
   const nextRunAt = status === "ACTIVE"
     ? computeRecurringEditNextRunAt({ ...scheduleInput, status }, scheduleInput.startAt || new Date())
     : null;
   const targetingPayload = TargetingEngineService.prepareTargetingPayload({
-    filterAst: body.filterAst ?? null,
+    filterAst: trustedBody.filterAst ?? null,
     legacyFilterParams: [],
     targetGranularity: "PRODUCT",
     source: "RECURRING",
     applyMirrorScope: false,
   });
   const recurringExecutionPlan = planMutationExecution({
-    operationKey: body.operationKey || null,
+    operationKey: trustedBody.operationKey || null,
     shop,
     planType: "RECURRING_EDIT",
     mutationIntent: {
       mutationType: "PRODUCT_SET",
       fieldsBeingEdited: rules.map((item) => item?.field).filter(Boolean),
-      operationKey: body.operationKey || null,
+      operationKey: trustedBody.operationKey || null,
     },
     targetGranularity: targetingPayload.targetGranularity || "PRODUCT",
     targetCount: 0,
@@ -352,16 +558,21 @@ export async function createRecurringEdit({ shop, body, subscription }) {
     shop,
     mirrorBatchId: null,
     approvedPreviewCount:
-      Number.isInteger(body.approvedPreviewCount) && body.approvedPreviewCount >= 0
-        ? body.approvedPreviewCount
+      Number.isInteger(trustedBody.approvedPreviewCount) && trustedBody.approvedPreviewCount >= 0
+        ? trustedBody.approvedPreviewCount
         : null,
-    targetCount: null,
+    targetCount: previewContract.previewCount,
     filterHash: targetingPayload.filterHash,
     filterFingerprint:
-      String(body.filterFingerprint || body.targetingFingerprint || "").trim() ||
+      String(trustedBody.filterFingerprint || trustedBody.targetingFingerprint || "").trim() ||
       targetingPayload.filterHash,
     frontendTargetingFingerprint:
-      String(body.targetingFingerprint || "").trim() || null,
+      String(trustedBody.targetingFingerprint || "").trim() || null,
+    filterContractId: previewContract.previewContractId,
+    previewContractId: previewContract.previewContractId,
+    previewSignature:
+      String(trustedBody.previewSignature || previewContract.fingerprint.previewSignature || "").trim() ||
+      null,
     normalizedAst: targetingPayload.normalizedFilterAst,
     source: "RECURRING",
     semantics: "DYNAMIC_AT_RUN",
@@ -389,6 +600,10 @@ export async function createRecurringEdit({ shop, body, subscription }) {
     fieldRegistryVersion: targetingPayload.versions.fieldRegistryVersion,
     operatorRegistryVersion: targetingPayload.versions.operatorRegistryVersion,
     filterHash: targetingPayload.filterHash,
+    actorType: actor?.type || null,
+    actorId: actor?.userId || null,
+    actorEmail: actor?.email || null,
+    actorName: actor?.name || null,
     rules,
     nextRunAt,
   });

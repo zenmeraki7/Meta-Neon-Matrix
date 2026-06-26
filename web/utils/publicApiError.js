@@ -14,6 +14,7 @@ const DEFAULT_MESSAGES = Object.freeze({
   PREVIEW_NOT_FOUND: "Run preview again before applying this edit.",
   PREVIEW_FORBIDDEN: "This preview does not belong to the current shop.",
   PREVIEW_STALE: "Preview is stale. Run preview again before applying this edit.",
+  FILTER_CONTRACT_REQUIRED: "Run preview again before saving this recurring edit.",
   PREVIEW_SNAPSHOT_INCOMPLETE: "Preview data is incomplete. Run preview again before applying this edit.",
   EDIT_EXECUTION_FAILED: "Unable to start this edit. Run preview again and retry.",
   EDIT_PREVIEW_FAILED: "Unable to generate edit preview.",
@@ -47,6 +48,7 @@ function statusFromCode(code = "INTERNAL_ERROR") {
   if (code === "PREVIEW_NOT_FOUND") return 404;
   if (code === "PREVIEW_FORBIDDEN") return 403;
   if (code === "PREVIEW_STALE") return 409;
+  if (code === "FILTER_CONTRACT_REQUIRED") return 400;
   if (code === "PREVIEW_SNAPSHOT_INCOMPLETE") return 409;
   if (code === "EDIT_EXECUTION_FAILED") return 500;
   if (code === "IDEMPOTENCY_KEY_REQUIRED") return 400;
@@ -168,6 +170,14 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
   if (raw.includes("PREMIUM_FEATURE_REQUIRED") || raw.includes("FORBIDDEN")) {
     return { code: "FORBIDDEN", message: DEFAULT_MESSAGES.FORBIDDEN };
   }
+  if (raw === "FILTER_CONTRACT_REQUIRED") {
+    return {
+      code: "FILTER_CONTRACT_REQUIRED",
+      message: error?.message
+        ? String(error.message)
+        : DEFAULT_MESSAGES.FILTER_CONTRACT_REQUIRED,
+    };
+  }
   if (raw.includes("UPGRADE_REQUIRED")) {
     return {
       code: "UPGRADE_REQUIRED",
@@ -226,6 +236,7 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
   return {
     statusCode,
     body: {
+      ok: false,
       success: false,
       code: mapped.code,
       message: mapped.message,
