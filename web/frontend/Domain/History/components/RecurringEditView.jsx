@@ -189,8 +189,18 @@ const getLastRunStatusBadge = (status) => {
   const fallbackLabel =
     normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1);
 
- const label = t(`runStatus.${normalizedStatus}`);
+const key = normalizedStatus
+  ? `runStatus.${normalizedStatus}`
+  : "";
 
+const translated = key
+  ? t(key, { defaultValue: fallbackLabel })
+  : fallbackLabel;
+
+const label =
+  typeof translated === "string"
+    ? translated
+    : fallbackLabel;
   return <Badge tone={tone}>{label}</Badge>;
 };
 

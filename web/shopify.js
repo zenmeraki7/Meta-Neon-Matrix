@@ -52,7 +52,6 @@ export const billingConfig = {
 const shopify = shopifyApp({
   api: {
     apiVersion: LATEST_API_VERSION,
-
     // Disable Shopify framework logs
     logger: {
       log: () => {},
