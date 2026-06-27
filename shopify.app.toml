@@ -2,7 +2,7 @@
 
 client_id = "8080a194096cb602f516d4bb1841df93"
 name = "test-meta-new"
-application_url = "https://views-exclusion-verbal-undefined.trycloudflare.com"
+application_url = "https://gtk-language-the-scanner.trycloudflare.com"
 embedded = true
 handle = "test-meta-new"
 
@@ -28,8 +28,8 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://views-exclusion-verbal-undefined.trycloudflare.com/auth/callback",
-  "https://views-exclusion-verbal-undefined.trycloudflare.com/auth/shopify/callback"
+  "https://gtk-language-the-scanner.trycloudflare.com/auth/callback",
+  "https://gtk-language-the-scanner.trycloudflare.com/auth/shopify/callback"
 ]
 
 [app_proxy]
