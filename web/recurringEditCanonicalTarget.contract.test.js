@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { buildCreateRecurringEditCommand } from "./normalizers/recurringEditCommandNormalizer.js";
+import { RecurringEditPlanError } from "./services/recurringEditPlanService.js";
+import { buildPublicApiErrorResponse } from "./utils/publicApiError.js";
 
 function read(file) {
   return fs.readFileSync(path.resolve(file), "utf8");
@@ -191,6 +193,117 @@ test("recurring edit submit builds payload safely before mutation", () => {
       modal.includes("payload = buildSubmitPayload();") &&
       modal.includes("recurringEditErrors.invalidSchedule"),
     "RecurringEditModal submit must catch payload build failures before mutation",
+  );
+});
+
+test("recurring edit pro-plan gate returns structured upgrade response", () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+
+  try {
+    const { statusCode, body } = buildPublicApiErrorResponse(
+      new RecurringEditPlanError(),
+      "RECURRING_EDIT_CREATE_FAILED",
+    );
+
+    assert.equal(statusCode, 403);
+    assert.equal(body.ok, false);
+    assert.equal(body.success, false);
+    assert.equal(body.code, "RECURRING_EDIT_PRO_PLAN_REQUIRED");
+    assert.equal(
+      body.message,
+      "Recurring edits are available on paid plans. Please upgrade to continue.",
+    );
+    assert.equal(body.upgradeRequired, true);
+    assert.equal(body.requiredPlan, "pro");
+    assert.match(body.errorId, /^[a-f0-9]{16}$/);
+    assert.equal(body.rootCause, undefined);
+    assert.equal(body.stack, undefined);
+  } finally {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  }
+});
+
+test("recurring edit pro-plan gate does not expose stack in dev tunnels", () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = "development";
+
+  try {
+    const { body } = buildPublicApiErrorResponse(
+      new RecurringEditPlanError(),
+      "RECURRING_EDIT_CREATE_FAILED",
+    );
+
+    assert.equal(body.code, "RECURRING_EDIT_PRO_PLAN_REQUIRED");
+    assert.equal(body.rootCause, undefined);
+    assert.equal(body.stack, undefined);
+  } finally {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  }
+});
+
+test("recurring edit frontend handles plan gate once without toast duplication", () => {
+  const modal = read(
+    "web/frontend/Domain/products/edit/components/RecurringEditModal.jsx",
+  );
+  const mutation = read(
+    "web/frontend/Domain/products/edit/hooks/useCreateRecurringEditMutation.js",
+  );
+
+  assert.ok(
+    mutation.includes('"RECURRING_EDIT_PRO_PLAN_REQUIRED"') &&
+      mutation.includes("detail?.upgradeRequired === true"),
+    "Create recurring edit mutation must recognize recurring plan-gate responses",
+  );
+  assert.ok(
+    mutation.indexOf("detail?.message") < mutation.indexOf("detail?.rootCause"),
+    "Frontend must prefer public API message over internal rootCause",
+  );
+  assert.ok(
+    modal.includes("if (mappedError.isUpgradeRequired)") &&
+      modal.includes('setError("");') &&
+      modal.includes("setUpgradeWarning(failureMessage);") &&
+      !modal.includes("showError(failureMessage);\n        return;"),
+    "RecurringEditModal must show plan gate inline without a duplicate error toast",
+  );
+});
+
+test("recurring edit modal uses shop timezone source for schedule payloads", () => {
+  const modal = read(
+    "web/frontend/Domain/products/edit/components/RecurringEditModal.jsx",
+  );
+  const controller = read("web/controllers/recurringEditController.js");
+  const storeAccess = read("web/services/storeAccessService.js");
+
+  assert.ok(
+    modal.includes("useShopTimezone") &&
+      modal.includes("const { shopTimezone } = useShopTimezone();") &&
+      modal.includes("const resolvedTimezone = normalizeRecurringEditTimezone(shopTimezone);"),
+    "RecurringEditModal must normalize the shop/server timezone before submitting",
+  );
+  assert.ok(
+    modal.includes('RECURRING_EDIT_UNSAFE_TIMEZONES = new Set(["America/New_York"])') &&
+      modal.includes("RECURRING_EDIT_UNSAFE_TIMEZONES.has(normalized)") &&
+      modal.includes("FALLBACK_TIMEZONE"),
+    "RecurringEditModal must not let America/New_York become the recurring schedule timezone",
+  );
+  assert.ok(
+    controller.includes("normalizeRecurringEditTimezone") &&
+      storeAccess.includes('RECURRING_EDIT_UNSAFE_TIMEZONES = new Set(["America/New_York"])'),
+    "Recurring edit backend must normalize unsafe shop timezones before saving",
+  );
+  assert.equal(
+    modal.includes('const resolvedTimezone = "America/New_York"'),
+    false,
+    "RecurringEditModal must not default recurring schedules to America/New_York",
   );
 });
 

@@ -1,20 +1,48 @@
 import { recurringEditRepository } from "../repositories/recurringEditRepository.js";
 
-const PRO_PLAN_KEYS = new Set(["PRO_MONTHLY"]);
+const RECURRING_EDIT_PLAN_KEYS = new Set([
+  "BASIC_MONTHLY",
+  "ADVANCED_MONTHLY",
+  "PRO_MONTHLY",
+]);
 const MAX_ACTIVE_RECURRING_EDITS = 10;
+export const RECURRING_EDIT_PRO_PLAN_REQUIRED_MESSAGE =
+  "Recurring edits are available on paid plans. Please upgrade to continue.";
+
+export class RecurringEditPlanError extends Error {
+  constructor(message = RECURRING_EDIT_PRO_PLAN_REQUIRED_MESSAGE) {
+    super(message);
+    this.name = "RecurringEditPlanError";
+    this.code = "RECURRING_EDIT_PRO_PLAN_REQUIRED";
+    this.statusCode = 403;
+    this.expose = true;
+    this.details = {
+      upgradeRequired: true,
+      requiredPlan: "pro",
+      feature: "recurring_edits",
+      billingUrl: "/pricing",
+    };
+  }
+}
+
+export function isRecurringEditPlanError(error) {
+  return (
+    error instanceof RecurringEditPlanError ||
+    error?.code === "RECURRING_EDIT_PRO_PLAN_REQUIRED"
+  );
+}
 
 export function hasRecurringEditAccess(subscription = {}) {
   return (
     subscription?.isCreditUser === true ||
-    PRO_PLAN_KEYS.has(subscription?.planKey)
+    (subscription?.status === "ACTIVE" &&
+      RECURRING_EDIT_PLAN_KEYS.has(subscription?.planKey))
   );
 }
 
 export async function assertProRecurringEditAccess(subscription = {}) {
   if (!hasRecurringEditAccess(subscription)) {
-    throw new Error(
-      "Recurring edits are available only on the Pro plan. Please upgrade to continue.",
-    );
+    throw new RecurringEditPlanError();
   }
 }
 

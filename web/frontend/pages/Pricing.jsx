@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Badge,
   Banner,
@@ -16,30 +16,44 @@ import {
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import { protectedApiPost } from "../api/protectedApiClient";
 import { getDefaultPricingPlans } from "../Domain/Subscription/config/pricingPlans";
+import { useApiClient } from "../hooks/useApiClient";
 import { useEmbeddedRedirect } from "../hooks/useEmbeddedRedirect";
 import { toSafeErrorMessage } from "../utils/frontendError";
+import { getShopifyContext } from "../utils/shopifyContext";
 
 const PLAN_BADGES = {
+  FREE: { label: "Current plan", tone: "success" },
   STARTER: { label: "Current plan", tone: "success" },
   BASIC_MONTHLY: { label: "Standard", tone: "new" },
   ADVANCED_MONTHLY: { label: "Most popular", tone: "info" },
+  PRO_MONTHLY: { label: "Best for scale", tone: "attention" },
   PROFESSIONAL_MONTHLY: { label: "Best for scale", tone: "attention" },
 };
 
 const PLAN_DESCRIPTIONS = {
+  FREE: "For small stores getting started with basic bulk editing.",
   STARTER: "For small stores getting started with basic bulk editing.",
   BASIC_MONTHLY: "For stores that need faster bulk editing workflows.",
   ADVANCED_MONTHLY: "For growing stores with recurring catalog operations.",
+  PRO_MONTHLY: "For teams managing high-volume catalog operations.",
   PROFESSIONAL_MONTHLY: "For teams managing high-volume catalog operations.",
 };
 
 const PLAN_CTA_LABELS = {
+  FREE: "Current plan",
   STARTER: "Current plan",
   BASIC_MONTHLY: "Choose Basic",
   ADVANCED_MONTHLY: "Choose Advanced",
+  PRO_MONTHLY: "Choose Pro",
   PROFESSIONAL_MONTHLY: "Choose Pro",
+};
+
+const BILLING_PLAN_BY_PRICING_KEY = {
+  BASIC_MONTHLY: "basic",
+  ADVANCED_MONTHLY: "advanced",
+  PRO_MONTHLY: "pro",
+  PROFESSIONAL_MONTHLY: "pro",
 };
 
 function PricingCard({ plan, isSubscribing, onSelectPlan, t, planText }) {
@@ -47,7 +61,7 @@ function PricingCard({ plan, isSubscribing, onSelectPlan, t, planText }) {
   const badge = PLAN_BADGES[plan.key] || { label: "Standard", tone: "new" };
   const description = PLAN_DESCRIPTIONS[plan.key] || plan.description;
   const ctaLabel = PLAN_CTA_LABELS[plan.key] || plan.buttonText;
-  const isFree = plan.price == null;
+  const isFree = plan.isFree === true || plan.price == null || Number(plan.price) === 0;
 
   return (
     <Card>
@@ -132,12 +146,66 @@ function PricingCard({ plan, isSubscribing, onSelectPlan, t, planText }) {
 export default function PricingPage() {
   const navigate = useNavigate();
   const { t } = useTranslation(["subscription", "common"]);
+  const api = useApiClient();
   const { redirectRemote } = useEmbeddedRedirect();
   const [plans, setPlans] = useState(() => getDefaultPricingPlans());
   const [billingError, setBillingError] = useState(null);
   const [subscribing, setSubscribing] = useState(null);
 
   const planText = useCallback((value) => String(value || "").trim(), []);
+
+  const loadAuthoritativePlans = useCallback(async () => {
+    const response = await api.get("/api/subscription/get-plans");
+    const data = response?.data ?? response;
+    if (Array.isArray(data?.plans)) {
+      setPlans(data.plans);
+    }
+    return data;
+  }, [api]);
+
+  useEffect(() => {
+    const { host } = getShopifyContext();
+    console.info("Pricing page mounted", {
+      hasHost: Boolean(host),
+    });
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const syncResponse = await api.post("/api/billing/sync", null, {
+          idempotent: true,
+        });
+        console.info("Billing sync completed", {
+          synced: Boolean(syncResponse?.synced),
+          planKey: syncResponse?.planKey || null,
+          mock: Boolean(syncResponse?.mock),
+        });
+
+        if (!cancelled) {
+          await loadAuthoritativePlans();
+        }
+      } catch (err) {
+        console.warn("Billing sync/load failed", {
+          code: err?.payload?.code || err?.code || null,
+          message: err?.message || String(err),
+        });
+        if (!cancelled) {
+          try {
+            await loadAuthoritativePlans();
+          } catch (loadErr) {
+            console.warn("Billing plan load failed", {
+              code: loadErr?.payload?.code || loadErr?.code || null,
+              message: loadErr?.message || String(loadErr),
+            });
+          }
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, loadAuthoritativePlans]);
 
   const handleSelectPlan = async (plan) => {
     if (plan.isCurrent) {
@@ -148,44 +216,75 @@ export default function PricingPage() {
       setBillingError(null);
       setSubscribing(plan.key);
 
-      const data = await protectedApiPost(
-        "/api/subscription/create-subscription",
-        {
-          planKey: plan.key,
-          returnUrl: `${window.location.origin}/pricing`,
-        },
-        {
-          idempotent: true,
-        },
-      );
+      const billingPlan = BILLING_PLAN_BY_PRICING_KEY[plan.key];
+      if (!billingPlan) {
+        throw new Error(
+          t("invalidBillingPlan", {
+            defaultValue: "This plan cannot be purchased from the pricing page.",
+          }),
+        );
+      }
 
-      if (!data?.success) {
+      console.info("Billing plan selected", {
+        pricingPlanKey: plan.key,
+        billingPlan,
+      });
+      const response = await api.post(
+        "/api/billing/subscribe",
+        { plan: billingPlan },
+        { idempotent: true },
+      );
+      const data = response?.data ?? response;
+
+      if (!data?.ok && !data?.success) {
         throw new Error(
           data?.message ||
             t("subscriptionFailed", { defaultValue: "Subscription failed" }),
         );
       }
 
-      if (!data.confirmationUrl) {
-        setPlans((currentPlans) =>
-          currentPlans.map((currentPlan) => ({
-            ...currentPlan,
-            isCurrent: currentPlan.key === plan.key,
-          })),
-        );
+      if (data.mock === true) {
+        const refreshed = await loadAuthoritativePlans();
+        if (!Array.isArray(refreshed?.plans)) {
+          setPlans((currentPlans) =>
+            currentPlans.map((currentPlan) => ({
+              ...currentPlan,
+              isCurrent: currentPlan.key === plan.key,
+            })),
+          );
+        }
+        setBillingError(data.message || null);
         return;
       }
 
+      if (!data.confirmationUrl) {
+        throw new Error(
+          data?.message ||
+            t("billingConfirmationMissing", {
+              defaultValue: "Shopify did not return a billing approval URL.",
+            }),
+        );
+      }
+
+      console.info("Redirecting to Shopify billing approval", {
+        plan: billingPlan,
+        confirmationUrlPresent: Boolean(data.confirmationUrl),
+      });
       redirectRemote(data.confirmationUrl);
     } catch (err) {
       console.error("Subscription error:", err);
+      const billingUnavailableMessage =
+        err?.payload?.code === "BILLING_API_UNAVAILABLE"
+          ? err.payload.message
+          : null;
       setBillingError(
-        err?.code === "AUTH_FETCH_UNAVAILABLE"
+        billingUnavailableMessage ||
+        (err?.code === "AUTH_FETCH_UNAVAILABLE"
           ? t("billingAuthUnavailable", {
               defaultValue:
-                "Billing actions are unavailable because authenticated fetch is not initialized. Reload the embedded app.",
+                "Billing could not start because the embedded app session is not ready. Please reload the app.",
             })
-          : toSafeErrorMessage(t, err, "common.errors.generic"),
+          : toSafeErrorMessage(t, err, "common.errors.generic")),
       );
     } finally {
       setSubscribing(null);

@@ -43,6 +43,7 @@ console.log(`Worker process ${process.pid} starting`);
 
 const workerModulePaths = [
   "./Jobs/Workers/bulkEditPipelineWorker.js",
+  "./Jobs/Workers/bulkEditItemApplyWorker.js",
   "./Jobs/Workers/bulkEditExecuteWorker.js",
   "./Jobs/Workers/bulkExportWorker.js",
   "./Jobs/Workers/bulkUndoWorker.js",
@@ -93,6 +94,9 @@ for (const modPath of workerModulePaths) {
   }
   if (typeof mod?.startBulkEditVerificationWorker === "function") {
     mod.startBulkEditVerificationWorker();
+  }
+  if (typeof mod?.startBulkEditItemApplyWorker === "function") {
+    mod.startBulkEditItemApplyWorker();
   }
   for (const value of Object.values(mod || {})) {
     if (value && typeof value.close === "function") {

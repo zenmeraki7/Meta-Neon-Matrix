@@ -16,6 +16,7 @@ import PrivacyWebhookHandlers from "./privacy.js";
 import productRoutes from "./routes/productRoutes.js";
 import collectionRoutes from "./routes/collectionRoutes.js";
 import SubscriptionRoutes from "./routes/SubscriptionRoutes.js";
+import BillingRoutes from "./routes/billingRoutes.js";
 import SuggestionRoutes from "./routes/SuggestionRoutes.js";
 import HistoryRoutes from "./routes/HistoryRoutes.js";
 import recurringEditRoutes from "./routes/recurringEditRoutes.js";
@@ -194,6 +195,7 @@ export const buildApp = (_server, io) => {
   app.use("/api/collection", collectionRoutes);
   app.use("/api/suggestion", SuggestionRoutes);
   app.use("/api/subscription", SubscriptionRoutes);
+  app.use("/api/billing", BillingRoutes);
   app.use("/api/history", HistoryRoutes);
   app.use("/api/store", StoreRoutes);
   app.use("/api/location", LocationRoutes);

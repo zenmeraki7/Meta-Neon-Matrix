@@ -2,9 +2,11 @@ import { generateErrorId } from "./errorUtils.js";
 
 const DEFAULT_MESSAGES = Object.freeze({
   UNAUTHENTICATED: "Authentication required.",
+  AUTH_REQUIRED: "Authentication required.",
   UNAUTHORIZED: "Authentication required.",
   FORBIDDEN: "You are not allowed to perform this action",
   UPGRADE_REQUIRED: "This feature requires an active paid plan.",
+  RECURRING_EDIT_PRO_PLAN_REQUIRED: "Recurring edits are available on paid plans. Please upgrade to continue.",
   CONFLICT: "Operation cannot be completed in the current state",
   VALIDATION_FAILED: "Request validation failed",
   NOT_FOUND: "Requested resource was not found",
@@ -19,6 +21,10 @@ const DEFAULT_MESSAGES = Object.freeze({
   EDIT_EXECUTION_FAILED: "Unable to start this edit. Run preview again and retry.",
   EDIT_PREVIEW_FAILED: "Unable to generate edit preview.",
   IDEMPOTENCY_KEY_REQUIRED: "Request idempotency key is required.",
+  INVALID_BILLING_PLAN: "Invalid billing plan.",
+  UNKNOWN_BILLING_PLAN: "Unknown billing plan.",
+  BILLING_API_UNAVAILABLE: "Shopify billing is unavailable for this app configuration.",
+  MOCK_BILLING_DISABLED: "Mock billing is disabled.",
   OPERATION_NOT_UNDOABLE: "This edit is not eligible for undo.",
   UNDO_ALREADY_QUEUED: "Undo is already queued for this edit.",
   UNDO_ELIGIBLE_TARGETS_NOT_FOUND: "No successfully edited targets are available to undo.",
@@ -36,9 +42,11 @@ const DEFAULT_MESSAGES = Object.freeze({
 
 function statusFromCode(code = "INTERNAL_ERROR") {
   if (code === "UNAUTHENTICATED") return 401;
+  if (code === "AUTH_REQUIRED") return 401;
   if (code === "UNAUTHORIZED") return 403;
   if (code === "FORBIDDEN") return 403;
   if (code === "UPGRADE_REQUIRED") return 403;
+  if (code === "RECURRING_EDIT_PRO_PLAN_REQUIRED") return 403;
   if (code === "NOT_FOUND") return 404;
   if (code === "CONFLICT") return 409;
   if (code === "RATE_LIMITED") return 429;
@@ -52,6 +60,10 @@ function statusFromCode(code = "INTERNAL_ERROR") {
   if (code === "PREVIEW_SNAPSHOT_INCOMPLETE") return 409;
   if (code === "EDIT_EXECUTION_FAILED") return 500;
   if (code === "IDEMPOTENCY_KEY_REQUIRED") return 400;
+  if (code === "INVALID_BILLING_PLAN") return 400;
+  if (code === "UNKNOWN_BILLING_PLAN") return 409;
+  if (code === "BILLING_API_UNAVAILABLE") return 403;
+  if (code === "MOCK_BILLING_DISABLED") return 403;
   if (code === "OPERATION_NOT_UNDOABLE") return 409;
   if (code === "UNDO_ALREADY_QUEUED") return 409;
   if (code === "UNDO_ELIGIBLE_TARGETS_NOT_FOUND") return 409;
@@ -72,6 +84,9 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
 
   if (raw.includes("SESSION") || raw.includes("UNAUTHORIZED") || raw.includes("UNAUTHENTICATED")) {
     return { code: "UNAUTHENTICATED", message: DEFAULT_MESSAGES.UNAUTHENTICATED };
+  }
+  if (raw === "AUTH_REQUIRED") {
+    return { code: "AUTH_REQUIRED", message: DEFAULT_MESSAGES.AUTH_REQUIRED };
   }
   if (raw.includes("NOT_FOUND")) {
     return { code: "NOT_FOUND", message: DEFAULT_MESSAGES.NOT_FOUND };
@@ -131,6 +146,33 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
   if (raw === "IDEMPOTENCY_KEY_REQUIRED") {
     return { code: "IDEMPOTENCY_KEY_REQUIRED", message: DEFAULT_MESSAGES.IDEMPOTENCY_KEY_REQUIRED };
   }
+  if (raw === "INVALID_BILLING_PLAN") {
+    return { code: "INVALID_BILLING_PLAN", message: DEFAULT_MESSAGES.INVALID_BILLING_PLAN };
+  }
+  if (raw === "UNKNOWN_BILLING_PLAN") {
+    return {
+      code: "UNKNOWN_BILLING_PLAN",
+      message: error?.message
+        ? String(error.message)
+        : DEFAULT_MESSAGES.UNKNOWN_BILLING_PLAN,
+    };
+  }
+  if (raw === "BILLING_API_UNAVAILABLE") {
+    return {
+      code: "BILLING_API_UNAVAILABLE",
+      message: error?.message
+        ? String(error.message)
+        : DEFAULT_MESSAGES.BILLING_API_UNAVAILABLE,
+    };
+  }
+  if (raw === "MOCK_BILLING_DISABLED") {
+    return {
+      code: "MOCK_BILLING_DISABLED",
+      message: error?.message
+        ? String(error.message)
+        : DEFAULT_MESSAGES.MOCK_BILLING_DISABLED,
+    };
+  }
   if (raw === "OPERATION_NOT_UNDOABLE") {
     return { code: "OPERATION_NOT_UNDOABLE", message: DEFAULT_MESSAGES.OPERATION_NOT_UNDOABLE };
   }
@@ -186,6 +228,14 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
         : DEFAULT_MESSAGES.UPGRADE_REQUIRED,
     };
   }
+  if (raw === "RECURRING_EDIT_PRO_PLAN_REQUIRED") {
+    return {
+      code: "RECURRING_EDIT_PRO_PLAN_REQUIRED",
+      message: error?.message
+        ? String(error.message)
+        : DEFAULT_MESSAGES.RECURRING_EDIT_PRO_PLAN_REQUIRED,
+    };
+  }
   if (
     raw.includes("STALE")
     || raw.includes("MISMATCH")
@@ -233,6 +283,9 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
     errors.body = String(error.message);
   }
 
+  const exposeRootCause =
+    process.env.NODE_ENV !== "production" && error?.expose !== true;
+
   return {
     statusCode,
     body: {
@@ -241,7 +294,9 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
       code: mapped.code,
       message: mapped.message,
       errorId: generateErrorId(),
-      rootCause: error?.message ? String(error.message) : mapped.message,
+      ...(exposeRootCause
+        ? { rootCause: error?.message ? String(error.message) : mapped.message }
+        : {}),
       ...(mapped.code === "UPGRADE_REQUIRED"
         ? {
           feature: String(details.feature || "scheduled_edits"),
@@ -249,8 +304,16 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
           billingUrl: String(details.billingUrl || "/pricing"),
         }
         : {}),
+      ...(mapped.code === "RECURRING_EDIT_PRO_PLAN_REQUIRED"
+        ? {
+          upgradeRequired: true,
+          requiredPlan: "pro",
+        }
+        : {}),
       ...(Object.keys(details).length ? { details } : {}),
-      ...(process.env.NODE_ENV !== "production" && error?.stack ? { stack: String(error.stack) } : {}),
+      ...(process.env.NODE_ENV !== "production" && error?.expose !== true && error?.stack
+        ? { stack: String(error.stack) }
+        : {}),
       ...(error?.action ? { action: String(error.action) } : {}),
       ...(Object.keys(errors).length ? { errors } : {}),
     },

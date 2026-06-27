@@ -9,6 +9,7 @@ import {
 const STORE_ACCESS_CACHE_TTL_SECONDS = 300;
 const STORE_TIMEZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const FALLBACK_SHOP_TIMEZONE = "Asia/Kolkata";
+const RECURRING_EDIT_UNSAFE_TIMEZONES = new Set(["America/New_York"]);
 
 function isValidTimezone(timezone) {
   if (!timezone) return false;
@@ -74,6 +75,13 @@ export async function resolveTrustedShopTimezone({
   }
 
   return FALLBACK_SHOP_TIMEZONE;
+}
+
+export function normalizeRecurringEditTimezone(timezone) {
+  const normalized = String(timezone || "").trim();
+  return RECURRING_EDIT_UNSAFE_TIMEZONES.has(normalized)
+    ? FALLBACK_SHOP_TIMEZONE
+    : normalized || FALLBACK_SHOP_TIMEZONE;
 }
 
 export async function getStoreAccessDto({ session }) {

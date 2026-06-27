@@ -6,6 +6,7 @@ const UPGRADE_REQUIRED_CODES = new Set([
   "UPGRADE_REQUIRED",
   "PLAN_REQUIRED",
   "RECURRING_EDIT_PLAN_REQUIRED",
+  "RECURRING_EDIT_PRO_PLAN_REQUIRED",
 ]);
 
 export const RECURRING_EDIT_QUERY_KEYS = Object.freeze({
@@ -36,8 +37,8 @@ export function mapCreateRecurringEditError(t, error) {
     null;
   const code = detail?.code || error?.code || null;
   const serverMessage =
-    detail?.rootCause ||
     detail?.message ||
+    detail?.rootCause ||
     detail?.errors?.body ||
     error?.message ||
     "";
@@ -47,7 +48,9 @@ export function mapCreateRecurringEditError(t, error) {
     message:
       serverMessage ||
       toSafeErrorMessage(t, error, "common.errors.generic"),
-    isUpgradeRequired: UPGRADE_REQUIRED_CODES.has(code),
+    isUpgradeRequired:
+      UPGRADE_REQUIRED_CODES.has(code) ||
+      detail?.upgradeRequired === true,
   };
 }
 

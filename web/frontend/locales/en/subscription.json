@@ -2,7 +2,7 @@
   "pricingPageTitle": "Pricing",
   "pricingPageSubtitle": "Choose a plan that fits your store's bulk editing needs.",
   "pricingBillingNote": "All charges are billed in USD. Recurring charges are billed every 30 days.",
-  "billingAuthUnavailable": "Billing actions are unavailable because authenticated fetch is not initialized. Reload the embedded app.",
+  "billingAuthUnavailable": "Billing could not start because the embedded app session is not ready. Please reload the app.",
   "LoadingPlans": "Loading plans...",
   "pricingLoadPlansError": "Failed to load plans",
   "pricingUnableToLoadPlans": "Unable to load plans",

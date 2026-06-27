@@ -1,5 +1,5 @@
 const ACTIVE_STATUSES = new Set(["ACTIVE"]);
-const PAID_PLAN_KEYS = new Set(["ADVANCED_MONTHLY", "PRO_MONTHLY"]);
+const PAID_PLAN_KEYS = new Set(["BASIC_MONTHLY", "ADVANCED_MONTHLY", "PRO_MONTHLY"]);
 const DEFAULT_BILLING_URL = "/pricing";
 
 export const SCHEDULED_EDITS_FEATURE = "scheduled_edits";

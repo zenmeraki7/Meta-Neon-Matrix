@@ -46,3 +46,23 @@ test("worker manifest: every worker file is imported by web/worker.js exactly on
   );
 });
 
+test("catalog missed-updates polling keeps Shopify query cost under single-query cap", () => {
+  const source = fs.readFileSync(
+    path.join(workersDir, "catalogMissedUpdatesPollingWorker.js"),
+    "utf8",
+  );
+
+  assert.ok(
+    source.includes("const DEFAULT_PAGE_SIZE = 50"),
+    "catalog missed-updates polling must use a conservative default page size",
+  );
+  assert.ok(
+    source.includes("const MAX_SAFE_PAGE_SIZE = 50"),
+    "catalog missed-updates polling must cap configured page size below Shopify cost limits",
+  );
+  assert.ok(
+    source.includes("Math.min(parsed, MAX_SAFE_PAGE_SIZE)"),
+    "catalog missed-updates polling env override must not bypass the safe cap",
+  );
+});
+

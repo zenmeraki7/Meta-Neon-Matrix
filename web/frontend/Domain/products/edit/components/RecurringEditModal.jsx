@@ -31,11 +31,13 @@ import {
 } from "../hooks/useCreateRecurringEditMutation";
 import { toCanonicalEditOperation } from "../hooks/useEditPreviewQuery";
 import { useEmbeddedNavigate } from "../../../../hooks/useEmbeddedNavigate";
+import { useShopTimezone } from "../../../../hooks/useShopTimezone";
 
 const DEFAULT_TIME = "12:00";
 const DEFAULT_DAY_OF_MONTH = "1";
 const ACTIVE_STATUS = "ACTIVE";
 const FALLBACK_TIMEZONE = "Asia/Kolkata";
+const RECURRING_EDIT_UNSAFE_TIMEZONES = new Set(["America/New_York"]);
 const FREQUENCY = Object.freeze({
   HOURLY: "HOURLY",
   EVERY_2_HOURS: "EVERY_2_HOURS",
@@ -208,6 +210,13 @@ function isValidTimezone(timezone) {
   } catch {
     return false;
   }
+}
+
+function normalizeRecurringEditTimezone(timezone) {
+  const normalized = safeString(timezone);
+  return RECURRING_EDIT_UNSAFE_TIMEZONES.has(normalized)
+    ? FALLBACK_TIMEZONE
+    : normalized || FALLBACK_TIMEZONE;
 }
 
 function safeZonedDateTimeToUtcIso(date, time, timezone) {
@@ -738,8 +747,9 @@ function RecurringEditModal({
   const navigate = useEmbeddedNavigate();
   const { showSuccess, showError } = useAppToast();
   const createRecurringEditMutation = useCreateRecurringEditMutation();
+  const { shopTimezone } = useShopTimezone();
 
-  const resolvedTimezone = FALLBACK_TIMEZONE;
+  const resolvedTimezone = normalizeRecurringEditTimezone(shopTimezone);
   const safeProductCount = safeCount(count);
   const submitting = createRecurringEditMutation.isPending;
 
@@ -1139,10 +1149,12 @@ function RecurringEditModal({
       });
 
       if (mappedError.isUpgradeRequired) {
+        setError("");
         setUpgradeWarning(failureMessage);
         return;
       }
 
+      setUpgradeWarning("");
       setError(failureMessage);
       showError(failureMessage);
     }
@@ -1153,6 +1165,7 @@ function RecurringEditModal({
     onHide,
     showError,
     showSuccess,
+    resolvedTimezone,
     submissionKey,
     submitting,
     t,

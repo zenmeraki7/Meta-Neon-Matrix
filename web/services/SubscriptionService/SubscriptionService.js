@@ -1,9 +1,10 @@
 // services/SubscriptionService.js
 import shopify from "../../shopify.js";
+import { resolveBillingPlan } from "../billingPlanRegistry.js";
 export const PLANS = {
   FREE: {
     key: "FREE",
-    name: "Free Plan",
+    name: "Starter",
     price: 0,
     compareAtPrice: null,
     trialDays: 0,
@@ -20,11 +21,29 @@ export const PLANS = {
     
   },
 
+  BASIC_MONTHLY: {
+    key: "BASIC_MONTHLY",
+    name: "Basic",
+    price: 25,
+    compareAtPrice: null,
+    trialDays: 0,
+    isFree: false,
+    description: "For stores that need faster bulk editing workflows",
+    highlight: "Unlimited products per task",
+    features: [
+      "All Free features",
+      "Unlimited products per task",
+      "Scheduled edits",
+    ],
+    buttonText: "Upgrade to Basic",
+    buttonVariant: "primary",
+  },
+
   ADVANCED_MONTHLY: {
     key: "ADVANCED_MONTHLY",
-    name: "Advanced Monthly",
-    price: 3,
-    compareAtPrice: 10,
+    name: "Advanced",
+    price: 50,
+    compareAtPrice: null,
     trialDays: 0,
     isFree: false,
     description: "For growing businesses",
@@ -41,9 +60,9 @@ export const PLANS = {
 
   PRO_MONTHLY: {
     key: "PRO_MONTHLY",
-    name: "Pro Monthly",
-    price: 5,
-    compareAtPrice: 18,
+    name: "Professional",
+    price: 110,
+    compareAtPrice: null,
     trialDays: 0,
     isFree: false,
     description: "For established stores",
@@ -61,9 +80,14 @@ export const PLANS = {
 export const getPlansArray = () => Object.values(PLANS)
 
 export const mapPlanKeyFromName = (planName) => {
+  const billingPlan = resolveBillingPlan(planName);
+  if (billingPlan?.planKey) {
+    return billingPlan.planKey;
+  }
+
   // Find the plan that matches the name
   const planEntry = Object.entries(PLANS).find(
-    ([key, plan]) => plan.name === planName
+    ([, plan]) => plan.name === planName
   );
   
 

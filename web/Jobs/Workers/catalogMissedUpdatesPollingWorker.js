@@ -14,8 +14,19 @@ const POLL_INTERVAL_MS = 15 * 60 * 1000;
 const LEADER_LOCK_KEY = "leader:catalog-missed-updates-polling:scheduler";
 const LEADER_LOCK_TTL_MS = 45_000;
 const CURSOR_RESOURCE = "products";
-const PAGE_SIZE = 250;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_SAFE_PAGE_SIZE = 50;
 const REQUIRED_TABLES = ["sync_cursors", "variant_metafields"];
+
+function resolveSafePageSize(value = process.env.CATALOG_MISSED_UPDATES_PAGE_SIZE) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return DEFAULT_PAGE_SIZE;
+  }
+  return Math.min(parsed, MAX_SAFE_PAGE_SIZE);
+}
+
+const PAGE_SIZE = resolveSafePageSize();
 
 const PRODUCTS_UPDATED_QUERY = `#graphql
   query ProductsUpdatedSince($first: Int!, $after: String, $query: String!) {

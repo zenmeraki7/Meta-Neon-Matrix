@@ -31,7 +31,11 @@ import {
   toRecurringEditStatusUpdatedDto,
   toRecurringEditUpdatedDto,
 } from "../dtos/recurringEditDto.js";
-import { resolveTrustedShopTimezone } from "../services/storeAccessService.js";
+import {
+  normalizeRecurringEditTimezone,
+  resolveTrustedShopTimezone,
+} from "../services/storeAccessService.js";
+import { isRecurringEditPlanError } from "../services/recurringEditPlanService.js";
 
 function getAssociatedSessionUser(session) {
   return session?.onlineAccessInfo?.associated_user || null;
@@ -87,13 +91,15 @@ export async function createRecurringEditController(req, res) {
   try {
     session = requireShopifySession(res);
     const body = requireRecurringEditBodyObject(req.body);
-    const trustedTimezone = await resolveTrustedShopTimezone({
-      shop: session.shop,
-      session,
-      requestedTimezone: body.timezone,
-      allowCachedTimezone: false,
-      allowRequestedTimezone: false,
-    });
+    const trustedTimezone = normalizeRecurringEditTimezone(
+      await resolveTrustedShopTimezone({
+        shop: session.shop,
+        session,
+        requestedTimezone: body.timezone,
+        allowCachedTimezone: false,
+        allowRequestedTimezone: false,
+      }),
+    );
     const actor = buildRecurringEditActorFromSession(session);
 
     const command = buildCreateRecurringEditCommand({
@@ -116,6 +122,17 @@ export async function createRecurringEditController(req, res) {
 
     return res.status(201).json(toRecurringEditCreatedDto(result));
   } catch (error) {
+    if (isRecurringEditPlanError(error)) {
+      return handleLoggedControllerError({
+        res,
+        req,
+        session,
+        error,
+        source: "recurringEditController.create",
+        fallbackCode: "RECURRING_EDIT_PRO_PLAN_REQUIRED",
+      });
+    }
+
     return handleLoggedControllerError({
       res,
       req,
