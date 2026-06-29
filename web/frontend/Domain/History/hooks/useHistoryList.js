@@ -42,6 +42,7 @@ export const useHistoryList = () => {
   const isLoadingMore = loadMoreStatus === "loading";
 
   const fetchHistoryData = useCallback((silent = false) => {
+    console.log(`[useHistoryList] fetchHistoryData called – silent: ${silent}`);
     dispatch(
       fetchHistories({
         type: filters.type,
@@ -88,14 +89,23 @@ export const useHistoryList = () => {
       const undoActive = ["processing"].includes(h.undo?.status?.toLowerCase());
       return mainActive || undoActive;
     });
+    console.log(`[useHistoryList] hasActiveItems: ${hasActiveItems}`);
 
-    if (!hasActiveItems) return;
+    if (!hasActiveItems) {
+      console.log('[useHistoryList] No active items – polling stopped');
+      return;
+    }
 
+    console.log('[useHistoryList] Starting polling interval (4s)');
     const interval = setInterval(() => {
+      console.log('[useHistoryList] Interval tick – fetching history (silent)');
       fetchHistoryData(true);
     }, 4000);
 
-    return () => clearInterval(interval);
+    return () => {
+      console.log('[useHistoryList] Clearing polling interval');
+      clearInterval(interval);
+    };
   }, [histories, fetchHistoryData]);
 
   return {

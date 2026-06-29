@@ -1,21 +1,21 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "8080a194096cb602f516d4bb1841df93"
-name = "test-meta-new"
-application_url = "https://gtk-language-the-scanner.trycloudflare.com"
+client_id = "0d2faed5eadc2b3043d4da7d9dc6e290"
+name = "MetaMatrix Bulk Product Editor"
+application_url = "https://metamatrix-a1cccaa914e8.herokuapp.com"
 embedded = true
-handle = "test-meta-new"
+handle = "metamatrix"
 
 [webhooks]
 api_version = "2024-07"
 
   [[webhooks.subscriptions]]
   topics = [
-  "products/delete",
   "products/update",
-  "bulk_operations/finish",
   "products/create",
-  "app/uninstalled"
+  "bulk_operations/finish",
+  "app/uninstalled",
+  "products/delete"
 ]
   uri = "/api/webhooks"
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
@@ -28,14 +28,7 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://gtk-language-the-scanner.trycloudflare.com/auth/callback",
-  "https://gtk-language-the-scanner.trycloudflare.com/auth/shopify/callback"
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/callback",
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/auth/shopify/callback",
+  "https://metamatrix-a1cccaa914e8.herokuapp.com/api/auth/callback"
 ]
-
-[app_proxy]
-url = "https://automatic-learners-excluded-decorative.trycloudflare.com/storefront/subscription"
-subpath = "proxy"
-prefix = "apps"
-
-[build]
-automatically_update_urls_on_dev = true
