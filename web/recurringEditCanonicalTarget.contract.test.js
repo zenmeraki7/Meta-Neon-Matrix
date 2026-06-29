@@ -196,7 +196,7 @@ test("recurring edit submit builds payload safely before mutation", () => {
   );
 });
 
-test("recurring edit pro-plan gate returns structured upgrade response", () => {
+test("recurring edit paid-plan gate returns structured upgrade response", () => {
   const previousNodeEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = "production";
 
@@ -215,7 +215,7 @@ test("recurring edit pro-plan gate returns structured upgrade response", () => {
       "Recurring edits are available on paid plans. Please upgrade to continue.",
     );
     assert.equal(body.upgradeRequired, true);
-    assert.equal(body.requiredPlan, "pro");
+    assert.equal(body.requiredPlan, "paid");
     assert.match(body.errorId, /^[a-f0-9]{16}$/);
     assert.equal(body.rootCause, undefined);
     assert.equal(body.stack, undefined);
@@ -228,7 +228,7 @@ test("recurring edit pro-plan gate returns structured upgrade response", () => {
   }
 });
 
-test("recurring edit pro-plan gate does not expose stack in dev tunnels", () => {
+test("recurring edit paid-plan gate does not expose stack in dev tunnels", () => {
   const previousNodeEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = "development";
 
@@ -273,6 +273,33 @@ test("recurring edit frontend handles plan gate once without toast duplication",
       modal.includes("setUpgradeWarning(failureMessage);") &&
       !modal.includes("showError(failureMessage);\n        return;"),
     "RecurringEditModal must show plan gate inline without a duplicate error toast",
+  );
+});
+
+test("recurring edit pricing and backend gate use the same paid-plan promise", () => {
+  const plans = read("web/services/SubscriptionService/SubscriptionService.js");
+  const fallbackPlans = read("web/frontend/Domain/Subscription/config/pricingPlans.js");
+  const recurringGate = read("web/services/recurringEditPlanService.js");
+
+  assert.ok(
+    recurringGate.includes('"BASIC_MONTHLY"') &&
+      recurringGate.includes('"ADVANCED_MONTHLY"') &&
+      recurringGate.includes('"PRO_MONTHLY"'),
+    "Recurring edit backend gate must allow every paid plan advertised with recurring edits",
+  );
+  assert.ok(
+    plans.includes("BASIC_MONTHLY") &&
+      plans.includes('"Recurring edits"') &&
+      fallbackPlans.includes("BASIC_MONTHLY") &&
+      fallbackPlans.includes('"Recurring edits"'),
+    "Pricing surfaces must advertise recurring edits only in line with the backend paid-plan gate",
+  );
+  assert.equal(
+    plans.includes("Unlimited Scheduled Edit") ||
+      fallbackPlans.includes("20 recurring edits") ||
+      fallbackPlans.includes("5 recurring edits"),
+    false,
+    "Pricing must not advertise recurring/scheduled quantities that backend gates do not enforce",
   );
 });
 

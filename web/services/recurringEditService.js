@@ -4,7 +4,7 @@ import { recurringEditRepository } from "../repositories/recurringEditRepository
 import { recurringEditRunRepository } from "../repositories/recurringEditRunRepository.js";
 import { findPreviewContractRecord } from "../repositories/bulkEditCommandRepository.js";
 import {
-  assertProRecurringEditAccess,
+  assertPaidRecurringEditAccess,
   assertRecurringEditActiveLimit,
 } from "./recurringEditPlanService.js";
 import {
@@ -502,7 +502,7 @@ async function getRecurringEditHydrated(id, shop) {
 }
 
 export async function createRecurringEdit({ shop, body, actor = null, subscription }) {
-  await assertProRecurringEditAccess(subscription);
+  await assertPaidRecurringEditAccess(subscription);
 
   const previewContract = await resolveTrustedPreviewContract({ shop, body, actor });
   const trustedBody = buildTrustedRecurringBodyFromPreview(body, previewContract);
@@ -745,7 +745,7 @@ export async function updateRecurringEdit({
 
   const nextStatus = normalizeStatus(body.status, existing.status);
   if (nextStatus === "ACTIVE") {
-    await assertProRecurringEditAccess(subscription);
+    await assertPaidRecurringEditAccess(subscription);
     if (existing.status !== "ACTIVE") {
       await assertRecurringEditActiveLimit({
         shop,
@@ -876,7 +876,7 @@ export async function toggleRecurringEditStatus({
   );
 
   if (requestedStatus === "ACTIVE") {
-    await assertProRecurringEditAccess(subscription);
+    await assertPaidRecurringEditAccess(subscription);
     await assertRecurringEditActiveLimit({
       shop,
       excludeRecurringEditId: existing.id,

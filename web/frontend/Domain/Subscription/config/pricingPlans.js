@@ -30,6 +30,7 @@ export const DEFAULT_PRICING_PLANS = Object.freeze([
       "60-day bulk edit history",
       "1 inventory sync job",
       "Scheduled edits",
+      "Recurring edits",
       "Edit multiple fields at once",
       "Export and import support",
     ],
@@ -48,7 +49,7 @@ export const DEFAULT_PRICING_PLANS = Object.freeze([
     compareAtPrice: null,
     features: [
       "Everything in Basic",
-      "5 recurring edits",
+      "Recurring edits",
       "90-day bulk edit history",
       "5 inventory sync jobs",
       "5 scheduled exports",
@@ -70,7 +71,7 @@ export const DEFAULT_PRICING_PLANS = Object.freeze([
     compareAtPrice: null,
     features: [
       "Everything in Advanced",
-      "20 recurring edits",
+      "Recurring edits",
       "180-day bulk edit history",
       "10 inventory sync jobs",
       "20 scheduled exports",

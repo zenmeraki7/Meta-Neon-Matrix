@@ -307,7 +307,7 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
       ...(mapped.code === "RECURRING_EDIT_PRO_PLAN_REQUIRED"
         ? {
           upgradeRequired: true,
-          requiredPlan: "pro",
+          requiredPlan: String(details.requiredPlan || "paid"),
         }
         : {}),
       ...(Object.keys(details).length ? { details } : {}),

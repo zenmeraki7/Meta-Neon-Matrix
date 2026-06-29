@@ -112,5 +112,7 @@ test("paid feature entitlements accept active paid mock subscriptions", () => {
   assert.ok(scheduled.includes('"BASIC_MONTHLY"'));
   assert.ok(recurring.includes("RECURRING_EDIT_PLAN_KEYS"));
   assert.ok(recurring.includes('"BASIC_MONTHLY"'));
+  assert.ok(recurring.includes("resolveBillingPlan"));
+  assert.ok(recurring.includes('requiredPlan: "paid"'));
   assert.ok(recurring.includes('subscription?.status === "ACTIVE"'));
 });
