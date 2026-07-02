@@ -2,6 +2,7 @@
 import express from "express";
 import {
   createProductExport,
+  getProductExportFields,
   cancelExportOperation,
   pauseExportOperation,
   resumePausedExportOperation,
@@ -83,6 +84,11 @@ router.post(
   subscriptionMiddleware,
   validateBody(exportRequestSchema),
   createProductExport
+);
+router.get(
+  "/export/fields",
+  subscriptionMiddleware,
+  getProductExportFields
 );
 router.post(
   "/create-scheduled-export",

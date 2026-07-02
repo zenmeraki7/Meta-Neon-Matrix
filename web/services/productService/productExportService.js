@@ -1,8 +1,11 @@
-import { fieldMappings } from "../../utils/productExportUtils.js";
 import { EXPORT_TYPES } from "../../config/constants.js";
 import { getCache, setCache } from "../../utils/cacheUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
 import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
+import {
+  assertSupportedExportFields,
+  EXPORT_FIELD_GRANULARITY,
+} from "./productExportFieldRegistry.js";
 import {
   EXPORT_EXECUTION_STATES,
 } from "../exportExecutionStateService.js";
@@ -27,25 +30,11 @@ import {
 export class ProductExportService {
   constructor(session) {
     this.session = session;
-    this.fieldMappings = fieldMappings;
     this.idempotencyStore = new IdempotencyStoreService(db);
   }
 
-  _assertSupportedExportFields(fields = []) {
-    if (!Array.isArray(fields) || fields.length === 0) {
-      const error = new Error("FIELDS_REQUIRED");
-      error.code = "VALIDATION_FAILED";
-      throw error;
-    }
-    const supported = new Set(Object.keys(this.fieldMappings || {}));
-    for (const field of fields) {
-      const key = String(field || "");
-      if (!supported.has(key)) {
-        const error = new Error(`Unsupported export field: ${key}`);
-        error.code = "VALIDATION_FAILED";
-        throw error;
-      }
-    }
+  _assertSupportedExportFields(fields = [], options = {}) {
+    return assertSupportedExportFields(fields, options).map((field) => field.key);
   }
 
   _checkValidation(count, activePlan) {
@@ -195,11 +184,20 @@ export class ProductExportService {
     fileName,
     filterParams,
     filterAst = null,
+    options = null,
     actor = null,
     entitlementSnapshot = null,
     idempotencyKey = null,
   }) {
-    this._assertSupportedExportFields(fields);
+    const targetGranularity =
+      String(options?.targetGranularity || EXPORT_FIELD_GRANULARITY.PRODUCT)
+        .trim()
+        .toUpperCase() === EXPORT_FIELD_GRANULARITY.VARIANT
+        ? EXPORT_FIELD_GRANULARITY.VARIANT
+        : EXPORT_FIELD_GRANULARITY.PRODUCT;
+    const normalizedFields = this._assertSupportedExportFields(fields, {
+      targetGranularity,
+    });
 
     const normalizedIdempotencyKey = String(idempotencyKey || "").trim();
     if (!normalizedIdempotencyKey) {
@@ -214,10 +212,11 @@ export class ProductExportService {
       requestHash: buildIdempotencyRequestHash({
         shop: this.session.shop,
         operationType: "EXPORT_CREATE",
-        fields,
+        fields: normalizedFields,
         fileName,
         filterParams,
         filterAst,
+        targetGranularity,
       }),
     });
     if (begin.mode === "replay") {
@@ -260,8 +259,9 @@ export class ProductExportService {
           data: {
             shop,
             filename,
-            fields,
+            fields: normalizedFields,
             filterQuery: "{}",
+            targetGranularity,
             status: "PENDING",
             statusNormalized: normalizeExportJobStatus("PENDING"),
             executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
@@ -277,8 +277,8 @@ export class ProductExportService {
         const resolvedTarget = await TargetingEngineService.resolveAndFreezeExportTargets({
           shop,
           source: "EXPORT",
-          targetType: "PRODUCT",
-          targetGranularity: "PRODUCT",
+          targetType: targetGranularity,
+          targetGranularity,
           filterAst,
           legacyFilterParams: Array.isArray(filterParams) ? filterParams : [],
           ownerType: "EXPORT_JOB",
@@ -287,10 +287,11 @@ export class ProductExportService {
             operationType: "EXPORT",
             mutationType: "CSV_EXPORT",
             mutationPayload: {
-              fields,
+              fields: normalizedFields,
+              targetGranularity,
               filename,
             },
-            targetGranularity: "PRODUCT",
+            targetGranularity,
           },
           queryParams: { cursor: null, limit: 20 },
           sampleLimit: 20,
@@ -314,7 +315,7 @@ export class ProductExportService {
       await addbulkExportJob({
         exportJobId: jobId,
         shop,
-        fields,
+        fields: normalizedFields,
         source: "manual_export",
         executionId: jobId,
       });

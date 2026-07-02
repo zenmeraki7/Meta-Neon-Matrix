@@ -6,7 +6,9 @@ import {
   requestPauseExportOperation,
   resumeExportOperation,
 } from "../services/operationPauseResumeService.js";
-import { fieldMappings } from "../utils/productExportUtils.js";
+import {
+  assertSupportedExportFields as assertRegisteredExportFields,
+} from "../services/productService/productExportFieldRegistry.js";
 
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_ARRAY = Object.freeze([]);
@@ -108,6 +110,7 @@ function toCreateExportServiceInput(command) {
     fileName: command.fileName,
     filterParams: safeArray(command.filterParams),
     filterAst: command.filterAst || null,
+    options: command.options || EMPTY_OBJECT,
     idempotencyKey: command.idempotencyKey,
 
     // Transitional compatibility fields.
@@ -155,27 +158,9 @@ function toCancelServiceInput(command) {
   });
 }
 
-/**
- * Replace this with your real export field registry.
- *
- * Request normalizer validates safe token shape.
- * This use-case/domain layer must validate business support.
- */
-function assertSupportedExportFields(fields) {
+function assertSupportedExportFields(fields, options = EMPTY_OBJECT) {
   const safeFields = safeArray(fields);
-  const supported = new Set(Object.keys(fieldMappings));
-
-  if (safeFields.length === 0) {
-    throw buildUseCaseError("FIELDS_REQUIRED", "VALIDATION_FAILED");
-  }
-
-  for (const field of safeFields) {
-    if (!supported.has(String(field))) {
-      throw buildUseCaseError(`Unsupported export field: ${String(field)}`, "VALIDATION_FAILED");
-    }
-  }
-
-  return safeFields;
+  return assertRegisteredExportFields(safeFields, options).map((field) => field.key);
 }
 
 function getAllowedDownloadHosts() {
@@ -232,12 +217,18 @@ export const productExportUseCases = Object.freeze({
   async create(command) {
     command = assertCreateExportCommand(command);
 
-    assertSupportedExportFields(command.fields);
+    const normalizedFields = assertSupportedExportFields(
+      command.fields,
+      command.options,
+    );
 
     const service = createProductExportCommandService(command);
 
     const result = await service.createExportCommand(
-      toCreateExportServiceInput(command),
+      toCreateExportServiceInput({
+        ...command,
+        fields: normalizedFields,
+      }),
     );
 
     return requireResult(result, "Export command creation failed");

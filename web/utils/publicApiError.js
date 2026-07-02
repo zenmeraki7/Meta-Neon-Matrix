@@ -146,6 +146,9 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
   if (raw === "IDEMPOTENCY_KEY_REQUIRED") {
     return { code: "IDEMPOTENCY_KEY_REQUIRED", message: DEFAULT_MESSAGES.IDEMPOTENCY_KEY_REQUIRED };
   }
+  if (error?.code === "VALIDATION_FAILED" && error?.message) {
+    return { code: "VALIDATION_FAILED", message: String(error.message) };
+  }
   if (raw === "INVALID_BILLING_PLAN") {
     return { code: "INVALID_BILLING_PLAN", message: DEFAULT_MESSAGES.INVALID_BILLING_PLAN };
   }
@@ -268,13 +271,20 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
   const details = error?.details && typeof error.details === "object"
     ? error.details
     : {};
-  const fields = Array.isArray(error?.fields) ? error.fields : [];
-  const errors = fields.reduce((acc, fieldError) => {
+  const fieldErrors = Array.isArray(error?.fields) ? error.fields : [];
+  let errors = fieldErrors.reduce((acc, fieldError) => {
     const field = String(fieldError?.field || "body").trim() || "body";
     const message = String(fieldError?.error || fieldError?.message || mapped.message).trim();
     acc[field] = message || mapped.message;
     return acc;
   }, {});
+  if (
+    error?.errors &&
+    typeof error.errors === "object" &&
+    !Array.isArray(error.errors)
+  ) {
+    errors = { ...errors, ...error.errors };
+  }
   if (
     mapped.code === "VALIDATION_FAILED" &&
     Object.keys(errors).length === 0 &&
@@ -315,6 +325,9 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
         ? { stack: String(error.stack) }
         : {}),
       ...(error?.action ? { action: String(error.action) } : {}),
+      ...(Array.isArray(error?.allowedFields)
+        ? { allowedFields: error.allowedFields.map(String) }
+        : {}),
       ...(Object.keys(errors).length ? { errors } : {}),
     },
   };

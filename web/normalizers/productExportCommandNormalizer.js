@@ -27,6 +27,8 @@ const CREATE_EXPORT_BODY_KEYS = new Set([
   "fileName",
   "filterParams",
   "filterAst",
+  "context",
+  "options",
 ]);
 
 const CANCEL_EXPORT_BODY_KEYS = new Set([
@@ -411,6 +413,21 @@ function normalizeOptionalPlainObjectFallback(value, fieldName) {
   return normalizeOptionalPlainObject(value, fieldName) || EMPTY_OBJECT;
 }
 
+function normalizeExportOptions(value) {
+  const safe = normalizeOptionalPlainObjectFallback(value, "options");
+  const targetGranularity = String(safe.targetGranularity || "PRODUCT")
+    .trim()
+    .toUpperCase();
+
+  if (!["PRODUCT", "VARIANT"].includes(targetGranularity)) {
+    throw buildRequestError("Invalid options.targetGranularity");
+  }
+
+  return Object.freeze({
+    targetGranularity,
+  });
+}
+
 function assertCommandContext(context) {
   const safe = assertPlainObject(context, "command context");
 
@@ -449,6 +466,8 @@ export function buildCreateProductExportCommand({
     fileName: normalizeFileName(safeBody.fileName),
     filterParams: normalizeFilterParams(safeBody.filterParams),
     filterAst: normalizeFilterAst(safeBody.filterAst),
+    clientContext: normalizeOptionalPlainObject(safeBody.context, "context"),
+    options: normalizeExportOptions(safeBody.options),
     idempotencyKey: normalizeIdempotencyKey(headers),
   });
 }

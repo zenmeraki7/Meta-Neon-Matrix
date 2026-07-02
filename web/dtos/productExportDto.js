@@ -11,12 +11,17 @@ function toSafeText(value, max = 2000) {
 }
 
 export function toExportJobQueuedResponseDto(result) {
+  const exportJobId = result?.id || null;
+  const queuedAt = toIso(result?.createdAt);
   return {
     success: true,
+    exportJobId,
+    status: "QUEUED",
+    queuedAt,
     data: {
-      exportJobId: result?.id || null,
+      exportJobId,
       status: "QUEUED",
-      queuedAt: toIso(result?.createdAt),
+      queuedAt,
     },
   };
 }

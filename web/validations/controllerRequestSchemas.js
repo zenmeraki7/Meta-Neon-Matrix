@@ -118,6 +118,10 @@ export const exportRequestSchema = Joi.object({
   fileName: Joi.string().trim().min(1).required(),
   filterParams: Joi.array().items(filterParamSchema).default([]),
   filterAst: Joi.object().allow(null),
+  context: Joi.object().unknown(true).default({}),
+  options: Joi.object({
+    targetGranularity: Joi.string().trim().valid("PRODUCT", "VARIANT").default("PRODUCT"),
+  }).unknown(true).default({ targetGranularity: "PRODUCT" }),
 }).unknown(false);
 
 export const subscriptionCreateSchema = Joi.object({

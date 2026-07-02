@@ -43,6 +43,12 @@ import {
   markExportPaused,
   markExportRetryableState,
 } from "../../repositories/bulkExportExecutionRepository.js";
+import {
+  assertSupportedExportFields,
+  buildExportCsvHeaders,
+  buildExportCsvRow,
+  EXPORT_FIELD_GRANULARITY,
+} from "../../services/productService/productExportFieldRegistry.js";
 
 const QUEUE_NAME = process.env.EXPORT_QUEUE || "bulk-export";
 const WORKER_NAME = "bulkExportWorker";
@@ -58,34 +64,6 @@ function assertNoRawTargetingPayload(jobData = {}) {
     throw error;
   }
 }
-
-const PRODUCT_FIELD_RESOLVERS = {
-  title: (p) => p.title ?? "",
-  description: (p) => p.descriptionHtml ?? p.descriptionText ?? "",
-  vendor: (p) => p.vendor ?? "",
-  productType: (p) => p.productType ?? "",
-  handle: (p) => p.handle ?? "",
-  status: (p) => p.status ?? "",
-  metaTitle: (p) => p.seoTitle ?? "",
-  metaDescription: (p) => p.seoDescription ?? "",
-  tags: (p) => (Array.isArray(p.tags) ? p.tags.join(", ") : ""),
-  collections: (p) => {
-    const raw = p.collectionsJson;
-    if (!Array.isArray(raw)) return "";
-    return raw.map((collection) => collection?.title).filter(Boolean).join(", ");
-  },
-  category: (p) => p.categoryName ?? "",
-};
-
-const VARIANT_FIELD_RESOLVERS = {
-  price: (v) => v.price ?? "",
-  compareAtPrice: (v) => v.compareAtPrice ?? "",
-  sku: (v) => v.sku ?? "",
-  barcode: (v) => v.barcode ?? "",
-  taxable: (v) => (typeof v.taxable === "boolean" ? v.taxable : ""),
-  variantTitle: (v) => v.title ?? "",
-  inventoryQuantity: (v) => v.inventoryQuantity ?? "",
-};
 
 class RetryableExportError extends Error {
   constructor(message, code = "retryable_export") {
@@ -196,15 +174,17 @@ const bulkExportWorker = new Worker(
       filePath = path.join(os.tmpdir(), exportJob.filename);
       const writeStream = fs.createWriteStream(filePath);
       const selectedFields =
-  Array.isArray(fields) && fields.length ? fields : exportJob.fields;
-
-const csvHeaders = ["id"];
-
-if (selectedFields.some((f) => VARIANT_FIELD_RESOLVERS[f])) {
-  csvHeaders.push("variant_id");
-}
-
-csvHeaders.push(...selectedFields);
+        Array.isArray(fields) && fields.length ? fields : exportJob.fields;
+      const targetGranularity =
+        String(exportJob.targetGranularity || EXPORT_FIELD_GRANULARITY.PRODUCT)
+          .trim()
+          .toUpperCase() === EXPORT_FIELD_GRANULARITY.VARIANT
+          ? EXPORT_FIELD_GRANULARITY.VARIANT
+          : EXPORT_FIELD_GRANULARITY.PRODUCT;
+      const fieldDefinitions = assertSupportedExportFields(selectedFields, {
+        targetGranularity,
+      });
+      const csvHeaders = buildExportCsvHeaders(fieldDefinitions);
 
 const csvStream = format({
   headers: csvHeaders,
@@ -255,58 +235,23 @@ const csvStream = format({
           const product = productMap.get(productId);
           if (!product) continue;
 
-          const variants = product.variants ?? [];
+          if (targetGranularity === EXPORT_FIELD_GRANULARITY.PRODUCT) {
+            csvStream.write(buildExportCsvRow({ fieldDefinitions, product }));
+            totalRows += 1;
+            if (totalRows % 1000 === 0) {
+              await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
+            }
+            continue;
+          }
 
-         if (!variants.length) {
-  const row = { id: productId };
-
-  if (csvHeaders.includes("variant_id")) {
-    row.variant_id = "";
-  }
-
-  for (const field of selectedFields) {
-    const productResolver = PRODUCT_FIELD_RESOLVERS[field];
-    row[field] = productResolver ? productResolver(product) : "";
-  }
-
-  csvStream.write(row);
-  totalRows += 1;
-  if (totalRows % 1000 === 0) {
-    await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
-  }
-  continue;
-}
-
-         for (let index = 0; index < variants.length; index += 1) {
-  const variant = variants[index];
-
-  const row = {
-    id: productId,
-  };
-
-  if (csvHeaders.includes("variant_id")) {
-    row.variant_id = variant.id;
-  }
-
-  for (const field of selectedFields) {
-    const productResolver = PRODUCT_FIELD_RESOLVERS[field];
-    const variantResolver = VARIANT_FIELD_RESOLVERS[field];
-
-    if (variantResolver) {
-      row[field] = variantResolver(variant);
-    } else if (productResolver) {
-      row[field] = index === 0 ? productResolver(product) : "";
-    } else {
-      row[field] = "";
-    }
-  }
-
-  csvStream.write(row);
-  totalRows += 1;
-  if (totalRows % 1000 === 0) {
-    await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
-  }
-}
+          const variants = product.variants?.length ? product.variants : [null];
+          for (const variant of variants) {
+            csvStream.write(buildExportCsvRow({ fieldDefinitions, product, variant }));
+            totalRows += 1;
+            if (totalRows % 1000 === 0) {
+              await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
+            }
+          }
         }
 
         cursorOrdinal = snapshotPage.lastOrdinal;

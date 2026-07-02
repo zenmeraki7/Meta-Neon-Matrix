@@ -19,6 +19,7 @@ import {
   productExportUseCases,
   productExportLifecycleUseCases,
 } from "../useCases/productExportUseCases.js";
+import { listExportFields } from "../services/productService/productExportFieldRegistry.js";
 
 function assertSafeDownloadUrl(rawUrl) {
   if (typeof rawUrl !== "string" || !rawUrl.trim()) {
@@ -69,6 +70,23 @@ export const createProductExport = async (req, res, next) => {
     });
     const result = await productExportUseCases.create(command);
     return res.status(200).json(toExportJobQueuedResponseDto(result));
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getProductExportFields = async (req, res, next) => {
+  try {
+    setPrivateNoStore(res);
+    requireShopifySession(res, "UNAUTHENTICATED");
+    const targetGranularity = String(req.query?.targetGranularity || "PRODUCT")
+      .trim()
+      .toUpperCase();
+    return res.status(200).json({
+      ok: true,
+      success: true,
+      fields: listExportFields({ targetGranularity }),
+    });
   } catch (error) {
     return next(error);
   }

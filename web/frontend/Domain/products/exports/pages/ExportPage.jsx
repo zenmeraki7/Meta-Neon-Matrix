@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Badge, Banner, BlockStack, Card, InlineStack, Layout, Page, Text } from "@shopify/polaris";
 import { useNavigate } from "react-router-dom";
 import { useSelector } from "react-redux";
@@ -7,7 +7,7 @@ import {
   selectProductCount,
   selectSearch
 } from "../../../../store/slices/productSlice";
-import { allFields } from "../constants";
+import { allFields as fallbackFields } from "../constants";
 
 import { useTranslation } from "react-i18next";
 import { useApiClient } from "../../../../hooks/useApiClient";
@@ -35,12 +35,57 @@ export default function CsvExportPage() {
   const [fileName, setFileName] = useState("");
   const [fileError, setFileError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [fieldsLoading, setFieldsLoading] = useState(true);
+  const [exportFields, setExportFields] = useState(fallbackFields);
   const [banner, setBanner] = useState(null);
   const [showScheduledExportModal, setShowScheduledExportModal] = useState(false);
+  const targetGranularity = "PRODUCT";
 
-  const productFields = useMemo(() => allFields.filter((f) => f.group === "product"), []);
-  const variantFields = useMemo(() => allFields.filter((f) => f.group === "variant"), []);
-  const seoFields = useMemo(() => allFields.filter((f) => f.group === "seo"), []);
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadExportFields() {
+      setFieldsLoading(true);
+      try {
+        const data = await api.get(
+          `/api/products/export/fields?targetGranularity=${targetGranularity}`,
+        );
+        const fields = Array.isArray(data?.fields) ? data.fields : [];
+        if (!ignore && fields.length) {
+          setExportFields(
+            fields.map((field) => ({
+              label: field.label,
+              value: field.key,
+              group: field.group || "product",
+              granularity: field.granularity,
+            })),
+          );
+          setSelectedFields((prev) =>
+            prev.filter((key) => fields.some((field) => field.key === key)),
+          );
+        }
+      } catch (err) {
+        if (!ignore) {
+          setBanner({
+            tone: "critical",
+            message: toSafeErrorMessage(t, err, "common.errors.generic"),
+          });
+        }
+      } finally {
+        if (!ignore) setFieldsLoading(false);
+      }
+    }
+
+    loadExportFields();
+
+    return () => {
+      ignore = true;
+    };
+  }, [api, t]);
+
+  const productFields = useMemo(() => exportFields.filter((f) => f.group === "product"), [exportFields]);
+  const variantFields = useMemo(() => exportFields.filter((f) => f.group === "variant"), [exportFields]);
+  const seoFields = useMemo(() => exportFields.filter((f) => f.group === "seo"), [exportFields]);
 
   const validateFileName = () => {
     if (!fileName.trim()) {
@@ -91,9 +136,15 @@ export default function CsvExportPage() {
       filterParams: effectiveFilters,
       filterAst: buildFilterAstFromLegacyFilters({
         filterParams: effectiveFilters,
-        targetGranularity: "PRODUCT",
+        targetGranularity,
         source: "MANUAL_EXPORT_DEFINITION",
       }),
+      context: {
+        source: "MANUAL_EXPORT_DEFINITION",
+      },
+      options: {
+        targetGranularity,
+      },
     };
 
     try {
@@ -104,7 +155,7 @@ export default function CsvExportPage() {
         tone: "success",
         message: "Export started successfully. You will receive the CSV once ready.",
       });
-      navigate("/exportDetails/" + data.exportJobId);
+      navigate("/exportDetails/" + (data.exportJobId || data.data?.exportJobId));
     } catch (err) {
       setBanner({
         tone: "critical",
@@ -195,8 +246,8 @@ export default function CsvExportPage() {
                 seoFields={seoFields}
                 selectedFields={selectedFields}
                 setSelectedFields={setSelectedFields}
-                allFields={allFields}
-                loading={loading}
+                allFields={exportFields}
+                loading={loading || fieldsLoading}
               />
             </BlockStack>
           </Layout.Section>

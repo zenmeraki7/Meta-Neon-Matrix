@@ -62,6 +62,14 @@ test("catalog polling readiness returns Prisma-supported text and cannot crash w
   assert.match(worker, /registerRepeatableTick\(\)\.catch/);
 });
 
+test("sync cursor writes ensure the legacy shops foreign key parent", () => {
+  const cursors = read("web/db/syncCursors.js");
+
+  assert.match(cursors, /async function ensureSyncCursorShop/);
+  assert.match(cursors, /prisma\.shop\.upsert/);
+  assert.match(cursors, /await ensureSyncCursorShop\(shop\)/);
+});
+
 test("sync status exposes the persisted start timestamp used for stale recovery", () => {
   const repository = read("web/repositories/storeRepository.js");
   const service = read("web/services/syncStatusQueryService.js");
