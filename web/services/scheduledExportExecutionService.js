@@ -32,7 +32,6 @@ import {
   buildEntitlementSnapshot,
 } from "../utils/operationContextUtils.js";
 import { EXPORT_EXECUTION_STATES } from "./exportExecutionStateService.js";
-import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
 import {
 } from "../utils/jobQueueUtils.js";
 import {
@@ -444,7 +443,7 @@ shopRenewInterval = setInterval(async () => {
           fields: currentRun.scheduledExport.fields,
           filterQuery: "{}",
           status: "PENDING",
-          executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+          executionState: EXPORT_EXECUTION_STATES.PLANNED,
           type: "Scheduled export",
           isScheduled: true,
           scheduledExportId: currentRun.scheduledExport.id,
@@ -537,7 +536,7 @@ shopRenewInterval = setInterval(async () => {
       const targetFrozenSet = await markExportJobTargetFrozen({
         exportJobId: createdExportJob.id,
         shop: createdExportJob.shop,
-        expectedExecutionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+        expectedExecutionState: EXPORT_EXECUTION_STATES.PLANNED,
         frozenCount,
       }, tx);
       if (targetFrozenSet.count !== 1) {
@@ -565,8 +564,8 @@ shopRenewInterval = setInterval(async () => {
     const queued = await markExportJobQueued({
       exportJobId: exportJob.id,
       shop: exportJob.shop,
-      expectedExecutionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
-      queuedExecutionState: OPERATION_LIFECYCLE_STATES.QUEUED,
+      expectedExecutionState: EXPORT_EXECUTION_STATES.PLANNED,
+      queuedExecutionState: EXPORT_EXECUTION_STATES.QUEUED,
       executionStateNormalized: null,
     });
     if (queued.count !== 1) {

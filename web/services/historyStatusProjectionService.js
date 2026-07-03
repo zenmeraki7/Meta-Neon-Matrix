@@ -501,7 +501,7 @@ function getExportProgressPercent(executionState, processedCount, totalItems) {
       return 5;
     case EXPORT_EXECUTION_STATES.RUNNING:
       return 60;
-    case EXPORT_EXECUTION_STATES.FINALIZING:
+    case "finalizing":
       return 90;
     case EXPORT_EXECUTION_STATES.COMPLETED:
       return 100;
@@ -533,7 +533,7 @@ function mapExportExecutionSummary(executionState) {
         detailKey: "historyStatusDetail.export_running",
       });
 
-    case EXPORT_EXECUTION_STATES.FINALIZING:
+    case "finalizing":
       return buildStatusSummary({
         key: "finalizing",
         label: "Uploading file",
@@ -552,7 +552,7 @@ function mapExportExecutionSummary(executionState) {
         isTerminal: true,
       });
 
-    case EXPORT_EXECUTION_STATES.PARTIAL:
+    case "partial":
       return buildStatusSummary({
         key: "partial",
         label: "Partially completed",

@@ -32,7 +32,7 @@ export async function claimExportJobExecution({ exportJobId, shop, executionId, 
     const executionState = String(currentJob.executionStateNormalized || "").toLowerCase();
     if (
       isTerminalExportExecutionState(executionState)
-      || ["COMPLETED", "FAILED", "CANCELLED", "PARTIAL"].includes(currentJob.executionStateNormalized || "")
+      || ["COMPLETED", "FAILED", "CANCELLED"].includes(currentJob.executionStateNormalized || "")
       || ["COMPLETED", "FAILED", "CANCELLED"].includes(currentJob.statusNormalized || "")
     ) {
       return { state: "terminal", exportJob: currentJob };
@@ -40,7 +40,7 @@ export async function claimExportJobExecution({ exportJobId, shop, executionId, 
     if (String(currentJob.executionState || "").toUpperCase() === "PAUSED") {
       return { state: "paused", exportJob: currentJob };
     }
-    if (currentJob.executionStateNormalized === normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.FINALIZING)) {
+    if (String(currentJob.executionState || "").toUpperCase() === "FINALIZING") {
       return { state: "finalizing", exportJob: currentJob };
     }
     if (
@@ -62,20 +62,33 @@ export async function claimExportJobExecution({ exportJobId, shop, executionId, 
       return { state: "shop_busy", exportJob: currentJob };
     }
 
+    const isRecoverableSameJobRun =
+      currentJob.statusNormalized === normalizeExportJobStatus("PROCESSING")
+      && currentJob.executionStateNormalized === normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING)
+      && !currentJob.fileUrl;
+
     const updated = await tx.exportJob.updateMany({
       where: {
         id: exportJobId,
         shop,
         statusNormalized: {
-          in: [normalizeExportJobStatus("PENDING"), normalizeExportJobStatus("FAILED")],
+          in: [
+            normalizeExportJobStatus("PENDING"),
+            normalizeExportJobStatus("FAILED"),
+            ...(isRecoverableSameJobRun ? [normalizeExportJobStatus("PROCESSING")] : []),
+          ],
         },
         executionStateNormalized: {
           in: [
             normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.PLANNED),
             normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
             normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.FAILED),
+            ...(isRecoverableSameJobRun
+              ? [normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING)]
+              : []),
           ],
         },
+        fileUrl: null,
       },
       data: {
         status: "PROCESSING",
@@ -159,7 +172,6 @@ export async function markExportFailureState({ exportJobId, shop, error, attempt
       executionStateNormalized: {
         in: [
           normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
-          normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.FINALIZING),
         ],
       },
     },
@@ -199,8 +211,8 @@ export async function markExportFinalizing(exportJobId, shop, executionId = null
       executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
     },
     data: {
-      executionState: EXPORT_EXECUTION_STATES.FINALIZING,
-      executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.FINALIZING),
+      executionState: EXPORT_EXECUTION_STATES.RUNNING,
+      executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
     },
   });
 
@@ -218,7 +230,6 @@ export async function finalizeExportSuccessState(exportJob, fileUrl, totalRows, 
       executionStateNormalized: {
         in: [
           normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
-          normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.FINALIZING),
         ],
       },
     },
@@ -313,7 +324,6 @@ export async function checkpointExportCursor({ exportJobId, shop, cursorOrdinal,
       executionStateNormalized: {
         in: [
           normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
-          normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.FINALIZING),
         ],
       },
     },

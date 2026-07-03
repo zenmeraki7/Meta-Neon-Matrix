@@ -1,9 +1,15 @@
+import { productExportFieldRegistry } from "../services/productService/productExportFieldRegistry.js";
+
 const MAX_ERROR_LIST_LENGTH = 100;
 const MAX_ERROR_MESSAGE_LENGTH = 300;
 const MAX_VALUE_STRING_LENGTH = 1000;
 const MAX_TEXT_LENGTH = 300;
 const MAX_TITLE_LENGTH = 200;
 const MAX_URL_LENGTH = 2000;
+
+const EXPORT_FIELD_LABEL_BY_KEY = new Map(
+  productExportFieldRegistry.map((field) => [field.key, field.label || field.key]),
+);
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -13,6 +19,55 @@ function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value
     : null;
+}
+
+function parseArrayString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+}
+
+function normalizeExportFieldKeys(value) {
+  const rawFields = Array.isArray(value) ? value : parseArrayString(value) || [];
+
+  return rawFields
+    .map((field) => {
+      if (typeof field === "string") return field.trim();
+      const safe = asObject(field);
+      return toStringOrNull(safe?.key ?? safe?.value ?? safe?.field, 160);
+    })
+    .filter(Boolean);
+}
+
+function toExportedFieldDtos(value) {
+  const rawFields = Array.isArray(value) ? value : parseArrayString(value) || [];
+
+  return rawFields
+    .map((field) => {
+      const safe = asObject(field);
+      const key = typeof field === "string"
+        ? field.trim()
+        : toStringOrNull(safe?.key ?? safe?.value ?? safe?.field, 160);
+      if (!key) return null;
+
+      return {
+        key,
+        label: toSafeText(safe?.label, MAX_TITLE_LENGTH)
+          || EXPORT_FIELD_LABEL_BY_KEY.get(key)
+          || key,
+      };
+    })
+    .filter(Boolean);
 }
 
 function toNumber(value, fallback = 0) {
@@ -128,11 +183,14 @@ function toEditHistoryEmbeddedSummaryDto(summary) {
 
 function toExportHistoryListItemDto(history) {
   const safe = asObject(history) || {};
+  const status = toStringOrNull(safe.statusNormalized ?? safe.status, 120);
+  const downloadUrl = toSafeText(safe.downloadUrl ?? safe.fileUrl, MAX_URL_LENGTH);
 
   return {
     id: toStringOrNull(safe.id, 200),
     type: toStringOrNull(safe.type, 120),
-    status: toStringOrNull(safe.status, 120),
+    status,
+    statusNormalized: status,
     fileName: toSafeText(safe.fileName ?? safe.filename, 255),
     format: toStringOrNull(safe.format, 80),
     createdAt: toIsoString(safe.createdAt),
@@ -140,26 +198,63 @@ function toExportHistoryListItemDto(history) {
     totalRows: toNumber(safe.totalRows, 0),
     successCount: toNumber(safe.successCount, 0),
     failedCount: toNumber(safe.failedCount, 0),
-    downloadUrl: toSafeText(safe.downloadUrl ?? safe.fileUrl, MAX_URL_LENGTH),
+    processedCount: toNumber(safe.processedCount, 0),
+    progressPercent: toNumber(safe.progressPercent, 0),
+    downloadReady: status === "COMPLETED" && Boolean(downloadUrl),
+    downloadUrl,
   };
 }
 
 function toExportHistoryDetailDto(history) {
   const safe = asObject(history) || {};
+  const status = toStringOrNull(safe.statusNormalized ?? safe.status, 120);
+  const executionState = toStringOrNull(
+    safe.executionStateNormalized ?? safe.executionState,
+    120,
+  );
+  const downloadUrl = toSafeText(safe.downloadUrl ?? safe.fileUrl, MAX_URL_LENGTH);
+  const totalItems = toNumber(safe.totalItems ?? safe.totalRows, 0);
+  const fields = normalizeExportFieldKeys(
+    safe.fields ?? safe.selectedFields ?? safe.exportFields ?? safe.columns,
+  );
+  const exportedFields = toExportedFieldDtos(
+    safe.exportedFields && safe.exportedFields.length ? safe.exportedFields : fields,
+  );
 
   return {
     id: toStringOrNull(safe.id, 200),
+    exportJobId: toStringOrNull(safe.exportJobId ?? safe.id, 200),
     type: toStringOrNull(safe.type, 120),
-    status: toStringOrNull(safe.status, 120),
+    rawType: toStringOrNull(safe.rawType ?? safe.type, 120),
+    status,
+    statusLabel: status,
+    statusNormalized: status,
+    executionState,
+    executionStateNormalized: executionState,
+    targetGranularity: toStringOrNull(safe.targetGranularity, 80),
     fileName: toSafeText(safe.fileName ?? safe.filename, 255),
+    filename: toSafeText(safe.filename ?? safe.fileName, 255),
     format: toStringOrNull(safe.format, 80),
     createdAt: toIsoString(safe.createdAt),
+    queuedAt: toIsoString(safe.queuedAt ?? safe.createdAt),
+    startedAt: toIsoString(safe.startedAt),
     completedAt: toIsoString(safe.completedAt),
-    totalRows: toNumber(safe.totalRows, 0),
+    failedAt: status === "FAILED" ? toIsoString(safe.completedAt ?? safe.updatedAt) : null,
+    totalItems,
+    totalRows: totalItems,
+    rowCount: totalItems,
+    processedCount: toNumber(safe.processedCount, 0),
+    progressPercent: toNumber(safe.progressPercent, 0),
+    targetSnapshotCount: toNumber(safe.targetSnapshotCount, 0),
+    durationMs: toNumber(safe.durationMs, 0),
+    fields,
+    exportedFields,
     successCount: toNumber(safe.successCount, 0),
     failedCount: toNumber(safe.failedCount, 0),
-    downloadUrl: toSafeText(safe.downloadUrl ?? safe.fileUrl, MAX_URL_LENGTH),
+    downloadReady: status === "COMPLETED" && Boolean(downloadUrl),
+    downloadUrl,
     errors: toSafeErrorList(safe.errors),
+    error: safe.error ?? null,
   };
 }
 

@@ -36,7 +36,7 @@ function buildStage(executionStateRaw) {
   if (state === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN || state === OPERATION_LIFECYCLE_STATES.QUEUED) return "AFTER_FREEZE_BEFORE_EXECUTION";
   if (state === "EXECUTING" || state === "SHOPIFY_BULK_SUBMITTED" || state === "SHOPIFY_RUNNING") return "DURING_EXECUTION";
   if (state === "SHOPIFY_COMPLETED" || state === "INGESTING_RESULTS" || state === "VERIFYING" || state === "MIRROR_UPDATING") return "DURING_VERIFICATION";
-  if (state === BULK_EDIT_EXECUTION_STATES.FINALIZING || state === EXPORT_EXECUTION_STATES.FINALIZING) {
+  if (state === BULK_EDIT_EXECUTION_STATES.FINALIZING || state === "FINALIZING") {
     return "DURING_VERIFICATION";
   }
   if (

@@ -22,6 +22,7 @@ import { useLocaleFormatters } from "../../../hooks/useLocaleFormatters";
 import TableErrorBoundary from "../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../components/Error/CellErrorBoundary";
 import { useExportHistoryQuery } from "../hooks/useExportHistoryQuery";
+import { historyService } from "../services/historyService";
 
 const DEFAULT_PAGE_INFO = {
   hasNextPage: false,
@@ -33,7 +34,6 @@ const STATUS_RAIL_MIN_HEIGHT = "88px";
 
 const ExportRowActions = React.memo(function ExportRowActions({
   rowId,
-  fileUrl,
   filename,
   isDownloading,
   isDownloadable,
@@ -47,7 +47,7 @@ const ExportRowActions = React.memo(function ExportRowActions({
       disabled={!isDownloadable || isDownloading}
       loading={isDownloading}
       variant="plain"
-      onClick={() => onDownload(rowId, fileUrl, filename)}
+      onClick={() => onDownload(rowId, filename)}
     >
       {isDownloading ? downloadingLabel : downloadLabel}
     </Button>
@@ -123,26 +123,26 @@ const ExportTable = ({
     ? toSafeErrorMessage(t, exportQuery.error, "common.errors.generic")
     : null;
 
-  const handleDownloadClick = async (id, fileUrl, filename) => {
-    if (!fileUrl) {
-       onExportError?.(t("exportDownloadLinkMissing"));
+  const handleDownloadClick = async (id, filename) => {
+    if (!id) {
+      onExportError?.(t("exportDownloadLinkMissing"));
       return;
     }
 
     setDownloadingItems((prev) => new Set(prev).add(id));
 
     try {
-      const link = document.createElement("a");
-      link.href = fileUrl;
-      link.download = filename || "export.csv";
-      link.target = "_blank";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-
-      onExportSuccess?.();
+      const result = await historyService.downloadExportedData(
+        id,
+        filename || "export.csv",
+      );
+      if (result?.success) {
+        onExportSuccess?.();
+      } else {
+        onExportError?.(t("exportDownloadFailed"));
+      }
     } catch {
-       onExportError?.(t("exportDownloadFailed"));
+      onExportError?.(t("exportDownloadFailed"));
     } finally {
       setDownloadingItems((prev) => {
         const next = new Set(prev);
@@ -273,7 +273,8 @@ const ExportTable = ({
                   const filename = item.filename || "Untitled export";
                   const isDownloading = downloadingItems.has(id);
                   const isDownloadable =
-                    primaryStatus.key === "completed" && Boolean(item.fileUrl);
+                    primaryStatus.key === "completed" &&
+                    Boolean(item.downloadReady || item.downloadUrl || item.fileUrl);
                   const progress = Math.max(
                     0,
                     Math.min(100, Number(item?.progressSummary?.percent ?? item?.progressPercent ?? 0)),
@@ -341,7 +342,6 @@ const ExportTable = ({
                       <IndexTable.Cell>
                         <ExportRowActions
                           rowId={id}
-                          fileUrl={item.fileUrl}
                           filename={filename}
                           isDownloading={isDownloading}
                           isDownloadable={isDownloadable}

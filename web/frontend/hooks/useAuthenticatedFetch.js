@@ -46,6 +46,7 @@ export function useAuthenticatedFetch() {
       }
 
       return window.fetch(uri, {
+        credentials: options.credentials || "include",
         ...options,
         headers,
       });
@@ -58,7 +59,10 @@ export function useAuthenticatedFetch() {
         throw createAuthFetchUnavailableError();
       }
 
-      const response = await fetchFunction(uri, options);
+      const response = await fetchFunction(uri, {
+        credentials: options.credentials || "include",
+        ...options,
+      });
 
       if (
         response.headers.get("X-Shopify-API-Request-Failure-Reauthorize") ===

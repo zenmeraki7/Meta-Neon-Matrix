@@ -2,18 +2,16 @@ export const EXPORT_EXECUTION_STATES = {
   PLANNED: "planned",
   QUEUED: "queued",
   RUNNING: "running",
-  FINALIZING: "finalizing",
   COMPLETED: "completed",
   FAILED: "failed",
-  PARTIAL: "partial",
   CANCELLED: "cancelled",
+  UNKNOWN: "unknown",
 };
 
 export function isTerminalExportExecutionState(state) {
   return [
     EXPORT_EXECUTION_STATES.COMPLETED,
     EXPORT_EXECUTION_STATES.FAILED,
-    EXPORT_EXECUTION_STATES.PARTIAL,
     EXPORT_EXECUTION_STATES.CANCELLED,
   ].includes(state);
 }

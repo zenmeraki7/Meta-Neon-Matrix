@@ -1,8 +1,13 @@
 import { bulkExportQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import logger from "../../utils/loggerUtils.js";
 import {
   buildDefaultJobOptions,
   mergeJobOptions,
 } from "../../utils/jobQueueUtils.js";
+import {
+  PRODUCT_EXPORT_QUEUE_NAME,
+  PRODUCT_EXPORT_JOB_NAME,
+} from "../../queues/exportQueue.constants.js";
 
 const defaultJobOptions = buildDefaultJobOptions({
   attempts: 5,
@@ -17,12 +22,23 @@ export async function addbulkExportJob(data, options = {}) {
     throw new Error("bulk export job requires exportJobId, shop, and executionId");
   }
 
-  return bulkExportQueue.add(
-    "bulk-export",
+  const job = await bulkExportQueue.add(
+    PRODUCT_EXPORT_JOB_NAME,
     data,
     mergeJobOptions(defaultJobOptions, {
       ...options,
       jobId: options.jobId || data.exportJobId,
     }),
   );
+
+  logger.info("Bulk export job enqueued", {
+    queue: PRODUCT_EXPORT_QUEUE_NAME,
+    jobName: PRODUCT_EXPORT_JOB_NAME,
+    bullJobId: job.id,
+    exportJobId: data.exportJobId,
+    shop: data.shop,
+    source: data.source || null,
+  });
+
+  return job;
 }

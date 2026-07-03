@@ -17,7 +17,8 @@ import { ArrowLeftIcon } from "@shopify/polaris-icons";
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { protectedApiGet } from "../../api/protectedApiClient";
+import { useApiClient } from "../../hooks/useApiClient";
+import { useAuthenticatedFetch } from "../../hooks/useAuthenticatedFetch";
 import { useToast as useAppToast } from "../../components/providers/ToastProvider";
 import { toSafeErrorMessage } from "../../utils/frontendError";
 import { useQuery } from "@tanstack/react-query";
@@ -27,9 +28,12 @@ export default function ExportHistoryDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { showError } = useAppToast();
+  const api = useApiClient();
+  const authenticatedFetch = useAuthenticatedFetch();
 
   const [exportJob, setExportJob] = useState(null);
   const [error, setError] = useState(null);
+  const [downloadLoading, setDownloadLoading] = useState(false);
   const dateTimeFormatter = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
@@ -158,6 +162,41 @@ export default function ExportHistoryDetailsPage() {
     return dateTimeFormatter.format(new Date(date));
   }, [dateTimeFormatter]);
 
+  const downloadExport = useCallback(async () => {
+    if (!id || downloadLoading) return;
+
+    setDownloadLoading(true);
+    try {
+      const response = await authenticatedFetch(`/api/products/download-export/${id}`, {
+        method: "GET",
+      });
+
+      if (!response?.ok) {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        throw new Error(payload?.message || payload?.error || "EXPORT_DOWNLOAD_FAILED");
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = exportJob?.fileName || exportJob?.filename || "export.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      showError(toSafeErrorMessage(t, err, "exportDownloadFailed"));
+    } finally {
+      setDownloadLoading(false);
+    }
+  }, [authenticatedFetch, downloadLoading, exportJob?.fileName, exportJob?.filename, id, showError, t]);
+
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
     const onVisibilityChange = () => {
@@ -173,7 +212,7 @@ export default function ExportHistoryDetailsPage() {
     queryKey: ["export-detail", id || ""],
     enabled: Boolean(id) && isVisible,
     queryFn: async ({ signal }) => {
-      const data = await protectedApiGet(`/api/history/export/detail/${id}`, { signal });
+      const data = await api.get(`/api/history/export/detail/${id}`, { signal });
       if (!data.success) {
         throw new Error(toSafeErrorMessage(t, data, "common.errors.generic"));
       }
@@ -265,12 +304,33 @@ export default function ExportHistoryDetailsPage() {
     startedAt,
     completedAt,
     fields = [],
-    fileUrl,
     error: jobError,
   } = exportJob;
 
   const translatedStatus = getStatusLabel(status);
   const translatedType = getExportTypeLabel(type, rawType);
+  const exportedFieldItems = Array.isArray(exportJob.exportedFields)
+    ? exportJob.exportedFields
+        .map((field) => {
+          if (typeof field === "string") {
+            return { key: field, label: getTranslatedFieldLabel(field) };
+          }
+          if (!field || typeof field !== "object") return null;
+          const key = field.key || field.value || field.field || field.label;
+          if (!key) return null;
+          return {
+            key,
+            label: field.label || getTranslatedFieldLabel(key),
+          };
+        })
+        .filter(Boolean)
+    : [];
+  const fieldItems = exportedFieldItems.length
+    ? exportedFieldItems
+    : fields.map((field) => ({
+        key: field,
+        label: getTranslatedFieldLabel(field),
+      }));
 
   return (
     <Page
@@ -284,7 +344,8 @@ export default function ExportHistoryDetailsPage() {
         normalizeStatusKey(status) === "completed"
           ? {
               content: t("exportDetails.downloadCsv"),
-              onAction: () => window.open(fileUrl, "_blank"),
+              onAction: downloadExport,
+              loading: downloadLoading,
             }
           : undefined
       }
@@ -353,11 +414,11 @@ export default function ExportHistoryDetailsPage() {
               </Text>
               <Divider />
 
-              {fields.length > 0 ? (
+              {fieldItems.length > 0 ? (
                 <List type="bullet">
-                  {fields.map((field, index) => (
-                    <List.Item key={`${field}-${index}`}>
-                      {getTranslatedFieldLabel(field)}
+                  {fieldItems.map((field, index) => (
+                    <List.Item key={`${field.key}-${index}`}>
+                      {field.label}
                     </List.Item>
                   ))}
                 </List>

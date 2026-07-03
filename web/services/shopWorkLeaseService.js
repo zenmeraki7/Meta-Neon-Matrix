@@ -34,6 +34,7 @@ export async function acquireExclusiveShopWork({
   entityType = null,
   entityId = null,
   executionId = null,
+  ttlMs = DEFAULT_LOCK_TTL_MS,
 }) {
   const lockKey = buildShopWorkLockKey(shop, namespace);
   const lockToken = crypto.randomUUID();
@@ -42,7 +43,7 @@ export async function acquireExclusiveShopWork({
     lockToken,
     "NX",
     "PX",
-    DEFAULT_LOCK_TTL_MS,
+    ttlMs,
   );
 
   if (acquired !== "OK") {
@@ -66,7 +67,7 @@ export async function acquireExclusiveShopWork({
         connection,
         key: lockKey,
         token: lockToken,
-        ttlMs: DEFAULT_LOCK_TTL_MS,
+        ttlMs,
       });
     } catch (_error) {
       // Best effort lease extension; lock expires naturally if refresh fails.

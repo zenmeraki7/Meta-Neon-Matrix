@@ -420,14 +420,11 @@ function getTargetingStatementTimeoutMs({ flow, freeze }) {
 }
 
 async function withTargetingStatementTimeout(db, timeoutMs) {
-  if (!db || typeof db.$executeRaw !== "function") return;
-  try {
-    await db.$executeRaw`SET LOCAL statement_timeout = ${`${Number(
-      timeoutMs
-    )}ms`}`;
-  } catch (_error) {
-    // SET LOCAL requires transaction scope in Postgres; ignore when unavailable.
-  }
+  if (!db || typeof db.$queryRaw !== "function") return;
+  const normalizedTimeoutMs = Math.max(1, Math.floor(Number(timeoutMs) || 0));
+  await db.$queryRaw`
+    SELECT set_config('statement_timeout', ${`${normalizedTimeoutMs}ms`}, true)
+  `;
 }
 
 function isStatementTimeoutError(error) {
@@ -710,12 +707,14 @@ async function resolveAndMaybeFreeze({
   targetingModeOverride = null,
   targetingSnapshotMetaOverride = null,
   mutationIntent = null,
+  mirrorPurpose = null,
   requireBroadTargetConfirmation = false,
   confirmBroadTarget = false,
   db = repositoryDb,
 }) {
   const flags = getTargetingFeatureFlags();
-  await assertMirrorSafeForTargeting(shop, { purpose: flow });
+  const targetingMirrorPurpose = mirrorPurpose || flow;
+  await assertMirrorSafeForTargeting(shop, { purpose: targetingMirrorPurpose });
 
   assertAstInputAllowed({ filterAst, flags });
   assertLegacyAdapterAllowed({
@@ -849,7 +848,7 @@ async function resolveAndMaybeFreeze({
   });
 
   const mirrorBatchId = await getActiveMirrorBatchId(shop, {
-    purpose: freeze ? "EXECUTE" : "PREVIEW",
+    purpose: mirrorPurpose || (freeze ? "EXECUTE" : "PREVIEW"),
   });
 
   const normalized = normalizeAndValidate({
@@ -1603,6 +1602,7 @@ export const TargetingEngineService = {
     return resolveAndMaybeFreeze({
       flow: "EXPORT",
       freeze: true,
+      mirrorPurpose: "EXPORT",
       allowLegacyFilterParams: false,
       targetingModeOverride:
         input?.targetingModeOverride || TARGETING_MODES.DYNAMIC_AT_RUN,

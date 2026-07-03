@@ -2,9 +2,10 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { format } from "@fast-csv/format";
-import { Worker } from "bullmq";
+import { QueueEvents, Worker } from "bullmq";
 import logger from "../../utils/loggerUtils.js";
-import { connection } from "../../config/redis.js";
+import { connection, createRedisConnection } from "../../config/redis.js";
+import { addbulkExportJob } from "../Queues/bulkExportJob.js";
 import { uploadCsvToCloudinary } from "../../utils/uploadCsvToCloudinary.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { finalizeScheduledExportRunFromExportJob } from "../../services/scheduledExportExecutionService.js";
@@ -49,9 +50,25 @@ import {
   buildExportCsvRow,
   EXPORT_FIELD_GRANULARITY,
 } from "../../services/productService/productExportFieldRegistry.js";
+import {
+  PRODUCT_EXPORT_JOB_NAME,
+  PRODUCT_EXPORT_QUEUE_NAME,
+} from "../../queues/exportQueue.constants.js";
 
-const QUEUE_NAME = process.env.EXPORT_QUEUE || "bulk-export";
+const QUEUE_NAME = PRODUCT_EXPORT_QUEUE_NAME;
 const WORKER_NAME = "bulkExportWorker";
+const WORKER_CONCURRENCY = Number(process.env.EXPORT_WORKER_CONCURRENCY || 1);
+const WORKER_LOCK_DURATION_MS = Number(process.env.EXPORT_WORKER_LOCK_DURATION_MS || 120000);
+const WORKER_STALLED_INTERVAL_MS = Number(process.env.EXPORT_WORKER_STALLED_INTERVAL_MS || 60000);
+const WORKER_MAX_STALLED_COUNT = Number(process.env.EXPORT_WORKER_MAX_STALLED_COUNT || 1);
+const SHOP_WORK_LOCK_TTL_MS = Number(process.env.EXPORT_SHOP_WORK_LOCK_TTL_MS || 120000);
+const RETRYABLE_EXPORT_DEFER_DELAY_MS = Number(process.env.EXPORT_RETRYABLE_DEFER_DELAY_MS || 60000);
+
+logger.info("Bulk export worker module loaded", {
+  worker: WORKER_NAME,
+  queue: QUEUE_NAME,
+  concurrency: WORKER_CONCURRENCY,
+});
 
 function assertNoRawTargetingPayload(jobData = {}) {
   if (
@@ -78,6 +95,57 @@ function isRetryableError(error) {
   return Boolean(error?.retryable);
 }
 
+function endCsvAndWaitForFile({ csvStream, writeStream }) {
+  return new Promise((resolve, reject) => {
+    writeStream.once("finish", resolve);
+    writeStream.once("error", reject);
+    csvStream.once("error", reject);
+    csvStream.end();
+  });
+}
+
+async function deferRetryableExportJob({ job, shop, exportJobId, executionId, source, error }) {
+  const delayMs = Number.isFinite(RETRYABLE_EXPORT_DEFER_DELAY_MS) && RETRYABLE_EXPORT_DEFER_DELAY_MS > 0
+    ? Math.floor(RETRYABLE_EXPORT_DEFER_DELAY_MS)
+    : 60000;
+  const retryReason = error?.code === "shop_work_conflict" || error?.code === "shop_export_busy"
+    ? "shop_work_conflict"
+    : error?.code || "retryable_export";
+
+  await addbulkExportJob(
+    {
+      ...(job?.data || {}),
+      exportJobId,
+      shop,
+      executionId,
+      source,
+    },
+    {
+      delay: delayMs,
+      jobId: `product-export:${shop}:${exportJobId}:retry:${Date.now()}`,
+    },
+  );
+
+  logger.warn("Bulk export worker deferred retryable export job", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    jobId: job?.id || null,
+    exportJobId,
+    shop,
+    executionId,
+    delayMs,
+    reason: retryReason,
+  });
+
+  return toWorkerOperationStatusDto({
+    deferred: true,
+    requeued: true,
+    delayMs,
+    reason: retryReason,
+    shop,
+    exportJobId,
+  });
+}
 
 const bulkExportWorker = new Worker(
   QUEUE_NAME,
@@ -87,6 +155,15 @@ const bulkExportWorker = new Worker(
     const attempt = getJobAttempt(job);
 
     if (!exportJobId || !shop || !executionId) {
+      logger.error("Bulk export worker received invalid payload", {
+        worker: WORKER_NAME,
+        queue: QUEUE_NAME,
+        jobId: job?.id,
+        payloadKeys: Object.keys(job.data || {}),
+        hasExportJobId: Boolean(exportJobId),
+        hasShop: Boolean(shop),
+        hasExecutionId: Boolean(executionId),
+      });
       throw new Error("bulk export job requires exportJobId, shop, and executionId");
     }
 
@@ -106,6 +183,7 @@ const bulkExportWorker = new Worker(
         entityId: exportJobId,
         executionId,
         namespace: LOCK_NS.WRITE_CATALOG,
+        ttlMs: SHOP_WORK_LOCK_TTL_MS,
       });
 
       if (!lock.acquired) {
@@ -271,11 +349,7 @@ const csvStream = format({
 
       const cancelled = await findExportTerminalFlags(exportJobId, shop);
       if (String(cancelled?.statusNormalized || "").toUpperCase() === "CANCELLED") {
-        csvStream.end();
-        await new Promise((resolve, reject) => {
-          writeStream.on("finish", resolve);
-          writeStream.on("error", reject);
-        });
+        await endCsvAndWaitForFile({ csvStream, writeStream });
         if (filePath) {
           await fs.promises.unlink(filePath).catch(() => {});
           filePath = null;
@@ -283,11 +357,7 @@ const csvStream = format({
         return toWorkerOperationStatusDto({ skipped: true, reason: "cancelled_during_execution", shop, exportJobId });
       }
       if (String(cancelled?.executionState || "").toUpperCase() === "PAUSED") {
-        csvStream.end();
-        await new Promise((resolve, reject) => {
-          writeStream.on("finish", resolve);
-          writeStream.on("error", reject);
-        });
+        await endCsvAndWaitForFile({ csvStream, writeStream });
         if (filePath) {
           await fs.promises.unlink(filePath).catch(() => {});
           filePath = null;
@@ -295,12 +365,7 @@ const csvStream = format({
         return toWorkerOperationStatusDto({ skipped: true, reason: "paused_during_execution", shop, exportJobId });
       }
 
-      csvStream.end();
-
-      await new Promise((resolve, reject) => {
-        writeStream.on("finish", resolve);
-        writeStream.on("error", reject);
-      });
+      await endCsvAndWaitForFile({ csvStream, writeStream });
 
       const movedToFinalizing = await markExportFinalizing(
         exportJob.id,
@@ -358,13 +423,13 @@ const csvStream = format({
         source,
       });
 
+      await job.updateProgress({ stage: "completed", pct: 100, rows: totalRows });
       return toWorkerOperationStatusDto({
         success: true,
         exportJobId,
         totalRows,
         shop,
       });
-      await job.updateProgress({ stage: "completed", pct: 100, rows: totalRows });
     } catch (error) {
       logger.error("Bulk export worker failed during execution", {
         worker: WORKER_NAME,
@@ -458,7 +523,7 @@ const csvStream = format({
         await recordDeadLetterJob({
           shop,
           queueName: QUEUE_NAME,
-          jobName: "bulk-export",
+          jobName: PRODUCT_EXPORT_JOB_NAME,
           jobId: job?.id || null,
           payload: job?.data || null,
           error,
@@ -468,14 +533,71 @@ const csvStream = format({
         }).catch(() => {});
       }
 
+      if (isRetryableError(error)) {
+        return deferRetryableExportJob({
+          job,
+          shop,
+          exportJobId,
+          executionId,
+          source,
+          error,
+        });
+      }
+
       throw error;
     } finally {
       await releaseShopifyExecutionBudget({ shop, leases: budgetLeases });
       await releaseExclusiveShopWork(shopLockKey);
     }
   },
-  { connection, concurrency: 1 },
+  {
+    connection,
+    concurrency: WORKER_CONCURRENCY,
+    lockDuration: WORKER_LOCK_DURATION_MS,
+    stalledInterval: WORKER_STALLED_INTERVAL_MS,
+    maxStalledCount: WORKER_MAX_STALLED_COUNT,
+  },
 );
+
+export const bulkExportQueueEvents = new QueueEvents(QUEUE_NAME, {
+  connection: createRedisConnection(),
+});
+
+bulkExportWorker.on("ready", () => {
+  logger.info("Bulk export worker started", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    concurrency: WORKER_CONCURRENCY,
+    lockDurationMs: WORKER_LOCK_DURATION_MS,
+  });
+});
+
+bulkExportWorker.on("active", (job) => {
+  logger.info("Bulk export worker picked job", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    jobId: job?.id,
+    exportJobId: job?.data?.exportJobId,
+    shop: job?.data?.shop,
+  });
+});
+
+bulkExportWorker.on("stalled", (jobId) => {
+  logger.warn("Bulk export worker job stalled", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    jobId,
+  });
+});
+
+bulkExportWorker.on("error", (error) => {
+  logger.error("Bulk export worker runtime error", {
+    worker: WORKER_NAME,
+    queue: QUEUE_NAME,
+    message: error?.message || String(error),
+    stack: error?.stack,
+  });
+});
 
 bulkExportWorker.on("failed", async (job, error) => {
   logger.error("Bulk export worker failed job", {
@@ -504,6 +626,52 @@ bulkExportWorker.on("failed", async (job, error) => {
       },
     });
   }
+});
+
+bulkExportQueueEvents.on("waiting", ({ jobId }) => {
+  logger.info("Bulk export queue event waiting", {
+    queue: QUEUE_NAME,
+    jobId,
+  });
+});
+
+bulkExportQueueEvents.on("active", ({ jobId, prev }) => {
+  logger.info("Bulk export queue event active", {
+    queue: QUEUE_NAME,
+    jobId,
+    prev,
+  });
+});
+
+bulkExportQueueEvents.on("completed", ({ jobId, returnvalue }) => {
+  logger.info("Bulk export queue event completed", {
+    queue: QUEUE_NAME,
+    jobId,
+    returnvalue,
+  });
+});
+
+bulkExportQueueEvents.on("failed", ({ jobId, failedReason }) => {
+  logger.error("Bulk export queue event failed", {
+    queue: QUEUE_NAME,
+    jobId,
+    failedReason,
+  });
+});
+
+bulkExportQueueEvents.on("stalled", ({ jobId }) => {
+  logger.warn("Bulk export queue event stalled", {
+    queue: QUEUE_NAME,
+    jobId,
+  });
+});
+
+bulkExportQueueEvents.on("error", (error) => {
+  logger.error("Bulk export queue events runtime error", {
+    queue: QUEUE_NAME,
+    message: error?.message || String(error),
+    stack: error?.stack,
+  });
 });
 
 export default bulkExportWorker;

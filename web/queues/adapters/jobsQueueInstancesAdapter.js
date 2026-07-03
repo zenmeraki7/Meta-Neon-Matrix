@@ -11,6 +11,7 @@ import {
   PRODUCT_SYNC_JOB_OPTIONS,
   PRODUCT_SYNC_SCHEDULER_QUEUE_NAME,
 } from "../productSyncQueue.constants.js";
+import { PRODUCT_EXPORT_QUEUE_NAME } from "../exportQueue.constants.js";
 
 const APP_INSTALLATION_QUEUE = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 
@@ -91,7 +92,7 @@ export const bulkEditResultIngestDlqQueue = new Queue(
   },
 );
 
-export const bulkExportQueue = new Queue(process.env.EXPORT_QUEUE || "bulk-export", {
+export const bulkExportQueue = new Queue(PRODUCT_EXPORT_QUEUE_NAME, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 5,

@@ -74,7 +74,7 @@ export async function markExportJobTargetFrozen({
     },
     data: {
       targetSnapshotCount: frozenCount,
-      executionState: "TARGET_FROZEN",
+      executionState: expectedExecutionState,
     },
   });
 }

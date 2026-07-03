@@ -10,11 +10,15 @@ import {
   EXPORT_EXECUTION_STATES,
 } from "../exportExecutionStateService.js";
 import { projectExportHistoryStatus } from "../historyStatusProjectionService.js";
-import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
 import {
   normalizeExportJobExecutionState,
   normalizeExportJobStatus,
 } from "../../utils/normalizedStateUtils.js";
+import {
+  EXPORT_JOB_DETAIL_SELECT,
+  EXPORT_JOB_LIST_SELECT,
+  withDerivedExportProgress,
+} from "./exportJobSelectors.js";
 import { addbulkExportJob } from "../../Jobs/Queues/bulkExportJob.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import {
@@ -96,20 +100,7 @@ export class ProductExportService {
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: normalizedLimit + 1,
-        select: {
-          id: true,
-          filename: true,
-          fileUrl: true,
-          createdAt: true,
-          completedAt: true,
-          type: true,
-          status: true,
-          processedCount: true,
-          targetSnapshotCount: true,
-          progressPercent: true,
-          durationMs: true,
-          error: true,
-        },
+        select: EXPORT_JOB_LIST_SELECT,
       }),
       db.exportJob.count({ where }),
     ]);
@@ -120,7 +111,7 @@ export class ProductExportService {
 
     const items = histories.map((history) =>
       projectExportHistoryStatus({
-        ...history,
+        ...withDerivedExportProgress(history),
         rawType: history.type || "",
         type: EXPORT_TYPES[history.type]?.[lang] || history.type || "",
       }),
@@ -142,42 +133,32 @@ export class ProductExportService {
     return result;
   }
 
-  async getExportHistoryDetails(id) {
-  if (!id || id === "undefined" || id === "null") {
-    throw new Error("Invalid export history ID");
+  async getExportHistoryDetails(input) {
+    const exportJobId =
+      typeof input === "string" ? input : input?.exportJobId || input?.id;
+    const shop = this.session.shop;
+
+    if (!exportJobId || exportJobId === "undefined" || exportJobId === "null") {
+      throw new Error("Invalid export history ID");
+    }
+
+    const history = await db.exportJob.findFirst({
+      where: {
+        id: exportJobId,
+        shop,
+      },
+      select: EXPORT_JOB_DETAIL_SELECT,
+    });
+
+    if (!history) {
+      throw new Error("export history not found");
+    }
+
+    return {
+      ...withDerivedExportProgress(history),
+      rawType: history.type || "",
+    };
   }
-
-  const history = await db.exportJob.findFirst({
-    where: {
-      id,
-      shop: this.session.shop,
-    },
-    select: {
-      id: true,
-      filename: true,
-      type: true,
-      status: true,
-      totalItems: true,
-      processedCount: true,
-      targetSnapshotCount: true,
-      durationMs: true,
-      startedAt: true,
-      completedAt: true,
-      fields: true,
-      fileUrl: true,
-      error: true,
-    },
-  });
-
-  if (!history) {
-    throw new Error("export history not found");
-  }
-
-  return {
-    ...history,
-    rawType: history.type || "",
-  };
-}
 
   async createExportJob({
     fields,
@@ -226,6 +207,7 @@ export class ProductExportService {
     const filename = fileName?.endsWith(".csv") ? fileName : `${fileName}.csv`;
     const shop = this.session.shop;
     let writeCatalogLock = null;
+    let jobId = null;
 
     const active = await db.exportJob.findFirst({
       where: {
@@ -233,8 +215,7 @@ export class ProductExportService {
         statusNormalized: normalizeExportJobStatus("PROCESSING"),
         executionStateNormalized: {
           in: [
-            normalizeExportJobExecutionState("RUNNING"),
-            normalizeExportJobExecutionState("FINALIZING"),
+            normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
           ],
         },
       },
@@ -254,7 +235,7 @@ export class ProductExportService {
       throw new Error("Another catalog write operation is already running. Please retry shortly.");
     }
     try {
-      const { jobId } = await db.$transaction(async (tx) => {
+      const created = await db.$transaction(async (tx) => {
         const job = await tx.exportJob.create({
           data: {
             shop,
@@ -264,7 +245,7 @@ export class ProductExportService {
             targetGranularity,
             status: "PENDING",
             statusNormalized: normalizeExportJobStatus("PENDING"),
-            executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
+            executionState: EXPORT_EXECUTION_STATES.PLANNED,
             executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.PLANNED),
             entitlementSnapshot,
             actorType: actor?.actorType || null,
@@ -303,29 +284,66 @@ export class ProductExportService {
           where: { id: job.id },
           data: {
             targetSnapshotCount: frozenCount,
-            executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
+            executionState: EXPORT_EXECUTION_STATES.PLANNED,
             executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.PLANNED),
           },
         });
 
         return { jobId: job.id };
       });
+      jobId = created.jobId;
 
-      await clearKeyCaches(`${shop}:fetchExportHistories:`);
-      await addbulkExportJob({
-        exportJobId: jobId,
-        shop,
-        fields: normalizedFields,
-        source: "manual_export",
-        executionId: jobId,
-      });
       await db.exportJob.update({
         where: { id: jobId },
         data: {
-          executionState: OPERATION_LIFECYCLE_STATES.QUEUED,
+          executionState: EXPORT_EXECUTION_STATES.QUEUED,
           executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
         },
       });
+      await clearKeyCaches(`${shop}:fetchExportHistories:`);
+
+      await releaseExclusiveShopWork(writeCatalogLock?.lockKey);
+      writeCatalogLock = null;
+
+      try {
+        await addbulkExportJob(
+          {
+            exportJobId: jobId,
+            shop,
+            fields: normalizedFields,
+            source: "manual_export",
+            executionId: jobId,
+          },
+          {
+            jobId: `product-export:${shop}:${jobId}`,
+          },
+        );
+      } catch (enqueueError) {
+        await db.exportJob.updateMany({
+          where: {
+            id: jobId,
+            shop,
+            statusNormalized: normalizeExportJobStatus("PENDING"),
+            executionStateNormalized: {
+              in: [
+                normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.PLANNED),
+                normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
+              ],
+            },
+          },
+          data: {
+            status: "FAILED",
+            statusNormalized: normalizeExportJobStatus("FAILED"),
+            executionState: EXPORT_EXECUTION_STATES.FAILED,
+            executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.FAILED),
+            failureStage: "queue_enqueue",
+            error: enqueueError?.message || "Export queue enqueue failed",
+            completedAt: new Date(),
+          },
+        });
+        await clearKeyCaches(`${shop}:fetchExportHistories:`);
+        throw enqueueError;
+      }
 
       const response = await db.exportJob.findFirst({
         where: {

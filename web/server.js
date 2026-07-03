@@ -1,12 +1,10 @@
-import dotenv from "dotenv";
+import "dotenv/config";
 import http from "http";
 import { Server } from "socket.io";
 import { buildApp } from "./app.js";
 import db from "./repositories/repositoryDb.js";
 import { connection as redis } from "./config/redis.js";
 import logger from "./utils/loggerUtils.js";
-
-dotenv.config();
 
 const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 const server = http.createServer();

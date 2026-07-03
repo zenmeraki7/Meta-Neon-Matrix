@@ -91,7 +91,7 @@ export const historyUseCases = Object.freeze({
 
       const result = await service.getExportHistoryDetails({
         shop: command.shop,
-        id: command.id,
+        exportJobId: command.id,
       });
 
       return requireResult(result, "Export history record not found");

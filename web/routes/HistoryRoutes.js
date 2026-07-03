@@ -86,6 +86,7 @@ router.get(
 
 router.get(
   "/get-export-details/:id",
+  validateSession,
   getExportHistoryDetails
 );
 router.get(

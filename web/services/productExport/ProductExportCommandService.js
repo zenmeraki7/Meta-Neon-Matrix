@@ -27,7 +27,9 @@ export class ProductExportCommandService {
     });
   }
 
-  async getExportDetails(exportJobId) {
+  async getExportDetails(input) {
+    const exportJobId =
+      typeof input === "string" ? input : input?.exportJobId || input?.id;
     return this.service.getExportHistoryDetails(exportJobId);
   }
 }

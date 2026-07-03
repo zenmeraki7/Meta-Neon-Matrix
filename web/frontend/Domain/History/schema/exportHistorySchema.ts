@@ -33,6 +33,8 @@ export const ExportHistoryItemSchema = z.object({
   processedCount: z.number().optional().default(0),
   exportTime: z.union([z.string(), z.date()]).optional(),
   fileUrl: z.string().nullable().optional(),
+  downloadUrl: z.string().nullable().optional(),
+  downloadReady: z.boolean().optional(),
   createdAt: z.union([z.string(), z.date()]).optional(),
   completedAt: z.union([z.string(), z.date()]).optional(),
   ingestionTotalTargets: z.number().optional().default(0),

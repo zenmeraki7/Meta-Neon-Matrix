@@ -56,12 +56,17 @@ export function normalizeExportJobExecutionState(value) {
     case "PLANNED":
     case "QUEUED":
     case "RUNNING":
-    case "FINALIZING":
     case "COMPLETED":
     case "FAILED":
-    case "PARTIAL":
     case "CANCELLED":
+    case "UNKNOWN":
       return v;
+    case "FINALIZING":
+      return "RUNNING";
+    case "PARTIAL":
+      return "FAILED";
+    case "PAUSED":
+      return "QUEUED";
     default:
       return "UNKNOWN";
   }
