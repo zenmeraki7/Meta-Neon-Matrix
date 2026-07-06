@@ -23,6 +23,44 @@ import { useToast as useAppToast } from "../../components/providers/ToastProvide
 import { toSafeErrorMessage } from "../../utils/frontendError";
 import { useQuery } from "@tanstack/react-query";
 
+function parseContentDispositionFilename(headerValue) {
+  if (!headerValue) return null;
+  const encoded = headerValue.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return null;
+    }
+  }
+  return headerValue.match(/filename="([^"]+)"/i)?.[1] || null;
+}
+
+function getDownloadErrorMessage(t, error) {
+  const code = String(error?.code || "").toUpperCase();
+  if (code === "EXPORT_NOT_FOUND") {
+    return t("exportDownloadUnavailable", {
+      defaultValue: "This export is no longer available.",
+    });
+  }
+  if (
+    code === "EXPORT_NOT_READY" ||
+    code === "EXPORT_FILE_REFERENCE_MISSING"
+  ) {
+    return t("exportDownloadNotReady", {
+      defaultValue: "The export file is not available yet.",
+    });
+  }
+  if (code === "EXPORT_FILE_TIMEOUT") {
+    return t("exportDownloadTimeout", {
+      defaultValue: "The CSV could not be retrieved in time. Please try again.",
+    });
+  }
+  return t("exportDownloadRetrieveFailed", {
+    defaultValue: "The CSV could not be retrieved. Please try again.",
+  });
+}
+
 export default function ExportHistoryDetailsPage() {
   const { t } = useTranslation();
   const { id } = useParams();
@@ -167,9 +205,10 @@ export default function ExportHistoryDetailsPage() {
 
     setDownloadLoading(true);
     try {
-      const response = await authenticatedFetch(`/api/products/download-export/${id}`, {
-        method: "GET",
-      });
+      const response = await authenticatedFetch(
+        `/api/products/download-export/${encodeURIComponent(id)}`,
+        { method: "GET" },
+      );
 
       if (!response?.ok) {
         let payload = null;
@@ -178,20 +217,27 @@ export default function ExportHistoryDetailsPage() {
         } catch {
           payload = null;
         }
-        throw new Error(payload?.message || payload?.error || "EXPORT_DOWNLOAD_FAILED");
+        const error = new Error(payload?.message || payload?.error || "EXPORT_DOWNLOAD_FAILED");
+        error.code = payload?.code || "EXPORT_DOWNLOAD_FAILED";
+        error.status = response?.status || 0;
+        throw error;
       }
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = exportJob?.fileName || exportJob?.filename || "export.csv";
+      anchor.download =
+        parseContentDispositionFilename(response.headers.get("Content-Disposition")) ||
+        exportJob?.fileName ||
+        exportJob?.filename ||
+        "export.csv";
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      window.URL.revokeObjectURL(url);
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     } catch (err) {
-      showError(toSafeErrorMessage(t, err, "exportDownloadFailed"));
+      showError(getDownloadErrorMessage(t, err) || toSafeErrorMessage(t, err, "exportDownloadFailed"));
     } finally {
       setDownloadLoading(false);
     }
