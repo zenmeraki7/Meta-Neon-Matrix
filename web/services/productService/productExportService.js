@@ -72,9 +72,9 @@ export class ProductExportService {
 
     const where = { shop: this.session.shop };
     if (normalizedType.includes("scheduled")) {
-      where.type = "scheduled export";
+      where.type = { in: ["Scheduled export", "scheduled export", "Scheduled Export"] };
     } else if (normalizedType.includes("manual")) {
-      where.type = "manual export";
+      where.type = { in: ["Manual export", "manual export", "Manual Export"] };
     }
 
     let cursorFilter = {};

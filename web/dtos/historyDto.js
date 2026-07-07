@@ -185,21 +185,28 @@ function toExportHistoryListItemDto(history) {
   const safe = asObject(history) || {};
   const status = toStringOrNull(safe.statusNormalized ?? safe.status, 120);
   const downloadUrl = toSafeText(safe.downloadUrl ?? safe.fileUrl, MAX_URL_LENGTH);
+  const totalItems = toNumber(safe.totalItems ?? safe.totalRows, 0);
 
   return {
     id: toStringOrNull(safe.id, 200),
     type: toStringOrNull(safe.type, 120),
+    rawType: toStringOrNull(safe.rawType ?? safe.type, 120),
     status,
     statusNormalized: status,
     fileName: toSafeText(safe.fileName ?? safe.filename, 255),
+    filename: toSafeText(safe.filename ?? safe.fileName, 255),
     format: toStringOrNull(safe.format, 80),
     createdAt: toIsoString(safe.createdAt),
     completedAt: toIsoString(safe.completedAt),
-    totalRows: toNumber(safe.totalRows, 0),
+    totalItems,
+    totalRows: totalItems,
     successCount: toNumber(safe.successCount, 0),
     failedCount: toNumber(safe.failedCount, 0),
     processedCount: toNumber(safe.processedCount, 0),
     progressPercent: toNumber(safe.progressPercent, 0),
+    primaryStatus: asObject(safe.primaryStatus),
+    progressSummary: asObject(safe.progressSummary),
+    supportStatus: asObject(safe.supportStatus),
     downloadReady: status === "COMPLETED" && Boolean(downloadUrl),
     downloadUrl,
   };

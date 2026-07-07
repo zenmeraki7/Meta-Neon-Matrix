@@ -130,7 +130,10 @@ test("export job selects only contain real ExportJob fields", () => {
 });
 
 test("export history detail DTO returns selected fields and display labels", async () => {
-  const { toExportHistoryDetailResponseDto } = await import("./dtos/historyDto.js");
+  const {
+    toExportHistoryDetailResponseDto,
+    toExportHistoryListResponseDto,
+  } = await import("./dtos/historyDto.js");
 
   const response = toExportHistoryDetailResponseDto({
     id: "export_1",
@@ -147,6 +150,52 @@ test("export history detail DTO returns selected fields and display labels", asy
     { key: "title", label: "Title" },
     { key: "status", label: "Status" },
   ]);
+
+  const listResponse = toExportHistoryListResponseDto({
+    items: [
+      {
+        id: "export_1",
+        filename: "products.csv",
+        type: "Manual Export",
+        rawType: "Manual export",
+        status: "COMPLETED",
+        statusNormalized: "COMPLETED",
+        fileUrl: "https://res.cloudinary.com/dpmkrqs2n/raw/upload/v1/product-exports/products.csv",
+        totalItems: 1,
+        primaryStatus: {
+          key: "completed",
+          label: "Completed",
+          isTerminal: true,
+        },
+      },
+    ],
+    totalCount: 1,
+  });
+
+  assert.equal(listResponse.data[0].filename, "products.csv");
+  assert.equal(listResponse.data[0].fileName, "products.csv");
+  assert.equal(listResponse.data[0].rawType, "Manual export");
+  assert.equal(listResponse.data[0].downloadReady, true);
+  assert.equal(listResponse.data[0].totalItems, 1);
+  assert.equal(listResponse.data[0].primaryStatus.isTerminal, true);
+});
+
+test("export history list filters match stored Manual export casing", () => {
+  assert.match(
+    SERVICE_SOURCE,
+    /where\.type\s*=\s*\{\s*in:\s*\["Manual export",\s*"manual export",\s*"Manual Export"\]\s*\}/,
+    "manual export list filter must include the actual ExportJob.type default casing",
+  );
+  assert.match(
+    SERVICE_SOURCE,
+    /where\.type\s*=\s*\{\s*in:\s*\["Scheduled export",\s*"scheduled export",\s*"Scheduled Export"\]\s*\}/,
+    "scheduled export list filter must include expected stored casing variants",
+  );
+  assert.doesNotMatch(
+    SERVICE_SOURCE,
+    /where\.type\s*=\s*"manual export"/,
+    "manual export list filter must not use a single lower-case Postgres equality",
+  );
 });
 
 test("manual export enqueue marks queued before BullMQ add and releases API shop lock first", () => {

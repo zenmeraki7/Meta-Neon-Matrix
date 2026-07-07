@@ -55,6 +55,56 @@ async function authRequest(url, options = {}) {
   return payload;
 }
 
+function parseContentDispositionFilename(headerValue) {
+  if (!headerValue) return null;
+  const encoded = headerValue.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return null;
+    }
+  }
+  return headerValue.match(/filename="([^"]+)"/i)?.[1] || null;
+}
+
+async function authBlobRequest(url, options = {}) {
+  const authFetch = getAuthenticatedFetch();
+  if (!authFetch) {
+    throw toServiceError(
+      { code: "AUTH_FETCH_UNINITIALIZED", status: 401 },
+      "AUTH_FETCH_UNINITIALIZED",
+    );
+  }
+
+  const response = await authFetch(url, options);
+  if (!response) {
+    throw toServiceError({ code: "UNAUTHENTICATED", status: 401 }, "UNAUTHENTICATED");
+  }
+
+  if (!response.ok) {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    throw toServiceError(
+      {
+        code: payload?.code || payload?.errorCode || "HTTP_REQUEST_FAILED",
+        status: response.status,
+        details: payload,
+      },
+      "HTTP_REQUEST_FAILED",
+    );
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: parseContentDispositionFilename(response.headers.get("Content-Disposition")),
+  };
+}
+
 function buildQuery(params = {}) {
   const queryParams = new URLSearchParams();
   const allowed = [
@@ -127,13 +177,16 @@ export const historyService = {
 
   async downloadExportedData(id, fileName = "exported_data") {
     try {
-      const blob = await authRequest(`/api/products/download-export/${id}`, { method: "GET" });
+      const { blob, filename } = await authBlobRequest(
+        `/api/products/download-export/${encodeURIComponent(id)}`,
+        { method: "GET" },
+      );
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${fileName}.csv`;
+      a.download = filename || fileName || "export.csv";
       a.click();
-      window.URL.revokeObjectURL(url);
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
       return { success: true };
     } catch (error) {
       return {
