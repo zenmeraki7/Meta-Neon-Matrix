@@ -1,9 +1,5 @@
-//web/middleware/subscriptionMiddleware.js
-
-import { PLANS } from "../services/SubscriptionService/SubscriptionService.js";
-
-import { db } from "../repositories/repositoryDb.js";
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import { loadAuthoritativeSubscriptionForShop } from "../services/subscriptionAuthorityService.js";
 import {
   buildScheduleEditCapability,
   SCHEDULED_EDITS_FEATURE,
@@ -13,11 +9,9 @@ import {
 
 export const subscriptionMiddleware = async (req, res, next) => {
   try {
-    // Get shop from session 
     const session = res.locals.shopify?.session;
-    
-    if (!session || !session.shop) {
-      console.error("[SUBSCRIPTION_MIDDLEWARE] No session or shop found");
+
+    if (!session?.shop) {
       const { statusCode, body } = buildPublicApiErrorResponse(
         { code: "UNAUTHENTICATED" },
         "UNAUTHENTICATED",
@@ -25,105 +19,21 @@ export const subscriptionMiddleware = async (req, res, next) => {
       return res.status(statusCode).json(body);
     }
 
-    const shop = session.shop;
-    console.log("[SUBSCRIPTION_MIDDLEWARE] Checking subscription for shop:", shop);
-
-
-    // Check if store has free credit (grandfathered access)
-const store = await db.store.findUnique({
-      where: { shopUrl: shop },
-      select: { isCreditAvailable: true },
-    });
-
-    // If store has isCreditAvailable = true, grant them Pro plan access for free
-    if (store && store.isCreditAvailable === true) {
-      console.log("[SUBSCRIPTION_MIDDLEWARE] Store has free credit - granting Pro access");
-      
-      req.subscription = {
-        shop,
-        planKey: "PRO_MONTHLY",
-        planName: "Pro Plan (Grandfathered)",
-        limit: Infinity,
-        isUnlimited: true,
-        status: "ACTIVE",
-        subscriptionId: null,
-        isCreditUser: true, // Flag to indicate this is a grandfathered user
-      };
-      res.locals.entitlement = {
-        ...req.subscription,
-        source: "subscriptionMiddleware",
-      };
-
-      console.log("[SUBSCRIPTION_MIDDLEWARE] Subscription info (Credit User):", req.subscription);
-      return next();
-    }
-
-      // 🔍 Find subscription using shop
-    const subscription = await db.subscription.findFirst({
-      where: { shop },
-    });
-
-    // Determine limit based on subscription
-    let limit = 100; // Default for FREE or no subscription
-    let planKey = "FREE";
-    let planName = "Free Plan";
-
-    if (subscription && subscription.planKey) {
-      planKey = subscription.planKey;
-      const plan = PLANS[planKey];
-
-      if (plan) {
-        planName = plan.name;
-
-        // Only apply plan limits if subscription is ACTIVE
-        if (subscription.status === "ACTIVE" || subscription.status === "PENDING") {
-          // Check plan keys that match your PLANS object
-          if (planKey === "ADVANCED_MONTHLY") {
-            limit = 1000;
-          } else if (planKey === "PRO_MONTHLY") {
-            limit = Infinity; // Unlimited
-          } else {
-            limit = 100; // FREE or unknown
-          }
-        } else {
-          // If status is CANCELLED, or FREE, default to 100
-          limit = 100;
-        }
-      }
-    }
-
-    // Attach subscription info to request for use in controllers
-    req.subscription = {
-      shop,
-      planKey,
-      planName,
-      limit,
-      isUnlimited: limit === Infinity,
-      status: subscription?.status || "FREE",
-      subscriptionId: subscription?.subscriptionId || null,
-      isCreditUser : false
-    };
+    req.subscription = await loadAuthoritativeSubscriptionForShop(session.shop);
     res.locals.entitlement = {
       ...req.subscription,
       source: "subscriptionMiddleware",
     };
 
-    console.log("[SUBSCRIPTION_MIDDLEWARE] Subscription info:", req.subscription);
-
-    // Continue to next middleware/controller
-    next();
-
+    return next();
   } catch (error) {
-    console.error("[SUBSCRIPTION_MIDDLEWARE] Error:", error);
     const { statusCode, body } = buildPublicApiErrorResponse(
       error,
-      "INTERNAL_ERROR",
+      error?.code || "INTERNAL_ERROR",
     );
     return res.status(statusCode).json(body);
   }
-
 };
-
 export const requirePaidPlanMiddleware = (req, res, next) => {
   try {
     if (!req.subscription) {

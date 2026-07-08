@@ -19,8 +19,10 @@ test("free plan cannot schedule edit and receives structured upgrade response", 
   assert.equal(canUseScheduledEdits(freeSubscription), false);
   assert.deepEqual(buildScheduleEditCapability(freeSubscription), {
     canScheduleEdits: false,
+    canScheduleExports: false,
     planKey: "FREE",
     planName: "Free Plan",
+    isDevelopmentPlan: false,
     upgradeUrl: "/pricing",
     billingUrl: "/pricing",
   });

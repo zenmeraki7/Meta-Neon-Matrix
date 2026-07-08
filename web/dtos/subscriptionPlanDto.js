@@ -31,12 +31,16 @@ export function toSubscriptionPlanSnapshotDto(snapshot = {}) {
     snapshot?.capabilities && typeof snapshot.capabilities === "object"
       ? {
         canScheduleEdits: snapshot.capabilities.canScheduleEdits === true,
+        canScheduleExports: snapshot.capabilities.canScheduleExports === true,
+        isDevelopmentPlan: snapshot.capabilities.isDevelopmentPlan === true,
         planName: String(snapshot.capabilities.planName || planName).trim() || planName,
         upgradeUrl: String(snapshot.capabilities.upgradeUrl || "/pricing").trim() || "/pricing",
         billingUrl: String(snapshot.capabilities.billingUrl || "/pricing").trim() || "/pricing",
       }
       : {
         canScheduleEdits: currentPlanKey !== "FREE",
+        canScheduleExports: false,
+        isDevelopmentPlan: currentPlanKey === "DEV_TEST",
         planName,
         upgradeUrl: "/pricing",
         billingUrl: "/pricing",
@@ -47,6 +51,8 @@ export function toSubscriptionPlanSnapshotDto(snapshot = {}) {
     currentPlanKey,
     planName,
     capabilities,
+    billingState: String(snapshot?.billingState || "FREE").trim() || "FREE",
+    subscriptionSource: String(snapshot?.subscriptionSource || "UNKNOWN").trim() || "UNKNOWN",
     plans,
   };
 }

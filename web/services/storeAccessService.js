@@ -9,7 +9,6 @@ import {
 const STORE_ACCESS_CACHE_TTL_SECONDS = 300;
 const STORE_TIMEZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const FALLBACK_SHOP_TIMEZONE = "Asia/Kolkata";
-const RECURRING_EDIT_UNSAFE_TIMEZONES = new Set(["America/New_York"]);
 
 function isValidTimezone(timezone) {
   if (!timezone) return false;
@@ -37,7 +36,7 @@ async function resolveShopTimezone(session) {
       },
     });
     const timezone = response?.body?.data?.shop?.ianaTimezone;
-    return isValidTimezone(timezone) ? timezone : null;
+    return normalizeRecurringEditTimezone(timezone);
   } catch {
     return null;
   }
@@ -47,9 +46,9 @@ async function resolveShopTimezoneCached({ shop, session }) {
   const timezoneCacheKey = `${shop}:storeTimezone`;
   const cachedTimezone = await getCache(timezoneCacheKey);
   if (isValidTimezone(cachedTimezone)) {
-    return String(cachedTimezone);
+    return normalizeRecurringEditTimezone(cachedTimezone);
   }
-  const timezone = (await resolveShopTimezone(session)) || FALLBACK_SHOP_TIMEZONE;
+  const timezone = normalizeRecurringEditTimezone(await resolveShopTimezone(session));
   await setCache(timezoneCacheKey, timezone, STORE_TIMEZONE_CACHE_TTL_SECONDS);
   return timezone;
 }
@@ -67,11 +66,11 @@ export async function resolveTrustedShopTimezone({
   const timezoneCacheKey = `${shop}:storeTimezone`;
   const cachedTimezone = await getCache(timezoneCacheKey);
   if (allowCachedTimezone && isValidTimezone(cachedTimezone)) {
-    return String(cachedTimezone);
+    return normalizeRecurringEditTimezone(cachedTimezone);
   }
 
   if (allowRequestedTimezone && isValidTimezone(requestedTimezone)) {
-    return String(requestedTimezone).trim();
+    return normalizeRecurringEditTimezone(requestedTimezone);
   }
 
   return FALLBACK_SHOP_TIMEZONE;
@@ -79,9 +78,9 @@ export async function resolveTrustedShopTimezone({
 
 export function normalizeRecurringEditTimezone(timezone) {
   const normalized = String(timezone || "").trim();
-  return RECURRING_EDIT_UNSAFE_TIMEZONES.has(normalized)
+  return !isValidTimezone(normalized)
     ? FALLBACK_SHOP_TIMEZONE
-    : normalized || FALLBACK_SHOP_TIMEZONE;
+    : normalized;
 }
 
 export async function getStoreAccessDto({ session }) {

@@ -4,6 +4,8 @@ import { getDefaultPricingPlans } from "../config/pricingPlans";
 const SUBSCRIPTION_PLANS_PATH = "/api/subscription/get-plans";
 const FALLBACK_CAPABILITIES = Object.freeze({
   canScheduleEdits: false,
+  canScheduleExports: false,
+  isDevelopmentPlan: false,
   planName: "Free Plan",
   upgradeUrl: "/pricing",
   billingUrl: "/pricing",

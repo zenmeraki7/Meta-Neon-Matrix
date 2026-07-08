@@ -107,9 +107,12 @@ test("local env enables mock billing for development only", () => {
 
 test("paid feature entitlements accept active paid mock subscriptions", () => {
   const scheduled = read("web/services/entitlement/scheduledEditEntitlement.js");
+  const capabilities = read("web/services/entitlement/planCapabilities.js");
   const recurring = read("web/services/recurringEditPlanService.js");
 
-  assert.ok(scheduled.includes('"BASIC_MONTHLY"'));
+  assert.ok(scheduled.includes("buildPlanCapabilities"));
+  assert.ok(capabilities.includes('"BASIC_MONTHLY"'));
+  assert.ok(capabilities.includes("canScheduleExports"));
   assert.ok(recurring.includes("RECURRING_EDIT_PLAN_KEYS"));
   assert.ok(recurring.includes('"BASIC_MONTHLY"'));
   assert.ok(recurring.includes("resolveBillingPlan"));

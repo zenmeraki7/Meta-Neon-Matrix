@@ -1,46 +1,25 @@
 import { getPlansArray } from "../SubscriptionService/SubscriptionService.js";
-import { findActiveSubscription } from "../../repositories/subscriptionRepository.js";
-import { db } from "../../repositories/repositoryDb.js";
-import { buildScheduleEditCapability } from "../entitlement/scheduledEditEntitlement.js";
+import { resolveBillingState } from "../subscriptionAuthorityService.js";
 import logger from "../../utils/loggerUtils.js";
 
 export async function getPlanSnapshot(command = Object.freeze({})) {
   const shop = String(command?.shop || "").trim();
-  let activeSubscription = null;
-  let store = null;
+  let billingState = null;
 
   try {
-    [activeSubscription, store] = await Promise.all([
-      findActiveSubscription(shop),
-      db.store.findUnique({
-        where: { shopUrl: shop },
-        select: { isCreditAvailable: true },
-      }),
-    ]);
+    billingState = await resolveBillingState({ shop });
   } catch (error) {
-    logger.warn("Unable to load active subscription; falling back to Free plan", {
+    logger.warn("Unable to load billing state for subscription plan snapshot", {
       shop,
       code: error?.code,
       message: error?.message,
     });
+    throw error;
   }
 
-  const currentPlanKey = String(activeSubscription?.planKey || "FREE");
+  const currentPlanKey = String(billingState?.planKey || "FREE");
   const currentPlanName =
     getPlansArray().find((plan) => plan.key === currentPlanKey)?.name || "Free Plan";
-  const entitlementSnapshot = store?.isCreditAvailable
-    ? {
-      planKey: "PRO_MONTHLY",
-      planName: "Pro Plan (Grandfathered)",
-      status: "ACTIVE",
-      isCreditUser: true,
-    }
-    : {
-      planKey: currentPlanKey,
-      planName: currentPlanName,
-      status: activeSubscription?.status || "FREE",
-      isCreditUser: false,
-    };
 
   const plans = getPlansArray().map((plan) => ({
     ...plan,
@@ -49,8 +28,10 @@ export async function getPlanSnapshot(command = Object.freeze({})) {
 
   return {
     currentPlanKey,
-    planName: entitlementSnapshot.planName,
-    capabilities: buildScheduleEditCapability(entitlementSnapshot),
+    planName: billingState?.planName || currentPlanName,
+    capabilities: billingState?.capabilities || {},
+    billingState: billingState?.billingState || "FREE",
+    subscriptionSource: billingState?.subscriptionSource || "UNKNOWN",
     plans,
   };
 }

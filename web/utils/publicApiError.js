@@ -23,6 +23,10 @@ const DEFAULT_MESSAGES = Object.freeze({
   IDEMPOTENCY_KEY_REQUIRED: "Request idempotency key is required.",
   INVALID_BILLING_PLAN: "Invalid billing plan.",
   UNKNOWN_BILLING_PLAN: "Unknown billing plan.",
+  UNKNOWN_ACTIVE_SUBSCRIPTION: "Unknown active subscription.",
+  MULTIPLE_ACTIVE_SUBSCRIPTIONS: "Multiple active subscriptions found.",
+  BILLING_RESTRICTED: "Billing is restricted for this shop.",
+  BILLING_STATE_UNAVAILABLE: "Billing state is unavailable.",
   BILLING_API_UNAVAILABLE: "Shopify billing is unavailable for this app configuration.",
   MOCK_BILLING_DISABLED: "Mock billing is disabled.",
   OPERATION_NOT_UNDOABLE: "This edit is not eligible for undo.",
@@ -62,6 +66,10 @@ function statusFromCode(code = "INTERNAL_ERROR") {
   if (code === "IDEMPOTENCY_KEY_REQUIRED") return 400;
   if (code === "INVALID_BILLING_PLAN") return 400;
   if (code === "UNKNOWN_BILLING_PLAN") return 409;
+  if (code === "UNKNOWN_ACTIVE_SUBSCRIPTION") return 409;
+  if (code === "MULTIPLE_ACTIVE_SUBSCRIPTIONS") return 409;
+  if (code === "BILLING_RESTRICTED") return 403;
+  if (code === "BILLING_STATE_UNAVAILABLE") return 403;
   if (code === "BILLING_API_UNAVAILABLE") return 403;
   if (code === "MOCK_BILLING_DISABLED") return 403;
   if (code === "OPERATION_NOT_UNDOABLE") return 409;
@@ -160,6 +168,30 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
         : DEFAULT_MESSAGES.UNKNOWN_BILLING_PLAN,
     };
   }
+  if (raw === "UNKNOWN_ACTIVE_SUBSCRIPTION") {
+    return {
+      code: "UNKNOWN_ACTIVE_SUBSCRIPTION",
+      message: DEFAULT_MESSAGES.UNKNOWN_ACTIVE_SUBSCRIPTION,
+    };
+  }
+  if (raw === "MULTIPLE_ACTIVE_SUBSCRIPTIONS") {
+    return {
+      code: "MULTIPLE_ACTIVE_SUBSCRIPTIONS",
+      message: DEFAULT_MESSAGES.MULTIPLE_ACTIVE_SUBSCRIPTIONS,
+    };
+  }
+  if (raw === "BILLING_RESTRICTED") {
+    return {
+      code: "BILLING_RESTRICTED",
+      message: DEFAULT_MESSAGES.BILLING_RESTRICTED,
+    };
+  }
+  if (raw === "BILLING_STATE_UNAVAILABLE") {
+    return {
+      code: "BILLING_STATE_UNAVAILABLE",
+      message: DEFAULT_MESSAGES.BILLING_STATE_UNAVAILABLE,
+    };
+  }
   if (raw === "BILLING_API_UNAVAILABLE") {
     return {
       code: "BILLING_API_UNAVAILABLE",
@@ -226,8 +258,8 @@ export function mapErrorToPublicContract(error, fallbackCode = "INTERNAL_ERROR")
   if (raw.includes("UPGRADE_REQUIRED")) {
     return {
       code: "UPGRADE_REQUIRED",
-      message: error?.message
-        ? String(error.message)
+      message: error?.publicMessage || error?.message
+        ? String(error.publicMessage || error.message)
         : DEFAULT_MESSAGES.UPGRADE_REQUIRED,
     };
   }
@@ -309,7 +341,7 @@ export function buildPublicApiErrorResponse(error, fallbackCode = "INTERNAL_ERRO
         : {}),
       ...(mapped.code === "UPGRADE_REQUIRED"
         ? {
-          feature: String(details.feature || "scheduled_edits"),
+          feature: String(details.feature || "unknown"),
           upgradeRequired: true,
           billingUrl: String(details.billingUrl || "/pricing"),
         }

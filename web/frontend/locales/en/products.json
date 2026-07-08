@@ -11,7 +11,7 @@
   "bulkEditPreviewStaleTitle": "Preview is stale",
   "bulkEditPreviewStaleMessage": "Run preview again before executing this edit.",
   "startEditTime": "Start edit at scheduled time",
-  "scheduleTimezoneNotice": "All schedule times are interpreted in shop timezone: {{timezone}}.",
+  "scheduleTimezoneNotice": "All schedule times are interpreted in your local timezone: {{timezone}}.",
   "date": "Date",
   "selectDateRunEdit": "Select the date to run the edit",
   "time": "Time",

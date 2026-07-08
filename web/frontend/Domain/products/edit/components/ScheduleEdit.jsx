@@ -14,7 +14,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
-import { useShopTimezone } from "../../../../hooks/useShopTimezone";
+import { useScheduleTimezone } from "../../../../hooks/useScheduleTimezone";
 import {
   getDateInputInTimezone,
   getScheduleDateTimeValidation,
@@ -38,8 +38,8 @@ function ScheduleEdit({
   const navigate = useNavigate();
   const { t } = useTranslation(["products", "common"]);
   const api = useApiClient();
-  const { shopTimezone } = useShopTimezone();
-  const resolvedTimezone = shopTimezone || "UTC";
+  const { scheduleTimezone } = useScheduleTimezone();
+  const resolvedTimezone = scheduleTimezone || "UTC";
   const { showSuccess, showError } = useAppToast();
   const scheduleCapabilityQuery = useQuery({
     queryKey: ["subscription-capabilities", "scheduled-edits"],
@@ -417,7 +417,7 @@ function ScheduleEdit({
             <Banner tone="info">
               <p>
                 {t("scheduleTimezoneNotice", {
-                  defaultValue: "All schedule times are interpreted in shop timezone: {{timezone}}.",
+                  defaultValue: "All schedule times are interpreted in your local timezone: {{timezone}}.",
                   timezone: resolvedTimezone,
                 })}
               </p>

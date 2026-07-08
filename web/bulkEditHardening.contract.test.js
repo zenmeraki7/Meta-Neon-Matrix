@@ -91,7 +91,7 @@ test("paid feature denial is returned as an upgrade requirement and schedule UI 
   assert.ok(middleware.includes("SCHEDULED_EDITS_UPGRADE_MESSAGE"));
   assert.ok(routes.includes("requireScheduledEditPlanMiddleware"));
   assert.ok(publicErrors.includes('UPGRADE_REQUIRED: "This feature requires an active paid plan."'));
-  assert.ok(publicErrors.includes('feature: String(details.feature || "scheduled_edits")'));
+  assert.ok(publicErrors.includes('feature: String(details.feature || "unknown")'));
   assert.ok(modal.includes('errorCode === "UPGRADE_REQUIRED"'));
   assert.ok(modal.includes('onAction: () => navigate(resolvedBillingUrl)'));
   assert.ok(modal.includes('defaultValue: "Scheduled edit time must be in the future."'));

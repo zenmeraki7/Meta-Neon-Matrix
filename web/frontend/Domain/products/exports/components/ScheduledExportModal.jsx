@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   Modal,
   FormLayout,
@@ -12,11 +13,14 @@ import {
 import { useTranslation } from "react-i18next";
 import { buildFilterAstFromLegacyFilters } from "../../list/utils/filterAst.js";
 import { useApiClient } from "../../../../hooks/useApiClient";
-import { useShopTimezone } from "../../../../hooks/useShopTimezone";
+import { useScheduleTimezone } from "../../../../hooks/useScheduleTimezone";
 import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
 
+const SCHEDULED_EXPORTS_UPGRADE_MESSAGE =
+  "Scheduled exports are not available on your current plan.";
+const DEFAULT_BILLING_URL = "/pricing";
 
 function ScheduledExportModal({
   show,
@@ -27,17 +31,42 @@ function ScheduledExportModal({
 }) {
   const { t } = useTranslation();
   const api = useApiClient();
-  const { shopTimezone } = useShopTimezone();
-  const resolvedTimezone = shopTimezone || "UTC";
+  const { scheduleTimezone } = useScheduleTimezone();
+  const resolvedTimezone = scheduleTimezone || "UTC";
   const { showSuccess, showError } = useAppToast();
+  const scheduleCapabilityQuery = useQuery({
+    queryKey: ["subscription-capabilities", "scheduled-exports"],
+    queryFn: async () => api.get("/api/subscription/get-plans"),
+    enabled: show === true,
+    staleTime: 30_000,
+  });
 
   const navigate = useNavigate();
   const [startExportChecked, setStartExportChecked] = useState(true);
   const [startExportDate, setStartExportDate] = useState("");
   const [startExportTime, setStartExportTime] = useState("");
   const [upgradeWarning, setUpgradeWarning] = useState(null);
+  const [upgradeBillingUrl, setUpgradeBillingUrl] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const scheduleCapability = scheduleCapabilityQuery.data?.capabilities || null;
+  const scheduleCapabilityLoading =
+    scheduleCapabilityQuery.isLoading || scheduleCapabilityQuery.isFetching;
+  const canScheduleExports = scheduleCapability?.canScheduleExports === true;
+  const scheduleUpgradeRequired =
+    scheduleCapabilityLoading === false && canScheduleExports !== true;
+  const scheduleUpgradeMessage = upgradeWarning || (
+    scheduleUpgradeRequired
+      ? t("scheduledExport.upgradeRequiredMessage", {
+        defaultValue: SCHEDULED_EXPORTS_UPGRADE_MESSAGE,
+      })
+      : null
+  );
+  const resolvedBillingUrl =
+    upgradeBillingUrl ||
+    scheduleCapability?.billingUrl ||
+    scheduleCapability?.upgradeUrl ||
+    DEFAULT_BILLING_URL;
 
   const isFormValid =
     startExportChecked &&
@@ -45,13 +74,15 @@ function ScheduledExportModal({
     Boolean(startExportTime) &&
     Boolean(fileName?.trim()) &&
     Array.isArray(selectedFields) &&
-    selectedFields.length > 0;
+    selectedFields.length > 0 &&
+    canScheduleExports;
 
   const resetForm = useCallback(() => {
     setStartExportChecked(true);
     setStartExportDate("");
     setStartExportTime("");
     setUpgradeWarning(null);
+    setUpgradeBillingUrl(null);
     setSubmitting(false);
     setError(null);
   }, []);
@@ -62,6 +93,15 @@ function ScheduledExportModal({
   }, [onHide, resetForm]);
 
  const handleScheduleExport = useCallback(async () => {
+  if (!canScheduleExports) {
+    setUpgradeWarning(
+      t("scheduledExport.upgradeRequiredMessage", {
+        defaultValue: SCHEDULED_EXPORTS_UPGRADE_MESSAGE,
+      }),
+    );
+    return;
+  }
+
   if (!isFormValid) return;
 
   setSubmitting(true);
@@ -98,9 +138,21 @@ function ScheduledExportModal({
         "SCHEDULED_EXPORT_FAILED";
 
       // 🔥 Upgrade case
-      if (errorCode === "SCHEDULED_EXPORT_PLAN_UPGRADE_REQUIRED") {
+      if (
+        errorCode === "UPGRADE_REQUIRED" ||
+        errorCode === "SCHEDULED_EXPORT_PLAN_UPGRADE_REQUIRED" ||
+        requestError?.payload?.upgradeRequired === true
+      ) {
+        setUpgradeBillingUrl(
+          requestError?.payload?.billingUrl ||
+          requestError?.details?.billingUrl ||
+          DEFAULT_BILLING_URL,
+        );
         setUpgradeWarning(
-          t("scheduledExport.upgradeRequiredMessage")
+          requestError?.payload?.message ||
+          t("scheduledExport.upgradeRequiredMessage", {
+            defaultValue: SCHEDULED_EXPORTS_UPGRADE_MESSAGE,
+          })
         );
         return;
       }
@@ -146,6 +198,7 @@ function ScheduledExportModal({
   startExportTime,
   resolvedTimezone,
   api,
+  canScheduleExports,
   t,
   showError,
   showSuccess,
@@ -161,7 +214,11 @@ function ScheduledExportModal({
           content: t("scheduledExport.scheduleButton"),
           onAction: handleScheduleExport,
           loading: submitting,
-          disabled: !isFormValid || submitting,
+          disabled:
+            scheduleCapabilityLoading ||
+            scheduleUpgradeRequired ||
+            !isFormValid ||
+            submitting,
         }}
         secondaryActions={[
           {
@@ -172,17 +229,17 @@ function ScheduledExportModal({
       >
         <Modal.Section>
           <FormLayout>
-            {upgradeWarning && (
+            {scheduleUpgradeMessage && (
               <Banner
                 tone="warning"
                 title={t("scheduledExport.upgradeRequiredTitle")}
-                onDismiss={() => setUpgradeWarning(null)}
+                onDismiss={scheduleUpgradeRequired ? undefined : () => setUpgradeWarning(null)}
                 action={{
                    content: t("scheduledExport.upgradePlanButton"),
-                  onAction: () => navigate("/pricing"),
+                  onAction: () => navigate(resolvedBillingUrl),
                 }}
               >
-                <p>{upgradeWarning}</p>
+                <p>{scheduleUpgradeMessage}</p>
               </Banner>
             )}
 
@@ -201,7 +258,7 @@ function ScheduledExportModal({
             <Banner tone="info">
               <p>
                 {t("scheduleTimezoneNotice", {
-                  defaultValue: "All schedule times are interpreted in shop timezone: {{timezone}}.",
+                  defaultValue: "All schedule times are interpreted in your local timezone: {{timezone}}.",
                   timezone: resolvedTimezone,
                 })}
               </p>
