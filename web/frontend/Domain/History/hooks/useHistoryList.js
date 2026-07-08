@@ -17,14 +17,14 @@ export const TYPE_TO_KEY = {
   "Manual edit": "ManualEdit",
   "Scheduled edit": "ScheduledEdit",
   "Recurring edit": "RecurringEdit",
-  "Favorites": "Favorites"
+  Favorites: "Favorites",
 };
 
 export const KEY_TO_TYPE = {
   ManualEdit: "Manual edit",
   ScheduledEdit: "Scheduled edit",
   RecurringEdit: "Recurring edit",
-  Favorites: "Favorites"
+  Favorites: "Favorites",
 };
 
 export const useHistoryList = () => {
@@ -41,30 +41,33 @@ export const useHistoryList = () => {
   const isLoading = status === "loading";
   const isLoadingMore = loadMoreStatus === "loading";
 
-  const fetchHistoryData = useCallback((silent = false) => {
-    console.log(`[useHistoryList] fetchHistoryData called – silent: ${silent}`);
-    dispatch(
-      fetchHistories({
-        type: filters.type,
-        cursor: null,
-        limit: pagination.limit,
-        search: filters.search,
-        lang: i18n.language || "en",
-        silent,
-      })
-    );
-  }, [dispatch, filters.type, filters.search, pagination.limit]);
+  const fetchHistoryData = useCallback(
+    (silent = false) => {
+      console.log(`[useHistoryList] fetchHistoryData called - silent: ${silent}`);
+      dispatch(
+        fetchHistories({
+          type: filters.type,
+          cursor: null,
+          limit: pagination.limit,
+          search: filters.search,
+          lang: i18n.language || "en",
+          silent,
+        }),
+      );
+    },
+    [dispatch, filters.type, filters.search, pagination.limit, i18n.language],
+  );
 
   const handleTabChange = useCallback(
     (tabIndex, tabTypes) => {
       const selectedLabel = tabTypes[tabIndex].content;
       const selectedKey = Object.keys(KEY_TO_TYPE).find(
-        (key) => t(key) === selectedLabel
+        (key) => t(key) === selectedLabel,
       );
       const backendValue = KEY_TO_TYPE[selectedKey] || "Manual edit";
       dispatch(setHistoryType(backendValue));
     },
-    [dispatch, t]
+    [dispatch, t],
   );
 
   const loadMore = useCallback(() => {
@@ -74,16 +77,24 @@ export const useHistoryList = () => {
           cursor: pagination.endCursor,
           limit: pagination.limit,
           lang: i18n.language || "en",
-        })
+        }),
       );
     }
-  }, [dispatch, pagination.hasNextPage, pagination.endCursor, pagination.limit, isLoadingMore]);
+  }, [
+    dispatch,
+    pagination.hasNextPage,
+    pagination.endCursor,
+    pagination.limit,
+    isLoadingMore,
+    i18n.language,
+  ]);
 
   useEffect(() => {
     fetchHistoryData();
-  }, [fetchHistoryData, filters.type, filters.search]);
+  }, [fetchHistoryData]);
 
   useEffect(() => {
+    const isRecurringEditTab = filters.type === "Recurring edit";
     const hasActiveItems = histories.some((h) => {
       const mainActive = ["pending", "processing"].includes(h.status?.toLowerCase());
       const undoActive = ["processing"].includes(h.undo?.status?.toLowerCase());
@@ -91,22 +102,22 @@ export const useHistoryList = () => {
     });
     console.log(`[useHistoryList] hasActiveItems: ${hasActiveItems}`);
 
-    if (!hasActiveItems) {
-      console.log('[useHistoryList] No active items – polling stopped');
+    if (!isRecurringEditTab && !hasActiveItems) {
+      console.log("[useHistoryList] No active items - polling stopped");
       return;
     }
 
-    console.log('[useHistoryList] Starting polling interval (4s)');
+    console.log("[useHistoryList] Starting polling interval (4s)");
     const interval = setInterval(() => {
-      console.log('[useHistoryList] Interval tick – fetching history (silent)');
+      console.log("[useHistoryList] Interval tick - fetching history (silent)");
       fetchHistoryData(true);
     }, 4000);
 
     return () => {
-      console.log('[useHistoryList] Clearing polling interval');
+      console.log("[useHistoryList] Clearing polling interval");
       clearInterval(interval);
     };
-  }, [histories, fetchHistoryData]);
+  }, [histories, filters.type, fetchHistoryData]);
 
   return {
     histories,
