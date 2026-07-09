@@ -131,14 +131,33 @@ export class ProductImportCommandService {
 
     await clearKeyCaches(`${shop}:fetchHistories`);
 
-    await addbulkImportEditJob({
-      historyId: newHistory.id,
-      shop,
-      filePath: file.path,
-      columnMappings,
-      source: "csv_import",
-      executionId: newHistory.executionIdentity,
-    });
+    try {
+      await addbulkImportEditJob({
+        historyId: newHistory.id,
+        shop,
+        filePath: file.path,
+        columnMappings,
+        source: "csv_import",
+        executionId: newHistory.executionIdentity,
+      });
+    } catch (error) {
+      await db.editHistory.updateMany({
+        where: { id: newHistory.id, shop },
+        data: {
+          status: "failed",
+          statusNormalized: normalizeEditHistoryStatus("failed"),
+          executionState: BULK_EDIT_EXECUTION_STATES.FAILED,
+          executionStateNormalized: normalizeEditHistoryExecutionState(
+            BULK_EDIT_EXECUTION_STATES.FAILED,
+          ),
+          error: {
+            code: "CSV_IMPORT_QUEUE_ADD_FAILED",
+            message: error?.message || "Failed to enqueue CSV import job",
+          },
+        },
+      });
+      throw error;
+    }
 
     await clearAllCachesForShop(shop);
 

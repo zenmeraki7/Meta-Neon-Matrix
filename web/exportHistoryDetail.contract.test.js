@@ -357,3 +357,21 @@ test("server loads dotenv before importing app graph", () => {
     "dotenv.config() after static imports is too late for queue constants",
   );
 });
+
+test("worker loads dotenv before importing db, redis, or worker graph", () => {
+  const workerSource = fs.readFileSync(
+    new URL("./worker.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(
+    workerSource,
+    /import\s+(?:\{[^}]*connection[^}]*\}|db)\s+from\s+["']\.\/(?:config\/redis|repositories\/repositoryDb)\.js["']/,
+    "worker.js must not statically import Redis or Prisma before dotenv.config() runs",
+  );
+  assert.match(
+    workerSource,
+    /dotenv\.config\(\{ path: path\.resolve\(__dirname, "\.env"\) \}\);[\s\S]*import\("\.\/config\/redis\.js"\)[\s\S]*import\("\.\/repositories\/repositoryDb\.js"\)/,
+    "worker.js must load web/.env before dynamically importing Redis and Prisma",
+  );
+});

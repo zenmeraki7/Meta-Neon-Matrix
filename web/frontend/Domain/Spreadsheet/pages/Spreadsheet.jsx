@@ -15,10 +15,10 @@ import {
 import CsvUploader from "../components/CsvUploader";
 import CsvPreviewTable from "../components/CsvPreviewTable";
 import ConfirmImportModal from "../components/ConfirmImportModal";
-import { buildInitialColumnMappings } from "../utils/csvParser";
+import { buildImportColumnMappings, buildInitialColumnMappings } from "../utils/csvParser";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { protectedApiRequest } from "../../../api/protectedApiClient";
+import { useApiClient } from "../../../hooks/useApiClient";
 import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
 import heroStyles from "../../shared/styles/HeroSurface.module.css";
 
@@ -43,6 +43,7 @@ export default function Spreadsheet() {
     const [previewLoading, setPreviewLoading] = useState(false);
     const { showSuccess, showError } = useAppToast();
     const navigate = useNavigate();
+    const apiClient = useApiClient();
 
     useEffect(() => {
         if (!status?.message) return;
@@ -83,8 +84,9 @@ export default function Spreadsheet() {
             if (!previewUploadToken || resetMappings) {
                 const formData = new FormData();
                 formData.append("file", selectedFile);
-                result = await protectedApiRequest(`/api/products/csv/preview?limit=${PREVIEW_PAGE_SIZE}`, {
+                result = await apiClient.request(`/api/products/csv/preview?limit=${PREVIEW_PAGE_SIZE}`, {
                     method: "POST",
+                    idempotent: true,
                     body: formData,
                 });
                 setPreviewUploadToken(result?.uploadToken || null);
@@ -93,7 +95,7 @@ export default function Spreadsheet() {
                 params.set("uploadToken", previewUploadToken);
                 params.set("limit", String(PREVIEW_PAGE_SIZE));
                 if (cursor) params.set("cursor", cursor);
-                result = await protectedApiRequest(`/api/products/csv/preview?${params.toString()}`, {
+                result = await apiClient.request(`/api/products/csv/preview?${params.toString()}`, {
                     method: "GET",
                 });
             }
@@ -118,7 +120,7 @@ export default function Spreadsheet() {
                 previousCursor: result?.pageInfo?.previousCursor || null,
             });
             if (resetMappings) {
-                setColumnMappings(buildInitialColumnMappings(headers));
+                setColumnMappings(buildImportColumnMappings(headers, buildInitialColumnMappings(headers)));
             }
         } catch (err) {
             setStatus({
@@ -140,9 +142,9 @@ export default function Spreadsheet() {
 
             const formData = new FormData();
             formData.append("file", file);
-            formData.append("columnMappings", JSON.stringify(columnMappings));
+            formData.append("columnMappings", JSON.stringify(buildImportColumnMappings(previewHeaders, columnMappings)));
 
-            const result = await protectedApiRequest("/api/products/csv/import", {
+            const result = await apiClient.request("/api/products/csv/import", {
                 method: "POST",
                 idempotent: true,
                 body: formData,
@@ -167,8 +169,12 @@ export default function Spreadsheet() {
                 previousCursor: null,
             });
             setColumnMappings({});
-            console.log(result);
-            navigate("/editDetails/" + result.importId);
+
+            const historyId = result?.operationId || result?.id;
+            if (!historyId) {
+                throw new Error(t("spreadsheetImportMissingHistoryId", { defaultValue: "Import was queued, but the history record could not be opened." }));
+            }
+            navigate(`/editDetails/${encodeURIComponent(historyId)}`);
             return true;
         } catch (err) {
             setStatus({

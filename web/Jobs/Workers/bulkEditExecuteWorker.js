@@ -37,12 +37,13 @@ import {
 } from "../../repositories/bulkEditExecutionRepository.js";
 import { toWorkerOperationStatusDto } from "../../dtos/workerOperationStatusDto.js";
 import { bulkEditExecuteDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
+import { QUEUE_NAMES } from "../../queues/queueNames.js";
 import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
 
 const WORKER_NAME = "bulkEditExecuteWorker";
 const OPERATION_QUEUE_NAMES = {
-  BULK_EDIT_EXECUTE: process.env.BULK_EDIT_EXECUTE_QUEUE || "bulk-edit-execute",
+  BULK_EDIT_EXECUTE: QUEUE_NAMES.BULK_EDIT_EXECUTE,
 };
 
 const DEFAULT_REQUEUE_DELAY_MS = Number.parseInt(
@@ -244,6 +245,7 @@ async function markExecuting({ historyId, shop, batchPatch = {} }) {
     historyId,
     shop,
     expectedExecutionStates: [
+      OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
       OPERATION_LIFECYCLE_STATES.PLANNED,
       OPERATION_LIFECYCLE_STATES.QUEUED,
       OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,

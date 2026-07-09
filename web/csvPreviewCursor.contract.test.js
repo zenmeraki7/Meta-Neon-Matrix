@@ -21,12 +21,14 @@ test("csv preview route exposes POST upload-token bootstrap and GET cursor page 
 
 test("csv preview controller returns cursor-paged rows and supports upload token bootstrap", () => {
   const controller = read("web/controllers/productImportController.js");
+  const service = read("web/services/productImport/productImportPreviewService.js");
   assert.ok(controller.includes("export const createCsvPreviewController = async (req, res) => {"));
-  assert.ok(controller.includes("uploadToken: previewDoc.id"));
-  assert.ok(controller.includes("buildPreviewResponse({ allItems, headers, cursor: 0, limit })"));
-  assert.ok(controller.includes('const uploadToken = String(req.query?.uploadToken || "").trim();'));
-  assert.ok(controller.includes("pageInfo: {"));
-  assert.ok(controller.includes("nextCursor: hasNextPage ? encodeCursor(end) : null"));
+  assert.ok(controller.includes("createCsvPreview({"));
+  assert.ok(service.includes("uploadToken: previewDoc.id"));
+  assert.ok(service.includes("buildPreviewResponse({"));
+  assert.ok(service.includes("cursor: 0"));
+  assert.ok(service.includes("pageInfo: {"));
+  assert.ok(service.includes("nextCursor: hasNextPage ? encodeCursor(end) : null"));
 });
 
 test("spreadsheet preview table renders only server response rows without local hard cap slicing", () => {
@@ -55,6 +57,24 @@ test("spreadsheet preview table renders only server response rows without local 
   assert.ok(
     spreadsheetPage.includes("params.set(\"cursor\", cursor)"),
     "Spreadsheet page must request cursor pages from server",
+  );
+});
+
+test("csv preview parser uses a realistic synchronous parse timeout guard", () => {
+  const service = read("web/services/productImport/productImportPreviewService.js");
+
+  assert.ok(
+    service.includes("DEFAULT_PREVIEW_PARSE_TIMEOUT_MS = 15_000"),
+    "CSV preview must not use a 1.5 second default timeout for valid merchant files",
+  );
+  assert.ok(
+    service.includes("CSV_PREVIEW_PARSE_TIMEOUT_MS"),
+    "CSV preview timeout must remain configurable",
+  );
+  assert.equal(
+    service.includes("Promise.race(["),
+    false,
+    "Papa.parse is synchronous here, so Promise.race cannot enforce this timeout",
   );
 });
 

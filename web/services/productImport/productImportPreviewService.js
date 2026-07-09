@@ -10,7 +10,11 @@ const DEFAULT_PREVIEW_LIMIT = 25;
 const MAX_PREVIEW_LIMIT = 250;
 const MAX_PREVIEW_ROWS = 5000;
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
-const PREVIEW_PARSE_TIMEOUT_MS = 1500;
+const DEFAULT_PREVIEW_PARSE_TIMEOUT_MS = 15_000;
+const PREVIEW_PARSE_TIMEOUT_MS = Math.max(
+  DEFAULT_PREVIEW_PARSE_TIMEOUT_MS,
+  Number.parseInt(process.env.CSV_PREVIEW_PARSE_TIMEOUT_MS || "", 10) || 0,
+);
 const idempotencyStore = new IdempotencyStoreService(db);
 
 function decodeCursor(cursor) {
@@ -95,16 +99,7 @@ async function parseCsvWithGuardrails(filePath) {
 
   const startedAt = Date.now();
   const fileContents = await fs.promises.readFile(filePath, "utf8");
-  const parsed = await Promise.race([
-    Promise.resolve(parseCsvRows(fileContents)),
-    new Promise((_, reject) => {
-      setTimeout(() => {
-        const error = new Error("CSV_PREVIEW_TIMEOUT");
-        error.code = "CSV_PREVIEW_TIMEOUT";
-        reject(error);
-      }, PREVIEW_PARSE_TIMEOUT_MS);
-    }),
-  ]);
+  const parsed = parseCsvRows(fileContents);
 
   if (Date.now() - startedAt > PREVIEW_PARSE_TIMEOUT_MS) {
     const error = new Error("CSV_PREVIEW_TIMEOUT");

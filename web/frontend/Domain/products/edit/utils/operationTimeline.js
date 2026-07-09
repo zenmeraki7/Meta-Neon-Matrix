@@ -1,4 +1,5 @@
 const LIFECYCLE_STAGE_KEYS = Object.freeze([
+  "PLANNED",
   "TARGET_FREEZING",
   "TARGET_FROZEN",
   "QUEUED",
@@ -13,6 +14,7 @@ const LIFECYCLE_STAGE_KEYS = Object.freeze([
 ]);
 
 const STAGE_LABELS = Object.freeze({
+  PLANNED: "Waiting to prepare targets",
   TARGET_FREEZING: "Preparing targets",
   TARGET_FROZEN: "Targets frozen",
   QUEUED: "Queued",
@@ -33,7 +35,6 @@ const STAGE_LABELS = Object.freeze({
 const TERMINAL_KEYS = new Set(["FAILED", "PARTIAL_FAILED", "CANCELLED"]);
 
 const STATE_ALIASES = Object.freeze({
-  PLANNED: "QUEUED",
   DISPATCHING: "EXECUTING",
   AWAITING_SHOPIFY: "SHOPIFY_RUNNING",
   FINALIZING: "VERIFYING",

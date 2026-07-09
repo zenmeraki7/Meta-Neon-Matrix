@@ -1,3 +1,5 @@
+import { isAllowedImportFieldKey } from "../services/productImport/importFieldRegistry.js";
+
 const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
 const MAX_COLUMN_MAPPING_KEYS = 100;
 const MAX_COLUMN_MAPPING_JSON_BYTES = 20_000;
@@ -186,6 +188,17 @@ function parseColumnMappings(raw) {
   }
   if (!Object.values(parsed).includes("id")) {
     throw buildRequestError("PRODUCT_ID_MAPPING_REQUIRED", "PRODUCT_ID_MAPPING_REQUIRED");
+  }
+  for (const [csvColumn, fieldKey] of Object.entries(parsed)) {
+    if (typeof csvColumn !== "string" || csvColumn.length > MAX_TEXT_LENGTH) {
+      throw buildRequestError("INVALID_COLUMN_MAPPING_KEY", "INVALID_COLUMN_MAPPING_KEY");
+    }
+    if (typeof fieldKey !== "string") {
+      throw buildRequestError("INVALID_COLUMN_MAPPING_FIELD", "INVALID_COLUMN_MAPPING_FIELD");
+    }
+    if (!isAllowedImportFieldKey(fieldKey)) {
+      throw buildRequestError("UNKNOWN_IMPORT_MAPPING_FIELD", "UNKNOWN_IMPORT_MAPPING_FIELD");
+    }
   }
   const cloned = safeJsonClone(
     parsed,

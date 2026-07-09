@@ -13,6 +13,7 @@ const LEGACY_COMPAT = Object.freeze({
   undoStatusFallback: String(process.env.ENABLE_LEGACY_UNDO_STATUS_FALLBACK || "false").toLowerCase() === "true",
 });
 const TIMELINE_STAGE_KEYS = Object.freeze([
+  "PLANNED",
   "TARGET_FREEZING",
   "TARGET_FROZEN",
   "QUEUED",
@@ -27,7 +28,6 @@ const TIMELINE_STAGE_KEYS = Object.freeze([
   "COMPLETED",
 ]);
 const TIMELINE_STATE_ALIASES = Object.freeze({
-  PLANNED: "QUEUED",
   DISPATCHING: "EXECUTING",
   AWAITING_SHOPIFY: "SHOPIFY_RUNNING",
   FINALIZING: "VERIFYING",
@@ -159,8 +159,11 @@ function buildMerchantSafetyState(record, undo, primaryStatus) {
 
   if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING) return "Preparing targets";
   if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN) return "Targets frozen";
+  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.PLANNED || normalizedExecutionState === "PLANNED") {
+    return "Waiting to prepare targets";
+  }
   if (rawExecutionState === "PAUSED") return "Paused";
-  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.QUEUED || normalizedExecutionState === "QUEUED" || normalizedExecutionState === "PLANNED") {
+  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.QUEUED || normalizedExecutionState === "QUEUED") {
     return "Queued";
   }
   if (normalizedExecutionState === "DISPATCHING" || normalizedExecutionState === "AWAITING_SHOPIFY") {
@@ -194,6 +197,15 @@ function buildMerchantSafetyState(record, undo, primaryStatus) {
 function mapBulkEditExecutionSummary(executionState) {
   switch (executionState) {
     case BULK_EDIT_EXECUTION_STATES.PLANNED:
+      return buildStatusSummary({
+        key: "planned",
+        label: "Waiting to prepare targets",
+        labelKey: "historyStatus.planned",
+        tone: "attention",
+        detail: "Waiting for the import worker to prepare targets.",
+        detailKey: "historyStatusDetail.planned",
+      });
+
     case BULK_EDIT_EXECUTION_STATES.QUEUED:
       return buildStatusSummary({
         key: "queued",

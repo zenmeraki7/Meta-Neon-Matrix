@@ -12,6 +12,7 @@ import {
   PRODUCT_SYNC_SCHEDULER_QUEUE_NAME,
 } from "../productSyncQueue.constants.js";
 import { PRODUCT_EXPORT_QUEUE_NAME } from "../exportQueue.constants.js";
+import { QUEUE_NAMES } from "../queueNames.js";
 
 const APP_INSTALLATION_QUEUE = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 
@@ -38,7 +39,7 @@ export const appUninstallQueue = new Queue("appUninstall", {
 });
 
 export const bulkEditExecuteQueue = new Queue(
-  process.env.BULK_EDIT_EXECUTE_QUEUE || "bulk-edit-execute",
+  QUEUE_NAMES.BULK_EDIT_EXECUTE,
   {
     connection,
     defaultJobOptions: buildDefaultJobOptions({
@@ -103,7 +104,7 @@ export const bulkExportQueue = new Queue(PRODUCT_EXPORT_QUEUE_NAME, {
   }),
 });
 
-export const bulkImportEditQueue = new Queue(process.env.IMPORT_EDIT_QUEUE || "importEdit", {
+export const bulkImportEditQueue = new Queue(QUEUE_NAMES.CSV_IMPORT_PREPARE, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 4,

@@ -40,8 +40,8 @@ export default function CsvPreviewTable({
 }) {
   const { t } = useTranslation();
   const productFields = getProductFields(t);
-  if (!headers.length && !loading) return null;
   const pageRows = useMemo(() => (Array.isArray(rows) ? rows : []), [rows]);
+  if (!headers.length && !loading) return null;
 
   return (
     <Card>

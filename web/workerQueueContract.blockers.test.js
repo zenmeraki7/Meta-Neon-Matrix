@@ -70,10 +70,12 @@ test("pipeline execute dispatch and execute-worker requeue use bulk-edit-execute
   const pipelineSource = read("web/Jobs/Workers/bulkEditPipelineWorker.js");
   const executeSource = read("web/Jobs/Workers/bulkEditExecuteWorker.js");
   const executeQueueSource = read("web/Jobs/Queues/bulkEditExecuteJob.js");
+  const queueNamesSource = read("web/queues/queueNames.js");
 
   assert.ok(pipelineSource.includes("addBulkEditExecuteJob("));
   assert.ok(executeSource.includes("addBulkEditExecuteJob("));
-  assert.ok(executeQueueSource.includes("BULK_EDIT_EXECUTE_QUEUE"));
+  assert.ok(executeQueueSource.includes("bulkEditExecuteQueue.add("));
+  assert.ok(queueNamesSource.includes("BULK_EDIT_EXECUTE"));
   assert.equal(
     pipelineSource.includes("addbulkEditJob("),
     false,

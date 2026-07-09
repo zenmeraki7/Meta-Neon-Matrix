@@ -8,6 +8,7 @@ import {
 test("lifecycle timeline contains required states in canonical order", () => {
   const stages = getLifecycleStageKeys();
   const required = [
+    "PLANNED",
     "WAITING_FOR_SHOPIFY_SLOT",
     "VERIFYING",
     "MIRROR_UPDATING",
@@ -20,12 +21,14 @@ test("lifecycle timeline contains required states in canonical order", () => {
   const waitingIndex = stages.indexOf("WAITING_FOR_SHOPIFY_SLOT");
   const verifyingIndex = stages.indexOf("VERIFYING");
   const mirrorUpdatingIndex = stages.indexOf("MIRROR_UPDATING");
+  assert.equal(stages.indexOf("PLANNED") < stages.indexOf("TARGET_FREEZING"), true, "PLANNED should appear before target freezing");
   assert.equal(waitingIndex < verifyingIndex, true, "WAITING_FOR_SHOPIFY_SLOT should appear before VERIFYING");
   assert.equal(verifyingIndex < mirrorUpdatingIndex, true, "VERIFYING should appear before MIRROR_UPDATING");
 });
 
 test("simulated lifecycle progression marks states in-order", () => {
   const sequence = [
+    "PLANNED",
     "TARGET_FREEZING",
     "TARGET_FROZEN",
     "QUEUED",
@@ -57,5 +60,15 @@ test("simulated lifecycle progression marks states in-order", () => {
       }
     }
   }
+});
+
+test("planned operation does not mark target freeze stages completed", () => {
+  const timeline = buildOperationTimeline("PLANNED");
+
+  assert.equal(timeline.currentState, "PLANNED");
+  assert.equal(timeline.stages.find((stage) => stage.key === "PLANNED")?.status, "active");
+  assert.equal(timeline.stages.find((stage) => stage.key === "TARGET_FREEZING")?.status, "pending");
+  assert.equal(timeline.stages.find((stage) => stage.key === "TARGET_FROZEN")?.status, "pending");
+  assert.equal(timeline.stages.find((stage) => stage.key === "QUEUED")?.status, "pending");
 });
 

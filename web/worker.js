@@ -1,8 +1,6 @@
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import { connection as redis } from "./config/redis.js";
-import db from "./repositories/repositoryDb.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,6 +36,11 @@ if (String(process.env.WEB_PROCESS || "").toLowerCase() === "true") {
 if (String(process.env.WORKER_PROCESS || "").toLowerCase() !== "true") {
   console.warn("WORKER_PROCESS is not explicitly true; starting workers anyway");
 }
+
+const [{ connection: redis }, { default: db }] = await Promise.all([
+  import("./config/redis.js"),
+  import("./repositories/repositoryDb.js"),
+]);
 
 console.log(`Worker process ${process.pid} starting`);
 

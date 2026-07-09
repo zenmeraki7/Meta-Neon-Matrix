@@ -1,9 +1,13 @@
+function normalizeHeaderKey(header) {
+    return String(header || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 export function buildInitialColumnMappings(headers = []) {
     const initialMappings = {};
     headers.forEach((header) => {
-        const lower = String(header).toLowerCase().trim();
+        const lower = normalizeHeaderKey(header);
         if (["id", "productid"].includes(lower)) initialMappings[header] = "id";
-        else if (["variantid", "variant_id"].includes(lower)) initialMappings[header] = "variant_id";
+        else if (["variantid"].includes(lower)) initialMappings[header] = "variant_id";
         else if (lower.includes("metatitle")) initialMappings[header] = "metaTitle";
         else if (lower.includes("metadescription")) initialMappings[header] = "metaDescription";
         else if (lower === "title" || lower.includes("producttitle")) initialMappings[header] = "title";
@@ -21,4 +25,19 @@ export function buildInitialColumnMappings(headers = []) {
         else initialMappings[header] = "";
     });
     return initialMappings;
+}
+
+export function buildImportColumnMappings(headers = [], columnMappings = {}) {
+    const mappings = { ...(columnMappings || {}) };
+    const firstHeader = headers[0];
+    const secondHeader = headers[1];
+
+    if (firstHeader) {
+        mappings[firstHeader] = "id";
+    }
+    if (secondHeader) {
+        mappings[secondHeader] = "variant_id";
+    }
+
+    return mappings;
 }

@@ -970,6 +970,7 @@
     "seconds": "Seconds"
   },
   "historyStatus": {
+    "planned": "Waiting to prepare targets",
     "queued": "Queued",
     "dispatching": "Dispatching",
     "awaiting_shopify": "Running in Shopify",
@@ -992,6 +993,7 @@
     "undo_processing": "Undo processing"
   },
   "historyStatusDetail": {
+    "planned": "Waiting for the import worker to prepare targets.",
     "queued": "Waiting for execution.",
     "dispatching": "Preparing the next Shopify mutation batch.",
     "awaiting_shopify": "Waiting for Shopify bulk operation completion.",
@@ -1012,6 +1014,7 @@
   "operationLifecycleTitle": "Operation lifecycle",
   "operationLifecycleStageCount": "{{completed}}/{{total}} stages",
   "operationLifecycleStageLabels": {
+    "PLANNED": "Waiting to prepare targets",
     "TARGET_FREEZING": "Preparing targets",
     "TARGET_FROZEN": "Targets frozen",
     "QUEUED": "Queued",

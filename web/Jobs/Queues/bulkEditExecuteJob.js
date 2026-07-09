@@ -13,8 +13,6 @@ const defaultJobOptions = buildDefaultJobOptions({
   removeOnFail: { age: 30 * 24 * 3600, count: 10_000 },
 });
 
-const BULK_EDIT_EXECUTE_QUEUE = process.env.BULK_EDIT_EXECUTE_QUEUE || "bulk-edit-execute";
-
 export async function addBulkEditExecuteJob(data, options = {}) {
   if (!data?.historyId || !data?.shop || !data?.executionId) {
     throw new Error(
