@@ -169,7 +169,7 @@ export const diffVariants = (oldVariants = [], newVariants = []) => {
 export const buildProductSetMutation = ({ productSet, existingProduct }) => {
   return {
     productSet: {
-      id: productSet.id,
+      ...(productSet.id && { id: productSet.id }),
 
       ...(productSet.title && { title: productSet.title }),
       ...(productSet.vendor && { vendor: productSet.vendor }),
@@ -181,7 +181,7 @@ export const buildProductSetMutation = ({ productSet, existingProduct }) => {
       ...(productSet.handle && { handle: productSet.handle }),
       ...(productSet.tags && { tags: productSet.tags }),
 
-      productOptions: existingProduct.options?.map((op) => ({
+      productOptions: (existingProduct.options || productSet.options || [])?.map((op) => ({
         name: op.name,
         values: op.values?.map((val) => ({ name: val })),
       })),

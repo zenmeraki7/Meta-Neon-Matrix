@@ -878,10 +878,13 @@ export async function getActiveMirrorBatchId(shop, { purpose = "EXECUTE" } = {})
   }
 
   const mirrorHealthState = String(store.mirrorHealthState || "").toUpperCase();
+  const normalizedPurpose = String(purpose || "EXECUTE").toUpperCase();
   const executionUnsafe = mirrorHealthState !== "HEALTHY" || store.repairRequired;
-  const previewUnsafe = ["UNSAFE", "REPAIR_REQUIRED"].includes(mirrorHealthState) || store.repairRequired;
+  const readableMirrorUnsafe =
+    ["UNSAFE", "REPAIR_REQUIRED"].includes(mirrorHealthState) || store.repairRequired;
+  const previewUnsafe = readableMirrorUnsafe;
 
-  if (purpose === "EXECUTE" && executionUnsafe) {
+  if (normalizedPurpose === "EXECUTE" && executionUnsafe) {
     const error = new Error(
       `Mirror is not safe for execution (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );
@@ -889,7 +892,15 @@ export async function getActiveMirrorBatchId(shop, { purpose = "EXECUTE" } = {})
     error.meta = { purpose, state: store };
     throw error;
   }
-  if ((purpose === "PREVIEW" || purpose === "EXPORT") && previewUnsafe) {
+  if (normalizedPurpose === "CSV_IMPORT_PREPARE" && readableMirrorUnsafe) {
+    const error = new Error(
+      `Mirror is not safe for csv import prepare (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
+    );
+    error.code = "TARGETING_REQUIRES_SYNC";
+    error.meta = { purpose, state: store };
+    throw error;
+  }
+  if ((normalizedPurpose === "PREVIEW" || normalizedPurpose === "EXPORT") && previewUnsafe) {
     const error = new Error(
       `Mirror is not safe for ${purpose.toLowerCase()} (state=${store.mirrorHealthState}, reason=${store.staleReason || "unknown"})`,
     );

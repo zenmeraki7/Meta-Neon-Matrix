@@ -119,6 +119,12 @@ test("14) busy Shopify mutation slot yields WAITING_FOR_SHOPIFY_SLOT + requeue",
   assert.ok(executeSrc.includes("waiting_for_shopify_slot"));
 });
 
+test("14b) terminal execute retries are ignored without re-marking failed", () => {
+  const executeSrc = read(SRC.executeWorker);
+  assert.ok(executeSrc.includes('"OPERATION_ALREADY_TERMINAL"'));
+  assert.ok(executeSrc.includes("ignored: true"));
+});
+
 test("15) Redis restart safety: DB is control plane, cache is hint-only", () => {
   const src = read(SRC.mutationService);
   assert.ok(src.includes("cacheSet"));

@@ -852,6 +852,7 @@ async function processBulkEditExecuteJob(job) {
   } catch (error) {
     const nonFailureErrors = new Set([
       "STALE_EXECUTION_JOB",
+      "OPERATION_ALREADY_TERMINAL",
       "OPERATION_CANCEL_REQUESTED",
       "SHOPIFY_BULK_OPERATION_ALREADY_SUBMITTED",
     ]);

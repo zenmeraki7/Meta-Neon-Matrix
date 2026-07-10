@@ -83,25 +83,40 @@ test("spreadsheet import redirects to edit history operation id", () => {
   );
 });
 
-test("spreadsheet import payload always includes the displayed Product ID mapping", () => {
+test("spreadsheet import payload uses explicit CSV mappings instead of forcing first columns", () => {
   assert.match(
     csvParserSource,
     /export function buildImportColumnMappings\(headers = \[\], columnMappings = \{\}\)/,
     "CSV parser should expose a final import mapping builder",
   );
-  assert.match(
+  assert.doesNotMatch(
     csvParserSource,
     /mappings\[firstHeader\] = "id";/,
-    "Final import mappings must include the first displayed column as Product ID",
+    "Final import mappings must not silently treat the first displayed column as Product ID",
+  );
+  assert.doesNotMatch(
+    previewTableSource,
+    /if \(index === 0\) forcedValue = "id";/,
+    "CSV preview must not force the first displayed column to Product ID",
   );
   assert.match(
     spreadsheetPageSource,
-    /JSON\.stringify\(buildImportColumnMappings\(previewHeaders, columnMappings\)\)/,
-    "CSV import request must submit effective mappings, not raw UI state",
+    /JSON\.stringify\(effectiveMappings\)/,
+    "CSV import request must submit validated effective mappings, not raw UI state",
+  );
+  assert.doesNotMatch(
+    spreadsheetPageSource,
+    /hasProductIdMapping\(effectiveMappings\)/,
+    "CSV import should allow create rows when Product ID is not mapped",
   );
   assert.match(
     spreadsheetPageSource,
-    /setColumnMappings\(buildImportColumnMappings\(headers, buildInitialColumnMappings\(headers\)\)\);/,
-    "CSV preview initialization should keep mapping state aligned with the disabled first columns",
+    /onClick=\{handleOpenConfirm\}/,
+    "CSV import should open confirmation through a named handler",
+  );
+  assert.doesNotMatch(
+    spreadsheetPageSource,
+    /onClick=\{\(\) => setConfirmOpen\(true\)\}/,
+    "CSV import must not open confirmation without validation",
   );
 });

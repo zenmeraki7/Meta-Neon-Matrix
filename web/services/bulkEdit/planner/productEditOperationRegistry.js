@@ -77,6 +77,15 @@ export const PRODUCT_EDIT_OPERATIONS = Object.freeze({
     requiresVerification: true,
     requiredScopes: ["write_products"],
   },
+  CSV_IMPORT_SET: {
+    target: "PRODUCT",
+    mutation: "productSet",
+    apiStrategy: API_STRATEGIES.BULK_MUTATION,
+    undoable: true,
+    requiresBeforeSnapshot: false,
+    requiresVerification: true,
+    requiredScopes: ["write_products"],
+  },
   VARIANT_GENERIC_SET: {
     target: "VARIANT",
     mutation: "productVariantsBulkUpdate",

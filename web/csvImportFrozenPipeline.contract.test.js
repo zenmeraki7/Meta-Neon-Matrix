@@ -22,7 +22,16 @@ test("csv import worker freezes explicit targets before execute", () => {
 test("csv import worker scopes mirror reads to active mirror batch", () => {
   const source = read("web/Jobs/Workers/bulkImportEditWorker.js");
   assert.ok(source.includes("getActiveMirrorBatchId("));
+  assert.ok(source.includes("purpose: \"CSV_IMPORT_PREPARE\""));
   assert.ok(source.includes("mirrorBatchId,"));
+});
+
+test("csv import prepare allows readable degraded mirror without treating it as live execution", () => {
+  const targeting = read("web/services/productService/productTargetingService.js");
+
+  assert.ok(targeting.includes("CSV_IMPORT_PREPARE"));
+  assert.ok(targeting.includes("readableMirrorUnsafe"));
+  assert.ok(targeting.includes("mirrorHealthState !== \"HEALTHY\""));
 });
 
 test("execution preparation reads csv rows from frozen-target products only", () => {
@@ -72,6 +81,36 @@ test("csv import worker validates trusted product and variant identities", () =>
   assert.ok(source.includes("DUPLICATE_IMPORT_IDENTITY"));
   assert.ok(source.includes("CSV_IMPORT_PRODUCT_NOT_FOUND_IN_SHOP"));
   assert.ok(source.includes("CSV_IMPORT_VARIANT_NOT_IN_PRODUCT"));
+});
+
+test("csv import supports product create rows without Product ID", () => {
+  const worker = read("web/Jobs/Workers/bulkImportEditWorker.js");
+  const normalizer = read("web/normalizers/productImportCommandNormalizer.js");
+  const importUtils = read("web/utils/importEditUtils.js");
+
+  assert.ok(!worker.includes("CSV_IMPORT_PRODUCT_ID_MAPPING_REQUIRED"));
+  assert.ok(!normalizer.includes("PRODUCT_ID_MAPPING_REQUIRED"));
+  assert.ok(worker.includes("PRODUCT_TITLE_REQUIRED"));
+  assert.ok(worker.includes("buildCsvCreateProductId"));
+  assert.ok(worker.includes("csvCreate"));
+  assert.ok(importUtils.includes("...(productSet.id && { id: productSet.id })"));
+});
+
+test("csv import writes execution plan before queueing execute worker", () => {
+  const worker = read("web/Jobs/Workers/bulkImportEditWorker.js");
+
+  assert.ok(worker.includes("buildExecutionPlanForEdit"));
+  assert.ok(worker.includes("buildCsvImportExecutionPlan"));
+  assert.ok(worker.includes('operationKey: "CSV_IMPORT_SET"'));
+  assert.ok(worker.includes("executionPlan,"));
+  assert.ok(worker.includes("operationKey: executionPlan.operationKey"));
+});
+
+test("csv import operation key is registered for productSet planning", () => {
+  const registry = read("web/services/bulkEdit/planner/productEditOperationRegistry.js");
+
+  assert.ok(registry.includes("CSV_IMPORT_SET"));
+  assert.ok(registry.includes('mutation: "productSet"'));
 });
 
 test("execute worker can consume a freshly frozen csv snapshot race-safely", () => {

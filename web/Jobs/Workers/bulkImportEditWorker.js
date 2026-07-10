@@ -27,6 +27,7 @@ import {
 import { upsertFrozenSnapshotSetFromLegacy } from "../../repositories/targetSnapshotSetRepository.js";
 import { addBulkEditExecuteJob } from "../Queues/bulkEditExecuteJob.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
+import { buildExecutionPlanForEdit } from "../../services/bulkEdit/bulkEditPlanUtils.js";
 import {
   normalizeEditHistoryExecutionState,
   normalizeEditHistoryStatus,
@@ -38,6 +39,19 @@ const QUEUE_NAME = QUEUE_NAMES.CSV_IMPORT_PREPARE;
 const WORKER_NAME = "bulkImportEditWorker";
 const PRODUCT_GID_RE = /^gid:\/\/shopify\/Product\/\d+$/;
 const VARIANT_GID_RE = /^gid:\/\/shopify\/ProductVariant\/\d+$/;
+
+function buildCsvImportExecutionPlan({ historyId, shop, targetCount }) {
+  return buildExecutionPlanForEdit({
+    operationKey: "CSV_IMPORT_SET",
+    operationId: historyId,
+    shop,
+    planType: "CSV_IMPORT",
+    rules: [{ field: "mixed" }],
+    targetGranularity: "PRODUCT",
+    targetCount,
+    shopPlanLimits: { batchSize: 250 },
+  });
+}
 
 const normalizeBoolean = (value) =>
   value === true || value === "TRUE" || value === "true";
@@ -57,9 +71,6 @@ function assertImportJobPayload(job) {
   }
   if (!columnMappings || typeof columnMappings !== "object" || Array.isArray(columnMappings)) {
     throw new Error("CSV_IMPORT_COLUMN_MAPPINGS_INVALID");
-  }
-  if (!Object.values(columnMappings).includes("id")) {
-    throw new Error("CSV_IMPORT_PRODUCT_ID_MAPPING_REQUIRED");
   }
   for (const fieldKey of Object.values(columnMappings)) {
     if (typeof fieldKey !== "string" || !isAllowedImportFieldKey(fieldKey)) {
@@ -82,6 +93,17 @@ function addValidationError(errors, rowNumber, code, message) {
     code,
     message,
   });
+}
+
+function buildCsvCreateProductId({ rowNumber, mapped }) {
+  const seed = JSON.stringify({
+    rowNumber,
+    title: mapped.title || null,
+    handle: mapped.handle || null,
+    vendor: mapped.vendor || null,
+    sku: mapped.sku || null,
+  });
+  return `CSV_CREATE:${crypto.createHash("sha256").update(seed).digest("hex").slice(0, 24)}`;
 }
 
 function extractProductOptions(existingProduct) {
@@ -184,20 +206,21 @@ function buildMappedProductRows(
     }
   }
 
-  if (!mapped.id) {
+  const productId = String(mapped.id || "").trim();
+  const variantId = String(mapped.variant_id || "").trim();
+  const isCreateRow = !productId;
+
+  if (isCreateRow && !String(mapped.title || "").trim()) {
     addValidationError(
       validationErrors,
       rowNumber,
-      "PRODUCT_ID_REQUIRED",
-      "Product ID is required for every import row",
+      "PRODUCT_TITLE_REQUIRED",
+      "Title is required when importing a new product without Product ID",
     );
     return;
   }
 
-  const productId = String(mapped.id || "").trim();
-  const variantId = String(mapped.variant_id || "").trim();
-
-  if (!PRODUCT_GID_RE.test(productId)) {
+  if (productId && !PRODUCT_GID_RE.test(productId)) {
     addValidationError(
       validationErrors,
       rowNumber,
@@ -207,7 +230,17 @@ function buildMappedProductRows(
     return;
   }
 
-  if (variantId && !VARIANT_GID_RE.test(variantId)) {
+  if (isCreateRow && variantId) {
+    addValidationError(
+      validationErrors,
+      rowNumber,
+      "VARIANT_ID_WITHOUT_PRODUCT_ID",
+      "Variant ID can only be used when Product ID is mapped for an existing product update",
+    );
+    return;
+  }
+
+  if (!isCreateRow && variantId && !VARIANT_GID_RE.test(variantId)) {
     addValidationError(
       validationErrors,
       rowNumber,
@@ -217,7 +250,8 @@ function buildMappedProductRows(
     return;
   }
 
-  const identityKey = variantId ? `${productId}:${variantId}` : `${productId}:PRODUCT`;
+  const resolvedProductId = productId || buildCsvCreateProductId({ rowNumber, mapped });
+  const identityKey = variantId ? `${resolvedProductId}:${variantId}` : `${resolvedProductId}:PRODUCT`;
   if (seenIdentities.has(identityKey)) {
     addValidationError(
       validationErrors,
@@ -229,10 +263,12 @@ function buildMappedProductRows(
   }
   seenIdentities.add(identityKey);
 
-  if (!productMap.has(productId)) {
-    productMap.set(productId, {
+  if (!productMap.has(resolvedProductId)) {
+    productMap.set(resolvedProductId, {
+      isCreate: isCreateRow,
+      syntheticProductId: isCreateRow ? resolvedProductId : null,
       productSet: {
-        id: productId,
+        ...(!isCreateRow && { id: resolvedProductId }),
         ...(mapped.title && { title: mapped.title }),
         ...(mapped.vendor && { vendor: mapped.vendor }),
         ...(mapped.status && { status: mapped.status.toUpperCase() }),
@@ -256,14 +292,14 @@ function buildMappedProductRows(
       },
     });
 
-    const product = productMap.get(productId).productSet;
+    const product = productMap.get(resolvedProductId).productSet;
     if (mapped.option1Name) product.options.push({ name: mapped.option1Name });
     if (mapped.option2Name) product.options.push({ name: mapped.option2Name });
     if (mapped.option3Name) product.options.push({ name: mapped.option3Name });
   }
 
   if (variantId) {
-    productMap.get(productId).productSet.variants.push({
+    productMap.get(resolvedProductId).productSet.variants.push({
       id: variantId,
       ...(mapped.price && { price: normalizeNumber(mapped.price) }),
       ...(mapped.compareAtPrice && {
@@ -334,7 +370,7 @@ const bulkImportEditWorker = new Worker(
       const validationErrors = [];
       let totalRows = 0;
       const mirrorBatchId = await getActiveMirrorBatchId(history.shop, {
-        purpose: "EXECUTE",
+        purpose: "CSV_IMPORT_PREPARE",
       });
 
       await new Promise((resolve, reject) => {
@@ -358,7 +394,9 @@ const bulkImportEditWorker = new Worker(
         throw error;
       }
 
-      const productIds = [...productMap.keys()];
+      const productIds = [...productMap.entries()]
+        .filter(([, value]) => !value.isCreate)
+        .map(([productId]) => productId);
       const existingProducts = await db.product.findMany({
         where: {
           shop: history.shop,
@@ -383,7 +421,10 @@ const bulkImportEditWorker = new Worker(
         throw error;
       }
 
-      for (const { productSet } of productMap.values()) {
+      for (const { productSet, isCreate } of productMap.values()) {
+        if (isCreate) {
+          continue;
+        }
         const existingProduct = existingById[productSet.id];
         const variantIdsForProduct = new Set(
           (existingProduct?.variants || []).map((variant) => variant.id),
@@ -406,28 +447,62 @@ const bulkImportEditWorker = new Worker(
       const explicitTargets = [];
       const batchId = String(job.id);
 
-      for (const { productSet } of productMap.values()) {
-        const existingProduct = existingById[productSet.id];
-        if (!existingProduct) {
+      for (const { productSet, isCreate, syntheticProductId } of productMap.values()) {
+        const effectiveProductId = isCreate ? syntheticProductId : productSet.id;
+        const existingProduct = isCreate ? null : existingById[productSet.id];
+        if (!isCreate && !existingProduct) {
           continue;
         }
 
-       const existingProductForDiff = {
-  ...existingProduct,
-  descriptionHtml: existingProduct.descriptionHtml,
-  seo: {
-    title: existingProduct.seoTitle,
-    description: existingProduct.seoDescription,
-  },
-  options: extractProductOptions(existingProduct),
-  variants: mapExistingVariantsForDiff(existingProduct.variants),
-};
+        const existingProductForDiff = isCreate
+          ? {
+              id: effectiveProductId,
+              title: null,
+              descriptionHtml: null,
+              vendor: null,
+              productType: null,
+              handle: null,
+              status: null,
+              tags: [],
+              seo: { title: null, description: null },
+              options: productSet.options || [],
+              variants: [],
+            }
+          : {
+              ...existingProduct,
+              descriptionHtml: existingProduct.descriptionHtml,
+              seo: {
+                title: existingProduct.seoTitle,
+                description: existingProduct.seoDescription,
+              },
+              options: extractProductOptions(existingProduct),
+              variants: mapExistingVariantsForDiff(existingProduct.variants),
+            };
 
-        const productFieldChanges = diffProductFields(existingProductForDiff, productSet);
-        const variantFieldChanges = diffVariants(
-          existingProductForDiff.variants,
-          productSet.variants,
-        );
+        const productFieldChanges = isCreate
+          ? Object.entries({
+              title: productSet.title,
+              vendor: productSet.vendor,
+              status: productSet.status,
+              productType: productSet.productType,
+              handle: productSet.handle,
+              description: productSet.descriptionHtml,
+              tags: Array.isArray(productSet.tags) ? productSet.tags.join(", ") : undefined,
+            })
+              .filter(([, value]) => value !== undefined && value !== null && value !== "")
+              .map(([field, newValue]) => ({
+                field,
+                oldValue: null,
+                newValue,
+                revertValue: null,
+              }))
+          : diffProductFields(existingProductForDiff, productSet);
+        const variantFieldChanges = isCreate
+          ? []
+          : diffVariants(
+              existingProductForDiff.variants,
+              productSet.variants,
+            );
 
         if (!productFieldChanges.length && !variantFieldChanges.length) {
           continue;
@@ -450,18 +525,19 @@ const bulkImportEditWorker = new Worker(
           targetType: variantFieldChanges.length ? "VARIANT" : "PRODUCT",
           targetIdentity: variantFieldChanges.length
             ? `PRODUCT:${productSet.id}:VARIANTS:${[...new Set(variantFieldChanges.map((item) => item?.variantId).filter(Boolean))].sort().join(",")}`
-            : `PRODUCT:${productSet.id}`,
-          productId: productSet.id,
+            : `PRODUCT:${effectiveProductId}`,
+          productId: effectiveProductId,
           variantId: variantFieldChanges.length
             ? [...new Set(variantFieldChanges.map((item) => item?.variantId).filter(Boolean))].sort().join(",")
             : null,
           shop: history.shop,
-          mirrorBatchId: existingProduct.mirrorBatchId || null,
-          title: existingProduct.title,
-          image: existingProduct.featuredImageUrl,
+          mirrorBatchId: mirrorBatchId || null,
+          title: isCreate ? productSet.title : existingProduct.title,
+          image: isCreate ? null : existingProduct.featuredImageUrl,
           scope: "mixed",
           batchId,
           beforeValues: {
+            ...(isCreate ? { csvCreate: true } : {}),
             productFieldChanges,
             variantFieldChanges,
           },
@@ -472,10 +548,11 @@ const bulkImportEditWorker = new Worker(
         });
         explicitTargets.push({
           targetType: "PRODUCT",
-          targetIdentity: `PRODUCT:${productSet.id}`,
-          productId: productSet.id,
+          targetIdentity: `PRODUCT:${effectiveProductId}`,
+          productId: effectiveProductId,
           variantId: null,
           beforeValues: {
+            ...(isCreate ? { csvCreate: true } : {}),
             productFieldChanges,
             variantFieldChanges,
           },
@@ -519,6 +596,7 @@ const bulkImportEditWorker = new Worker(
               options: {
                 csvMutationRow,
                 csvImport: true,
+                csvCreate: Boolean(record.beforeValues?.csvCreate),
                 productOptions: options,
               },
             };
@@ -571,6 +649,11 @@ const bulkImportEditWorker = new Worker(
         throw new Error("CSV_IMPORT_TARGET_SNAPSHOT_SET_EMPTY");
       }
       const frozenAt = new Date().toISOString();
+      const executionPlan = buildCsvImportExecutionPlan({
+        historyId,
+        shop: history.shop,
+        targetCount: frozenCount,
+      });
 
       await db.editHistory.update({
         where: { id: historyId },
@@ -598,6 +681,8 @@ const bulkImportEditWorker = new Worker(
             filterHash,
             freezeSource: "CSV_IMPORT",
             targetsFrozenAt: frozenAt,
+            executionPlan,
+            operationKey: executionPlan.operationKey,
             targetSnapshotRef: {
               snapshotSetId: snapshotSet.id,
               operationId: snapshotSet.operationId,
@@ -660,6 +745,8 @@ const bulkImportEditWorker = new Worker(
             filterHash,
             freezeSource: "CSV_IMPORT",
             targetsFrozenAt: frozenAt,
+            executionPlan,
+            operationKey: executionPlan.operationKey,
             targetSnapshotRef: {
               snapshotSetId: snapshotSet.id,
               operationId: snapshotSet.operationId,

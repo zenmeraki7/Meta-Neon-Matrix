@@ -186,9 +186,6 @@ function parseColumnMappings(raw) {
   if (Object.keys(parsed).length > MAX_COLUMN_MAPPING_KEYS) {
     throw buildRequestError("TOO_MANY_COLUMN_MAPPINGS", "TOO_MANY_COLUMN_MAPPINGS");
   }
-  if (!Object.values(parsed).includes("id")) {
-    throw buildRequestError("PRODUCT_ID_MAPPING_REQUIRED", "PRODUCT_ID_MAPPING_REQUIRED");
-  }
   for (const [csvColumn, fieldKey] of Object.entries(parsed)) {
     if (typeof csvColumn !== "string" || csvColumn.length > MAX_TEXT_LENGTH) {
       throw buildRequestError("INVALID_COLUMN_MAPPING_KEY", "INVALID_COLUMN_MAPPING_KEY");

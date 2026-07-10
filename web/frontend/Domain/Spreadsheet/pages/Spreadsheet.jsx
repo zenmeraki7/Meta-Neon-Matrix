@@ -120,7 +120,7 @@ export default function Spreadsheet() {
                 previousCursor: result?.pageInfo?.previousCursor || null,
             });
             if (resetMappings) {
-                setColumnMappings(buildImportColumnMappings(headers, buildInitialColumnMappings(headers)));
+                setColumnMappings(buildInitialColumnMappings(headers));
             }
         } catch (err) {
             setStatus({
@@ -132,17 +132,22 @@ export default function Spreadsheet() {
         }
     };
 
+    const handleOpenConfirm = () => {
+        setConfirmOpen(true);
+    };
+
     const handleUpload = async () => {
         try {
             if (!file) {
                 throw new Error(t("spreadsheetNoFileSelected"));
             }
 
+            const effectiveMappings = buildImportColumnMappings(previewHeaders, columnMappings);
             setUploading(true);
 
             const formData = new FormData();
             formData.append("file", file);
-            formData.append("columnMappings", JSON.stringify(buildImportColumnMappings(previewHeaders, columnMappings)));
+            formData.append("columnMappings", JSON.stringify(effectiveMappings));
 
             const result = await apiClient.request("/api/products/csv/import", {
                 method: "POST",
@@ -370,7 +375,7 @@ export default function Spreadsheet() {
 
                             <Button
                                 variant="primary"
-                                onClick={() => setConfirmOpen(true)}
+                                onClick={handleOpenConfirm}
                                 disabled={!file || uploading}
                                 loading={uploading}
                             >

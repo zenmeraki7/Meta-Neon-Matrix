@@ -48,21 +48,17 @@ export default function CsvPreviewTable({
       <BlockStack gap="300">
         <Text variant="headingSm">{t("spreadsheetPreviewMapColumns")}</Text>
         <InlineStack gap="200" wrap>
-          {headers.map((header, index) => {
-            let forcedValue = columnMappings[header] || "";
-            if (index === 0) forcedValue = "id";
-            if (index === 1) forcedValue = "variant_id";
+          {headers.map((header) => {
+            const value = columnMappings[header] || "";
             return (
               <Select
                 key={header}
                 label={header}
                 options={productFields}
-                value={forcedValue}
+                value={value}
                 onChange={(value) => {
-                  if (index === 0 || index === 1) return;
                   onMappingChange(header, value);
                 }}
-                disabled={index === 0 || index === 1}
               />
             );
           })}

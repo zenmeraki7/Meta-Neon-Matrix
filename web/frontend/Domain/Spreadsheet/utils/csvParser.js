@@ -28,16 +28,8 @@ export function buildInitialColumnMappings(headers = []) {
 }
 
 export function buildImportColumnMappings(headers = [], columnMappings = {}) {
-    const mappings = { ...(columnMappings || {}) };
-    const firstHeader = headers[0];
-    const secondHeader = headers[1];
-
-    if (firstHeader) {
-        mappings[firstHeader] = "id";
-    }
-    if (secondHeader) {
-        mappings[secondHeader] = "variant_id";
-    }
-
-    return mappings;
+    const allowedHeaders = new Set(headers || []);
+    return Object.fromEntries(
+        Object.entries(columnMappings || {}).filter(([header]) => allowedHeaders.has(header)),
+    );
 }
