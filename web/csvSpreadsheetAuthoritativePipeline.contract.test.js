@@ -55,6 +55,15 @@ test("CSV ingestion preserves Shopify's real created product id", () => {
   const source = read("web/services/bulkEdit/BulkEditResultIngestionService.js");
   assert.match(source, /isCsvImport\s*&&\s*item\.productId/);
   assert.match(source, /productId:\s*item\.productId/);
+  assert.match(source, /row\.status === "SUCCESS" && undoAllowed/);
+  assert.match(source, /\? "PENDING"\s*:\s*"NOT_REQUIRED"/);
+});
+
+test("undo submission backfills eligible legacy CSV snapshots", () => {
+  const source = read("web/services/productService/productBulkUndoService.js");
+  assert.match(source, /undoableTargetKeys/);
+  assert.match(source, /undoStatus:\s*"NOT_REQUIRED"/);
+  assert.match(source, /data:\s*\{ undoStatus:\s*"PENDING" \}/);
 });
 
 test("CSV verification ignores the submission batch mismatch and reconciles Shopify truth", () => {

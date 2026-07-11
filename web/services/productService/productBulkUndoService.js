@@ -202,6 +202,32 @@ class UndoEditService {
         operationId: snapshotOperationId || undefined,
         db: db,
       });
+      // Backfill legacy CSV executions that captured complete before-values but
+      // predated the ingestion transition that marks successful items undoable.
+      const successfulChanges = await db.changeRecord.findMany({
+        where: {
+          shop: this.session.shop,
+          editHistoryId: sourceHistoryId,
+          status: { in: SUCCESSFUL_CHANGE_STATUSES },
+        },
+        select: { targetIdentity: true, options: true },
+      });
+      const undoableTargetKeys = successfulChanges
+        .filter((record) => normalizeObject(record.options).csvCreate !== true)
+        .map((record) => String(record.targetIdentity || "").trim())
+        .filter(Boolean);
+      if (undoData.allowed === true && undoableTargetKeys.length > 0) {
+        await db.targetSnapshotItem.updateMany({
+          where: {
+            shop: this.session.shop,
+            snapshotSetId: snapshotSet.id,
+            targetKey: { in: undoableTargetKeys },
+            executionStatus: { in: ["SUCCEEDED", "VERIFIED"] },
+            undoStatus: "NOT_REQUIRED",
+          },
+          data: { undoStatus: "PENDING" },
+        });
+      }
       eligibleCount = await db.targetSnapshotItem.count({
         where: {
           shop: this.session.shop,

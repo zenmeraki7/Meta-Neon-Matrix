@@ -134,6 +134,7 @@ export class BulkEditResultIngestionService {
         shop: true,
         executionIdentity: true,
         isSpreadsheetEdit: true,
+        undo: true,
         batch: true,
         bulkOperationId: true,
         processingBatchId: true,
@@ -404,6 +405,10 @@ export class BulkEditResultIngestionService {
           status: row.status,
         });
         if (snapshotSetId) {
+          const recordOptions = existingRecord?.options && typeof existingRecord.options === "object"
+            ? existingRecord.options
+            : {};
+          const undoAllowed = history?.undo?.allowed === true && recordOptions.csvCreate !== true;
           // eslint-disable-next-line no-await-in-loop
           await db.targetSnapshotItem.updateMany({
             where: {
@@ -416,6 +421,10 @@ export class BulkEditResultIngestionService {
               ...(isCsvImport && row.productId
                 ? { productId: row.productId }
                 : {}),
+              undoStatus:
+                row.status === "SUCCESS" && undoAllowed
+                  ? "PENDING"
+                  : "NOT_REQUIRED",
               shopifyErrorCode: row.status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
               shopifyErrorMessage: row.status === "FAILED"
                 ? JSON.stringify(row.shopifyUserErrors || []).slice(0, 1000)
