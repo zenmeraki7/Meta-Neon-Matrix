@@ -758,6 +758,7 @@ export class EditHistoryService {
           id: true,
           snapshotSetId: true,
           executionIdentity: true,
+          isSpreadsheetEdit: true,
           batch: true,
         },
       });
@@ -773,7 +774,10 @@ export class EditHistoryService {
         String(history?.snapshotSetId || "").trim()
         || String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
 
-      if (snapshotSetId) {
+      // CSV imports already own durable ChangeRecord rows with the merchant-facing
+      // field diffs. Older CSV snapshots may not contain plannedMutation, so using
+      // them here would reject an otherwise successfully ingested import.
+      if (snapshotSetId && history.isSpreadsheetEdit !== true) {
         const totalCount = await db.targetSnapshotItem.count({
           where: {
             shop: this.session.shop,

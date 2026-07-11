@@ -551,6 +551,10 @@ const bulkImportEditWorker = new Worker(
           targetIdentity: `PRODUCT:${effectiveProductId}`,
           productId: effectiveProductId,
           variantId: null,
+          plannedMutation: {
+            productFieldChanges,
+            variantFieldChanges,
+          },
           beforeValues: {
             ...(isCreate ? { csvCreate: true } : {}),
             productFieldChanges,

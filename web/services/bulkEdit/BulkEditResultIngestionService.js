@@ -135,6 +135,7 @@ export class BulkEditResultIngestionService {
         id: true,
         shop: true,
         executionIdentity: true,
+        isSpreadsheetEdit: true,
         batch: true,
         bulkOperationId: true,
         processingBatchId: true,
@@ -273,11 +274,12 @@ export class BulkEditResultIngestionService {
 
     const pendingUpdates = [];
     const FLUSH_SIZE = 500;
+    const isCsvImport = history.isSpreadsheetEdit === true || history.batch?.csvImport === true;
     const batchChangeRecords = await db.changeRecord.findMany({
       where: {
         editHistoryId: historyId,
         shop,
-        ...(batchId ? { batchId } : {}),
+        ...(!isCsvImport && batchId ? { batchId } : {}),
       },
       select: {
         targetIdentity: true,
@@ -285,7 +287,7 @@ export class BulkEditResultIngestionService {
         options: true,
       },
     });
-    const targetIdentityByLineNumber = new Map(
+    let targetIdentityByLineNumber = new Map(
       batchChangeRecords.map((record, index) => {
         const configured = Number(record?.options?.shopifyBulkLineNumber);
         const lineNumber = Number.isInteger(configured) ? configured : index;
@@ -298,6 +300,21 @@ export class BulkEditResultIngestionService {
     const snapshotSetId = String(
       history.batch?.targetSnapshotRef?.snapshotSetId || "",
     ).trim();
+
+    // CSV imports keep their original import batch id and intentionally do not
+    // materialize duplicate change records for the Shopify submission batch.
+    // Correlate Shopify's positional JSONL rows with the frozen snapshot order,
+    // which is also the order used to build the submitted JSONL payload.
+    if (isCsvImport && snapshotSetId) {
+      const frozenRows = await db.targetSnapshotItem.findMany({
+        where: { shop, snapshotSetId },
+        orderBy: [{ targetKey: "asc" }],
+        select: { targetKey: true },
+      });
+      targetIdentityByLineNumber = new Map(
+        frozenRows.map((row, index) => [index, row.targetKey]),
+      );
+    }
 
     const flushCheckpoint = async () => {
       checkpoint.rowOffset = rowCount;
@@ -341,7 +358,7 @@ export class BulkEditResultIngestionService {
           where: {
             editHistoryId: historyId,
             shop,
-            ...(batchId ? { batchId } : {}),
+            ...(!isCsvImport && batchId ? { batchId } : {}),
             targetIdentity: item.targetIdentity,
             status: { in: ["pending", "PENDING", "failed", "FAILED"] },
           },
