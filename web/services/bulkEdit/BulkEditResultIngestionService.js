@@ -15,8 +15,6 @@ import {
 } from "../operationLeaseService.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
 import { transitionOperation } from "../operationTransitionService.js";
-import { applyMirrorFromSuccessfulChangeRecords } from "./BulkEditMirrorApplyService.js";
-import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 
 function normalizeTargetIdentity(row) {
@@ -364,6 +362,9 @@ export class BulkEditResultIngestionService {
           },
           data: {
             status: item.status,
+            ...(isCsvImport && item.productId
+              ? { productId: item.productId }
+              : {}),
             failureCode: item.status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
             failureMessage: item.status === "FAILED"
               ? JSON.stringify(item.shopifyUserErrors || [])
@@ -412,6 +413,9 @@ export class BulkEditResultIngestionService {
             },
             data: {
               executionStatus: row.status === "SUCCESS" ? "SUCCEEDED" : "FAILED",
+              ...(isCsvImport && row.productId
+                ? { productId: row.productId }
+                : {}),
               shopifyErrorCode: row.status === "FAILED" ? "SHOPIFY_USER_ERRORS" : null,
               shopifyErrorMessage: row.status === "FAILED"
                 ? JSON.stringify(row.shopifyUserErrors || []).slice(0, 1000)
@@ -463,6 +467,8 @@ export class BulkEditResultIngestionService {
 
       pendingUpdates.push({
         targetIdentity: item.targetIdentity,
+        productId: item.productId,
+        variantId: item.variantId,
         status: item.status === "SUCCESS" ? "SUCCESS" : "FAILED",
         shopifyUserErrors: item.shopifyUserErrors || [],
       });
@@ -585,44 +591,6 @@ export class BulkEditResultIngestionService {
     }
 
     await clearKeyCaches(`${shop}:historyChanges:${historyId}:`).catch(() => {});
-
-    const mirrorApplyResult = await applyMirrorFromSuccessfulChangeRecords({
-      shop,
-      historyId,
-    });
-
-    // completedUpdate persisted resultIngestion above. Merge mirror metadata into the
-    // latest batch value so this follow-up write cannot erase the ingestion marker.
-    const latestHistoryForMirrorApply = await db.editHistory.findFirst({
-      where: { id: historyId, shop },
-      select: { batch: true },
-    });
-    await db.editHistory.updateMany({
-      where: { id: historyId, shop },
-      data: {
-        batch: mergeBatch(latestHistoryForMirrorApply?.batch, {
-          mirrorApply: {
-            status: "APPLIED_PENDING_RECONCILE",
-            attemptedRows: Number(mirrorApplyResult?.attemptedRows || 0),
-            appliedRows: Number(mirrorApplyResult?.appliedRows || 0),
-            unresolvedRows: Number(mirrorApplyResult?.unresolvedRows || 0),
-            appliedProductRows: Number(mirrorApplyResult?.appliedProductRows || 0),
-            appliedVariantRows: Number(mirrorApplyResult?.appliedVariantRows || 0),
-            mirrorBatchId: mirrorApplyResult?.mirrorBatchId || null,
-            appliedAt: new Date().toISOString(),
-          },
-        }),
-      },
-    });
-
-    await schedulePostMutationMirrorReconciliation({
-      shop,
-      ownerType: "EDIT_HISTORY",
-      ownerId: historyId,
-      mirrorBatchId: mirrorApplyResult?.mirrorBatchId || undefined,
-      source: "BULK_EDIT_EXECUTION_APPLY",
-      verificationStatus: failureCount > 0 ? "PARTIAL" : "SUCCESS",
-    });
 
     await transitionOperation({
       shop,

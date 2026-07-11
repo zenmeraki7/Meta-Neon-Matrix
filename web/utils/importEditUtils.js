@@ -13,6 +13,8 @@ export const diffProductFields = (oldProduct, productSet) => {
     handle: "handle",
     descriptionHtml: "description",
     tags: "tags",
+    seoTitle: "seoTitle",
+    seoDescription: "seoDescription",
   };
 
   // console.log("🗺️ FIELD_MAP:", FIELD_MAP);
@@ -24,13 +26,23 @@ export const diffProductFields = (oldProduct, productSet) => {
     //   dbField,
     // });
 
-    if (productSet[incomingField] === undefined) {
+    const incomingValue = incomingField === "seoTitle"
+      ? productSet?.seo?.title
+      : incomingField === "seoDescription"
+        ? productSet?.seo?.description
+        : productSet[incomingField];
+
+    if (incomingValue === undefined) {
       // console.log(`⏭️ SKIP: productSet.${incomingField} is undefined`);
       continue;
     }
 
-    let oldValue = oldProduct?.[dbField] ?? null;
-    let newValue = productSet[incomingField];
+    let oldValue = incomingField === "seoTitle"
+      ? oldProduct?.seo?.title ?? oldProduct?.seoTitle ?? null
+      : incomingField === "seoDescription"
+        ? oldProduct?.seo?.description ?? oldProduct?.seoDescription ?? null
+        : oldProduct?.[dbField] ?? null;
+    let newValue = incomingValue;
 
     // 🔧 TAGS NORMALIZATION
     if (incomingField === "tags") {
@@ -43,6 +55,10 @@ export const diffProductFields = (oldProduct, productSet) => {
       if (Array.isArray(oldValue)) {
         oldValue = oldValue.join(", ");
       }
+    }
+
+    if (String(oldValue ?? "") === String(newValue ?? "")) {
+      continue;
     }
 
     // console.log("📌 FORCING CHANGE:", {
@@ -120,6 +136,10 @@ export const diffVariants = (oldVariants = [], newVariants = []) => {
       const oldValue = oldVariant[field] ?? null;
       const newValue = newVariant[field];
 
+      if (String(oldValue ?? "") === String(newValue ?? "")) {
+        continue;
+      }
+
       // console.log("📌 FORCING CHANGE:", {
       //   field,
       //   oldValue,
@@ -167,6 +187,9 @@ export const diffVariants = (oldVariants = [], newVariants = []) => {
 };
 
 export const buildProductSetMutation = ({ productSet, existingProduct }) => {
+  const variantInputs = Array.isArray(productSet?.variants) ? productSet.variants : [];
+  const hasVariantUpdates = variantInputs.length > 0;
+
   return {
     productSet: {
       ...(productSet.id && { id: productSet.id }),
@@ -180,13 +203,16 @@ export const buildProductSetMutation = ({ productSet, existingProduct }) => {
       ...(productSet.productType && { productType: productSet.productType }),
       ...(productSet.handle && { handle: productSet.handle }),
       ...(productSet.tags && { tags: productSet.tags }),
+      ...(productSet.seo && { seo: productSet.seo }),
 
-      productOptions: (existingProduct.options || productSet.options || [])?.map((op) => ({
-        name: op.name,
-        values: op.values?.map((val) => ({ name: val })),
-      })),
+      ...(hasVariantUpdates && {
+        productOptions: (existingProduct.options || productSet.options || [])?.map((op) => ({
+          name: op.name,
+          values: op.values?.map((val) => ({ name: val })),
+        })),
+      }),
 
-      variants: productSet.variants.map((variant) => {
+      ...(hasVariantUpdates && { variants: variantInputs.map((variant) => {
         const dbVariant = existingProduct.variants.find(
           (v) => v.id === variant.id,
         );
@@ -216,7 +242,7 @@ export const buildProductSetMutation = ({ productSet, existingProduct }) => {
           ...(variant.barcode && { barcode: variant.barcode }),
           ...(variant.taxable !== undefined && { taxable: variant.taxable }),
         };
-      }),
+      }) }),
     },
   };
 };

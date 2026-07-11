@@ -1,5 +1,6 @@
 import { db } from "../../repositories/repositoryDb.js";
 import { assertSnapshotItemsFullyIngested } from "../targetSnapshotItemIntegrityService.js";
+import { clearKeyCaches } from "../../utils/cacheUtils.js";
 
 function normalizeFieldName(field) {
   return String(field || "").trim();
@@ -310,5 +311,142 @@ export async function applyMirrorFromSuccessfulChangeRecords({
     appliedVariantRows,
     mirrorBatchId,
   };
+}
+
+function stripHtml(value) {
+  return String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeProductStatus(value) {
+  const status = String(value || "UNKNOWN").toUpperCase();
+  return ["ACTIVE", "DRAFT", "ARCHIVED"].includes(status) ? status : "UNKNOWN";
+}
+
+function productDataFromShopify(node) {
+  const descriptionHtml = node?.descriptionHtml ?? null;
+  return {
+    title: String(node?.title || ""),
+    handle: node?.handle == null ? null : String(node.handle),
+    status: String(node?.status || "UNKNOWN"),
+    statusNormalized: normalizeProductStatus(node?.status),
+    vendor: node?.vendor == null ? null : String(node.vendor),
+    productType: node?.productType == null ? null : String(node.productType),
+    tags: Array.isArray(node?.tags) ? node.tags.map(String) : [],
+    descriptionHtml,
+    descriptionText: stripHtml(descriptionHtml),
+    seoTitle: node?.seo?.title ?? null,
+    seoDescription: node?.seo?.description ?? null,
+    updatedAt: node?.updatedAt ? new Date(node.updatedAt) : undefined,
+    lastReconciledAt: new Date(),
+    lastSourceKind: "BULK_EDIT_VERIFICATION",
+  };
+}
+
+function variantDataFromShopify(node, productId) {
+  return {
+    productId,
+    title: node?.title ?? null,
+    sku: node?.sku ?? null,
+    barcode: node?.barcode ?? null,
+    price: node?.price ?? null,
+    compareAtPrice: node?.compareAtPrice ?? null,
+    inventoryQuantity: node?.inventoryQuantity ?? null,
+    taxable: node?.taxable ?? null,
+    selectedOptionsJson: Array.isArray(node?.selectedOptions) ? node.selectedOptions : undefined,
+    option1Value: node?.selectedOptions?.[0]?.value ?? null,
+    option2Value: node?.selectedOptions?.[1]?.value ?? null,
+    option3Value: node?.selectedOptions?.[2]?.value ?? null,
+  };
+}
+
+export async function reconcileVerifiedShopifyStateIntoActiveMirror({
+  shop,
+  productsById = new Map(),
+  variantsById = new Map(),
+}) {
+  if (!(productsById instanceof Map) || productsById.size === 0) {
+    return { mirrorBatchId: null, reconciledProducts: 0, reconciledVariants: 0 };
+  }
+  const store = await db.store.findUnique({
+    where: { shopUrl: shop },
+    select: { activeMirrorBatchId: true },
+  });
+  const mirrorBatchId = String(store?.activeMirrorBatchId || "").trim();
+  if (!mirrorBatchId) throw new Error("VERIFIED_MIRROR_ACTIVE_BATCH_REQUIRED");
+
+  let reconciledProducts = 0;
+  let reconciledVariants = 0;
+
+  for (const [productId, product] of productsById.entries()) {
+    if (!productId || product?.__typename !== "Product") continue;
+    const embeddedVariants = Array.isArray(product?.variants?.nodes)
+      ? product.variants.nodes
+      : [];
+
+    // Resolve the active generation inside each short transaction so a mirror
+    // generation switch cannot redirect writes to a retired batch.
+    // eslint-disable-next-line no-await-in-loop
+    const counts = await db.$transaction(async (tx) => {
+      const currentStore = await tx.store.findUnique({
+        where: { shopUrl: shop },
+        select: { activeMirrorBatchId: true },
+      });
+      const activeBatchId = String(currentStore?.activeMirrorBatchId || "").trim();
+      if (!activeBatchId) throw new Error("VERIFIED_MIRROR_ACTIVE_BATCH_REQUIRED");
+
+      const productData = productDataFromShopify(product);
+      await tx.product.upsert({
+        where: { shop_id_mirrorBatchId: { shop, id: productId, mirrorBatchId: activeBatchId } },
+        create: { shop, id: productId, mirrorBatchId: activeBatchId, ...productData },
+        update: productData,
+      });
+
+      const authoritativeVariants = new Map();
+      for (const variant of embeddedVariants) {
+        if (variant?.id) authoritativeVariants.set(String(variant.id), variant);
+      }
+      for (const variant of variantsById.values()) {
+        if (variant?.id && (!variant?.product?.id || String(variant.product.id) === productId)) {
+          authoritativeVariants.set(String(variant.id), variant);
+        }
+      }
+
+      for (const [variantId, variant] of authoritativeVariants.entries()) {
+        const data = variantDataFromShopify(variant, productId);
+        // eslint-disable-next-line no-await-in-loop
+        await tx.variant.upsert({
+          where: { shop_id_mirrorBatchId: { shop, id: variantId, mirrorBatchId: activeBatchId } },
+          create: { shop, id: variantId, mirrorBatchId: activeBatchId, ...data },
+          update: data,
+        });
+      }
+
+      const aggregate = await tx.variant.aggregate({
+        where: { shop, productId, mirrorBatchId: activeBatchId },
+        _sum: { inventoryQuantity: true },
+        _count: { _all: true },
+      });
+      await tx.product.update({
+        where: { shop_id_mirrorBatchId: { shop, id: productId, mirrorBatchId: activeBatchId } },
+        data: {
+          totalInventory: aggregate._sum.inventoryQuantity,
+          variantCount: aggregate._count._all,
+        },
+      });
+
+      return { products: 1, variants: authoritativeVariants.size };
+    });
+
+    reconciledProducts += counts.products;
+    reconciledVariants += counts.variants;
+  }
+
+  await Promise.all([
+    clearKeyCaches(`${shop}:ProductFetch:`),
+    clearKeyCaches(`${shop}:productTypes:`),
+    clearKeyCaches(`${shop}:ProductFilterValues:`),
+  ]);
+
+  return { mirrorBatchId, reconciledProducts, reconciledVariants };
 }
 

@@ -6,10 +6,10 @@ import {
   normalizeEditHistoryStatus,
 } from "../../utils/normalizedStateUtils.js";
 import { OPERATION_LIFECYCLE_STATES } from "../operationLifecycleStateMachine.js";
-import { schedulePostMutationMirrorReconciliation } from "../mirrorReconciliationService.js";
 import { upsertOperationStageProgress } from "../operationStageProgressService.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
+import { reconcileVerifiedShopifyStateIntoActiveMirror } from "./BulkEditMirrorApplyService.js";
 
 const VERIFY_MODES = Object.freeze({
   NONE: "NONE",
@@ -25,6 +25,11 @@ const SUPPORTED_PRODUCT_VERIFY_FIELDS = new Set([
   "vendor",
   "productType",
   "handle",
+  "description",
+  "descriptionHtml",
+  "tags",
+  "seoTitle",
+  "seoDescription",
 ]);
 
 const SUPPORTED_VARIANT_VERIFY_FIELDS = new Set([
@@ -33,6 +38,7 @@ const SUPPORTED_VARIANT_VERIFY_FIELDS = new Set([
   "price",
   "compareAtPrice",
   "inventoryQuantity",
+  "taxable",
 ]);
 
 const SHOPIFY_QUERY_RETRY_ATTEMPTS = Number.parseInt(
@@ -190,6 +196,26 @@ const VERIFY_NODES_QUERY = `#graphql
         vendor
         productType
         handle
+        descriptionHtml
+        tags
+        seo {
+          title
+          description
+        }
+        updatedAt
+        variants(first: 100) {
+          nodes {
+            id
+            title
+            sku
+            barcode
+            price
+            compareAtPrice
+            inventoryQuantity
+            taxable
+            selectedOptions { name value }
+          }
+        }
       }
       ... on ProductVariant {
         id
@@ -198,6 +224,10 @@ const VERIFY_NODES_QUERY = `#graphql
         price
         compareAtPrice
         inventoryQuantity
+        taxable
+        title
+        selectedOptions { name value }
+        product { id }
       }
     }
   }
@@ -428,7 +458,15 @@ function readExpectedFromAfterValues(afterValues = {}) {
     : [];
 
   const variantFieldChanges = Array.isArray(afterValues?.variantFieldChanges)
-    ? afterValues.variantFieldChanges
+    ? afterValues.variantFieldChanges.flatMap((group) => {
+        if (Array.isArray(group?.changes)) {
+          return group.changes.map((change) => ({
+            ...change,
+            variantId: change?.variantId || group?.variantId || null,
+          }));
+        }
+        return [group];
+      })
     : [];
 
   const inventoryLevelChanges = Array.isArray(afterValues?.inventoryLevelChanges)
@@ -445,6 +483,29 @@ function readExpectedFromAfterValues(afterValues = {}) {
     inventoryLevelChanges,
     metafieldChanges,
   };
+}
+
+function readExpectedFromRow(row = {}) {
+  const afterValues = row?.afterValues && typeof row.afterValues === "object"
+    ? row.afterValues
+    : {};
+  return readExpectedFromAfterValues({
+    ...afterValues,
+    productFieldChanges: Array.isArray(afterValues.productFieldChanges)
+      ? afterValues.productFieldChanges
+      : row.productFieldChanges,
+    variantFieldChanges: Array.isArray(afterValues.variantFieldChanges)
+      ? afterValues.variantFieldChanges
+      : row.variantFieldChanges,
+  });
+}
+
+function readActualProductField(product, field) {
+  if (field === "description") return product?.descriptionHtml ?? null;
+  if (field === "seoTitle") return product?.seo?.title ?? null;
+  if (field === "seoDescription") return product?.seo?.description ?? null;
+  if (field === "tags") return Array.isArray(product?.tags) ? product.tags.join(", ") : product?.tags ?? null;
+  return product?.[field] ?? null;
 }
 
 function normalizeInventoryTuple(change = {}, row = {}) {
@@ -494,7 +555,7 @@ function compareSimpleExpected({
       continue;
     }
 
-    const current = product?.[field] ?? null;
+    const current = readActualProductField(product, field);
     const wanted = item?.newValue ?? null;
 
     if (String(current) !== String(wanted)) {
@@ -665,6 +726,7 @@ export class BulkEditVerificationService {
         shop: true,
         executionIdentity: true,
         rules: true,
+        isSpreadsheetEdit: true,
         batch: true,
         targetSnapshotCount: true,
       },
@@ -758,13 +820,15 @@ export class BulkEditVerificationService {
       where: {
         editHistoryId: historyId,
         shop,
-        ...(batchId ? { batchId } : {}),
+        ...(history.isSpreadsheetEdit !== true && batchId ? { batchId } : {}),
       },
       select: {
         id: true,
         productId: true,
         variantId: true,
         afterValues: true,
+        productFieldChanges: true,
+        variantFieldChanges: true,
         status: true,
       },
     });
@@ -828,7 +892,7 @@ export class BulkEditVerificationService {
     const metafieldRequests = [];
 
     for (const row of verifyRows) {
-      const expected = readExpectedFromAfterValues(row.afterValues || {});
+      const expected = readExpectedFromRow(row);
 
       for (const change of expected.inventoryLevelChanges) {
         const { variantId, locationId } = normalizeInventoryTuple(change, row);
@@ -877,7 +941,7 @@ export class BulkEditVerificationService {
 
     for (const row of verifyRows) {
       const product = productsById.get(row.productId);
-      const expected = readExpectedFromAfterValues(row.afterValues || {});
+      const expected = readExpectedFromRow(row);
 
       const mismatches = compareSimpleExpected({
         row,
@@ -985,6 +1049,12 @@ export class BulkEditVerificationService {
 
     const totalFailed = failed + failures.length;
 
+    const mirrorReconciliation = await reconcileVerifiedShopifyStateIntoActiveMirror({
+      shop,
+      productsById,
+      variantsById,
+    });
+
     const finalState =
       totalFailed > 0 || completionBlockedByCoverage
         ? OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED
@@ -994,9 +1064,6 @@ export class BulkEditVerificationService {
       totalFailed > 0 || completionBlockedByCoverage
         ? "partial"
         : "completed";
-
-    const verificationStatus =
-      totalFailed > 0 || completionBlockedByCoverage ? "FAILED" : "SUCCESS";
 
     const historyUpdate = await guardedEditHistoryUpdate({
       id: historyId,
@@ -1029,6 +1096,7 @@ export class BulkEditVerificationService {
             sampledCount: verifyRows.length,
             verificationTargetCount,
             completionBlockedByCoverage,
+            mirrorReconciliation,
           },
         },
       },
@@ -1039,15 +1107,6 @@ export class BulkEditVerificationService {
     }
 
     await clearKeyCaches(`${shop}:historyChanges:${historyId}:`).catch(() => {});
-
-    await schedulePostMutationMirrorReconciliation({
-      shop,
-      ownerType: "EDIT_HISTORY",
-      ownerId: historyId,
-      mirrorBatchId: history.batch?.previewFingerprint?.mirrorBatchId || null,
-      source: "BULK_EDIT_VERIFICATION",
-      verificationStatus,
-    });
 
     await upsertOperationStageProgress({
       shop,
@@ -1071,6 +1130,7 @@ export class BulkEditVerificationService {
         verificationFailedCount: failed,
         totalFailedCount: totalFailed,
         completionBlockedByCoverage,
+        mirrorReconciliation,
       },
       completed: true,
     });
@@ -1086,6 +1146,7 @@ export class BulkEditVerificationService {
       shopifyFailed: failures.length,
       totalFailed,
       sampledCount: verifyRows.length,
+      mirrorReconciliation,
     };
   }
 }

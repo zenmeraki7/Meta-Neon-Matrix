@@ -41,9 +41,9 @@ test("result ingestion persists checkpoint and checksum fields for resumability"
   assert.ok(src.includes("UNMAPPED_RESULT_ROWS"));
 });
 
-test("result ingestion preserves its terminal marker and accepts committed row retries", () => {
+test("result ingestion preserves its terminal marker, accepts retries, and defers mirror writes", () => {
   const src = read("web/services/bulkEdit/BulkEditResultIngestionService.js");
-  assert.ok(src.includes("latestHistoryForMirrorApply?.batch"));
+  assert.ok(!src.includes("applyMirrorFromSuccessfulChangeRecords("));
   assert.ok(src.includes('["SUCCESS", "SUCCEEDED", "VERIFIED"].includes(existingStatus)'));
   assert.ok(src.includes("existingRecord.options"));
 });

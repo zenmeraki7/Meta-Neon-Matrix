@@ -17,6 +17,7 @@ import crypto from "crypto";
 import {
   BULK_EDIT_EXECUTION_STATES,
   appendExecutionError,
+  buildPlannedUndoState,
   buildExecutionError,
 } from "../../services/bulkEditExecutionStateService.js";
 import {
@@ -446,6 +447,7 @@ const bulkImportEditWorker = new Worker(
       const changeRecords = [];
       const explicitTargets = [];
       const batchId = String(job.id);
+      const containsProductCreates = [...productMap.values()].some((value) => value.isCreate);
 
       for (const { productSet, isCreate, syntheticProductId } of productMap.values()) {
         const effectiveProductId = isCreate ? syntheticProductId : productSet.id;
@@ -538,6 +540,10 @@ const bulkImportEditWorker = new Worker(
           batchId,
           beforeValues: {
             ...(isCreate ? { csvCreate: true } : {}),
+            productFieldChanges,
+            variantFieldChanges,
+          },
+          afterValues: {
             productFieldChanges,
             variantFieldChanges,
           },
@@ -667,6 +673,10 @@ const bulkImportEditWorker = new Worker(
           targetSnapshotCount: frozenCount,
           targetMirrorBatchId: mirrorBatchId,
           snapshotSetId: snapshotSet.id,
+          undo: buildPlannedUndoState({
+            allowed: !containsProductCreates,
+            executionIdentity: history.executionIdentity || null,
+          }),
           executionState: OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,
           executionStateNormalized: normalizeEditHistoryExecutionState(
             OPERATION_LIFECYCLE_STATES.TARGET_FROZEN,

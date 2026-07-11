@@ -28,7 +28,7 @@ import {
 } from "@shopify/polaris-icons";
 import Papa from "papaparse";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { buildOperationTimeline } from "../utils/operationTimeline";
 import { operationStatusBadge } from "../../../shared/components/StatusBadge";
 import { useApiClient } from "../../../../hooks/useApiClient";
@@ -180,6 +180,7 @@ export default function EditDetails() {
 const { t, i18n } = useTranslation();
   const { showError } = useAppToast();
   const api = useApiClient();
+  const queryClient = useQueryClient();
   const [historyItem, setHistoryItem] = useState(null);
   const [changes, setChanges] = useState([]);
   const [changeField, setChangeField] = useState("");
@@ -328,8 +329,21 @@ const { t, i18n } = useTranslation();
     const nextUndoStatus = getUndoStatus(summaryQuery.data);
     if (nextPrimaryStatus.key === "completed" || nextUndoStatus?.key === "undo_completed") {
       fetchChanges(currentPage);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["bootstrap-products"] });
     }
-  }, [summaryQuery.data, currentPage, fetchChanges]);
+  }, [summaryQuery.data, currentPage, fetchChanges, queryClient]);
+
+  const formatAuditValue = useCallback((value) => {
+    if (value === undefined) return t("historyValue.unavailable", { defaultValue: "Unavailable" });
+    if (value === null) return t("historyValue.none", { defaultValue: "None" });
+    if (value === "") return t("historyValue.empty", { defaultValue: "Empty" });
+    if (value === false) return t("historyValue.no", { defaultValue: "No" });
+    if (value === true) return t("historyValue.yes", { defaultValue: "Yes" });
+    if (Array.isArray(value)) return value.length ? value.join(", ") : t("historyValue.none", { defaultValue: "None" });
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  }, [t]);
 
   const flattenedRows = useMemo(() => {
     if (!Array.isArray(changes) || changes.length === 0) return [];
@@ -354,14 +368,8 @@ const { t, i18n } = useTranslation();
         scope: t("scope.product"),
         status: String(change?.status || historyItem?.primaryStatus?.key || historyItem?.status || "pending"),
         field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }),  // ✅ translate
-        oldValue:
-          fieldChange?.oldValue !== undefined && fieldChange?.oldValue !== null
-            ? String(fieldChange.oldValue)
-            : "N/A",
-        newValue:
-          fieldChange?.newValue !== undefined && fieldChange?.newValue !== null
-            ? String(fieldChange.newValue)
-            : "N/A",
+        oldValue: formatAuditValue(fieldChange?.oldValue),
+        newValue: formatAuditValue(fieldChange?.newValue),
       };
     })
   : [];
@@ -385,14 +393,8 @@ const { t, i18n } = useTranslation();
           scope: t("scope.variant"),
         status: String(change?.status || historyItem?.primaryStatus?.key || historyItem?.status || "pending"),
           field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }),  // ✅ translate
-          oldValue:
-            fieldChange?.oldValue !== undefined && fieldChange?.oldValue !== null
-              ? String(fieldChange.oldValue)
-              : "N/A",
-          newValue:
-            fieldChange?.newValue !== undefined && fieldChange?.newValue !== null
-              ? String(fieldChange.newValue)
-              : "N/A",
+          oldValue: formatAuditValue(fieldChange?.oldValue),
+          newValue: formatAuditValue(fieldChange?.newValue),
         };
       });
     })
@@ -400,7 +402,7 @@ const { t, i18n } = useTranslation();
 
       return [...productRows, ...variantRows];
     });
-  }, [changes, changeField, t, historyItem?.primaryStatus?.key, historyItem?.status]);
+  }, [changes, changeField, t, formatAuditValue, historyItem?.primaryStatus?.key, historyItem?.status]);
 
   const handleDownloadLogs = useCallback(() => {
     if (!historyItem?.id || flattenedRows.length === 0) return;
