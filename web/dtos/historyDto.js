@@ -8,7 +8,10 @@ const MAX_TITLE_LENGTH = 200;
 const MAX_URL_LENGTH = 2000;
 
 const EXPORT_FIELD_LABEL_BY_KEY = new Map(
-  productExportFieldRegistry.map((field) => [field.key, field.label || field.key]),
+  productExportFieldRegistry.map((field) => [
+    field.key,
+    field.label || field.key,
+  ])
 );
 
 function asArray(value) {
@@ -38,7 +41,9 @@ function parseArrayString(value) {
 }
 
 function normalizeExportFieldKeys(value) {
-  const rawFields = Array.isArray(value) ? value : parseArrayString(value) || [];
+  const rawFields = Array.isArray(value)
+    ? value
+    : parseArrayString(value) || [];
 
   return rawFields
     .map((field) => {
@@ -50,21 +55,25 @@ function normalizeExportFieldKeys(value) {
 }
 
 function toExportedFieldDtos(value) {
-  const rawFields = Array.isArray(value) ? value : parseArrayString(value) || [];
+  const rawFields = Array.isArray(value)
+    ? value
+    : parseArrayString(value) || [];
 
   return rawFields
     .map((field) => {
       const safe = asObject(field);
-      const key = typeof field === "string"
-        ? field.trim()
-        : toStringOrNull(safe?.key ?? safe?.value ?? safe?.field, 160);
+      const key =
+        typeof field === "string"
+          ? field.trim()
+          : toStringOrNull(safe?.key ?? safe?.value ?? safe?.field, 160);
       if (!key) return null;
 
       return {
         key,
-        label: toSafeText(safe?.label, MAX_TITLE_LENGTH)
-          || EXPORT_FIELD_LABEL_BY_KEY.get(key)
-          || key,
+        label:
+          toSafeText(safe?.label, MAX_TITLE_LENGTH) ||
+          EXPORT_FIELD_LABEL_BY_KEY.get(key) ||
+          key,
       };
     })
     .filter(Boolean);
@@ -162,7 +171,7 @@ function toSafeErrorList(value) {
         code: toStringOrNull(safe.code, 80),
         message: toSafeText(
           safe.publicMessage ?? safe.message,
-          MAX_ERROR_MESSAGE_LENGTH,
+          MAX_ERROR_MESSAGE_LENGTH
         ),
         row: toNumber(safe.row, 0) || null,
         field: toStringOrNull(safe.field, 120),
@@ -184,7 +193,10 @@ function toEditHistoryEmbeddedSummaryDto(summary) {
 function toExportHistoryListItemDto(history) {
   const safe = asObject(history) || {};
   const status = toStringOrNull(safe.statusNormalized ?? safe.status, 120);
-  const downloadUrl = toSafeText(safe.downloadUrl ?? safe.fileUrl, MAX_URL_LENGTH);
+  const downloadUrl = toSafeText(
+    safe.downloadUrl ?? safe.fileUrl,
+    MAX_URL_LENGTH
+  );
   const totalItems = toNumber(safe.totalItems ?? safe.totalRows, 0);
 
   return {
@@ -217,15 +229,20 @@ function toExportHistoryDetailDto(history) {
   const status = toStringOrNull(safe.statusNormalized ?? safe.status, 120);
   const executionState = toStringOrNull(
     safe.executionStateNormalized ?? safe.executionState,
-    120,
+    120
   );
-  const downloadUrl = toSafeText(safe.downloadUrl ?? safe.fileUrl, MAX_URL_LENGTH);
+  const downloadUrl = toSafeText(
+    safe.downloadUrl ?? safe.fileUrl,
+    MAX_URL_LENGTH
+  );
   const totalItems = toNumber(safe.totalItems ?? safe.totalRows, 0);
   const fields = normalizeExportFieldKeys(
-    safe.fields ?? safe.selectedFields ?? safe.exportFields ?? safe.columns,
+    safe.fields ?? safe.selectedFields ?? safe.exportFields ?? safe.columns
   );
   const exportedFields = toExportedFieldDtos(
-    safe.exportedFields && safe.exportedFields.length ? safe.exportedFields : fields,
+    safe.exportedFields && safe.exportedFields.length
+      ? safe.exportedFields
+      : fields
   );
 
   return {
@@ -246,7 +263,10 @@ function toExportHistoryDetailDto(history) {
     queuedAt: toIsoString(safe.queuedAt ?? safe.createdAt),
     startedAt: toIsoString(safe.startedAt),
     completedAt: toIsoString(safe.completedAt),
-    failedAt: status === "FAILED" ? toIsoString(safe.completedAt ?? safe.updatedAt) : null,
+    failedAt:
+      status === "FAILED"
+        ? toIsoString(safe.completedAt ?? safe.updatedAt)
+        : null,
     totalItems,
     totalRows: totalItems,
     rowCount: totalItems,
@@ -329,7 +349,10 @@ function toEditHistoryDetailDto(history) {
     status: toStringOrNull(safe.status, 120),
     statusNormalized: toStringOrNull(safe.statusNormalized, 120),
     executionState: toStringOrNull(safe.executionState, 120),
-    executionStateNormalized: toStringOrNull(safe.executionStateNormalized, 120),
+    executionStateNormalized: toStringOrNull(
+      safe.executionStateNormalized,
+      120
+    ),
     title: toSafeText(safe.title ?? safe.name, MAX_TITLE_LENGTH),
     field: toStringOrNull(safe.field, 160),
     createdAt: toIsoString(safe.createdAt),
@@ -367,7 +390,8 @@ function toEditHistoryDetailDto(history) {
 function toEditHistorySummaryDto(summary) {
   const safe = asObject(summary) || {};
   const rawType = toStringOrNull(safe.type ?? safe.editType, 120);
-  const type = rawType && rawType.toLowerCase() === "manual edit" ? "edit" : rawType;
+  const type =
+    rawType && rawType.toLowerCase() === "manual edit" ? "edit" : rawType;
 
   return {
     id: toStringOrNull(safe.id, 200),
@@ -375,7 +399,10 @@ function toEditHistorySummaryDto(summary) {
     status: toStringOrNull(safe.status, 120),
     statusNormalized: toStringOrNull(safe.statusNormalized, 120),
     executionState: toStringOrNull(safe.executionState, 120),
-    executionStateNormalized: toStringOrNull(safe.executionStateNormalized, 120),
+    executionStateNormalized: toStringOrNull(
+      safe.executionStateNormalized,
+      120
+    ),
     title: toSafeText(safe.title ?? safe.name, MAX_TITLE_LENGTH),
     createdAt: toIsoString(safe.createdAt),
     updatedAt: toIsoString(safe.updatedAt),
@@ -407,6 +434,34 @@ function toEditHistorySummaryDto(summary) {
 
 function toEditHistoryChangeDto(change) {
   const safe = asObject(change) || {};
+  const rawUndoResult = asObject(safe.undoResult);
+  const undoResult = rawUndoResult
+    ? {
+        status: toStringOrNull(rawUndoResult.status, 80),
+        verified: rawUndoResult.verified === true,
+        verifiedAt: toIsoString(rawUndoResult.verifiedAt),
+        fields: asArray(rawUndoResult.fields)
+          .slice(0, 100)
+          .map((entry) => {
+            const field = asObject(entry) || {};
+            return {
+              scope: toStringOrNull(field.scope, 40),
+              field: toStringOrNull(field.field, 160),
+              productId: toStringOrNull(field.productId, 200),
+              variantId: toStringOrNull(field.variantId, 200),
+              restoredValue: toDisplayValue(field.restoredValue),
+              currentShopifyValue: toDisplayValue(field.currentShopifyValue),
+              verified: field.verified === true,
+              verifiedAt: toIsoString(field.verifiedAt),
+            };
+          }),
+        errorCode: toStringOrNull(rawUndoResult.errorCode, 160),
+        errorMessage: toSafeText(
+          rawUndoResult.errorMessage,
+          MAX_ERROR_MESSAGE_LENGTH
+        ),
+      }
+    : null;
 
   return {
     id: toStringOrNull(safe.id, 200),
@@ -422,8 +477,9 @@ function toEditHistoryChangeDto(change) {
     status: toStringOrNull(safe.status, 120),
     errorMessage: toSafeText(
       safe.publicError ?? safe.errorMessage,
-      MAX_ERROR_MESSAGE_LENGTH,
+      MAX_ERROR_MESSAGE_LENGTH
     ),
+    undoResult,
     createdAt: toIsoString(safe.createdAt),
   };
 }
@@ -513,7 +569,9 @@ export function toImportHistoryListResponseDto(result) {
   const safe = asObject(result) || {};
   const historiesFromContract = asArray(safe.histories);
   const fallbackItems = asArray(safe.items);
-  const histories = historiesFromContract.length ? historiesFromContract : fallbackItems;
+  const histories = historiesFromContract.length
+    ? historiesFromContract
+    : fallbackItems;
 
   return {
     success: true,

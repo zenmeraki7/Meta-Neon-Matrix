@@ -27,6 +27,10 @@ import {
   getAllImportHistories,
   getImportHistoryDetails,
 } from "../controllers/historyController.js";
+import {
+  getHistoryUndoStatus,
+  requestHistoryUndo,
+} from "../controllers/historyUndoController.js";
 
 const router = express.Router();
 const historyRateLimiter = rateLimit({
@@ -58,7 +62,7 @@ router.get(
   "/export/list-summary",
   validateSession,
   historyRateLimiter,
-  getExportHistoryListSummary,
+  getExportHistoryListSummary
 );
 router.get(
   "/get-edit-history-details/:id",
@@ -66,16 +70,8 @@ router.get(
   // restrictSubscribeUserWork,
   getHistoryDetails
 );
-router.get(
-  "/get-edit-history-summary/:id",
-  validateSession,
-  getHistorySummary,
-);
-router.get(
-  "/edit/detail/:id/summary",
-  validateSession,
-  getHistorySummary,
-);
+router.get("/get-edit-history-summary/:id", validateSession, getHistorySummary);
+router.get("/edit/detail/:id/summary", validateSession, getHistorySummary);
 router.get(
   "/get-edit-history/changes/:id",
   validateSession,
@@ -83,19 +79,8 @@ router.get(
   getHistoryChanges
 );
 
-
-router.get(
-  "/get-export-details/:id",
-  validateSession,
-  getExportHistoryDetails
-);
-router.get(
-  "/export/detail/:id",
-  validateSession,
-  getExportHistoryDetail,
-);
-
-
+router.get("/get-export-details/:id", validateSession, getExportHistoryDetails);
+router.get("/export/detail/:id", validateSession, getExportHistoryDetail);
 
 // GET all import histories
 router.get(
@@ -110,5 +95,17 @@ router.get(
   "/get-import-history-details/:id",
   validateSession,
   getImportHistoryDetails
+);
+router.post(
+  "/:historyId/undo",
+  validateSession,
+  historyRateLimiter,
+  requestHistoryUndo
+);
+router.get(
+  "/undo/:undoExecutionId/status",
+  validateSession,
+  historyRateLimiter,
+  getHistoryUndoStatus
 );
 export default router;

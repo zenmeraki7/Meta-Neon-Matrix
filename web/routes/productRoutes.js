@@ -7,12 +7,8 @@ import {
   pauseExportOperation,
   resumePausedExportOperation,
 } from "../controllers/productExportController.js";
-import {
-  handleDownloadExportProductsData,
-} from "../controllers/productExportController.js";
-import {
-  clearProductTypes,
-} from "../controllers/productSyncController.js";
+import { handleDownloadExportProductsData } from "../controllers/productExportController.js";
+import { clearProductTypes } from "../controllers/productSyncController.js";
 import {
   cancelEditOperation,
   handleBulkEditProduct,
@@ -21,7 +17,6 @@ import {
   resumePausedEditOperation,
   getEditPreviewVariantDetails,
   trackEditPreview,
-  undoEdit,
 } from "../controllers/productBulkEditController.js";
 
 import {
@@ -55,7 +50,10 @@ import {
   updateScheduledExportController,
 } from "../controllers/scheduledExportController.js";
 
-import { subscriptionMiddleware, requireScheduledEditPlanMiddleware } from "../middleware/subscriptionMiddleware.js";
+import {
+  subscriptionMiddleware,
+  requireScheduledEditPlanMiddleware,
+} from "../middleware/subscriptionMiddleware.js";
 import productQuerySchema from "../validations/productQuerySchema.js";
 import { validateBody, validateQuery } from "../middleware/validateQuery.js";
 // import {
@@ -85,11 +83,7 @@ router.post(
   validateBody(exportRequestSchema),
   createProductExport
 );
-router.get(
-  "/export/fields",
-  subscriptionMiddleware,
-  getProductExportFields
-);
+router.get("/export/fields", subscriptionMiddleware, getProductExportFields);
 router.post(
   "/create-scheduled-export",
   subscriptionMiddleware,
@@ -107,26 +101,42 @@ router.put(
   subscriptionMiddleware,
   toggleScheduledExportStatusController
 );
-router.delete("/delete-scheduled-export/:id", subscriptionMiddleware, deleteScheduledExportController);
+router.delete(
+  "/delete-scheduled-export/:id",
+  subscriptionMiddleware,
+  deleteScheduledExportController
+);
 router.get(
   "/download-export/:id",
   // restrictSubscribeUserWork,
   handleDownloadExportProductsData
 );
-router.post("/cancel-export/:id", subscriptionMiddleware, cancelExportOperation);
+router.post(
+  "/cancel-export/:id",
+  subscriptionMiddleware,
+  cancelExportOperation
+);
 router.post("/pause-export/:id", subscriptionMiddleware, pauseExportOperation);
-router.post("/resume-export/:id", subscriptionMiddleware, resumePausedExportOperation);
-
+router.post(
+  "/resume-export/:id",
+  subscriptionMiddleware,
+  resumePausedExportOperation
+);
 
 router.get("/product-type-all", getProductTypes);
 router.get("/filter-values/:field", getProductFilterValues);
 router.get("/filter-registry", getFilterRegistry);
 router.get("/product-type-refresh", clearProductTypes);
-router.post("/edit-preview", subscriptionMiddleware, validateBody(bulkEditPreviewSchema), trackEditPreview);
+router.post(
+  "/edit-preview",
+  subscriptionMiddleware,
+  validateBody(bulkEditPreviewSchema),
+  trackEditPreview
+);
 router.get(
   "/edit-preview/:previewId/products/:productId/variants",
   subscriptionMiddleware,
-  getEditPreviewVariantDetails,
+  getEditPreviewVariantDetails
 );
 router.get("/bulk-edit-status/:id", checkEditStatus);
 router.post(
@@ -136,11 +146,18 @@ router.post(
   handleBulkEditProduct
 );
 
-router.put("/undo-edit/:id", subscriptionMiddleware, undoEdit);
 router.post("/cancel-edit/:id", subscriptionMiddleware, cancelEditOperation);
 router.post("/pause-edit/:id", subscriptionMiddleware, pauseEditOperation);
-router.post("/resume-edit/:id", subscriptionMiddleware, resumePausedEditOperation);
-router.post("/retry-failed-edit/:id", subscriptionMiddleware, retryFailedOnlyEditOperation);
+router.post(
+  "/resume-edit/:id",
+  subscriptionMiddleware,
+  resumePausedEditOperation
+);
+router.post(
+  "/retry-failed-edit/:id",
+  subscriptionMiddleware,
+  retryFailedOnlyEditOperation
+);
 router.post(
   "/create-recurring-edit",
   subscriptionMiddleware,
@@ -160,7 +177,11 @@ router.put(
   subscriptionMiddleware,
   toggleRecurringEditStatusController
 );
-router.delete("/delete-recurring-edit/:id", subscriptionMiddleware, deleteRecurringEditController);
+router.delete(
+  "/delete-recurring-edit/:id",
+  subscriptionMiddleware,
+  deleteRecurringEditController
+);
 router.post(
   "/schedule-task",
   subscriptionMiddleware,
@@ -168,17 +189,20 @@ router.post(
   createScheduledEdit
 );
 
-
 router.post(
   "/csv/import",
   subscriptionMiddleware,
   uploadCsv.single("file"),
   validateBody(importRequestSchema),
-  importCsvController,
+  importCsvController
 );
-router.post("/csv/preview", subscriptionMiddleware, uploadCsv.single("file"), createCsvPreviewController);
+router.post(
+  "/csv/preview",
+  subscriptionMiddleware,
+  uploadCsv.single("file"),
+  createCsvPreviewController
+);
 router.get("/csv/preview", subscriptionMiddleware, previewCsvController);
-
 
 // router.post("/save-filter-combination", addFilterCombination);
 // router.get("/get-filter-combinations", getFilterCombinations);

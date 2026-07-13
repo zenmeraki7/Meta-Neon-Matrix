@@ -10,7 +10,10 @@ import {
 import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
 import { normalizeExecutionStateLiteral } from "../utils/normalizedStateUtils.js";
 const LEGACY_COMPAT = Object.freeze({
-  undoStatusFallback: String(process.env.ENABLE_LEGACY_UNDO_STATUS_FALLBACK || "false").toLowerCase() === "true",
+  undoStatusFallback:
+    String(
+      process.env.ENABLE_LEGACY_UNDO_STATUS_FALLBACK || "false"
+    ).toLowerCase() === "true",
 });
 const TIMELINE_STAGE_KEYS = Object.freeze([
   "PLANNED",
@@ -32,10 +35,16 @@ const TIMELINE_STATE_ALIASES = Object.freeze({
   AWAITING_SHOPIFY: "SHOPIFY_RUNNING",
   FINALIZING: "VERIFYING",
 });
-const TERMINAL_TIMELINE_KEYS = new Set(["FAILED", "PARTIAL_FAILED", "CANCELLED"]);
+const TERMINAL_TIMELINE_KEYS = new Set([
+  "FAILED",
+  "PARTIAL_FAILED",
+  "CANCELLED",
+]);
 
 function normalizeTimelineState(value) {
-  const raw = String(value || "").trim().toUpperCase();
+  const raw = String(value || "")
+    .trim()
+    .toUpperCase();
   if (!raw) return "UNKNOWN";
   return TIMELINE_STATE_ALIASES[raw] || raw;
 }
@@ -55,11 +64,16 @@ function buildTimelineSummary(executionState, idempotencyStages = []) {
     for (let index = 0; index < stages.length; index += 1) {
       if (index < activeIndex) stages[index].status = "completed";
     }
-    stages[activeIndex].status = TERMINAL_TIMELINE_KEYS.has(currentState) ? "completed" : "active";
+    stages[activeIndex].status = TERMINAL_TIMELINE_KEYS.has(currentState)
+      ? "completed"
+      : "active";
   }
 
   const stageMeta = new Map(
-    (Array.isArray(idempotencyStages) ? idempotencyStages : []).map((stage) => [String(stage?.stage || ""), stage]),
+    (Array.isArray(idempotencyStages) ? idempotencyStages : []).map((stage) => [
+      String(stage?.stage || ""),
+      stage,
+    ])
   );
 
   const stageBadges = stages.slice(0, 5).map((stage) => {
@@ -79,7 +93,8 @@ function buildTimelineSummary(executionState, idempotencyStages = []) {
   const activeStage = stages.find((stage) => stage.status === "active") || null;
   return {
     currentState,
-    activeStageLabelKey: activeStage?.labelKey || `operationLifecycleStageLabels.${currentState}`,
+    activeStageLabelKey:
+      activeStage?.labelKey || `operationLifecycleStageLabels.${currentState}`,
     activeStageDefaultLabel: activeStage?.defaultLabel || currentState,
     stageBadges,
   };
@@ -100,12 +115,14 @@ function parseHistoryErrors(value) {
 }
 
 function normalizeIdempotencyStages(batchValue) {
-  const batch = batchValue && typeof batchValue === "object" && !Array.isArray(batchValue)
-    ? batchValue
-    : {};
-  const rawStages = batch.idempotencyStages && typeof batch.idempotencyStages === "object"
-    ? batch.idempotencyStages
-    : {};
+  const batch =
+    batchValue && typeof batchValue === "object" && !Array.isArray(batchValue)
+      ? batchValue
+      : {};
+  const rawStages =
+    batch.idempotencyStages && typeof batch.idempotencyStages === "object"
+      ? batch.idempotencyStages
+      : {};
   const entries = Object.entries(rawStages)
     .map(([stage, value]) => {
       const stageState = value && typeof value === "object" ? value : {};
@@ -148,47 +165,87 @@ function buildStatusSummary({
 }
 
 function buildMerchantSafetyState(record, undo, primaryStatus) {
-  const rawExecutionState = normalizeExecutionStateLiteral(record.executionState);
-  const normalizedExecutionState = String(record.executionStateNormalized || "").toUpperCase();
+  const rawExecutionState = normalizeExecutionStateLiteral(
+    record.executionState
+  );
+  const normalizedExecutionState = String(
+    record.executionStateNormalized || ""
+  ).toUpperCase();
   const statusNormalized = String(record.statusNormalized || "").toUpperCase();
   const processedCount = Number(record.processedCount || 0);
-  const batch = record.batch && typeof record.batch === "object" ? record.batch : {};
-  const verificationStatus = String(batch.verificationStatus || "").toUpperCase();
+  const batch =
+    record.batch && typeof record.batch === "object" ? record.batch : {};
+  const verificationStatus = String(
+    batch.verificationStatus || ""
+  ).toUpperCase();
   const conflictCount = Number(batch.conflictDetectedCount || 0);
-  const undoConflicts = Array.isArray(undo?.conflicts) ? undo.conflicts.length : 0;
+  const undoConflicts = Array.isArray(undo?.conflicts)
+    ? undo.conflicts.length
+    : 0;
 
-  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING) return "Preparing targets";
-  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN) return "Targets frozen";
-  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.PLANNED || normalizedExecutionState === "PLANNED") {
+  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING)
+    return "Preparing targets";
+  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN)
+    return "Targets frozen";
+  if (
+    rawExecutionState === OPERATION_LIFECYCLE_STATES.PLANNED ||
+    normalizedExecutionState === "PLANNED"
+  ) {
     return "Waiting to prepare targets";
   }
   if (rawExecutionState === "PAUSED") return "Paused";
-  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.QUEUED || normalizedExecutionState === "QUEUED") {
+  if (
+    rawExecutionState === OPERATION_LIFECYCLE_STATES.QUEUED ||
+    normalizedExecutionState === "QUEUED"
+  ) {
     return "Queued";
   }
-  if (normalizedExecutionState === "DISPATCHING" || normalizedExecutionState === "AWAITING_SHOPIFY") {
+  if (
+    normalizedExecutionState === "DISPATCHING" ||
+    normalizedExecutionState === "AWAITING_SHOPIFY"
+  ) {
     return "Editing products";
   }
-  if (normalizedExecutionState === "FINALIZING" || verificationStatus === "PENDING") {
+  if (
+    normalizedExecutionState === "FINALIZING" ||
+    verificationStatus === "PENDING"
+  ) {
     return "Verifying changes";
   }
-  if (normalizedExecutionState === "CANCELLED" || statusNormalized === "CANCELLED") {
+  if (
+    normalizedExecutionState === "CANCELLED" ||
+    statusNormalized === "CANCELLED"
+  ) {
     return "Cancelled";
   }
   if (normalizedExecutionState === "FAILED" || statusNormalized === "FAILED") {
-    return processedCount > 0 ? "Failed after partial edit" : "Failed before editing";
+    return processedCount > 0
+      ? "Failed after partial edit"
+      : "Failed before editing";
   }
-  if (normalizedExecutionState === "PARTIAL" || statusNormalized === "PARTIAL" || conflictCount > 0 || verificationStatus === "PARTIAL" || verificationStatus === "FAILED") {
+  if (
+    normalizedExecutionState === "PARTIAL" ||
+    statusNormalized === "PARTIAL" ||
+    conflictCount > 0 ||
+    verificationStatus === "PARTIAL" ||
+    verificationStatus === "FAILED"
+  ) {
     return "Completed with failures";
   }
-  if (normalizedExecutionState === "COMPLETED" || statusNormalized === "COMPLETED") {
+  if (
+    normalizedExecutionState === "COMPLETED" ||
+    statusNormalized === "COMPLETED"
+  ) {
     if (undo?.allowed && undoConflicts > 0) return "Undo partially available";
     if (undo?.allowed) return "Undo available";
     return "Completed";
   }
 
   if (primaryStatus?.key === "queued") return "Queued";
-  if (primaryStatus?.key === "dispatching" || primaryStatus?.key === "awaiting_shopify") {
+  if (
+    primaryStatus?.key === "dispatching" ||
+    primaryStatus?.key === "awaiting_shopify"
+  ) {
     return "Editing products";
   }
   return primaryStatus?.label || "Queued";
@@ -216,7 +273,6 @@ function mapBulkEditExecutionSummary(executionState) {
         detailKey: "historyStatusDetail.queued",
       });
 
-      
     case BULK_EDIT_EXECUTION_STATES.DISPATCHING:
       return buildStatusSummary({
         key: "dispatching",
@@ -351,11 +407,25 @@ function mapBulkUndoSummary(undoValue) {
       });
 
     case BULK_UNDO_STATES.COMPLETED:
+      if (undo?.verification?.verified !== true) {
+        return buildStatusSummary({
+          key: "undo_verification_failed",
+          label: "Undo verification failed",
+          labelKey: "historyStatus.undo_verification_failed",
+          tone: "critical",
+          detail:
+            "Shopify read-back evidence is missing or did not match the restored values.",
+          detailKey: "historyStatusDetail.undo_verification_failed",
+          isTerminal: true,
+        });
+      }
       return buildStatusSummary({
-        key: "undo_completed",
-        label: "Undo completed",
-        labelKey: "historyStatus.undo_completed",
+        key: "undo_verified",
+        label: "Undo completed / Verified",
+        labelKey: "historyStatus.undo_verified",
         tone: "success",
+        detail: "Shopify read-back matched every trusted restored value.",
+        detailKey: "historyStatusDetail.undo_verified",
         isTerminal: true,
       });
 
@@ -371,6 +441,19 @@ function mapBulkUndoSummary(undoValue) {
       });
 
     case BULK_UNDO_STATES.FAILED:
+      if (
+        String(undo?.error?.code || "").includes("undo_verification_failed")
+      ) {
+        return buildStatusSummary({
+          key: "undo_verification_failed",
+          label: "Undo verification failed",
+          labelKey: "historyStatus.undo_verification_failed",
+          tone: "critical",
+          detail: "Shopify did not match the trusted restored values.",
+          detailKey: "historyStatusDetail.undo_verification_failed",
+          isTerminal: true,
+        });
+      }
       return buildStatusSummary({
         key: "undo_failed",
         label: "Undo failed",
@@ -457,10 +540,13 @@ function buildProgressSummary({
 }
 
 function getIngestionSummary(record) {
-  const summary = record?.batch && typeof record.batch === "object"
-    && record.batch.ingestionSummary && typeof record.batch.ingestionSummary === "object"
-    ? record.batch.ingestionSummary
-    : {};
+  const summary =
+    record?.batch &&
+    typeof record.batch === "object" &&
+    record.batch.ingestionSummary &&
+    typeof record.batch.ingestionSummary === "object"
+      ? record.batch.ingestionSummary
+      : {};
   const recordSuccessCount = Math.max(0, Number(record?.successCount || 0));
   const summarySuccessCount = Math.max(0, Number(summary.successCount || 0));
   const recordFailedCount = Math.max(0, Number(record?.failedCount || 0));
@@ -478,7 +564,15 @@ function getIngestionSummary(record) {
 
 function getDisplayProgressProcessedCount(record, primaryStatus) {
   const rawProcessedCount = Math.max(0, Number(record?.processedCount || 0));
-  const totalItems = Math.max(0, Number(record?.targetSnapshotCount || record?.totalItems || record?.totalCount || 0));
+  const totalItems = Math.max(
+    0,
+    Number(
+      record?.targetSnapshotCount ||
+        record?.totalItems ||
+        record?.totalCount ||
+        0
+    )
+  );
   const ingestion = getIngestionSummary(record);
   const successfulCount = ingestion.successCount;
 
@@ -491,9 +585,15 @@ function getDisplayProgressProcessedCount(record, primaryStatus) {
     case "partial":
       return Math.min(successfulCount, totalItems || successfulCount);
     case "cancelled":
-      return Math.min(successfulCount || rawProcessedCount, totalItems || successfulCount || rawProcessedCount);
+      return Math.min(
+        successfulCount || rawProcessedCount,
+        totalItems || successfulCount || rawProcessedCount
+      );
     default:
-      return Math.min(successfulCount || rawProcessedCount, totalItems || successfulCount || rawProcessedCount);
+      return Math.min(
+        successfulCount || rawProcessedCount,
+        totalItems || successfulCount || rawProcessedCount
+      );
   }
 }
 
@@ -623,7 +723,10 @@ export function projectEditHistoryStatus(record) {
   });
 
   const undoErrors = parseHistoryErrors(undo.error);
-  const progressProcessedCount = getDisplayProgressProcessedCount(record, primaryStatus);
+  const progressProcessedCount = getDisplayProgressProcessedCount(
+    record,
+    primaryStatus
+  );
 
   const progress = buildProgressSummary({
     processedCount: progressProcessedCount,
@@ -631,7 +734,11 @@ export function projectEditHistoryStatus(record) {
     fallbackPercent: primaryStatus.key === "completed" ? 100 : 0,
     statusLabel: primaryStatus.label,
   });
-  const merchantSafetyState = buildMerchantSafetyState(record, undo, primaryStatus);
+  const merchantSafetyState = buildMerchantSafetyState(
+    record,
+    undo,
+    primaryStatus
+  );
   const idempotencyStages = normalizeIdempotencyStages(record.batch);
 
   return {
@@ -674,7 +781,7 @@ export function projectExportHistoryStatus(record) {
     fallbackPercent: getExportProgressPercent(
       executionState,
       record.processedCount || record.totalItems || 0,
-      record.targetSnapshotCount || record.totalItems || 0,
+      record.targetSnapshotCount || record.totalItems || 0
     ),
     statusLabel: primaryStatus.label,
   });

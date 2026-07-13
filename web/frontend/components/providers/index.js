@@ -2,4 +2,4 @@ export { QueryProvider } from "./QueryProvider";
 export { PolarisProvider } from "./PolarisProvider";
 export { ToastProvider } from "./ToastProvider";
 export { AuthenticatedFetchProvider } from "./AuthenticatedFetchProvider";
-export { AppBridgeProvider, useAppBridge, useAppBridgeAuth } from "./AppBridgeProvider";
+export { AppBridgeProvider, useAppBridgeAuth } from "./AppBridgeProvider";

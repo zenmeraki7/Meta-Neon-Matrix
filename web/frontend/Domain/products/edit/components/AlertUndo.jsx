@@ -1,5 +1,12 @@
 import React, { memo, useCallback, useMemo, useState } from "react";
-import { Modal, Text, BlockStack, Box, Banner, TextField } from "@shopify/polaris";
+import {
+  Modal,
+  Text,
+  BlockStack,
+  Box,
+  Banner,
+  TextField,
+} from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 
 function safeNumber(value, fallback = null) {
@@ -54,6 +61,12 @@ function mapUndoError(t, error) {
     error?.payload?.code ||
     error?.details?.code ||
     error?.code;
+  const status = Number(error?.status || error?.response?.status || 0);
+  const errorId =
+    error?.payload?.errorId ||
+    error?.details?.errorId ||
+    error?.errorId ||
+    null;
 
   switch (code) {
     case "UNDO_ALREADY_QUEUED":
@@ -70,22 +83,117 @@ function mapUndoError(t, error) {
       });
     case "UNDO_ELIGIBLE_TARGETS_NOT_FOUND":
       return t("products:undoNoEligibleTargets", {
-        defaultValue: "No successfully edited products or variants are available to undo.",
+        defaultValue:
+          "No successfully edited products or variants are available to undo.",
+      });
+    case "CSV_CREATE_UNDO_NOT_SUPPORTED":
+      return t("products:csvCreateUndoNotSupported", {
+        defaultValue:
+          "This import created a new product. It cannot be safely undone because no previous product state exists.",
       });
     case "UNDO_HISTORY_NOT_FOUND":
       return t("products:undoHistoryNotFound", {
-        defaultValue: "The edit history record could not be found. Refresh the app and try again.",
+        defaultValue:
+          "The edit history record could not be found. Refresh the app and try again.",
       });
     case "UNDO_QUEUE_TRANSITION_REJECTED":
       return t("products:undoQueueRejected", {
-        defaultValue: "Undo could not be queued because this edit changed state. Refresh the app and try again.",
+        defaultValue:
+          "Undo could not be queued because this edit changed state. Refresh the app and try again.",
       });
     case "UNDO_SNAPSHOT_BEFORE_VALUES_REQUIRED":
     case "UNDO_BEFORE_VALUES_REQUIRED":
+    case "UNDO_SNAPSHOTS_INCOMPLETE":
       return t("products:undoBeforeValuesMissing", {
-        defaultValue: "Undo cannot run because the original values are missing.",
+        defaultValue:
+          "Undo cannot run because the original values are missing.",
+      });
+    case "INVALID_HISTORY_ID":
+    case "INVALID_OPERATION_ID":
+      return t("products:undoMissingOperationId", {
+        defaultValue:
+          "This edit cannot be undone because its full history identity is missing.",
+      });
+    case "APP_BRIDGE_CONTEXT_MISSING":
+    case "SESSION_TOKEN_UNAVAILABLE":
+    case "AUTH_FETCH_UNAVAILABLE":
+      return t("products:undoAuthUnavailable", {
+        defaultValue:
+          "The Shopify session token is not available. Reopen or refresh the embedded app and try again.",
+      });
+    case "SESSION_TOKEN_ACQUISITION_FAILED":
+      return t("products:undoTokenAcquisitionFailed", {
+        defaultValue:
+          "Shopify could not create a fresh session token. Refresh the embedded app and try again.",
+      });
+    case "UNAUTHENTICATED":
+    case "AUTHENTICATION_REQUIRED":
+    case "AUTH_REQUIRED":
+    case "UNAUTHORIZED":
+    case "SHOPIFY_AUTHORIZATION_MISSING":
+      return t("products:undoAuthenticationRejected", {
+        defaultValue:
+          "Shopify rejected this session. Reopen the app from Shopify Admin and try again.",
+      });
+    case "SESSION_EXPIRED":
+    case "REAUTH_REQUIRED":
+      return t("products:undoSessionExpired", {
+        defaultValue:
+          "Your Shopify session expired. Reopen the embedded app and try again.",
+      });
+    case "NETWORK_FAILURE":
+      return t("products:undoNetworkFailure", {
+        defaultValue:
+          "The undo request could not reach the server. Check your connection and try again.",
+      });
+    case "DATABASE_UNAVAILABLE":
+      return t("products:undoDatabaseUnavailable", {
+        defaultValue: "Undo is temporarily unavailable. Please retry.",
+      });
+    case "UNDO_NOT_ALLOWED":
+    case "FORBIDDEN":
+      return t("products:undoNotPermitted", {
+        defaultValue: "This edit is not permitted to be undone.",
+      });
+    case "UNDO_ALREADY_REQUESTED":
+      return t("products:undoAlreadyQueued", {
+        defaultValue: "Undo is already queued for this edit.",
+      });
+    case "SNAPSHOT_NOT_AVAILABLE":
+      return t("products:undoBeforeValuesMissing", {
+        defaultValue:
+          "Undo cannot run because the original values are missing.",
       });
     default:
+      if (status === 401) {
+        return t("products:undoAuthenticationRejected", {
+          defaultValue:
+            "Shopify rejected this session. Reopen the app from Shopify Admin and try again.",
+        });
+      }
+      if (status === 403) {
+        return t("products:undoNotPermitted", {
+          defaultValue: "This edit is not permitted to be undone.",
+        });
+      }
+      if (status === 404) {
+        return t("products:undoEndpointUnavailable", {
+          defaultValue:
+            "The undo API route is unavailable. Restart the app backend and try again.",
+        });
+      }
+      if (status === 409) {
+        return t("products:undoRequestRejected", {
+          defaultValue:
+            "The undo request was rejected because this edit changed state. Refresh and try again.",
+        });
+      }
+      if (status >= 500) {
+        const reference = errorId ? ` Reference: ${errorId}` : "";
+        return t("products:undoServerFailure", {
+          defaultValue: `The server could not accept the undo request.${reference}`,
+        });
+      }
       return t("products:undoEditSubmitFailed", {
         defaultValue:
           "Unable to submit the undo request. Please retry or refresh the app.",
@@ -93,7 +201,7 @@ function mapUndoError(t, error) {
   }
 }
 
-const UndoSummary = memo(function UndoSummary({ summary, shopTimezone }) {
+const UndoSummary = memo(function UndoSummary({ summary, displayTimezone }) {
   const { t } = useTranslation(["products"]);
 
   if (!summary) return null;
@@ -103,8 +211,12 @@ const UndoSummary = memo(function UndoSummary({ summary, shopTimezone }) {
   const operationDisplayId = shortOperationId(operationId);
   const affectedProducts = safeNumber(summary.affectedProducts);
   const affectedVariants = safeNumber(summary.affectedVariants);
-  const editedAt = safeDateLabel(summary.createdAt || summary.editedAt, shopTimezone);
-  const editedAtWithZone = editedAt && shopTimezone ? `${editedAt} ${shopTimezone}` : editedAt;
+  const editedAt = safeDateLabel(
+    summary.createdAt || summary.editedAt,
+    displayTimezone
+  );
+  const editedAtWithZone =
+    editedAt && displayTimezone ? `${editedAt} ${displayTimezone}` : editedAt;
 
   if (
     affectedProducts === null &&
@@ -186,14 +298,14 @@ function AlertUndo({
   loading = false,
   undoSummary = null,
   idempotencyKey = null,
-  shopTimezone = null,
+  displayTimezone = null,
 }) {
   const { t } = useTranslation(["products", "common"]);
   const [submitStatus, setSubmitStatus] = useState("idle");
   const [submitError, setSubmitError] = useState(null);
   const [confirmationValue, setConfirmationValue] = useState("");
 
-  const operationId = safeString(undoSummary?.operationId, null, 120);
+  const operationId = safeString(undoSummary?.operationId, null, null);
   const historyId = safeString(undoSummary?.historyId, null, null);
   const affectedProducts = safeNumber(undoSummary?.affectedProducts, 0);
   const affectedVariants = safeNumber(undoSummary?.affectedVariants, 0);
@@ -212,7 +324,7 @@ function AlertUndo({
   const isBusy = loading || isSubmitting;
   const canUndo =
     typeof undoEditHistory === "function" &&
-    Boolean(operationId) &&
+    Boolean(historyId) &&
     hasTypedConfirmation &&
     !isBusy &&
     !isAccepted;
@@ -233,42 +345,39 @@ function AlertUndo({
     try {
       setSubmitError(null);
       setSubmitStatus("submitting");
-      console.info("[undo-ui] submit", {
-        operationId,
-        historyId,
-        hasIdempotencyKey: Boolean(idempotencyKey),
-      });
       await undoEditHistory({
-        operationId,
         historyId,
-        idempotencyKey: idempotencyKey || `undo:${operationId}`,
+        operationId,
+        idempotencyKey: idempotencyKey || `undo:${historyId}`,
       });
       setSubmitStatus("accepted");
+      if (typeof handleClose === "function") handleClose();
     } catch (error) {
-      console.error("[undo-ui] submit_failed", {
-        operationId,
-        historyId,
-        code: error?.code || error?.payload?.code || null,
-        status: error?.status || null,
-        rootCause: error?.payload?.rootCause || error?.message || null,
-        errorId: error?.payload?.errorId || null,
-      });
       setSubmitStatus("failed");
       setSubmitError(mapUndoError(t, error));
     }
-  }, [canUndo, historyId, idempotencyKey, operationId, t, undoEditHistory]);
+  }, [
+    canUndo,
+    handleClose,
+    historyId,
+    idempotencyKey,
+    operationId,
+    t,
+    undoEditHistory,
+  ]);
 
   const primaryAction = useMemo(
     () => ({
-      content: submitStatus === "accepted"
-        ? t("products:undoEditQueued", { defaultValue: "Undo queued" })
-        : t("products:yesUndoEdit", { defaultValue: "Yes, undo edit" }),
+      content:
+        submitStatus === "accepted"
+          ? t("products:undoEditQueued", { defaultValue: "Undo queued" })
+          : t("products:yesUndoEdit", { defaultValue: "Yes, undo edit" }),
       tone: "critical",
       onAction: handleUndo,
       loading: submitStatus === "submitting",
       disabled: !canUndo,
     }),
-    [canUndo, handleUndo, submitStatus, t],
+    [canUndo, handleUndo, submitStatus, t]
   );
 
   const secondaryActions = useMemo(
@@ -279,7 +388,7 @@ function AlertUndo({
         disabled: isBusy,
       },
     ],
-    [handleModalClose, isBusy, t],
+    [handleModalClose, isBusy, t]
   );
 
   if (!show) return null;
@@ -311,7 +420,10 @@ function AlertUndo({
             </p>
           </Banner>
 
-          <UndoSummary summary={undoSummary} shopTimezone={shopTimezone} />
+          <UndoSummary
+            summary={undoSummary}
+            displayTimezone={displayTimezone}
+          />
 
           {hasSuspiciousZeroAffectedCount ? (
             <Banner tone="warning">
@@ -324,7 +436,7 @@ function AlertUndo({
             </Banner>
           ) : null}
 
-          {!operationId ? (
+          {!historyId ? (
             <Banner tone="critical">
               <p>
                 {t("products:undoMissingOperationId", {

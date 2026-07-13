@@ -1,9 +1,17 @@
 import { BrowserRouter } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { AppLink, NavigationMenu } from "@shopify/app-bridge/actions";
-import { Banner, BlockStack, Box, Button, Card, Frame, Page, Text } from "@shopify/polaris";
-import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { NavMenu } from "@shopify/app-bridge-react";
+import {
+  Banner,
+  BlockStack,
+  Box,
+  Button,
+  Card,
+  Frame,
+  Page,
+  Text,
+} from "@shopify/polaris";
+import { useMemo, useState } from "react";
 
 import Routes from "./Routes";
 import { QueryProvider, PolarisProvider } from "./components";
@@ -11,7 +19,6 @@ import {
   AuthenticatedFetchProvider,
   AppBridgeProvider,
   ToastProvider,
-  useAppBridge,
 } from "./components/providers";
 import ErrorBoundary from "./components/Error/ErrorBoundary";
 
@@ -26,7 +33,9 @@ function getEmbeddedRouterBasename() {
     return "/";
   }
 
-  const match = window.location.pathname.match(/^(\/store\/[^/]+\/apps\/[^/]+)(?:\/|$)/);
+  const match = window.location.pathname.match(
+    /^(\/store\/[^/]+\/apps\/[^/]+)(?:\/|$)/
+  );
   return match?.[1] || "/";
 }
 
@@ -50,7 +59,7 @@ export default function App() {
 
   return (
     <BrowserRouter basename={routerBasename}>
-      <AppBridgeProvider host={host}>
+      <AppBridgeProvider>
         <PolarisProvider>
           <AuthenticatedFetchProvider>
             <Frame>
@@ -89,7 +98,10 @@ function MissingEmbeddedContext({ missingApiKey = false }) {
                 : "Open this app from Shopify Admin Apps, then retry from the app navigation."}
             </Text>
             <Box>
-              <Button onClick={() => window.location.reload()} variant="primary">
+              <Button
+                onClick={() => window.location.reload()}
+                variant="primary"
+              >
                 Retry
               </Button>
             </Box>
@@ -101,9 +113,6 @@ function MissingEmbeddedContext({ missingApiKey = false }) {
 }
 
 function EmbeddedNavMenu({ isSyncing, t }) {
-  const location = useLocation();
-  const appBridge = useAppBridge();
-
   const items = useMemo(
     () => [
       {
@@ -133,25 +142,18 @@ function EmbeddedNavMenu({ isSyncing, t }) {
         label: t("nav.pricing", { defaultValue: "Pricing" }),
       },
     ],
-    [t],
+    [t]
   );
 
-  useEffect(() => {
-    if (!appBridge) {
-      return;
-    }
+  if (isSyncing) return null;
 
-    const visibleItems = isSyncing ? [] : items;
-    const links = visibleItems.map((item) => AppLink.create(appBridge, item));
-    const activeLink = links.find((link) =>
-      location.pathname.startsWith(link.options.destination),
-    );
-
-    NavigationMenu.create(appBridge, {
-      items: links,
-      active: activeLink,
-    });
-  }, [appBridge, isSyncing, items, location.pathname]);
-
-  return null;
+  return (
+    <NavMenu>
+      {items.map((item) => (
+        <a href={item.destination} key={item.destination}>
+          {item.label}
+        </a>
+      ))}
+    </NavMenu>
+  );
 }

@@ -19,10 +19,10 @@ export async function addbulkUndoJob(data, options = {}) {
   }
 
   const jobId =
-    options.jobId
-    || buildUndoExecuteJobId({
+    options.jobId ||
+    buildUndoExecuteJobId({
       shop: data.shop,
-      undoOperationId: data.historyId,
+      undoOperationId: data.undoExecutionId || data.historyId,
       executionId: data.executionId,
       source: data?.source || "default",
     });
@@ -33,6 +33,6 @@ export async function addbulkUndoJob(data, options = {}) {
     mergeJobOptions(defaultJobOptions, {
       ...options,
       jobId,
-    }),
+    })
   );
 }

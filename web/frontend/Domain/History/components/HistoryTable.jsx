@@ -1,4 +1,11 @@
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   IndexTable,
@@ -21,14 +28,29 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import AlertUndo from "../../products/edit/components/AlertUndo";
 import useProductSyncStatus from "../../../hooks/useProductSyncStatus";
-import { useShopTimezone } from "../../../hooks/useShopTimezone";
-import { protectedApiPut } from "../../../api/protectedApiClient";
+import { historyService } from "../services/historyService";
 import { useLocaleFormatters } from "../../../hooks/useLocaleFormatters";
+import { getBrowserScheduleTimezone } from "../../../utils/scheduleTimezone";
+import { useAuthenticatedFetch } from "../../../hooks/useAuthenticatedFetch";
 import TableErrorBoundary from "../../../components/Error/TableErrorBoundary";
 import CellErrorBoundary from "../../../components/Error/CellErrorBoundary";
-import JobProgressCell, { STATUS_CONFIG, normalizeJobStatus } from "./JobProgressCell";
+import JobProgressCell, {
+  STATUS_CONFIG,
+  normalizeJobStatus,
+} from "./JobProgressCell";
 
 const HISTORY_TABLE_MIN_HEIGHT = "560px";
+const TERMINAL_UNDO_STATES = new Set([
+  "COMPLETED",
+  "PARTIALLY_COMPLETED",
+  "PARTIAL",
+  "FAILED",
+  "CANCELLED",
+]);
+
+function logUndoClient(event, detail = {}) {
+  if (import.meta.env.DEV) console.info(`undo.client.${event}`, detail);
+}
 
 function safeString(value, fallback = null, maxLength = 120) {
   if (value === undefined || value === null) return fallback;
@@ -78,7 +100,9 @@ function getJobTotalCount(item) {
   if (positiveCount !== undefined) return positiveCount;
 
   const fallbackCount = Number(candidates[0] || 0);
-  return Number.isFinite(fallbackCount) && fallbackCount > 0 ? fallbackCount : 0;
+  return Number.isFinite(fallbackCount) && fallbackCount > 0
+    ? fallbackCount
+    : 0;
 }
 
 function merchantStatusBadge(item, t) {
@@ -90,6 +114,15 @@ function merchantStatusBadge(item, t) {
       {t(label.key, { defaultValue: label.defaultValue })}
     </Badge>
   );
+}
+
+function isUndoDisabled(item, syncInProgress) {
+  if (syncInProgress) return true;
+  if (item?.undoAvailability?.available === false) return true;
+  const state = String(
+    item?.undoStatusSummary?.key || item?.undoStatus || ""
+  ).toLowerCase();
+  return state.startsWith("undo_");
 }
 
 const TYPE_OPTIONS = [
@@ -116,8 +149,15 @@ const HistoryRowActions = memo(function HistoryRowActions({
 }) {
   return (
     <InlineStack gap="200" wrap={false}>
-      <Button size="slim" onClick={() => onView(rowId)}>{viewLabel}</Button>
-      <Button size="slim" tone="critical" onClick={() => onUndo(rowId)} disabled={undoDisabled}>
+      <Button size="slim" onClick={() => onView(rowId)}>
+        {viewLabel}
+      </Button>
+      <Button
+        size="slim"
+        tone="critical"
+        onClick={() => onUndo(rowId)}
+        disabled={undoDisabled}
+      >
         {undoLabel}
       </Button>
     </InlineStack>
@@ -140,14 +180,29 @@ const HistoryTable = memo(function HistoryTable({
   const navigate = useNavigate();
   const { t } = useTranslation(["history", "common"]);
   const queryClient = useQueryClient();
+  const authenticatedFetch = useAuthenticatedFetch();
   const { dateTimeFormatter } = useLocaleFormatters();
-  const { shopTimezone } = useShopTimezone();
+  const displayTimezone = useMemo(
+    () => getBrowserScheduleTimezone() || "Asia/Kolkata",
+    []
+  );
   const { isSyncInProgress } = useProductSyncStatus();
   const [showUndoModal, setShowUndoModal] = useState(false);
   const [undoLoading, setUndoLoading] = useState(false);
   const [undoHistoryItem, setUndoHistoryItem] = useState(null);
   const [undoIdempotencyKey, setUndoIdempotencyKey] = useState(null);
   const [localHistories, setLocalHistories] = useState(() => histories || []);
+  const mountedRef = useRef(true);
+  const undoRequestRef = useRef(null);
+  const pollingAbortRef = useRef(null);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      pollingAbortRef.current?.abort();
+    },
+    []
+  );
 
   useEffect(() => {
     setLocalHistories(histories || []);
@@ -192,7 +247,9 @@ const HistoryTable = memo(function HistoryTable({
               label: t(option.label, { defaultValue: option.value }),
             }))}
             selected={query.type ? [query.type] : []}
-            onChange={(selected) => onQueryChange({ type: selected[0] || "", cursor: null })}
+            onChange={(selected) =>
+              onQueryChange({ type: selected[0] || "", cursor: null })
+            }
           />
         ),
         shortcut: true,
@@ -209,13 +266,15 @@ const HistoryTable = memo(function HistoryTable({
               label: t(option.label, { defaultValue: option.value }),
             }))}
             selected={query.status ? [query.status] : []}
-            onChange={(selected) => onQueryChange({ status: selected[0] || "", cursor: null })}
+            onChange={(selected) =>
+              onQueryChange({ status: selected[0] || "", cursor: null })
+            }
           />
         ),
         shortcut: true,
       },
     ],
-    [onQueryChange, query.status, query.type, t],
+    [onQueryChange, query.status, query.type, t]
   );
 
   const headings = useMemo(
@@ -226,12 +285,16 @@ const HistoryTable = memo(function HistoryTable({
       { title: t("historyColumnUpdated") },
       { title: t("historyColumnActions") },
     ],
-    [t],
+    [t]
   );
 
   const handleUndo = useCallback((history) => {
-    const operationId = safeString(history?.operationId || history?.id, "unknown", null);
-    console.info("[undo-ui] button_click", {
+    const operationId = safeString(
+      history?.operationId || history?.id,
+      "unknown",
+      null
+    );
+    logUndoClient("confirm_clicked", {
       historyId: history?.id || null,
       operationId,
       status: history?.status || history?.primaryStatus?.key || null,
@@ -240,14 +303,22 @@ const HistoryTable = memo(function HistoryTable({
     setUndoIdempotencyKey(`undo:${operationId}`);
     setShowUndoModal(true);
   }, []);
-  const handleView = useCallback((rowId) => {
-    navigate(`/editDetails/${rowId}`);
-  }, [navigate]);
-  const handleUndoById = useCallback((rowId) => {
-    const target = (localHistories || []).find((entry) => String(entry?.id || "") === String(rowId));
-    if (!target) return;
-    handleUndo(target);
-  }, [localHistories, handleUndo]);
+  const handleView = useCallback(
+    (rowId) => {
+      navigate(`/editDetails/${rowId}`);
+    },
+    [navigate]
+  );
+  const handleUndoById = useCallback(
+    (rowId) => {
+      const target = (localHistories || []).find(
+        (entry) => String(entry?.id || "") === String(rowId)
+      );
+      if (!target) return;
+      handleUndo(target);
+    },
+    [localHistories, handleUndo]
+  );
 
   const handleCloseUndoModal = useCallback(() => {
     setShowUndoModal(false);
@@ -255,37 +326,113 @@ const HistoryTable = memo(function HistoryTable({
     setUndoIdempotencyKey(null);
   }, []);
 
-  const handleUndoEditHistory = useCallback(async ({
-    operationId,
-    historyId,
-    idempotencyKey,
-  } = {}) => {
-    const targetHistoryId = safeString(historyId || undoHistoryItem?.id, null, null);
-    const targetOperationId = safeString(operationId || undoHistoryItem?.operationId || targetHistoryId, null, null);
-    if (!targetHistoryId && !targetOperationId) return;
-    setUndoLoading(true);
-    try {
-      console.info("[undo-ui] request_start", {
-        historyId: targetHistoryId,
-        operationId: targetOperationId,
-      });
-      await protectedApiPut(`/api/products/undo-edit/${targetHistoryId || targetOperationId}`, {
-        operationId: targetOperationId,
-        historyId: targetHistoryId,
-      }, {
-        idempotent: true,
-        idempotencyKey,
-      });
-      console.info("[undo-ui] request_accepted", {
-        historyId: targetHistoryId,
-        operationId: targetOperationId,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["history-list"] });
-      await queryClient.invalidateQueries({ queryKey: ["edit-history-summary"] });
-    } finally {
-      setUndoLoading(false);
-    }
-  }, [queryClient, undoHistoryItem]);
+  const handleUndoEditHistory = useCallback(
+    async ({ historyId, operationId, idempotencyKey } = {}) => {
+      const targetHistoryId = safeString(
+        historyId || undoHistoryItem?.id,
+        null,
+        null
+      );
+      const targetOperationId = safeString(
+        operationId || undoHistoryItem?.operationId || targetHistoryId,
+        null,
+        null
+      );
+      if (!targetHistoryId || targetHistoryId.includes("...")) {
+        const error = new Error("A full immutable history id is required.");
+        error.code = "INVALID_HISTORY_ID";
+        throw error;
+      }
+      if (!targetOperationId || targetOperationId.includes("...")) {
+        const error = new Error("A full immutable operation id is required.");
+        error.code = "INVALID_OPERATION_ID";
+        throw error;
+      }
+      if (undoRequestRef.current) return undoRequestRef.current;
+
+      const request = (async () => {
+        if (mountedRef.current) setUndoLoading(true);
+        try {
+          const requestUrl = `/api/history/${encodeURIComponent(
+            targetHistoryId
+          )}/undo`;
+          logUndoClient("request_started", {
+            historyId: targetHistoryId,
+            requestUrl,
+          });
+          const response = await historyService.requestUndo(
+            targetHistoryId,
+            targetOperationId,
+            idempotencyKey,
+            authenticatedFetch
+          );
+          logUndoClient("response_received", {
+            historyId: targetHistoryId,
+            status: response?.status || null,
+            undoExecutionId: response?.undoExecutionId || null,
+          });
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["history-list"] }),
+            queryClient.invalidateQueries({
+              queryKey: ["edit-history-summary"],
+            }),
+          ]);
+
+          if (response?.undoExecutionId) {
+            pollingAbortRef.current?.abort();
+            const controller = new AbortController();
+            pollingAbortRef.current = controller;
+            void (async () => {
+              for (
+                let attempt = 0;
+                attempt < 12 && !controller.signal.aborted;
+                attempt += 1
+              ) {
+                const delayMs = Math.min(2_000 * 1.35 ** attempt, 10_000);
+                await new Promise((resolve) =>
+                  window.setTimeout(resolve, delayMs)
+                );
+                if (controller.signal.aborted) return;
+                try {
+                  const status = await historyService.getUndoStatus(
+                    response.undoExecutionId,
+                    controller.signal
+                  );
+                  await queryClient.invalidateQueries({
+                    queryKey: ["history-list"],
+                  });
+                  if (
+                    status?.terminal ||
+                    TERMINAL_UNDO_STATES.has(String(status?.status || ""))
+                  ) {
+                    return;
+                  }
+                } catch (error) {
+                  if (error?.name === "AbortError") return;
+                  if (Number(error?.status || 0) < 500) return;
+                }
+              }
+            })();
+          }
+          return response;
+        } catch (error) {
+          logUndoClient("request_failed", {
+            historyId: targetHistoryId,
+            name: error?.name || "Error",
+            code: error?.code || error?.payload?.code || null,
+            message: error?.message || "Undo request failed",
+          });
+          throw error;
+        } finally {
+          undoRequestRef.current = null;
+          if (mountedRef.current) setUndoLoading(false);
+        }
+      })();
+      undoRequestRef.current = request;
+      return request;
+    },
+    [authenticatedFetch, queryClient, undoHistoryItem]
+  );
 
   const undoSummary = useMemo(() => {
     if (!undoHistoryItem) return null;
@@ -324,7 +471,11 @@ const HistoryTable = memo(function HistoryTable({
             filters={filterOptions}
             appliedFilters={appliedFilters}
             onClearAll={onQueryClear}
-            cancelAction={{ onAction: () => {}, disabled: true, loading: false }}
+            cancelAction={{
+              onAction: () => {},
+              disabled: true,
+              loading: false,
+            }}
             tabs={[]}
             selected={0}
             onSelect={() => {}}
@@ -351,121 +502,142 @@ const HistoryTable = memo(function HistoryTable({
   return (
     <Card padding="0">
       <Box minHeight={HISTORY_TABLE_MIN_HEIGHT}>
-      <IndexFilters
-        queryValue={querySearch}
-        queryPlaceholder={t("historySearchPlaceholder", {
-          defaultValue: "Search history",
-        })}
-        onQueryChange={onSearchChange}
-        onQueryClear={onQueryClear}
-        filters={filterOptions}
-        appliedFilters={appliedFilters}
-        onClearAll={onQueryClear}
-        cancelAction={{ onAction: () => {}, disabled: true, loading: false }}
-        tabs={[]}
-        selected={0}
-        onSelect={() => {}}
-        canCreateNewView={false}
-        mode="default"
-        setMode={() => {}}
-      />
+        <IndexFilters
+          queryValue={querySearch}
+          queryPlaceholder={t("historySearchPlaceholder", {
+            defaultValue: "Search history",
+          })}
+          onQueryChange={onSearchChange}
+          onQueryClear={onQueryClear}
+          filters={filterOptions}
+          appliedFilters={appliedFilters}
+          onClearAll={onQueryClear}
+          cancelAction={{ onAction: () => {}, disabled: true, loading: false }}
+          tabs={[]}
+          selected={0}
+          onSelect={() => {}}
+          canCreateNewView={false}
+          mode="default"
+          setMode={() => {}}
+        />
 
-      <Divider />
+        <Divider />
 
-      {!localHistories?.length ? (
-        <Box padding="1200">
-          <EmptyState heading={t("historyEmptyStateTitle")}>
-            <p>{emptyStateMessage}</p>
-          </EmptyState>
-        </Box>
-      ) : (
-        <Box overflowX="auto" paddingInlineStart="800">
-          <TableErrorBoundary>
-            <IndexTable
-              resourceName={{ singular: "history item", plural: "history items" }}
-              itemCount={localHistories.length}
-              selectable={false}
-              headings={headings}
-            >
-              {(localHistories || []).map((item, index) => {
-                const id = getHistoryRowId(item);
-                const totalCount = getJobTotalCount(item);
-                const statusKey = getMerchantStatusKey(item);
+        {!localHistories?.length ? (
+          <Box padding="1200">
+            <EmptyState heading={t("historyEmptyStateTitle")}>
+              <p>{emptyStateMessage}</p>
+            </EmptyState>
+          </Box>
+        ) : (
+          <Box overflowX="auto" paddingInlineStart="800">
+            <TableErrorBoundary>
+              <IndexTable
+                resourceName={{
+                  singular: "history item",
+                  plural: "history items",
+                }}
+                itemCount={localHistories.length}
+                selectable={false}
+                headings={headings}
+              >
+                {(localHistories || []).map((item, index) => {
+                  const id = getHistoryRowId(item);
+                  const totalCount = getJobTotalCount(item);
+                  const statusKey = getMerchantStatusKey(item);
 
-                return (
-                  <IndexTable.Row id={String(id)} key={String(id)} position={index}>
-                    <IndexTable.Cell>
-                      <CellErrorBoundary fallback="[render error]">
-                        <BlockStack gap="050">
-                          <Text variant="bodyMd" fontWeight="medium" as="span">{item.title || "-"}</Text>
-                          <Text variant="bodySm" tone="subdued" as="span">{item.shop?.split(".")?.[0] || "-"}</Text>
-                        </BlockStack>
-                      </CellErrorBoundary>
-                    </IndexTable.Cell>
+                  return (
+                    <IndexTable.Row
+                      id={String(id)}
+                      key={String(id)}
+                      position={index}
+                    >
+                      <IndexTable.Cell>
+                        <CellErrorBoundary fallback="[render error]">
+                          <BlockStack gap="050">
+                            <Text
+                              variant="bodyMd"
+                              fontWeight="medium"
+                              as="span"
+                            >
+                              {item.title || "-"}
+                            </Text>
+                            <Text variant="bodySm" tone="subdued" as="span">
+                              {item.shop?.split(".")?.[0] || "-"}
+                            </Text>
+                          </BlockStack>
+                        </CellErrorBoundary>
+                      </IndexTable.Cell>
 
-                    <IndexTable.Cell>
-                      <CellErrorBoundary fallback="[render error]">
-                        {merchantStatusBadge(item, t)}
-                      </CellErrorBoundary>
-                    </IndexTable.Cell>
+                      <IndexTable.Cell>
+                        <CellErrorBoundary fallback="[render error]">
+                          {merchantStatusBadge(item, t)}
+                        </CellErrorBoundary>
+                      </IndexTable.Cell>
 
-                    <IndexTable.Cell>
-                      <CellErrorBoundary fallback="[render error]">
-                        <JobProgressCell
-                          job={item}
-                          processedCount={item?.processedCount || 0}
-                          progressProcessedCount={item?.progressProcessedCount ?? item?.successCount ?? 0}
-                          totalCount={totalCount}
-                          status={statusKey}
+                      <IndexTable.Cell>
+                        <CellErrorBoundary fallback="[render error]">
+                          <JobProgressCell
+                            job={item}
+                            processedCount={item?.processedCount || 0}
+                            progressProcessedCount={
+                              item?.progressProcessedCount ??
+                              item?.successCount ??
+                              0
+                            }
+                            totalCount={totalCount}
+                            status={statusKey}
+                          />
+                        </CellErrorBoundary>
+                      </IndexTable.Cell>
+
+                      <IndexTable.Cell>
+                        <Text as="span" variant="bodySm">
+                          {item?.updatedAt
+                            ? dateTimeFormatter.format(new Date(item.updatedAt))
+                            : "-"}
+                        </Text>
+                      </IndexTable.Cell>
+
+                      <IndexTable.Cell>
+                        <HistoryRowActions
+                          rowId={id}
+                          onView={handleView}
+                          onUndo={handleUndoById}
+                          undoDisabled={isUndoDisabled(item, isSyncInProgress)}
+                          viewLabel={t("historyViewButton")}
+                          undoLabel={t("historyUndoButton")}
                         />
-                      </CellErrorBoundary>
-                    </IndexTable.Cell>
+                      </IndexTable.Cell>
+                    </IndexTable.Row>
+                  );
+                })}
+              </IndexTable>
+            </TableErrorBoundary>
+          </Box>
+        )}
 
-                    <IndexTable.Cell>
-                      <Text as="span" variant="bodySm">
-                        {item?.updatedAt ? dateTimeFormatter.format(new Date(item.updatedAt)) : "-"}
-                      </Text>
-                    </IndexTable.Cell>
-
-                    <IndexTable.Cell>
-                      <HistoryRowActions
-                        rowId={id}
-                        onView={handleView}
-                        onUndo={handleUndoById}
-                        undoDisabled={isSyncInProgress}
-                        viewLabel={t("historyViewButton")}
-                        undoLabel={t("historyUndoButton")}
-                      />
-                    </IndexTable.Cell>
-                  </IndexTable.Row>
-                );
-              })}
-            </IndexTable>
-          </TableErrorBoundary>
+        <Divider />
+        <Box padding="400">
+          <Pagination
+            hasNext={Boolean(pageInfo?.hasNextPage)}
+            hasPrevious={Boolean(pageInfo?.hasPreviousPage)}
+            onNext={onNext}
+            onPrevious={onPrevious}
+          />
         </Box>
-      )}
 
-      <Divider />
-      <Box padding="400">
-        <Pagination
-          hasNext={Boolean(pageInfo?.hasNextPage)}
-          hasPrevious={Boolean(pageInfo?.hasPreviousPage)}
-          onNext={onNext}
-          onPrevious={onPrevious}
-        />
-      </Box>
-
-      {showUndoModal ? (
-        <AlertUndo
-          show={showUndoModal}
-          handleClose={handleCloseUndoModal}
-          undoEditHistory={handleUndoEditHistory}
-          loading={undoLoading}
-          undoSummary={undoSummary}
-          idempotencyKey={undoIdempotencyKey}
-          shopTimezone={shopTimezone}
-        />
-      ) : null}
+        {showUndoModal ? (
+          <AlertUndo
+            show={showUndoModal}
+            handleClose={handleCloseUndoModal}
+            undoEditHistory={handleUndoEditHistory}
+            loading={undoLoading}
+            undoSummary={undoSummary}
+            idempotencyKey={undoIdempotencyKey}
+            displayTimezone={displayTimezone}
+          />
+        ) : null}
       </Box>
     </Card>
   );

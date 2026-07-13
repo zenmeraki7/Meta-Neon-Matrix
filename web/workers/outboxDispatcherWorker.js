@@ -1,5 +1,7 @@
 import { db } from "../repositories/repositoryDb.js";
 import { enqueueTargetFreezeRequestedJob } from "../Jobs/Queues/targetFreezeQueue.js";
+import { addbulkUndoJob } from "../Jobs/Queues/bulkUndoJob.js";
+import logger from "../utils/loggerUtils.js";
 
 const OUTBOX_STATUS = Object.freeze({
   PENDING: "PENDING",
@@ -9,6 +11,14 @@ const OUTBOX_STATUS = Object.freeze({
 });
 
 export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
+  const staleBefore = new Date(Date.now() - 5 * 60_000);
+  await db.outboxEvent.updateMany({
+    where: {
+      status: OUTBOX_STATUS.DISPATCHING,
+      updatedAt: { lt: staleBefore },
+    },
+    data: { status: OUTBOX_STATUS.PENDING },
+  });
   const pending = await db.outboxEvent.findMany({
     where: { status: OUTBOX_STATUS.PENDING },
     orderBy: { createdAt: "asc" },
@@ -23,6 +33,8 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
       },
       data: {
         status: OUTBOX_STATUS.DISPATCHING,
+        attemptCount: { increment: 1 },
+        lastErrorCode: null,
         updatedAt: new Date(),
       },
     });
@@ -32,10 +44,32 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
     }
 
     try {
+      logger.info("undo.outbox.dispatch_started", {
+        outboxEventId: event.id,
+        shop: event.shop,
+        undoExecutionId: event.aggregateId,
+        eventType: event.eventType,
+      });
       if (event.eventType === "TARGET_FREEZE_REQUESTED") {
-        await enqueueTargetFreezeRequestedJob(event.payloadJson, {
-          jobId: `${event.eventType}:${event.aggregateId}`,
+        await enqueueTargetFreezeRequestedJob(event.payloadJson);
+      } else if (event.eventType === "UNDO_REQUESTED") {
+        const payload =
+          event.payloadJson && typeof event.payloadJson === "object"
+            ? event.payloadJson
+            : {};
+        const undoJob = await addbulkUndoJob(payload);
+        logger.info("undo.outbox.enqueued", {
+          outboxEventId: event.id,
+          shop: event.shop,
+          undoExecutionId: event.aggregateId,
+          workerJobId: undoJob?.id || null,
         });
+      } else {
+        const unsupported = new Error(
+          `Unsupported outbox event type: ${event.eventType}`
+        );
+        unsupported.code = "OUTBOX_EVENT_UNSUPPORTED";
+        throw unsupported;
       }
 
       await db.outboxEvent.update({
@@ -43,6 +77,7 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
         data: {
           status: OUTBOX_STATUS.DISPATCHED,
           dispatchedAt: new Date(),
+          lastErrorCode: null,
           updatedAt: new Date(),
         },
       });
@@ -51,6 +86,11 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
         where: { id: event.id },
         data: {
           status: OUTBOX_STATUS.PENDING,
+          lastErrorCode: String(error?.code || "OUTBOX_DISPATCH_FAILED").slice(
+            0,
+            120
+          ),
+          lastErrorAt: new Date(),
           updatedAt: new Date(),
         },
       });
@@ -63,7 +103,7 @@ async function logDispatchError(event, error) {
   try {
     // Keep dispatcher resilient; outbox row remains retryable.
     // eslint-disable-next-line no-console
-    console.error("Outbox dispatch failed", {
+    logger.error("undo.outbox.dispatch_failed", {
       outboxEventId: event?.id || null,
       eventType: event?.eventType || null,
       aggregateId: event?.aggregateId || null,
@@ -77,4 +117,3 @@ async function logDispatchError(event, error) {
 export default {
   dispatchPendingOutboxEvents,
 };
-

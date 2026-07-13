@@ -5,7 +5,12 @@ import { db } from "../../repositories/repositoryDb.js";
 import { projectEditHistoryStatus } from "../historyStatusProjectionService.js";
 import { assertSnapshotItemsFullyIngested } from "../targetSnapshotItemIntegrityService.js";
 
-const validTypes = ["Manual edit", "Scheduled edit", "Recurring edit", "Automatic rule"];
+const validTypes = [
+  "Manual edit",
+  "Scheduled edit",
+  "Recurring edit",
+  "Automatic rule",
+];
 
 function getLocalizedJsonText(value, lang = "en") {
   if (value == null) return null;
@@ -23,37 +28,75 @@ function toNonNegativeInt(value, fallback = 0) {
   return Math.max(0, Math.trunc(parsed));
 }
 
-function buildIngestionSummaryFields(batch, targetSnapshotCount, processedCount) {
-  const initialSource = batch && typeof batch === "object" && batch.ingestionSummary
-    && typeof batch.ingestionSummary === "object"
-    ? batch.ingestionSummary
-    : {};
-  const completedSource = batch && typeof batch === "object" && batch.resultIngestion
-    && typeof batch.resultIngestion === "object" && batch.resultIngestion.ingestedAt
-    ? batch.resultIngestion
-    : null;
+function buildUndoResultProjection(snapshot) {
+  if (!snapshot) return null;
+  const payload =
+    snapshot.undoPayload && typeof snapshot.undoPayload === "object"
+      ? snapshot.undoPayload
+      : {};
+  return {
+    status: String(snapshot.undoStatus || "NOT_REQUIRED").toLowerCase(),
+    verified: payload.verified === true,
+    verifiedAt: payload.verifiedAt || snapshot.undoneAt || null,
+    fields: Array.isArray(payload.fields) ? payload.fields : [],
+    errorCode: snapshot.undoErrorCode || null,
+    errorMessage: snapshot.undoErrorMessage || null,
+  };
+}
+
+function buildIngestionSummaryFields(
+  batch,
+  targetSnapshotCount,
+  processedCount
+) {
+  const initialSource =
+    batch &&
+    typeof batch === "object" &&
+    batch.ingestionSummary &&
+    typeof batch.ingestionSummary === "object"
+      ? batch.ingestionSummary
+      : {};
+  const completedSource =
+    batch &&
+    typeof batch === "object" &&
+    batch.resultIngestion &&
+    typeof batch.resultIngestion === "object" &&
+    batch.resultIngestion.ingestedAt
+      ? batch.resultIngestion
+      : null;
 
   const totalTargets = toNonNegativeInt(
     initialSource.totalTargets,
-    toNonNegativeInt(targetSnapshotCount || 0, 0),
+    toNonNegativeInt(targetSnapshotCount || 0, 0)
   );
   const submittedCount = toNonNegativeInt(
     completedSource?.rowCount,
-    toNonNegativeInt(initialSource.submittedCount, toNonNegativeInt(processedCount || 0, 0)),
+    toNonNegativeInt(
+      initialSource.submittedCount,
+      toNonNegativeInt(processedCount || 0, 0)
+    )
   );
   const successCount = toNonNegativeInt(
     completedSource?.successCount,
-    toNonNegativeInt(initialSource.successCount, 0),
+    toNonNegativeInt(initialSource.successCount, 0)
   );
   const failedCount = toNonNegativeInt(
     completedSource?.failureCount,
-    toNonNegativeInt(initialSource.failedCount, 0),
+    toNonNegativeInt(initialSource.failedCount, 0)
   );
-  const retryableFailureCount = toNonNegativeInt(initialSource.retryableFailureCount, 0);
-  const permanentFailureCount = toNonNegativeInt(initialSource.permanentFailureCount, 0);
+  const retryableFailureCount = toNonNegativeInt(
+    initialSource.retryableFailureCount,
+    0
+  );
+  const permanentFailureCount = toNonNegativeInt(
+    initialSource.permanentFailureCount,
+    0
+  );
   const skippedCount = toNonNegativeInt(
-    completedSource ? Math.max(totalTargets - submittedCount, 0) : initialSource.skippedCount,
-    Math.max(totalTargets - submittedCount, 0),
+    completedSource
+      ? Math.max(totalTargets - submittedCount, 0)
+      : initialSource.skippedCount,
+    Math.max(totalTargets - submittedCount, 0)
   );
 
   return {
@@ -67,63 +110,76 @@ function buildIngestionSummaryFields(batch, targetSnapshotCount, processedCount)
   };
 }
 
-async function getEditExecutionCounts({ shop, historyId, snapshotSetId = null }) {
+async function getEditExecutionCounts({
+  shop,
+  historyId,
+  snapshotSetId = null,
+}) {
   if (snapshotSetId) {
-    const grouped = await db.targetSnapshotItem.groupBy({
-      by: ["executionStatus"],
-      where: {
-        shop,
-        snapshotSetId,
-      },
-      _count: {
-        _all: true,
-      },
-    }).catch(() => []);
+    const grouped = await db.targetSnapshotItem
+      .groupBy({
+        by: ["executionStatus"],
+        where: {
+          shop,
+          snapshotSetId,
+        },
+        _count: {
+          _all: true,
+        },
+      })
+      .catch(() => []);
 
     return (Array.isArray(grouped) ? grouped : []).reduce(
       (acc, row) => {
         const status = String(row?.executionStatus || "").toUpperCase();
         const count = toNonNegativeInt(row?._count?._all || 0, 0);
-        if (["SUCCEEDED", "VERIFIED"].includes(status)) acc.successCount += count;
+        if (["SUCCEEDED", "VERIFIED"].includes(status))
+          acc.successCount += count;
         else if (status === "FAILED") acc.failedCount += count;
         else if (status === "SKIPPED") acc.skippedCount += count;
         acc.totalCount += count;
         return acc;
       },
-      { totalCount: 0, successCount: 0, failedCount: 0, skippedCount: 0 },
+      { totalCount: 0, successCount: 0, failedCount: 0, skippedCount: 0 }
     );
   }
 
-  const grouped = await db.changeRecord.groupBy({
-    by: ["status"],
-    where: {
-      shop,
-      editHistoryId: historyId,
-    },
-    _count: {
-      _all: true,
-    },
-  }).catch(() => []);
+  const grouped = await db.changeRecord
+    .groupBy({
+      by: ["status"],
+      where: {
+        shop,
+        editHistoryId: historyId,
+      },
+      _count: {
+        _all: true,
+      },
+    })
+    .catch(() => []);
 
   return (Array.isArray(grouped) ? grouped : []).reduce(
     (acc, row) => {
       const status = String(row?.status || "").toUpperCase();
       const count = toNonNegativeInt(row?._count?._all || 0, 0);
-      if (["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status)) acc.successCount += count;
+      if (["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status))
+        acc.successCount += count;
       else if (status === "FAILED") acc.failedCount += count;
       else if (status === "SKIPPED") acc.skippedCount += count;
       acc.totalCount += count;
       return acc;
     },
-    { totalCount: 0, successCount: 0, failedCount: 0, skippedCount: 0 },
+    { totalCount: 0, successCount: 0, failedCount: 0, skippedCount: 0 }
   );
 }
 
 function buildIdempotencyStageFields(batch) {
-  const stages = batch && typeof batch === "object" && batch.idempotencyStages
-    && typeof batch.idempotencyStages === "object"
-    ? batch.idempotencyStages
-    : {};
+  const stages =
+    batch &&
+    typeof batch === "object" &&
+    batch.idempotencyStages &&
+    typeof batch.idempotencyStages === "object"
+      ? batch.idempotencyStages
+      : {};
   const projected = Object.entries(stages)
     .map(([stage, value]) => {
       const stageState = value && typeof value === "object" ? value : {};
@@ -160,42 +216,54 @@ function normalizeShopifyBulkStatus(executionState, bulkOperationId) {
 }
 
 function buildSnapshotReference(record) {
-  const batch = record?.batch && typeof record.batch === "object" ? record.batch : {};
-  const batchRef = batch?.targetSnapshotRef && typeof batch.targetSnapshotRef === "object"
-    ? batch.targetSnapshotRef
-    : {};
-  const set = record?.snapshotSet && typeof record.snapshotSet === "object"
-    ? record.snapshotSet
-    : null;
-  const lifecycleSnapshotSetId = String(record?.snapshotSetId || "").trim() || null;
-  const batchSnapshotSetId = String(batchRef?.snapshotSetId || "").trim() || null;
-  const snapshotSetId = lifecycleSnapshotSetId || batchSnapshotSetId || set?.id || null;
+  const batch =
+    record?.batch && typeof record.batch === "object" ? record.batch : {};
+  const batchRef =
+    batch?.targetSnapshotRef && typeof batch.targetSnapshotRef === "object"
+      ? batch.targetSnapshotRef
+      : {};
+  const set =
+    record?.snapshotSet && typeof record.snapshotSet === "object"
+      ? record.snapshotSet
+      : null;
+  const lifecycleSnapshotSetId =
+    String(record?.snapshotSetId || "").trim() || null;
+  const batchSnapshotSetId =
+    String(batchRef?.snapshotSetId || "").trim() || null;
+  const snapshotSetId =
+    lifecycleSnapshotSetId || batchSnapshotSetId || set?.id || null;
 
   return {
     previewContractId:
-      String(set?.previewContractId || "").trim()
-      || String(batch?.previewContractId || "").trim()
-      || String(batch?.previewId || "").trim()
-      || null,
+      String(set?.previewContractId || "").trim() ||
+      String(batch?.previewContractId || "").trim() ||
+      String(batch?.previewId || "").trim() ||
+      null,
     snapshotSetId,
     mirrorBatchId:
-      String(set?.mirrorBatchId || "").trim()
-      || String(record?.targetMirrorBatchId || "").trim()
-      || String(batchRef?.mirrorBatchId || "").trim()
-      || null,
+      String(set?.mirrorBatchId || "").trim() ||
+      String(record?.targetMirrorBatchId || "").trim() ||
+      String(batchRef?.mirrorBatchId || "").trim() ||
+      null,
     targetingFingerprint:
-      String(set?.targetingFingerprint || "").trim()
-      || String(batch?.previewFingerprint?.filterHash || "").trim()
-      || null,
+      String(set?.targetingFingerprint || "").trim() ||
+      String(batch?.previewFingerprint?.filterHash || "").trim() ||
+      null,
     targetCount: Number(set?.targetCount || record?.targetSnapshotCount || 0),
     productCount: Number(set?.productCount || 0),
     variantCount: Number(set?.variantCount || 0),
-    checksum: String(set?.checksum || "").trim() || String(batchRef?.checksum || "").trim() || null,
+    checksum:
+      String(set?.checksum || "").trim() ||
+      String(batchRef?.checksum || "").trim() ||
+      null,
     freezeStatus:
-      String(set?.status || "").trim()
-      || String(batchRef?.status || "").trim()
-      || null,
-    executionStatus: String(record?.executionStateNormalized || record?.executionState || "").trim() || null,
+      String(set?.status || "").trim() ||
+      String(batchRef?.status || "").trim() ||
+      null,
+    executionStatus:
+      String(
+        record?.executionStateNormalized || record?.executionState || ""
+      ).trim() || null,
     undoStatus: String(record?.undo?.state || "").trim() || null,
     frozenAt: set?.frozenAt || null,
     submittedAt: record?.batch?.shopifyBulkOperationSubmittedAt || null,
@@ -204,23 +272,22 @@ function buildSnapshotReference(record) {
   };
 }
 
-function buildExecutionTransparencyFields({
-  history,
-  changeStatusCounts,
-}) {
-  const batch = history?.batch && typeof history.batch === "object" ? history.batch : {};
-  const executionPlan = batch?.executionPlan && typeof batch.executionPlan === "object"
-    ? batch.executionPlan
-    : {};
+function buildExecutionTransparencyFields({ history, changeStatusCounts }) {
+  const batch =
+    history?.batch && typeof history.batch === "object" ? history.batch : {};
+  const executionPlan =
+    batch?.executionPlan && typeof batch.executionPlan === "object"
+      ? batch.executionPlan
+      : {};
   const targetTotal = toNonNegativeInt(
     history?.targetSnapshotCount ?? history?.totalItems ?? 0,
-    0,
+    0
   );
   const processed = toNonNegativeInt(history?.processedCount || 0, 0);
   const failedCount = toNonNegativeInt(changeStatusCounts?.FAILED || 0, 0);
   const successCount = toNonNegativeInt(
     (changeStatusCounts?.SUCCESS || 0) + (changeStatusCounts?.SUCCEEDED || 0),
-    0,
+    0
   );
   const pendingCount = toNonNegativeInt(changeStatusCounts?.PENDING || 0, 0);
   const directSucceeded =
@@ -230,15 +297,17 @@ function buildExecutionTransparencyFields({
     failedCount === 0;
   const explicitVerifiedCount = toNonNegativeInt(
     changeStatusCounts?.VERIFIED ?? batch.verifiedCount ?? 0,
-    0,
+    0
   );
-  const verifiedCount = explicitVerifiedCount || (directSucceeded ? successCount : 0);
+  const verifiedCount =
+    explicitVerifiedCount || (directSucceeded ? successCount : 0);
   const directGraphqlExecution =
     String(batch.executionMode || "").toUpperCase() === "DIRECT" &&
     processed > 0;
-  const submittedToShopify = Boolean(history?.bulkOperationId) || directGraphqlExecution;
+  const submittedToShopify =
+    Boolean(history?.bulkOperationId) || directGraphqlExecution;
   const verificationStatus = String(
-    batch.verificationStatus || (directSucceeded ? "PASSED" : "UNKNOWN"),
+    batch.verificationStatus || (directSucceeded ? "PASSED" : "UNKNOWN")
   ).toUpperCase();
   const ingestion = buildIngestionSummaryFields(batch, targetTotal, processed);
 
@@ -249,7 +318,8 @@ function buildExecutionTransparencyFields({
         total: targetTotal,
       },
       executionPlan: {
-        operationKey: batch?.operationKey || executionPlan?.operationKey || null,
+        operationKey:
+          batch?.operationKey || executionPlan?.operationKey || null,
         mutationType: executionPlan?.mutationType || null,
         apiStrategy: executionPlan?.apiStrategy || null,
         targetType: executionPlan?.targetType || null,
@@ -262,9 +332,9 @@ function buildExecutionTransparencyFields({
       shopifyBulkOperationStatus: directGraphqlExecution
         ? String(history?.executionState || "").toUpperCase()
         : normalizeShopifyBulkStatus(
-          history?.executionState,
-          history?.bulkOperationId,
-        ),
+            history?.executionState,
+            history?.bulkOperationId
+          ),
       resultIngestionProgress: {
         submittedCount: ingestion.ingestionSubmittedCount,
         successCount: ingestion.ingestionSuccessCount,
@@ -418,7 +488,7 @@ export class EditHistoryService {
           ...record,
           snapshotReference: buildSnapshotReference(record),
           title: getLocalizedJsonText(record.title, lang),
-        }),
+        })
       );
 
       const totalCount = await db.editHistory.count({
@@ -448,7 +518,7 @@ export class EditHistoryService {
       if (!id || id === "undefined" || id === "null") {
         throw new NotFoundError(
           `Invalid history ID format: ${id}`,
-          "Invalid ID",
+          "Invalid ID"
         );
       }
 
@@ -509,7 +579,7 @@ export class EditHistoryService {
       if (!history) {
         throw new NotFoundError(
           `History record ${id} not found`,
-          "History not found",
+          "History not found"
         );
       }
 
@@ -525,9 +595,7 @@ export class EditHistoryService {
           rule?.field ??
           "unknown_field",
         type:
-          EDIT_TYPES?.[history.type]?.[lang] ??
-          history.type ??
-          "unknown_type",
+          EDIT_TYPES?.[history.type]?.[lang] ?? history.type ?? "unknown_type",
       });
 
       const immutableEditCommand =
@@ -540,40 +608,45 @@ export class EditHistoryService {
 
       returnData.immutableEditCommand = immutableEditCommand;
       returnData.idempotencyKey = immutableEditCommand?.idempotencyKey || null;
-      const groupedStatuses = await db.changeRecord.groupBy({
-        by: ["status"],
-        where: {
-          editHistoryId: history.id,
-          shop: history.shop,
-        },
-        _count: {
-          _all: true,
-        },
-      }).catch(() => []);
-      const changeStatusCounts = (Array.isArray(groupedStatuses) ? groupedStatuses : []).reduce(
-        (acc, row) => {
-          const key = String(row?.status || "").toUpperCase();
-          if (!key) return acc;
-          acc[key] = toNonNegativeInt(row?._count?._all || 0, 0);
-          return acc;
-        },
-        {},
-      );
+      const groupedStatuses = await db.changeRecord
+        .groupBy({
+          by: ["status"],
+          where: {
+            editHistoryId: history.id,
+            shop: history.shop,
+          },
+          _count: {
+            _all: true,
+          },
+        })
+        .catch(() => []);
+      const changeStatusCounts = (
+        Array.isArray(groupedStatuses) ? groupedStatuses : []
+      ).reduce((acc, row) => {
+        const key = String(row?.status || "").toUpperCase();
+        if (!key) return acc;
+        acc[key] = toNonNegativeInt(row?._count?._all || 0, 0);
+        return acc;
+      }, {});
       Object.assign(
         returnData,
         buildIngestionSummaryFields(
           history.batch,
           history.targetSnapshotCount,
-          history.processedCount,
-        ),
+          history.processedCount
+        )
       );
       Object.assign(returnData, buildIdempotencyStageFields(history.batch));
-      Object.assign(returnData, buildExecutionTransparencyFields({
-        history,
-        changeStatusCounts,
-      }));
+      Object.assign(
+        returnData,
+        buildExecutionTransparencyFields({
+          history,
+          changeStatusCounts,
+        })
+      );
       returnData.supportStatus = {
-        ...(returnData.supportStatus && typeof returnData.supportStatus === "object"
+        ...(returnData.supportStatus &&
+        typeof returnData.supportStatus === "object"
           ? returnData.supportStatus
           : {}),
         idempotencyStages: returnData.idempotencyStages,
@@ -594,7 +667,7 @@ export class EditHistoryService {
       if (!id || id === "undefined" || id === "null") {
         throw new NotFoundError(
           `Invalid history ID format: ${id}`,
-          "Invalid ID",
+          "Invalid ID"
         );
       }
 
@@ -644,40 +717,44 @@ export class EditHistoryService {
       if (!history) {
         throw new NotFoundError(
           `History record ${id} not found`,
-          "History not found",
+          "History not found"
         );
       }
 
       const snapshotSetId =
-        String(history?.snapshotSetId || "").trim()
-        || String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
+        String(history?.snapshotSetId || "").trim() ||
+        String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
       const executionCounts = await getEditExecutionCounts({
         shop: this.session.shop,
         historyId: history.id,
         snapshotSetId,
       });
-      const groupedStatuses = await db.changeRecord.groupBy({
-        by: ["status"],
-        where: {
-          editHistoryId: history.id,
-          shop: history.shop,
-        },
-        _count: {
-          _all: true,
-        },
-      }).catch(() => []);
-      const changeStatusCounts = (Array.isArray(groupedStatuses) ? groupedStatuses : []).reduce(
-        (acc, row) => {
-          const key = String(row?.status || "").toUpperCase();
-          if (!key) return acc;
-          acc[key] = toNonNegativeInt(row?._count?._all || 0, 0);
-          return acc;
-        },
-        {},
-      );
+      const groupedStatuses = await db.changeRecord
+        .groupBy({
+          by: ["status"],
+          where: {
+            editHistoryId: history.id,
+            shop: history.shop,
+          },
+          _count: {
+            _all: true,
+          },
+        })
+        .catch(() => []);
+      const changeStatusCounts = (
+        Array.isArray(groupedStatuses) ? groupedStatuses : []
+      ).reduce((acc, row) => {
+        const key = String(row?.status || "").toUpperCase();
+        if (!key) return acc;
+        acc[key] = toNonNegativeInt(row?._count?._all || 0, 0);
+        return acc;
+      }, {});
       const totalCount =
         executionCounts.totalCount ||
-        toNonNegativeInt(history.targetSnapshotCount || history.totalItems || 0, 0);
+        toNonNegativeInt(
+          history.targetSnapshotCount || history.totalItems || 0,
+          0
+        );
       console.info("[history-summary]", {
         id: history.id,
         status: history.status,
@@ -701,16 +778,20 @@ export class EditHistoryService {
         buildIngestionSummaryFields(
           history.batch,
           history.targetSnapshotCount,
-          history.processedCount,
-        ),
+          history.processedCount
+        )
       );
       Object.assign(returnData, buildIdempotencyStageFields(history.batch));
-      Object.assign(returnData, buildExecutionTransparencyFields({
-        history,
-        changeStatusCounts,
-      }));
+      Object.assign(
+        returnData,
+        buildExecutionTransparencyFields({
+          history,
+          changeStatusCounts,
+        })
+      );
       returnData.supportStatus = {
-        ...(returnData.supportStatus && typeof returnData.supportStatus === "object"
+        ...(returnData.supportStatus &&
+        typeof returnData.supportStatus === "object"
           ? returnData.supportStatus
           : {}),
         idempotencyStages: returnData.idempotencyStages,
@@ -731,16 +812,21 @@ export class EditHistoryService {
       if (!id || id === "undefined" || id === "null") {
         throw new NotFoundError(
           `Invalid history ID format: ${id}`,
-          "Invalid ID",
+          "Invalid ID"
         );
       }
 
       const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
-      const cacheKey = `${this.session.shop}:historyChanges:${id}:cursor${cursor || "start"}:limit${limitNum}`;
+      const cacheKey = `${this.session.shop}:historyChanges:${id}:cursor${
+        cursor || "start"
+      }:limit${limitNum}`;
       const cacheData = await getCache(cacheKey);
 
       const cachedTotalCount = toNonNegativeInt(cacheData?.totalCount, 0);
-      if (cacheData && (cachedTotalCount > 0 || cacheData?.changes?.length > 0)) {
+      if (
+        cacheData &&
+        (cachedTotalCount > 0 || cacheData?.changes?.length > 0)
+      ) {
         return {
           changes: cacheData.changes,
           pageInfo: cacheData.pageInfo,
@@ -766,13 +852,13 @@ export class EditHistoryService {
       if (!history) {
         throw new NotFoundError(
           `History record ${id} not found`,
-          "History not found",
+          "History not found"
         );
       }
 
       const snapshotSetId =
-        String(history?.snapshotSetId || "").trim()
-        || String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
+        String(history?.snapshotSetId || "").trim() ||
+        String(history?.batch?.targetSnapshotRef?.snapshotSetId || "").trim();
 
       // CSV imports already own durable ChangeRecord rows with the merchant-facing
       // field diffs. Older CSV snapshots may not contain plannedMutation, so using
@@ -782,7 +868,9 @@ export class EditHistoryService {
           where: {
             shop: this.session.shop,
             snapshotSetId,
-            executionStatus: { in: ["SUCCEEDED", "VERIFIED", "FAILED", "SKIPPED"] },
+            executionStatus: {
+              in: ["SUCCEEDED", "VERIFIED", "FAILED", "SKIPPED"],
+            },
           },
         });
 
@@ -797,7 +885,9 @@ export class EditHistoryService {
           where: {
             shop: this.session.shop,
             snapshotSetId,
-            executionStatus: { in: ["SUCCEEDED", "VERIFIED", "FAILED", "SKIPPED"] },
+            executionStatus: {
+              in: ["SUCCEEDED", "VERIFIED", "FAILED", "SKIPPED"],
+            },
             ...snapshotCursorWhere,
           },
           select: {
@@ -817,10 +907,16 @@ export class EditHistoryService {
         const hasNextPage = rows.length > limitNum;
         const pageRows = hasNextPage ? rows.slice(0, limitNum) : rows;
         assertSnapshotItemsFullyIngested(
-          pageRows.filter((row) => ["SUCCEEDED", "VERIFIED"].includes(String(row.executionStatus || ""))),
-          "history_changes",
+          pageRows.filter((row) =>
+            ["SUCCEEDED", "VERIFIED"].includes(
+              String(row.executionStatus || "")
+            )
+          ),
+          "history_changes"
         );
-        const endCursor = pageRows.length ? pageRows[pageRows.length - 1].targetKey : null;
+        const endCursor = pageRows.length
+          ? pageRows[pageRows.length - 1].targetKey
+          : null;
 
         const changes = pageRows.map((row) => ({
           id: row.targetKey,
@@ -832,6 +928,7 @@ export class EditHistoryService {
           productId: row.productId,
           variantId: row.variantId,
           createdAt: row.createdAt,
+          undoResult: buildUndoResultProjection(row),
         }));
 
         const result = {
@@ -902,6 +999,8 @@ export class EditHistoryService {
           status: true,
           image: true,
           productId: true,
+          variantId: true,
+          targetIdentity: true,
           createdAt: true,
         },
         orderBy: {
@@ -912,10 +1011,38 @@ export class EditHistoryService {
 
       const hasNextPage = rows.length > limitNum;
       const changes = hasNextPage ? rows.slice(0, limitNum) : rows;
+      const undoSnapshots = snapshotSetId
+        ? await db.targetSnapshotItem.findMany({
+            where: {
+              shop: this.session.shop,
+              snapshotSetId,
+              targetKey: {
+                in: changes.map((row) => row.targetIdentity).filter(Boolean),
+              },
+            },
+            select: {
+              targetKey: true,
+              undoStatus: true,
+              undoPayload: true,
+              undoErrorCode: true,
+              undoErrorMessage: true,
+              undoneAt: true,
+            },
+          })
+        : [];
+      const undoSnapshotByTarget = new Map(
+        undoSnapshots.map((snapshot) => [snapshot.targetKey, snapshot])
+      );
+      const projectedChanges = changes.map((change) => ({
+        ...change,
+        undoResult: buildUndoResultProjection(
+          undoSnapshotByTarget.get(change.targetIdentity)
+        ),
+      }));
       const endCursor = changes.length ? changes[changes.length - 1].id : null;
 
       const result = {
-        changes,
+        changes: projectedChanges,
         pageInfo: {
           hasNextPage,
           endCursor,
@@ -935,4 +1062,3 @@ export class EditHistoryService {
     }
   }
 }
-

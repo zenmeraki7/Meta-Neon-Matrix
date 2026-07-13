@@ -1,4 +1,6 @@
 import { getAuthenticatedFetch } from "../../../api/authenticatedFetchRegistry";
+import { protectedApiGet } from "../../../api/protectedApiClient";
+import { unifiedApiRequest } from "../../../api/unifiedApiClient";
 
 function toServiceError(error, fallbackCode) {
   const status = Number(error?.status || error?.response?.status || 0);
@@ -7,18 +9,16 @@ function toServiceError(error, fallbackCode) {
       error?.details?.code ||
       error?.payload?.code ||
       fallbackCode ||
-      "REQUEST_FAILED",
+      "REQUEST_FAILED"
   ).toUpperCase();
 
   const serviceError = new Error(code);
   serviceError.name = "ServiceError";
   serviceError.code = code;
-  serviceError.status = Number.isFinite(status) && status > 0 ? status : undefined;
+  serviceError.status =
+    Number.isFinite(status) && status > 0 ? status : undefined;
   serviceError.details =
-    error?.details ||
-    error?.payload ||
-    error?.response?.data ||
-    null;
+    error?.details || error?.payload || error?.response?.data || null;
   serviceError.cause = error;
 
   return serviceError;
@@ -29,12 +29,15 @@ async function authRequest(url, options = {}) {
   if (!authFetch) {
     throw toServiceError(
       { code: "AUTH_FETCH_UNINITIALIZED", status: 401 },
-      "AUTH_FETCH_UNINITIALIZED",
+      "AUTH_FETCH_UNINITIALIZED"
     );
   }
   const response = await authFetch(url, options);
   if (!response) {
-    throw toServiceError({ code: "UNAUTHENTICATED", status: 401 }, "UNAUTHENTICATED");
+    throw toServiceError(
+      { code: "UNAUTHENTICATED", status: 401 },
+      "UNAUTHENTICATED"
+    );
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -48,7 +51,7 @@ async function authRequest(url, options = {}) {
         status: response.status,
         details: payload,
       },
-      "HTTP_REQUEST_FAILED",
+      "HTTP_REQUEST_FAILED"
     );
   }
 
@@ -73,13 +76,16 @@ async function authBlobRequest(url, options = {}) {
   if (!authFetch) {
     throw toServiceError(
       { code: "AUTH_FETCH_UNINITIALIZED", status: 401 },
-      "AUTH_FETCH_UNINITIALIZED",
+      "AUTH_FETCH_UNINITIALIZED"
     );
   }
 
   const response = await authFetch(url, options);
   if (!response) {
-    throw toServiceError({ code: "UNAUTHENTICATED", status: 401 }, "UNAUTHENTICATED");
+    throw toServiceError(
+      { code: "UNAUTHENTICATED", status: 401 },
+      "UNAUTHENTICATED"
+    );
   }
 
   if (!response.ok) {
@@ -95,13 +101,15 @@ async function authBlobRequest(url, options = {}) {
         status: response.status,
         details: payload,
       },
-      "HTTP_REQUEST_FAILED",
+      "HTTP_REQUEST_FAILED"
     );
   }
 
   return {
     blob: await response.blob(),
-    filename: parseContentDispositionFilename(response.headers.get("Content-Disposition")),
+    filename: parseContentDispositionFilename(
+      response.headers.get("Content-Disposition")
+    ),
   };
 }
 
@@ -129,13 +137,60 @@ function buildQuery(params = {}) {
 }
 
 export const historyService = {
+  async requestUndo(
+    historyId,
+    operationId,
+    idempotencyKey,
+    authenticatedFetch
+  ) {
+    const immutableId = String(historyId || "").trim();
+    const immutableOperationId = String(operationId || "").trim();
+    if (!immutableId || immutableId.includes("...")) {
+      throw toServiceError(
+        { code: "INVALID_HISTORY_ID", status: 400 },
+        "INVALID_HISTORY_ID"
+      );
+    }
+    if (!immutableOperationId || immutableOperationId.includes("...")) {
+      throw toServiceError(
+        { code: "INVALID_OPERATION_ID", status: 400 },
+        "INVALID_OPERATION_ID"
+      );
+    }
+    return unifiedApiRequest(
+      authenticatedFetch,
+      `/api/history/${encodeURIComponent(immutableId)}/undo`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmationOperationId: immutableOperationId,
+        }),
+        idempotent: true,
+        idempotencyKey,
+      }
+    );
+  },
+
+  async getUndoStatus(undoExecutionId, signal) {
+    return protectedApiGet(
+      `/api/history/undo/${encodeURIComponent(
+        String(undoExecutionId || "")
+      )}/status`,
+      { signal }
+    );
+  },
+
   async getHistories(params, signal) {
     try {
-      return await authRequest(`/api/history/get-shop-edithistory?${buildQuery(params)}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        signal,
-      });
+      return await authRequest(
+        `/api/history/get-shop-edithistory?${buildQuery(params)}`,
+        {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          signal,
+        }
+      );
     } catch (error) {
       if (error.name === "AbortError") throw error;
       throw toServiceError(error, "HISTORY_LIST_FETCH_FAILED");
@@ -144,18 +199,24 @@ export const historyService = {
 
   async getRecurringEditHistories(params, signal) {
     try {
-      return await authRequest(`/api/products/recurring/list-summary?${buildQuery(params)}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        signal,
-      });
+      return await authRequest(
+        `/api/products/recurring/list-summary?${buildQuery(params)}`,
+        {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          signal,
+        }
+      );
     } catch (error) {
       if (error.name === "AbortError") throw error;
       throw toServiceError(error, "RECURRING_HISTORY_FETCH_FAILED");
     }
   },
 
-  async getExportHistories({ lang, type, cursor, limit, search, sortKey, sortDirection }, signal) {
+  async getExportHistories(
+    { lang, type, cursor, limit, search, sortKey, sortDirection },
+    signal
+  ) {
     try {
       return await authRequest(
         `/api/history/export/list-summary?${buildQuery({
@@ -167,7 +228,11 @@ export const historyService = {
           sortKey,
           sortDirection,
         })}`,
-        { method: "GET", headers: { "Content-Type": "application/json" }, signal },
+        {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+          signal,
+        }
       );
     } catch (error) {
       if (error.name === "AbortError") throw error;
@@ -179,7 +244,7 @@ export const historyService = {
     try {
       const { blob, filename } = await authBlobRequest(
         `/api/products/download-export/${encodeURIComponent(id)}`,
-        { method: "GET" },
+        { method: "GET" }
       );
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");

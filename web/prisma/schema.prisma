@@ -9,21 +9,21 @@ datasource db {
 }
 
 model Product {
-  shop                        String
-  id                          String
-  mirrorBatchId               String
-  title                       String
-  handle                      String?
-  status                      String
-  statusNormalized            ShopifyProductStatus     @default(UNKNOWN)
-  productType                 String?
-  vendor                      String?
-  tags                        String[]
-  templateSuffix              String?
+  shop             String
+  id               String
+  mirrorBatchId    String
+  title            String
+  handle           String?
+  status           String
+  statusNormalized ShopifyProductStatus @default(UNKNOWN)
+  productType      String?
+  vendor           String?
+  tags             String[]
+  templateSuffix   String?
 
   // split raw html from filterable text
-  descriptionHtml             String?
-  descriptionText             String?
+  descriptionHtml String?
+  descriptionText String?
 
   createdAt                   DateTime?
   updatedAt                   DateTime?
@@ -135,7 +135,6 @@ model Product {
   @@index([shop, mirrorBatchId, visibleOnlineStore])
   @@index([shop, mirrorBatchId, variantCount])
   @@index([shop, mirrorBatchId, templateSuffix])
-
   // add this because search/filter now uses descriptionText
   @@index([shop, mirrorBatchId, descriptionText])
 }
@@ -223,14 +222,14 @@ model Variant {
 }
 
 model Shop {
-  id              String   @id
-  shopifyDomain   String   @unique @map("shopify_domain")
-  scope           String
-  plan            String   @default("free")
-  active          Boolean  @default(true)
-  installedAt     DateTime @default(now()) @map("installed_at")
-  uninstalledAt   DateTime? @map("uninstalled_at")
-  lastSyncedAt    DateTime? @map("last_synced_at")
+  id            String    @id
+  shopifyDomain String    @unique @map("shopify_domain")
+  scope         String
+  plan          String    @default("free")
+  active        Boolean   @default(true)
+  installedAt   DateTime  @default(now()) @map("installed_at")
+  uninstalledAt DateTime? @map("uninstalled_at")
+  lastSyncedAt  DateTime? @map("last_synced_at")
 
   variantMetafields VariantMetafield[]
   bulkEditSessions  BulkEditSession[]
@@ -240,28 +239,28 @@ model Shop {
 }
 
 model VariantMetafield {
-  id                 BigInt      @id @default(autoincrement())
-  shopId             String      @map("shop_id")
-  variantId          BigInt      @map("variant_id")
-  shopifyMetafieldId String?     @map("shopify_metafield_id")
+  id                 BigInt     @id @default(autoincrement())
+  shopId             String     @map("shop_id")
+  variantId          BigInt     @map("variant_id")
+  shopifyMetafieldId String?    @map("shopify_metafield_id")
   namespace          String
   key                String
   type               String?
   value              String?
-  pendingValue       String?     @map("pending_value")
-  compareDigest      String?     @map("compare_digest")
-  shopifyVersion     BigInt      @default(0) @map("shopify_version")
-  editStatus         EditStatus  @default(SYNCED) @map("edit_status")
-  isDirty            Boolean     @default(false) @map("is_dirty")
-  lastEditedAt       DateTime?   @map("last_edited_at")
-  lastSyncedAt       DateTime?   @map("last_synced_at")
+  pendingValue       String?    @map("pending_value")
+  compareDigest      String?    @map("compare_digest")
+  shopifyVersion     BigInt     @default(0) @map("shopify_version")
+  editStatus         EditStatus @default(SYNCED) @map("edit_status")
+  isDirty            Boolean    @default(false) @map("is_dirty")
+  lastEditedAt       DateTime?  @map("last_edited_at")
+  lastSyncedAt       DateTime?  @map("last_synced_at")
 
-  shop               Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  changes            BulkEditChange[]
+  shop    Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  changes BulkEditChange[]
 
+  @@unique([shopId, variantId, namespace, key])
   @@index([variantId, namespace, key])
   @@index([shopId, isDirty])
-  @@unique([shopId, variantId, namespace, key])
   @@map("variant_metafields")
 }
 
@@ -285,26 +284,26 @@ model BulkEditSession {
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
 
-  shop      Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  changes   BulkEditChange[]
+  shop    Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  changes BulkEditChange[]
 
   @@map("bulk_edit_sessions")
 }
 
 model BulkEditChange {
-  id                 BigInt         @id @default(autoincrement())
-  sessionId          BigInt         @map("session_id")
-  variantMetafieldId BigInt         @map("variant_metafield_id")
-  newValue           String         @map("new_value")
-  compareDigest      String         @map("compare_digest")
-  status             ChangeStatus   @default(PENDING)
-  errorCode          String?        @map("error_code")
-  retryable          Boolean        @default(true)
-  createdAt          DateTime       @default(now()) @map("created_at")
-  updatedAt          DateTime       @updatedAt @map("updated_at")
+  id                 BigInt       @id @default(autoincrement())
+  sessionId          BigInt       @map("session_id")
+  variantMetafieldId BigInt       @map("variant_metafield_id")
+  newValue           String       @map("new_value")
+  compareDigest      String       @map("compare_digest")
+  status             ChangeStatus @default(PENDING)
+  errorCode          String?      @map("error_code")
+  retryable          Boolean      @default(true)
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
 
-  session            BulkEditSession  @relation(fields: [sessionId], references: [id])
-  variantMetafield   VariantMetafield @relation(fields: [variantMetafieldId], references: [id])
+  session          BulkEditSession  @relation(fields: [sessionId], references: [id])
+  variantMetafield VariantMetafield @relation(fields: [variantMetafieldId], references: [id])
 
   @@unique([sessionId, variantMetafieldId])
   @@index([sessionId, status])
@@ -312,35 +311,35 @@ model BulkEditChange {
 }
 
 model SyncCursor {
-  id            BigInt    @id @default(autoincrement())
-  shopId        String    @map("shop_id")
-  resourceType  String    @map("resource_type")
-  cursorValue   String?   @map("cursor_value")
-  lastSyncedAt  DateTime? @map("last_synced_at")
+  id           BigInt    @id @default(autoincrement())
+  shopId       String    @map("shop_id")
+  resourceType String    @map("resource_type")
+  cursorValue  String?   @map("cursor_value")
+  lastSyncedAt DateTime? @map("last_synced_at")
 
-  shop          Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@unique([shopId, resourceType])
   @@map("sync_cursors")
 }
 
 model SpreadsheetFile {
-  id             String   @id @default(cuid())
-  shop           String
-  editHistoryId  String?
-  operationType  String?
-  operationId    String?
-  status         String   @default("UPLOADED")
-  originalFilename String?
-  storageKey     String?
-  checksum       String?
-  rowParseErrorCount Int? @default(0)
-  validatedAt    DateTime?
-  fileUrl        String?
-  columnMappings Json?
-  totalRows      Int?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                 String    @id @default(cuid())
+  shop               String
+  editHistoryId      String?
+  operationType      String?
+  operationId        String?
+  status             String    @default("UPLOADED")
+  originalFilename   String?
+  storageKey         String?
+  checksum           String?
+  rowParseErrorCount Int?      @default(0)
+  validatedAt        DateTime?
+  fileUrl            String?
+  columnMappings     Json?
+  totalRows          Int?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([shop])
   @@index([shop, editHistoryId])
@@ -474,27 +473,27 @@ model SyncHistory {
 }
 
 model MirrorBatch {
-  id                    String            @id
-  shop                  String
-  resourceType          MirrorResourceType @default(PRODUCT_CATALOG)
-  status                MirrorBatchStatus @default(SYNC_REQUESTED)
-  syncHistoryId         String?           @unique
-  bulkOperationId       String?
-  expectedProducts      Int?
-  actualProducts        Int?
-  expectedVariants      Int?
-  actualVariants        Int?
-  expectedCollections   Int?
-  actualCollections     Int?
-  expectedMetafields    Int?
-  actualMetafields      Int?
-  activatedAt           DateTime?
-  failedAt              DateTime?
-  failureReason         String?
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
-  store                 Store             @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
-  syncHistory           SyncHistory?      @relation(fields: [syncHistoryId], references: [id], onDelete: SetNull)
+  id                  String             @id
+  shop                String
+  resourceType        MirrorResourceType @default(PRODUCT_CATALOG)
+  status              MirrorBatchStatus  @default(SYNC_REQUESTED)
+  syncHistoryId       String?            @unique
+  bulkOperationId     String?
+  expectedProducts    Int?
+  actualProducts      Int?
+  expectedVariants    Int?
+  actualVariants      Int?
+  expectedCollections Int?
+  actualCollections   Int?
+  expectedMetafields  Int?
+  actualMetafields    Int?
+  activatedAt         DateTime?
+  failedAt            DateTime?
+  failureReason       String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  store               Store              @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
+  syncHistory         SyncHistory?       @relation(fields: [syncHistoryId], references: [id], onDelete: SetNull)
 
   @@unique([shop, id])
   @@index([shop, resourceType, status])
@@ -503,50 +502,50 @@ model MirrorBatch {
 }
 
 model EditHistory {
-  id                        String                 @id @default(cuid())
+  id                        String                           @id @default(cuid())
   shop                      String
   bulkOperationId           String?
-  executionState            String                 @default("planned")
-  executionStateNormalized  EditHistoryExecutionState @default(PLANNED)
-  executionIdentity         String?                @unique
-  targetSnapshotCount       Int                    @default(0)
+  executionState            String                           @default("planned")
+  executionStateNormalized  EditHistoryExecutionState        @default(PLANNED)
+  executionIdentity         String?                          @unique
+  targetSnapshotCount       Int                              @default(0)
   targetMirrorBatchId       String?
   failureStage              String?
   title                     Json?
-  queryFilter               String                 @default("")
+  queryFilter               String                           @default("")
   editedType                String?
   rules                     Json?
   affectedFields            Json?
   locationId                String?
-  status                    String                 @default("pending")
-  statusNormalized          EditHistoryStatus      @default(PENDING)
+  status                    String                           @default("pending")
+  statusNormalized          EditHistoryStatus                @default(PENDING)
   scheduledAt               DateTime?
   scheduledUndoAt           DateTime?
-  processedCount            Int                    @default(0)
-  totalItems                Int                    @default(0)
-  totalRows                 Int                    @default(0)
-  durationMs                Int                    @default(0)
-  editTime                  DateTime               @default(now())
+  processedCount            Int                              @default(0)
+  totalItems                Int                              @default(0)
+  totalRows                 Int                              @default(0)
+  durationMs                Int                              @default(0)
+  editTime                  DateTime                         @default(now())
   startedAt                 DateTime
   completedAt               DateTime?
   undo                      Json?
   batch                     Json?
-  type                      String?                @default("Manual edit")
+  type                      String?                          @default("Manual edit")
   processingBatchId         String?
   scheduledTask             String?
   user                      String?
-  isFavourite               Boolean                @default(false)
-  isSpreadsheetEdit         Boolean                @default(false)
-  isRecurring               Boolean                @default(false)
+  isFavourite               Boolean                          @default(false)
+  isSpreadsheetEdit         Boolean                          @default(false)
+  isRecurring               Boolean                          @default(false)
   recurringEditId           String?
   recurringRunId            String?
   snapshotSetId             String?
   automaticProductRuleId    String?
-  automaticProductRuleRunId String?                @unique
-  triggerType               EditHistoryTriggerType @default(MANUAL)
+  automaticProductRuleRunId String?                          @unique
+  triggerType               EditHistoryTriggerType           @default(MANUAL)
   error                     Json?
-  createdAt                 DateTime               @default(now())
-  updatedAt                 DateTime               @updatedAt
+  createdAt                 DateTime                         @default(now())
+  updatedAt                 DateTime                         @updatedAt
   filterVersion             Int?
   canonicalFilterKey        String?
   filterAst                 Json?
@@ -574,7 +573,7 @@ model EditHistory {
   ingestionCheckpoints      EditHistoryIngestionCheckpoint[]
   undoOperations            UndoOperation[]
   recoveryAudits            BulkEditRecoveryAudit[]
-  snapshotSet               TargetSnapshotSet?     @relation(fields: [snapshotSetId], references: [id])
+  snapshotSet               TargetSnapshotSet?               @relation(fields: [snapshotSetId], references: [id])
 
   @@index([shop, status, type, updatedAt], map: "shop_status_type_recent")
   @@index([shop])
@@ -592,24 +591,49 @@ model EditHistory {
 }
 
 model UndoOperation {
-  id                 String   @id @default(cuid())
-  shop               String
+  id                  String    @id @default(cuid())
+  shop                String
   sourceEditHistoryId String
-  executionIdentity  String   @unique
-  idempotencyKeyHash String?
-  status             String   @default("pending")
-  state              String   @default("queued")
-  bulkOperationId    String?
-  processedCount     Int      @default(0)
-  totalEligibleCount Int      @default(0)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  executionIdentity   String    @unique
+  idempotencyKeyHash  String?
+  status              String    @default("pending")
+  state               String    @default("queued")
+  bulkOperationId     String?
+  processedCount      Int       @default(0)
+  totalEligibleCount  Int       @default(0)
+  restoredCount       Int       @default(0)
+  failedCount         Int       @default(0)
+  skippedCount        Int       @default(0)
+  conflictedCount     Int       @default(0)
+  errorCode           String?
+  errorMessage        String?
+  requestedAt         DateTime  @default(now())
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  editHistory        EditHistory @relation(fields: [sourceEditHistoryId], references: [id], onDelete: Cascade)
-  conflictChunks     UndoOperationConflictChunk[]
+  editHistory    EditHistory                  @relation(fields: [sourceEditHistoryId], references: [id], onDelete: Cascade)
+  command        UndoCommand?
+  conflictChunks UndoOperationConflictChunk[]
 
   @@unique([shop, sourceEditHistoryId])
   @@index([shop, status, updatedAt])
+}
+
+model UndoCommand {
+  id                  String   @id @default(cuid())
+  shop                String
+  undoOperationId     String   @unique
+  sourceEditHistoryId String
+  commandVersion      Int      @default(1)
+  commandHash         String   @unique
+  commandJson         Json
+  createdAt           DateTime @default(now())
+
+  undoOperation UndoOperation @relation(fields: [undoOperationId], references: [id], onDelete: Cascade)
+
+  @@index([shop, sourceEditHistoryId])
 }
 
 model UndoOperationConflictChunk {
@@ -622,49 +646,49 @@ model UndoOperationConflictChunk {
   payload         Json
   createdAt       DateTime @default(now())
 
-  undoOperation   UndoOperation @relation(fields: [undoOperationId], references: [id], onDelete: Cascade)
+  undoOperation UndoOperation @relation(fields: [undoOperationId], references: [id], onDelete: Cascade)
 
   @@unique([shop, undoOperationId, chunkType, chunkIndex])
   @@index([shop, undoOperationId, chunkType, chunkIndex])
 }
 
 model BulkEditRecoveryAudit {
-  id             String   @id @default(cuid())
-  shop           String
-  historyId      String
-  mode           String
-  reason         String
-  actorType      String?
-  actorId        String?
-  actorEmail     String?
-  result         String
-  metadata       Json?
-  createdAt      DateTime @default(now())
+  id         String   @id @default(cuid())
+  shop       String
+  historyId  String
+  mode       String
+  reason     String
+  actorType  String?
+  actorId    String?
+  actorEmail String?
+  result     String
+  metadata   Json?
+  createdAt  DateTime @default(now())
 
-  editHistory    EditHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
+  editHistory EditHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
 
   @@index([shop, historyId, createdAt])
 }
 
 model EditHistoryIngestionCheckpoint {
-  id               String   @id @default(cuid())
-  shop             String
-  historyId        String
-  ingestionRunId   String
-  attempt          Int      @default(1)
-  status           String   @default("IN_PROGRESS")
-  rowOffset        Int      @default(0)
-  rowCount         Int      @default(0)
-  successCount     Int      @default(0)
-  failureCount     Int      @default(0)
-  unmappedRowCount Int      @default(0)
-  malformedRowCount Int     @default(0)
-  rollingChecksum  String?
-  metadata         Json?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                String   @id @default(cuid())
+  shop              String
+  historyId         String
+  ingestionRunId    String
+  attempt           Int      @default(1)
+  status            String   @default("IN_PROGRESS")
+  rowOffset         Int      @default(0)
+  rowCount          Int      @default(0)
+  successCount      Int      @default(0)
+  failureCount      Int      @default(0)
+  unmappedRowCount  Int      @default(0)
+  malformedRowCount Int      @default(0)
+  rollingChecksum   String?
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  editHistory      EditHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
+  editHistory EditHistory @relation(fields: [historyId], references: [id], onDelete: Cascade)
 
   @@unique([shop, historyId, ingestionRunId])
   @@index([shop, historyId, status, updatedAt])
@@ -672,44 +696,44 @@ model EditHistoryIngestionCheckpoint {
 }
 
 model RecurringEdit {
-  id                 String                @id @default(cuid())
-  shop               String
-  title              String
-  status             RecurringEditStatus   @default(ACTIVE)
-  scheduleType       RecurringScheduleType
-  timezone           String
-  scheduleConfig     Json
-  cronExpression     String?
-  intervalMinutes    Int?
-  startAt            DateTime?
-  endAt              DateTime?
-  filterParams       Json
-  rules              Json
-  runCount           Int                   @default(0)
-  lastRunAt          DateTime?
-  nextRunAt          DateTime?
-  lastSuccessAt      DateTime?
-  lastFailureAt      DateTime?
-  lastFailureReason  String?
-  isDeleted          Boolean               @default(false)
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
-  filterVersion      Int                   @default(1)
-  canonicalFilterKey String?
-  filterAst          Json?
-  normalizedFilterAst Json?
-  targetingSnapshotMeta Json?
-  targetingMode      String?
-  targetGranularity  String?
+  id                       String                @id @default(cuid())
+  shop                     String
+  title                    String
+  status                   RecurringEditStatus   @default(ACTIVE)
+  scheduleType             RecurringScheduleType
+  timezone                 String
+  scheduleConfig           Json
+  cronExpression           String?
+  intervalMinutes          Int?
+  startAt                  DateTime?
+  endAt                    DateTime?
+  filterParams             Json
+  rules                    Json
+  runCount                 Int                   @default(0)
+  lastRunAt                DateTime?
+  nextRunAt                DateTime?
+  lastSuccessAt            DateTime?
+  lastFailureAt            DateTime?
+  lastFailureReason        String?
+  isDeleted                Boolean               @default(false)
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  filterVersion            Int                   @default(1)
+  canonicalFilterKey       String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetingMode            String?
+  targetGranularity        String?
   targetingCompilerVersion String?
-  fieldRegistryVersion String?
-  operatorRegistryVersion String?
-  filterHash         String?
-  actorType          String?
-  actorId            String?
-  actorEmail         String?
-  actorName          String?
-  runs               RecurringEditRun[]
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  filterHash               String?
+  actorType                String?
+  actorId                  String?
+  actorEmail               String?
+  actorName                String?
+  runs                     RecurringEditRun[]
 
   @@index([shop])
   @@index([shop, status])
@@ -719,30 +743,30 @@ model RecurringEdit {
 }
 
 model RecurringEditRun {
-  id              String                 @id @default(cuid())
-  recurringEditId String
-  shop            String
-  scheduledFor    DateTime
-  startedAt       DateTime?
-  completedAt     DateTime?
-  status          RecurringEditRunStatus @default(PENDING)
-  executionKey    String                 @unique
-  mirrorBatchId   String?
-  filterAst       Json?
-  normalizedFilterAst Json?
-  targetingSnapshotMeta Json?
-  targetingMode   String?
-  targetGranularity String?
+  id                       String                 @id @default(cuid())
+  recurringEditId          String
+  shop                     String
+  scheduledFor             DateTime
+  startedAt                DateTime?
+  completedAt              DateTime?
+  status                   RecurringEditRunStatus @default(PENDING)
+  executionKey             String                 @unique
+  mirrorBatchId            String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetingMode            String?
+  targetGranularity        String?
   targetingCompilerVersion String?
-  fieldRegistryVersion String?
-  operatorRegistryVersion String?
-  filterHash      String?
-  targetResolvedAt DateTime?
-  errorMessage    String?
-  editHistoryId   String?
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
-  recurringEdit   RecurringEdit          @relation(fields: [recurringEditId], references: [id], onDelete: Cascade)
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  filterHash               String?
+  targetResolvedAt         DateTime?
+  errorMessage             String?
+  editHistoryId            String?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+  recurringEdit            RecurringEdit          @relation(fields: [recurringEditId], references: [id], onDelete: Cascade)
 
   @@index([recurringEditId])
   @@index([shop, status])
@@ -752,74 +776,74 @@ model RecurringEditRun {
 }
 
 model AutomaticProductRule {
-  id                 String                             @id @default(cuid())
-  shop               String
-  title              String
-  name               String?
-  status             AutomaticProductRuleStatus         @default(ACTIVE)
-  revision           Int                                @default(1)
-  commandVersion     Int                                @default(1)
-  configFingerprint  String?
-  triggerType        AutomaticProductRuleTriggerType
-  scheduleType       AutomaticRuleScheduleType?
-  timezone           String?
-  scheduleConfig     Json?
-  scheduleJson       Json?
-  cronExpression     String?
-  intervalMinutes    Int?
-  targetMode         String?
-  filterAstJson      Json?
-  savedTargetSetId   String?
-  editOperationJson  Json?
-  safetyConfirmationJson Json?
+  id                         String                             @id @default(cuid())
+  shop                       String
+  title                      String
+  name                       String?
+  status                     AutomaticProductRuleStatus         @default(ACTIVE)
+  revision                   Int                                @default(1)
+  commandVersion             Int                                @default(1)
+  configFingerprint          String?
+  triggerType                AutomaticProductRuleTriggerType
+  scheduleType               AutomaticRuleScheduleType?
+  timezone                   String?
+  scheduleConfig             Json?
+  scheduleJson               Json?
+  cronExpression             String?
+  intervalMinutes            Int?
+  targetMode                 String?
+  filterAstJson              Json?
+  savedTargetSetId           String?
+  editOperationJson          Json?
+  safetyConfirmationJson     Json?
   expectedPreviewFingerprint String?
-  startAt            DateTime?
-  endAt              DateTime?
-  scopeType          AutomaticProductRuleScopeType
-  conditions         Json
-  actions            Json
-  applyMode          String
-  priority           Int                                @default(100)
-  cooldownMinutes    Int?
-  maxAffectedPerRun  Int?
-  runCount           Int                                @default(0)
-  lastRunAt          DateTime?
-  nextRunAt          DateTime?
-  lastSuccessAt      DateTime?
-  lastFailureAt      DateTime?
-  lastFailureReason  String?
-  createdBy          String?
-  updatedBy          String?
-  isDeleted          Boolean                            @default(false)
-  deletedAt          DateTime?
-  deletedBy          String?
-  pausedAt           DateTime?
-  pausedBy           String?
-  resumedAt          DateTime?
-  resumedBy          String?
-  schedulerDisabledAt DateTime?
-  schedulerClaimedAt DateTime?
-  schedulerClaimId   String?
-  createdAt          DateTime                           @default(now())
-  updatedAt          DateTime                           @updatedAt
-  filterVersion      Int                                @default(1)
-  canonicalFilterKey String?
-  filterAst          Json?
-  normalizedFilterAst Json?
-  targetingSnapshotMeta Json?
-  targetingMode      String?
-  targetGranularity  String?
-  targetingCompilerVersion String?
-  fieldRegistryVersion String?
-  operatorRegistryVersion String?
-  filterHash         String?
-  actorType          String?
-  actorId            String?
-  actorEmail         String?
-  actorName          String?
-  productStates      AutomaticProductRuleProductState[]
-  runs               AutomaticProductRuleRun[]
-  applications       AutomaticRuleApplication[]
+  startAt                    DateTime?
+  endAt                      DateTime?
+  scopeType                  AutomaticProductRuleScopeType
+  conditions                 Json
+  actions                    Json
+  applyMode                  String
+  priority                   Int                                @default(100)
+  cooldownMinutes            Int?
+  maxAffectedPerRun          Int?
+  runCount                   Int                                @default(0)
+  lastRunAt                  DateTime?
+  nextRunAt                  DateTime?
+  lastSuccessAt              DateTime?
+  lastFailureAt              DateTime?
+  lastFailureReason          String?
+  createdBy                  String?
+  updatedBy                  String?
+  isDeleted                  Boolean                            @default(false)
+  deletedAt                  DateTime?
+  deletedBy                  String?
+  pausedAt                   DateTime?
+  pausedBy                   String?
+  resumedAt                  DateTime?
+  resumedBy                  String?
+  schedulerDisabledAt        DateTime?
+  schedulerClaimedAt         DateTime?
+  schedulerClaimId           String?
+  createdAt                  DateTime                           @default(now())
+  updatedAt                  DateTime                           @updatedAt
+  filterVersion              Int                                @default(1)
+  canonicalFilterKey         String?
+  filterAst                  Json?
+  normalizedFilterAst        Json?
+  targetingSnapshotMeta      Json?
+  targetingMode              String?
+  targetGranularity          String?
+  targetingCompilerVersion   String?
+  fieldRegistryVersion       String?
+  operatorRegistryVersion    String?
+  filterHash                 String?
+  actorType                  String?
+  actorId                    String?
+  actorEmail                 String?
+  actorName                  String?
+  productStates              AutomaticProductRuleProductState[]
+  runs                       AutomaticProductRuleRun[]
+  applications               AutomaticRuleApplication[]
 
   @@index([shop, status])
   @@index([shop, nextRunAt])
@@ -838,56 +862,57 @@ model AutomaticProductRule {
 }
 
 model AutomaticProductRuleRun {
-  id                     String                               @id @default(cuid())
-  automaticProductRuleId String
-  shop                   String
-  triggerSource          AutomaticProductRuleRunTriggerSource
-  triggerReference       String?
-  scheduledFor           DateTime?
-  startedAt              DateTime?
-  processingStartedAt    DateTime?
-  heartbeatAt            DateTime?
-  completedAt            DateTime?
-  status                 AutomaticProductRuleRunStatus        @default(TARGET_FREEZE_QUEUED)
-  executionKey           String                               @unique
-  idempotencyKey         String
-  source                 String?
-  ruleRevision           Int?
-  configFingerprint      String?
-  requestedByJson        Json?
-  cancelledAt            DateTime?
-  cancelledBy            String?
-  cancelReason           String?
-  processingToken        String?
-  processingOwner        String?
-  operationId            String?
-  mirrorBatchId          String?
-  filterAst              Json?
-  normalizedFilterAst    Json?
-  targetingSnapshotMeta  Json?
-  targetingMode          String?
-  targetGranularity      String?
+  id                       String                               @id @default(cuid())
+  automaticProductRuleId   String
+  shop                     String
+  triggerSource            AutomaticProductRuleRunTriggerSource
+  triggerReference         String?
+  scheduledFor             DateTime?
+  startedAt                DateTime?
+  processingStartedAt      DateTime?
+  heartbeatAt              DateTime?
+  completedAt              DateTime?
+  status                   AutomaticProductRuleRunStatus        @default(TARGET_FREEZE_QUEUED)
+  executionKey             String                               @unique
+  idempotencyKey           String
+  source                   String?
+  ruleRevision             Int?
+  configFingerprint        String?
+  requestedByJson          Json?
+  cancelledAt              DateTime?
+  cancelledBy              String?
+  cancelReason             String?
+  processingToken          String?
+  processingOwner          String?
+  operationId              String?
+  mirrorBatchId            String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetingMode            String?
+  targetGranularity        String?
   targetingCompilerVersion String?
-  fieldRegistryVersion   String?
-  operatorRegistryVersion String?
-  filterHash             String?
-  targetResolvedAt       DateTime?
-  ruleSnapshot           Json?
-  conditionsSnapshot     Json?
-  actionsSnapshot        Json?
-  scopeTypeSnapshot      AutomaticProductRuleScopeType?
-  applyModeSnapshot      String?
-  matchedCount           Int                                  @default(0)
-  affectedCount          Int                                  @default(0)
-  attemptCount           Int                                  @default(0)
-  lastAttemptAt          DateTime?
-  queuedAt               DateTime?
-  errorMessage           String?
-  editHistoryId          String?
-  createdAt              DateTime                             @default(now())
-  updatedAt              DateTime                             @updatedAt
-  automaticProductRule   AutomaticProductRule                 @relation(fields: [automaticProductRuleId], references: [id], onDelete: Cascade)
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  filterHash               String?
+  targetResolvedAt         DateTime?
+  ruleSnapshot             Json?
+  conditionsSnapshot       Json?
+  actionsSnapshot          Json?
+  scopeTypeSnapshot        AutomaticProductRuleScopeType?
+  applyModeSnapshot        String?
+  matchedCount             Int                                  @default(0)
+  affectedCount            Int                                  @default(0)
+  attemptCount             Int                                  @default(0)
+  lastAttemptAt            DateTime?
+  queuedAt                 DateTime?
+  errorMessage             String?
+  editHistoryId            String?
+  createdAt                DateTime                             @default(now())
+  updatedAt                DateTime                             @updatedAt
+  automaticProductRule     AutomaticProductRule                 @relation(fields: [automaticProductRuleId], references: [id], onDelete: Cascade)
 
+  @@unique([shop, idempotencyKey])
   @@index([shop, status, createdAt])
   @@index([shop, status, startedAt])
   @@index([shop, status, heartbeatAt])
@@ -900,48 +925,51 @@ model AutomaticProductRuleRun {
   @@index([automaticProductRuleId, status, createdAt])
   @@index([automaticProductRuleId, scheduledFor])
   @@index([editHistoryId])
-  @@unique([shop, idempotencyKey])
 }
 
 model TargetFreezeCommand {
-  id                 String   @id @default(cuid())
-  shop               String
-  operationId        String?
-  sourceType         String
-  sourceId           String
-  sourceRevision     Int?
-  configFingerprint  String?
-  mirrorBatchId      String?
-  targetMode         String?
-  filterAstJson      Json?
-  savedTargetSetId   String?
-  editOperationJson  Json?
-  status             String
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                String   @id @default(cuid())
+  shop              String
+  operationId       String?
+  sourceType        String
+  sourceId          String
+  sourceRevision    Int?
+  configFingerprint String?
+  mirrorBatchId     String?
+  targetMode        String?
+  filterAstJson     Json?
+  savedTargetSetId  String?
+  editOperationJson Json?
+  status            String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([shop, operationId])
   @@index([status, createdAt])
 }
 
 model OutboxEvent {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   shop          String
   aggregateType String
   aggregateId   String
   eventType     String
+  eventIdentity String?   @unique
   payloadJson   Json?
   status        String
+  attemptCount  Int       @default(0)
+  lastErrorCode String?
+  lastErrorAt   DateTime?
   dispatchedAt  DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([status, createdAt])
   @@index([shop, aggregateType, aggregateId])
 }
 
 model AutomaticProductRuleProductState {
-  id                     String               @id @default(cuid())
+  id                     String                         @id @default(cuid())
   automaticProductRuleId String
   shop                   String
   targetType             AutomaticProductRuleTargetType @default(PRODUCT)
@@ -955,9 +983,9 @@ model AutomaticProductRuleProductState {
   lastMirrorBatchId      String?
   lastTriggerReference   String?
   lastRunId              String?
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @updatedAt
-  automaticProductRule   AutomaticProductRule @relation(fields: [automaticProductRuleId], references: [id], onDelete: Cascade)
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
+  automaticProductRule   AutomaticProductRule           @relation(fields: [automaticProductRuleId], references: [id], onDelete: Cascade)
 
   @@unique([automaticProductRuleId, shop, targetIdentity])
   @@index([shop, targetType, productId])
@@ -973,21 +1001,21 @@ model AutomaticProductRuleProductState {
 }
 
 model AutomaticRuleApplication {
-  id                  String                          @id @default(cuid())
-  shop                String
-  ruleId              String
-  runId               String
-  targetType          AutomaticProductRuleTargetType
-  productId           String?
-  variantId           String?
-  targetIdentity      String
-  triggerReference    String?
-  fingerprint         String
-  status              AutomaticRuleApplicationStatus  @default(RESERVED)
-  errorMessage        String?
-  createdAt           DateTime                        @default(now())
-  updatedAt           DateTime                        @updatedAt
-  automaticProductRule AutomaticProductRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  id                   String                         @id @default(cuid())
+  shop                 String
+  ruleId               String
+  runId                String
+  targetType           AutomaticProductRuleTargetType
+  productId            String?
+  variantId            String?
+  targetIdentity       String
+  triggerReference     String?
+  fingerprint          String
+  status               AutomaticRuleApplicationStatus @default(RESERVED)
+  errorMessage         String?
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+  automaticProductRule AutomaticProductRule           @relation(fields: [ruleId], references: [id], onDelete: Cascade)
 
   @@unique([shop, ruleId, fingerprint])
   @@index([shop, runId])
@@ -1059,8 +1087,8 @@ model ExportHistory {
   scheduledTask String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  @@unique([shop, scheduledTask])
 
+  @@unique([shop, scheduledTask])
   @@index([shop, createdAt])
   @@index([shop, status])
   @@index([shop, isFavourite])
@@ -1069,41 +1097,41 @@ model ExportHistory {
 }
 
 model ScheduledExport {
-  id                 String                @id @default(cuid())
-  shop               String
-  title              String
-  status             ScheduledExportStatus @default(ACTIVE)
-  scheduleType       RecurringScheduleType
-  timezone           String
-  scheduleConfig     Json
-  cronExpression     String?
-  intervalMinutes    Int?
-  startAt            DateTime?
-  endAt              DateTime?
-  filterParams       Json
-  fields             String[]
-  filename           String
-  runCount           Int                   @default(0)
-  lastRunAt          DateTime?
-  nextRunAt          DateTime?
-  lastSuccessAt      DateTime?
-  lastFailureAt      DateTime?
-  lastFailureReason  String?
-  isDeleted          Boolean               @default(false)
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
-  filterVersion      Int                   @default(1)
-  canonicalFilterKey String?
-  filterAst          Json?
-  normalizedFilterAst Json?
-  targetingSnapshotMeta Json?
-  targetingMode      String?
-  targetGranularity  String?
+  id                       String                @id @default(cuid())
+  shop                     String
+  title                    String
+  status                   ScheduledExportStatus @default(ACTIVE)
+  scheduleType             RecurringScheduleType
+  timezone                 String
+  scheduleConfig           Json
+  cronExpression           String?
+  intervalMinutes          Int?
+  startAt                  DateTime?
+  endAt                    DateTime?
+  filterParams             Json
+  fields                   String[]
+  filename                 String
+  runCount                 Int                   @default(0)
+  lastRunAt                DateTime?
+  nextRunAt                DateTime?
+  lastSuccessAt            DateTime?
+  lastFailureAt            DateTime?
+  lastFailureReason        String?
+  isDeleted                Boolean               @default(false)
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  filterVersion            Int                   @default(1)
+  canonicalFilterKey       String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetingMode            String?
+  targetGranularity        String?
   targetingCompilerVersion String?
-  fieldRegistryVersion String?
-  operatorRegistryVersion String?
-  filterHash         String?
-  runs               ScheduledExportRun[]
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  filterHash               String?
+  runs                     ScheduledExportRun[]
 
   @@index([shop])
   @@index([shop, status])
@@ -1113,33 +1141,33 @@ model ScheduledExport {
 }
 
 model ScheduledExportRun {
-  id                String                   @id @default(cuid())
-  scheduledExportId String
-  shop              String
-  scheduledFor      DateTime
-  startedAt         DateTime?
-  completedAt       DateTime?
-  status            ScheduledExportRunStatus @default(PENDING)
-  executionKey      String                   @unique
-  targetMirrorBatchId String?
-  filterAst         Json?
-  normalizedFilterAst Json?
-  targetingSnapshotMeta Json?
-  targetingMode     String?
-  targetGranularity String?
+  id                       String                   @id @default(cuid())
+  scheduledExportId        String
+  shop                     String
+  scheduledFor             DateTime
+  startedAt                DateTime?
+  completedAt              DateTime?
+  status                   ScheduledExportRunStatus @default(PENDING)
+  executionKey             String                   @unique
+  targetMirrorBatchId      String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetingMode            String?
+  targetGranularity        String?
   targetingCompilerVersion String?
-  fieldRegistryVersion String?
-  operatorRegistryVersion String?
-  filterHash        String?
-  targetResolvedAt  DateTime?
-  errorMessage      String?
-  exportJobId       String?
-  fileUrl           String?
-  totalItems        Int?
-  durationMs        Int?
-  createdAt         DateTime                 @default(now())
-  updatedAt         DateTime                 @updatedAt
-  scheduledExport   ScheduledExport          @relation(fields: [scheduledExportId], references: [id], onDelete: Cascade)
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  filterHash               String?
+  targetResolvedAt         DateTime?
+  errorMessage             String?
+  exportJobId              String?
+  fileUrl                  String?
+  totalItems               Int?
+  durationMs               Int?
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  scheduledExport          ScheduledExport          @relation(fields: [scheduledExportId], references: [id], onDelete: Cascade)
 
   @@index([scheduledExportId])
   @@index([shop, status])
@@ -1149,55 +1177,55 @@ model ScheduledExportRun {
 }
 
 model ExportJob {
-  id                   String               @id @default(cuid())
-  shop                 String
-  filterQuery          String               @default("{}")
-  executionState       String               @default("planned")
+  id                       String                  @id @default(cuid())
+  shop                     String
+  filterQuery              String                  @default("{}")
+  executionState           String                  @default("planned")
   executionStateNormalized ExportJobExecutionState @default(PLANNED)
-  targetSnapshotCount  Int                  @default(0)
-  targetMirrorBatchId  String?
-  filterAst            Json?
-  normalizedFilterAst  Json?
-  targetingSnapshotMeta Json?
-  targetingMode        String?
-  targetGranularity    String?
+  targetSnapshotCount      Int                     @default(0)
+  targetMirrorBatchId      String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetingMode            String?
+  targetGranularity        String?
   targetingCompilerVersion String?
-  fieldRegistryVersion String?
-  operatorRegistryVersion String?
-  filterHash           String?
-  targetResolvedAt     DateTime?
-  failureStage         String?
-  filename             String
-  fields               String[]
-  status               String               @default("PENDING")
-  statusNormalized     ExportJobStatus      @default(PENDING)
-  fileUrl              String?
-  type                 String               @default("Manual export")
-  isScheduled          Boolean              @default(false)
-  scheduledExportId    String?
-  scheduledExportRunId String?
-  triggerType          ExportJobTriggerType @default(MANUAL)
-  totalItems           Int?
-  durationMs           Int?
-  startedAt            DateTime?
-  completedAt          DateTime?
-  error                String?
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
-  filterVersion        Int?
-  canonicalFilterKey   String?
-  entitlementSnapshot  Json?
-  actorType            String?
-  actorId              String?
-  actorEmail           String?
-  actorName            String?
-  cancelRequestedAt    DateTime?
-  cancelledAt          DateTime?
-  cancelReason         String?
-  pauseRequestedAt     DateTime?
-  pausedAt             DateTime?
-  resumedAt            DateTime?
-  executionCursorOrdinal Int?
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  filterHash               String?
+  targetResolvedAt         DateTime?
+  failureStage             String?
+  filename                 String
+  fields                   String[]
+  status                   String                  @default("PENDING")
+  statusNormalized         ExportJobStatus         @default(PENDING)
+  fileUrl                  String?
+  type                     String                  @default("Manual export")
+  isScheduled              Boolean                 @default(false)
+  scheduledExportId        String?
+  scheduledExportRunId     String?
+  triggerType              ExportJobTriggerType    @default(MANUAL)
+  totalItems               Int?
+  durationMs               Int?
+  startedAt                DateTime?
+  completedAt              DateTime?
+  error                    String?
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+  filterVersion            Int?
+  canonicalFilterKey       String?
+  entitlementSnapshot      Json?
+  actorType                String?
+  actorId                  String?
+  actorEmail               String?
+  actorName                String?
+  cancelRequestedAt        DateTime?
+  cancelledAt              DateTime?
+  cancelReason             String?
+  pauseRequestedAt         DateTime?
+  pausedAt                 DateTime?
+  resumedAt                DateTime?
+  executionCursorOrdinal   Int?
 
   @@index([shop])
   @@index([shop, executionState])
@@ -1234,6 +1262,7 @@ model ChangeRecord {
   updatedAt           DateTime    @updatedAt
   editHistory         EditHistory @relation(fields: [editHistoryId], references: [id])
 
+  @@unique([shop, editHistoryId, batchId, targetIdentity], map: "uniq_change_record_shop_history_batch_target")
   @@index([editHistoryId])
   @@index([shop, editHistoryId])
   @@index([shop, editHistoryId, targetType])
@@ -1243,27 +1272,26 @@ model ChangeRecord {
   @@index([shop])
   @@index([status])
   @@index([batchId])
-  @@unique([shop, editHistoryId, batchId, targetIdentity], map: "uniq_change_record_shop_history_batch_target")
 }
 
 model BulkApplyRequest {
-  id             String   @id @default(cuid())
+  id             String @id @default(cuid())
   shop           String
   bulkJobId      String
   idempotencyKey String
-  status         String   @default("QUEUED")
+  status         String @default("QUEUED")
 
-  totalCount     Int      @default(0)
-  appliedCount   Int      @default(0)
-  failedCount    Int      @default(0)
-  cancelledCount Int      @default(0)
-  skippedCount   Int      @default(0)
+  totalCount     Int @default(0)
+  appliedCount   Int @default(0)
+  failedCount    Int @default(0)
+  cancelledCount Int @default(0)
+  skippedCount   Int @default(0)
 
-  lastError      String?
-  startedAt      DateTime?
-  finishedAt     DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  lastError  String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@unique([shop, bulkJobId, idempotencyKey])
   @@index([shop, bulkJobId])
@@ -1271,17 +1299,17 @@ model BulkApplyRequest {
 }
 
 model BulkApplyItem {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   shop       String
   bulkJobId  String
   productId  String
-  status     String   @default("PENDING")
+  status     String    @default("PENDING")
   error      String?
-  attempt    Int      @default(0)
+  attempt    Int       @default(0)
   startedAt  DateTime?
   finishedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@unique([shop, bulkJobId, productId])
   @@index([shop, bulkJobId])
@@ -1301,19 +1329,19 @@ model ProductApplySnapshot {
 }
 
 model BulkSubmission {
-  id                 String   @id @default(cuid())
-  shop               String
-  editHistoryId      String
-  executionIdentity  String?
-  batchId            String?
-  operationName      String
-  mutationMode       String
-  stagedUploadPath   String?
+  id                     String   @id @default(cuid())
+  shop                   String
+  editHistoryId          String
+  executionIdentity      String?
+  batchId                String?
+  operationName          String
+  mutationMode           String
+  stagedUploadPath       String?
   shopifyBulkOperationId String
-  shopifyStatus      String?
-  submittedAt        DateTime @default(now())
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  shopifyStatus          String?
+  submittedAt            DateTime @default(now())
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   @@unique([shop, shopifyBulkOperationId])
   @@index([shop, editHistoryId, submittedAt])
@@ -1321,15 +1349,15 @@ model BulkSubmission {
 }
 
 model OperationStageProgress {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   shop          String
   operationType String
   operationId   String
   executionId   String?
   stageKey      String
   stageStatus   String
-  startedAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  startedAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   completedAt   DateTime?
   counterA      Int?
   counterB      Int?
@@ -1394,13 +1422,13 @@ model AffiliateUser {
 }
 
 model Location {
-  shop String
-  id   String
-  name String
-  active Boolean?
+  shop         String
+  id           String
+  name         String
+  active       Boolean?
   lastSyncedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@id([shop, id])
   @@index([shop])
@@ -1454,7 +1482,7 @@ model InventoryLevelMirror {
   committed       Int?
   incoming        Int?
   updatedAt       DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   @@id([shop, inventoryItemId, locationId, mirrorBatchId])
   @@index([shop, mirrorBatchId, locationId])
@@ -1463,21 +1491,21 @@ model InventoryLevelMirror {
 }
 
 model ErrorLog {
-  id        BigInt   @id @default(autoincrement())
-  shop      String
-  type      String
-  level     String   @default("error")
-  message   String
-  stack     String?
-  source    String?
-  requestId String?
-  method    String?
-  path      String?
-  statusCode Int?
+  id          BigInt   @id @default(autoincrement())
+  shop        String
+  type        String
+  level       String   @default("error")
+  message     String
+  stack       String?
+  source      String?
+  requestId   String?
+  method      String?
+  path        String?
+  statusCode  Int?
   safeContext Json?
-  request   Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  request     Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([shop])
   @@index([type])
@@ -1487,27 +1515,27 @@ model ErrorLog {
 }
 
 model TargetSnapshot {
-  id            String   @id @default(cuid())
-  ownerType     String
-  ownerId       String
-  shop          String
-  mirrorBatchId String
-  targetType    String
-  source        String?
+  id                String   @id @default(cuid())
+  ownerType         String
+  ownerId           String
+  shop              String
+  mirrorBatchId     String
+  targetType        String
+  source            String?
   targetGranularity String?
-  productId     String?
-  variantId     String?
-  collectionId  String?
-  inventoryItemId String?
-  locationId    String?
-  targetIdentity String
-  ordinal       Int?
-  shard         Int?
-  beforeValues  Json?
-  filterHash    String?
-  targetHash    String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  productId         String?
+  variantId         String?
+  collectionId      String?
+  inventoryItemId   String?
+  locationId        String?
+  targetIdentity    String
+  ordinal           Int?
+  shard             Int?
+  beforeValues      Json?
+  filterHash        String?
+  targetHash        String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@unique([shop, ownerType, ownerId, targetIdentity])
   @@index([shop, ownerType, ownerId], map: "idx_targetsnapshot_owner")
@@ -1523,45 +1551,45 @@ model TargetSnapshot {
 }
 
 model TargetSnapshotSet {
-  id                   String                  @id @default(cuid())
+  id                   String @id @default(cuid())
   shop                 String
   operationId          String
   previewContractId    String
   mirrorBatchId        String
   targetingFingerprint String
 
-  targetCount          Int                     @default(0)
-  productCount         Int                     @default(0)
-  variantCount         Int                     @default(0)
+  targetCount  Int @default(0)
+  productCount Int @default(0)
+  variantCount Int @default(0)
 
-  pendingCount         Int                     @default(0)
-  submittedCount       Int                     @default(0)
-  succeededCount       Int                     @default(0)
-  failedCount          Int                     @default(0)
-  skippedCount         Int                     @default(0)
-  verifiedCount        Int                     @default(0)
+  pendingCount   Int @default(0)
+  submittedCount Int @default(0)
+  succeededCount Int @default(0)
+  failedCount    Int @default(0)
+  skippedCount   Int @default(0)
+  verifiedCount  Int @default(0)
 
-  undoPendingCount     Int                     @default(0)
-  undoSucceededCount   Int                     @default(0)
-  undoFailedCount      Int                     @default(0)
+  undoPendingCount   Int @default(0)
+  undoSucceededCount Int @default(0)
+  undoFailedCount    Int @default(0)
 
-  checksum             String?
-  compilerVersion      String
-  projectionVersion    String
-  plannerVersion       String?
+  checksum          String?
+  compilerVersion   String
+  projectionVersion String
+  plannerVersion    String?
 
-  status               TargetSnapshotSetStatus @default(FREEZING)
+  status TargetSnapshotSetStatus @default(FREEZING)
 
-  freezeErrorCode      String?
-  freezeErrorMessage   String?
+  freezeErrorCode    String?
+  freezeErrorMessage String?
 
-  createdAt            DateTime                @default(now())
-  frozenAt             DateTime?
-  failedAt             DateTime?
-  expiresAt            DateTime?
+  createdAt DateTime  @default(now())
+  frozenAt  DateTime?
+  failedAt  DateTime?
+  expiresAt DateTime?
 
-  items                TargetSnapshotItem[]
-  editHistories        EditHistory[]
+  items         TargetSnapshotItem[]
+  editHistories EditHistory[]
 
   @@unique([shop, operationId])
   @@index([shop, previewContractId])
@@ -1573,50 +1601,50 @@ model TargetSnapshotSet {
 }
 
 model TargetSnapshotItem {
-  id                     String                            @id @default(cuid())
+  id String @id @default(cuid())
 
-  snapshotSetId          String
-  shop                   String
-  operationId            String
-  mirrorBatchId          String
+  snapshotSetId String
+  shop          String
+  operationId   String
+  mirrorBatchId String
 
-  productId              String
-  variantId              String?
-  targetKey              String
-  targetType             TargetSnapshotTargetType
+  productId  String
+  variantId  String?
+  targetKey  String
+  targetType TargetSnapshotTargetType
 
-  mutationGroupKey       String?
+  mutationGroupKey String?
 
-  beforeValues           Json
-  plannedMutation        Json
+  beforeValues    Json
+  plannedMutation Json
 
-  targetFingerprint      String
-  rowChecksum            String
+  targetFingerprint String
+  rowChecksum       String
 
   executionStatus        TargetSnapshotItemExecutionStatus @default(PENDING)
-  executionAttemptCount  Int                                @default(0)
+  executionAttemptCount  Int                               @default(0)
   lastExecutionAttemptAt DateTime?
 
-  shopifyBulkLineNumber  Int?
-  shopifyResultId        String?
-  shopifyErrorCode       String?
-  shopifyErrorMessage    String?
+  shopifyBulkLineNumber Int?
+  shopifyResultId       String?
+  shopifyErrorCode      String?
+  shopifyErrorMessage   String?
 
-  undoStatus             TargetSnapshotItemUndoStatus       @default(NOT_REQUIRED)
-  undoAttemptCount       Int                                @default(0)
-  lastUndoAttemptAt      DateTime?
-  undoPayload            Json?
-  undoErrorCode          String?
-  undoErrorMessage       String?
+  undoStatus        TargetSnapshotItemUndoStatus @default(NOT_REQUIRED)
+  undoAttemptCount  Int                          @default(0)
+  lastUndoAttemptAt DateTime?
+  undoPayload       Json?
+  undoErrorCode     String?
+  undoErrorMessage  String?
 
-  createdAt              DateTime                           @default(now())
-  submittedAt            DateTime?
-  executedAt             DateTime?
-  verifiedAt             DateTime?
-  undoSubmittedAt        DateTime?
-  undoneAt               DateTime?
+  createdAt       DateTime  @default(now())
+  submittedAt     DateTime?
+  executedAt      DateTime?
+  verifiedAt      DateTime?
+  undoSubmittedAt DateTime?
+  undoneAt        DateTime?
 
-  snapshotSet            TargetSnapshotSet @relation(fields: [snapshotSetId], references: [id], onDelete: Cascade)
+  snapshotSet TargetSnapshotSet @relation(fields: [snapshotSetId], references: [id], onDelete: Cascade)
 
   @@unique([snapshotSetId, targetKey])
   @@index([shop, snapshotSetId])
@@ -1645,20 +1673,20 @@ model ProductCollection {
 }
 
 model MetafieldMirror {
-  shop          String
-  ownerType     String
-  ownerId       String
-  namespace     String
-  key           String
-  valueType     String?
-  valueText     String?
+  shop                String
+  ownerType           String
+  ownerId             String
+  namespace           String
+  key                 String
+  valueType           String?
+  valueText           String?
   valueTextNormalized String?
-  valueNumber   Decimal? @db.Decimal(30, 10)
-  valueBoolean  Boolean?
-  valueDate     DateTime?
-  valueJson     Json?
-  mirrorBatchId String
-  updatedAt     DateTime @default(now())
+  valueNumber         Decimal?  @db.Decimal(30, 10)
+  valueBoolean        Boolean?
+  valueDate           DateTime?
+  valueJson           Json?
+  mirrorBatchId       String
+  updatedAt           DateTime  @default(now())
 
   @@id([shop, ownerType, ownerId, namespace, key, mirrorBatchId])
   @@index([shop, mirrorBatchId, ownerType, ownerId])
@@ -1688,11 +1716,11 @@ model MirrorAnomaly {
 }
 
 model ShopifySession {
-  id               String  @id @db.VarChar(255)
-  shop             String  @db.VarChar(255)
-  state            String  @db.VarChar(255)
+  id               String    @id @db.VarChar(255)
+  shop             String    @db.VarChar(255)
+  state            String    @db.VarChar(255)
   isOnline         Boolean
-  scope            String? @db.VarChar(1024)
+  scope            String?   @db.VarChar(1024)
   expires          Int?
   expiresAt        DateTime?
   onlineAccessInfo String?
@@ -1733,7 +1761,7 @@ model MirrorReconcileSignal {
 }
 
 model OperationFingerprint {
-  id            String   @id
+  id            String                     @id
   shop          String
   operationType String
   fingerprint   String
@@ -1743,8 +1771,8 @@ model OperationFingerprint {
   lastError     String?
   expiresAt     DateTime?
   completedAt   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @default(now())
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @default(now())
 
   @@unique([shop, operationType, fingerprint])
   @@index([resourceType, resourceId], map: "OperationFingerprint_resource_idx")
@@ -1792,14 +1820,14 @@ model BillingEvent {
 }
 
 model OperationLease {
-  id           String   @id
+  id           String    @id
   shop         String
   namespace    String
   resourceId   String
   ownerId      String
   fencingToken BigInt
   expiresAt    DateTime
-  acquiredAt   DateTime @default(now())
+  acquiredAt   DateTime  @default(now())
   heartbeatAt  DateTime?
   releasedAt   DateTime?
 
@@ -1809,20 +1837,20 @@ model OperationLease {
 }
 
 model OperationEnqueueIntent {
-  id          String   @id @default(cuid())
-  shop        String
-  queueKey    String
-  jobName     String
-  payload     Json
-  options     Json?
-  dedupeKey   String?
-  status      String   @default("PENDING")
-  attempts    Int      @default(0)
-  lastError   String?
-  runAt       DateTime @default(now())
+  id           String    @id @default(cuid())
+  shop         String
+  queueKey     String
+  jobName      String
+  payload      Json
+  options      Json?
+  dedupeKey    String?
+  status       String    @default("PENDING")
+  attempts     Int       @default(0)
+  lastError    String?
+  runAt        DateTime  @default(now())
   dispatchedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@unique([shop, queueKey, dedupeKey])
   @@index([shop, status, runAt])
@@ -1830,7 +1858,7 @@ model OperationEnqueueIntent {
 }
 
 model DeadLetterJob {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   shop       String?
   queueName  String
   jobName    String?
@@ -1838,7 +1866,7 @@ model DeadLetterJob {
   payload    Json?
   error      String?
   attempts   Int
-  failedAt   DateTime @default(now())
+  failedAt   DateTime  @default(now())
   resolvedAt DateTime?
   resolution String?
 
@@ -1867,23 +1895,23 @@ model ProductTombstone {
 }
 
 model WebhookDelivery {
-  id           String    @id
-  topic        String
-  shop         String
-  webhookId    String?
-  firstWebhookId String?
-  lastWebhookId String?
-  causalChainId String?
-  entityId     String?
-  dedupeKey    String    @unique
-  payloadHash  String?
-  status       String    @default("RECEIVED")
+  id               String                @id
+  topic            String
+  shop             String
+  webhookId        String?
+  firstWebhookId   String?
+  lastWebhookId    String?
+  causalChainId    String?
+  entityId         String?
+  dedupeKey        String                @unique
+  payloadHash      String?
+  status           String                @default("RECEIVED")
   statusNormalized WebhookDeliveryStatus @default(RECEIVED)
-  processedAt  DateTime?
-  lastError    String?
-  attemptCount Int       @default(1)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @default(now())
+  processedAt      DateTime?
+  lastError        String?
+  attemptCount     Int                   @default(1)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @default(now())
 
   @@index([shop, topic, createdAt])
   @@index([status, createdAt])

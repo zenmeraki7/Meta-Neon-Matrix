@@ -44,7 +44,7 @@ function assertMutationCommand(command) {
   assertRequiredString(
     command.idempotencyKey,
     "Idempotency-Key",
-    "IDEMPOTENCY_KEY_REQUIRED",
+    "IDEMPOTENCY_KEY_REQUIRED"
   );
 
   return command;
@@ -53,6 +53,16 @@ function assertMutationCommand(command) {
 function assertHistoryMutationCommand(command) {
   command = assertMutationCommand(command);
   assertRequiredString(command.historyId, "historyId");
+  return command;
+}
+
+function assertUndoCommand(command) {
+  command = assertHistoryMutationCommand(command);
+  assertRequiredString(
+    command.confirmationOperationId,
+    "confirmationOperationId",
+    "INVALID_OPERATION_ID"
+  );
   return command;
 }
 
@@ -72,18 +82,21 @@ function assertScheduledCommand(command) {
   if (String(command.freezeMode || "") !== "STATIC_AT_SCHEDULE_CREATE") {
     throw buildUseCaseError(
       "Scheduled edits must freeze the approved preview at schedule creation",
-      "STATIC_SCHEDULE_FREEZE_REQUIRED",
+      "STATIC_SCHEDULE_FREEZE_REQUIRED"
     );
   }
   assertRequiredString(
     command.previewContractId || command.previewId,
     "previewContractId",
-    "PREVIEW_ID_REQUIRED",
+    "PREVIEW_ID_REQUIRED"
   );
-  if (!Number.isInteger(command.approvedTargetCount) || command.approvedTargetCount < 0) {
+  if (
+    !Number.isInteger(command.approvedTargetCount) ||
+    command.approvedTargetCount < 0
+  ) {
     throw buildUseCaseError(
       "approvedTargetCount is required",
-      "APPROVED_TARGET_COUNT_REQUIRED",
+      "APPROVED_TARGET_COUNT_REQUIRED"
     );
   }
 
@@ -96,19 +109,19 @@ function assertPreviewFingerprint(command) {
   assertRequiredString(
     command.previewFilterHash,
     "previewFilterHash",
-    "PREVIEW_FINGERPRINT_REQUIRED",
+    "PREVIEW_FINGERPRINT_REQUIRED"
   );
 
   assertRequiredString(
     command.previewFieldRegistryVersion,
     "previewFieldRegistryVersion",
-    "PREVIEW_REGISTRY_VERSION_REQUIRED",
+    "PREVIEW_REGISTRY_VERSION_REQUIRED"
   );
 
   assertRequiredString(
     command.previewOperatorRegistryVersion,
     "previewOperatorRegistryVersion",
-    "PREVIEW_REGISTRY_VERSION_REQUIRED",
+    "PREVIEW_REGISTRY_VERSION_REQUIRED"
   );
 }
 
@@ -116,19 +129,19 @@ function assertPreviewRegistryVersionMatches(command) {
   const current = getTargetingVersionBundle();
 
   const expectedFieldRegistryVersion = String(
-    current?.fieldRegistryVersion || "",
+    current?.fieldRegistryVersion || ""
   );
 
   const expectedOperatorRegistryVersion = String(
-    current?.operatorRegistryVersion || "",
+    current?.operatorRegistryVersion || ""
   );
 
   const actualFieldRegistryVersion = String(
-    command.previewFieldRegistryVersion || "",
+    command.previewFieldRegistryVersion || ""
   );
 
   const actualOperatorRegistryVersion = String(
-    command.previewOperatorRegistryVersion || "",
+    command.previewOperatorRegistryVersion || ""
   );
 
   if (
@@ -137,7 +150,7 @@ function assertPreviewRegistryVersionMatches(command) {
   ) {
     throw buildUseCaseError(
       "PREVIEW_REGISTRY_VERSION_MISMATCH",
-      "PREVIEW_REGISTRY_VERSION_MISMATCH",
+      "PREVIEW_REGISTRY_VERSION_MISMATCH"
     );
   }
 }
@@ -316,6 +329,7 @@ function toHistoryLifecycleInput(command) {
 function toUndoServiceInput(command) {
   return Object.freeze({
     ...toHistoryLifecycleInput(command),
+    confirmationOperationId: command.confirmationOperationId,
   });
 }
 
@@ -353,7 +367,7 @@ export const productBulkEditUseCases = Object.freeze({
     const service = createProductBulkService(command);
 
     const result = await service.trackEditProducts(
-      toPreviewServiceInput(command),
+      toPreviewServiceInput(command)
     );
 
     return requireResult(result, "Preview generation failed");
@@ -364,13 +378,13 @@ export const productBulkEditUseCases = Object.freeze({
     assertRequiredString(
       command.previewContractId || command.previewId,
       "previewContractId",
-      "PREVIEW_ID_REQUIRED",
+      "PREVIEW_ID_REQUIRED"
     );
 
     const service = createProductBulkService(command);
 
     const result = await service.bulkEditProducts(
-      toExecuteServiceInput(command),
+      toExecuteServiceInput(command)
     );
 
     requireResult(result, "Bulk edit execution failed");
@@ -387,7 +401,7 @@ export const productBulkEditUseCases = Object.freeze({
     const service = createProductBulkService(command);
 
     const result = await service.createScheduledEdit(
-      toScheduleServiceInput(command),
+      toScheduleServiceInput(command)
     );
 
     return requireResult(result, "Scheduled edit creation failed");
@@ -412,12 +426,13 @@ export const productBulkEditUseCases = Object.freeze({
 
 export const productBulkUndoUseCases = Object.freeze({
   async undo(command) {
-    command = assertHistoryMutationCommand(command);
+    command = assertUndoCommand(command);
 
     const service = createUndoEditService(command);
     const undoInput = toUndoServiceInput(command);
     const result = await service.undoEdit(undoInput.historyId, {
       idempotencyKey: undoInput.idempotencyKey,
+      confirmationOperationId: undoInput.confirmationOperationId,
       actor: undoInput.actor || null,
       subscription: undoInput.subscription || null,
       entitlement: undoInput.entitlement || null,
@@ -433,7 +448,7 @@ export const productOperationLifecycleUseCases = Object.freeze({
     command = assertHistoryMutationCommand(command);
 
     const result = await requestEditHistoryCancellation(
-      toCancelServiceInput(command),
+      toCancelServiceInput(command)
     );
 
     return requireResult(result, "Cancellation request failed");
@@ -443,7 +458,7 @@ export const productOperationLifecycleUseCases = Object.freeze({
     command = assertHistoryMutationCommand(command);
 
     const result = await requestPauseEditOperation(
-      toHistoryLifecycleInput(command),
+      toHistoryLifecycleInput(command)
     );
 
     return requireResult(result, "Pause request failed");
@@ -463,7 +478,7 @@ export const productOperationLifecycleUseCases = Object.freeze({
     const service = createProductBulkService(command);
 
     const result = await service.retryFailedOnly(
-      toRetryFailedOnlyServiceInput(command),
+      toRetryFailedOnlyServiceInput(command)
     );
 
     return requireResult(result, "Retry failed-only request failed");

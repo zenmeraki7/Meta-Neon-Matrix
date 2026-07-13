@@ -3,14 +3,7 @@
 import { useCallback, useMemo } from "react";
 import { triggerGlobalReauth } from "../api/reauthHandler";
 import { useAppBridgeAuth } from "../components/providers/AppBridgeProvider";
-
-function createAuthFetchUnavailableError() {
-  const error = new Error(
-    "Shopify authenticated fetch is not available yet. Open the app from Shopify Admin and reload.",
-  );
-  error.code = "AUTH_FETCH_UNAVAILABLE";
-  return error;
-}
+import { createShopifyAuthenticatedFetch } from "../api/shopifyAuthenticatedFetch";
 
 /**
  * Returns an authenticated fetch function that includes the Shopify session token.
@@ -20,45 +13,15 @@ function createAuthFetchUnavailableError() {
 export function useAuthenticatedFetch() {
   const { getSessionToken } = useAppBridgeAuth();
   const fetchFunction = useMemo(() => {
-    if (typeof window === "undefined") {
-      return null;
-    }
-
-    const shopifyGlobal = window.shopify || null;
-
-    if (typeof shopifyGlobal?.fetch === "function") {
-      return shopifyGlobal.fetch.bind(shopifyGlobal);
-    }
-
-    if (typeof getSessionToken !== "function") {
-      return null;
-    }
-
-    return async (uri, options = {}) => {
-      const headers = new Headers(options.headers || {});
-
-      if (!headers.has("Authorization")) {
-        const token = await getSessionToken();
-        if (!token) {
-          throw createAuthFetchUnavailableError();
-        }
-        headers.set("Authorization", `Bearer ${token}`);
-      }
-
-      return window.fetch(uri, {
-        credentials: options.credentials || "include",
-        ...options,
-        headers,
-      });
-    };
+    const fetchImpl =
+      typeof window !== "undefined" && typeof window.fetch === "function"
+        ? window.fetch.bind(window)
+        : null;
+    return createShopifyAuthenticatedFetch({ getSessionToken, fetchImpl });
   }, [getSessionToken]);
 
   return useCallback(
     async (uri, options = {}) => {
-      if (!fetchFunction) {
-        throw createAuthFetchUnavailableError();
-      }
-
       const response = await fetchFunction(uri, {
         credentials: options.credentials || "include",
         ...options,
@@ -69,7 +32,7 @@ export function useAuthenticatedFetch() {
         "1"
       ) {
         const redirectUrl = response.headers.get(
-          "X-Shopify-API-Request-Failure-Reauthorize-Url",
+          "X-Shopify-API-Request-Failure-Reauthorize-Url"
         );
 
         if (redirectUrl) {
@@ -84,6 +47,6 @@ export function useAuthenticatedFetch() {
 
       return response;
     },
-    [fetchFunction],
+    [fetchFunction]
   );
 }

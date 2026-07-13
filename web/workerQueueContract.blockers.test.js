@@ -19,22 +19,32 @@ test("undo queue job id includes historyId + executionId + source", () => {
   const queueSource = read("web/Jobs/Queues/bulkUndoJob.js");
   const utilsSource = read("web/utils/jobQueueUtils.js");
   assert.ok(queueSource.includes("buildUndoExecuteJobId({"));
-  assert.ok(queueSource.includes("undoOperationId: data.historyId"));
+  assert.ok(
+    queueSource.includes(
+      "undoOperationId: data.undoExecutionId || data.historyId"
+    )
+  );
   assert.ok(queueSource.includes("executionId: data.executionId"));
-  assert.ok(queueSource.includes("source: data?.source || \"default\""));
+  assert.ok(queueSource.includes('source: data?.source || "default"'));
   assert.ok(utilsSource.includes("export function buildUndoExecuteJobId"));
   assert.ok(
-    utilsSource.includes('return joinSafeJobId("undo-execute", shop, undoOperationId, executionId, source);'),
+    utilsSource.includes(
+      'return joinSafeJobId("undo-execute", shop, undoOperationId, executionId, source);'
+    )
   );
 });
 
 test("result ingestion uses authoritative Shopify fetch status", () => {
   const source = read("web/Jobs/Workers/bulkEditResultIngestWorker.js");
-  assert.ok(source.includes("const status = String(fetched.status || \"\").toUpperCase();"));
+  assert.ok(
+    source.includes(
+      'const status = String(fetched.status || "").toUpperCase();'
+    )
+  );
   assert.equal(
     source.includes("const status = webhookStatus || fetched.status;"),
     false,
-    "webhook status must not override fetched Shopify status",
+    "webhook status must not override fetched Shopify status"
   );
 });
 
@@ -62,7 +72,7 @@ test("legacy bulk-edit queue consumer remains absent", () => {
   assert.equal(
     workerSource.includes("bulkEditWorker.js"),
     false,
-    "legacy bulk-edit worker import must stay absent",
+    "legacy bulk-edit worker import must stay absent"
   );
 });
 
@@ -79,11 +89,11 @@ test("pipeline execute dispatch and execute-worker requeue use bulk-edit-execute
   assert.equal(
     pipelineSource.includes("addbulkEditJob("),
     false,
-    "pipeline worker must not enqueue execute jobs through legacy bulk-edit queue helper",
+    "pipeline worker must not enqueue execute jobs through legacy bulk-edit queue helper"
   );
   assert.equal(
     executeSource.includes("addbulkEditJob("),
     false,
-    "execute worker requeues must not use legacy bulk-edit queue helper",
+    "execute worker requeues must not use legacy bulk-edit queue helper"
   );
 });

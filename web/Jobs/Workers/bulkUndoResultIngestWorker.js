@@ -10,13 +10,16 @@ async function processBulkUndoResultIngest(job) {
   const bulkOperationId = job.data?.bulkOperationId;
   const status = job.data?.status || null;
   if (!shop || !bulkOperationId) {
-    throw new Error("bulk undo result ingest job requires shop and bulkOperationId");
+    throw new Error(
+      "bulk undo result ingest job requires shop and bulkOperationId"
+    );
   }
   const service = new UndoResultIngestionService();
   const result = await service.ingestUndoBulkOperationWebhook({
     shop,
     bulkOperationId: String(bulkOperationId),
     status,
+    resultUrl: job.data?.url || job.data?.partialDataUrl || null,
   });
 
   return {
@@ -33,7 +36,7 @@ const bulkUndoResultIngestWorker = new Worker(
   {
     connection,
     concurrency: 1,
-  },
+  }
 );
 
 export default bulkUndoResultIngestWorker;
