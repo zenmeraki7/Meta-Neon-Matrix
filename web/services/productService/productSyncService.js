@@ -1,4 +1,4 @@
-import readline from "readline";
+import readline from "node:readline";
 import {
   activateProductMirrorBatch,
   clearProductSyncCache,
@@ -9,6 +9,7 @@ import {
   queueProductSyncStart,
   stageProductMirrorBatch,
   updateInitialSyncProgress,
+  validateAndFinalizeProductMirrorBatch,
 } from "../../repositories/productSyncRepository.js";
 import { runProductBulkFetch } from "./productSyncGateway.js";
 import {
@@ -26,81 +27,50 @@ import { db } from "../../repositories/repositoryDb.js";
 import { ensureStoreForShop } from "../../repositories/storeRepository.js";
 import { recordMirrorAnomaly } from "../mirrorAnomalyService.js";
 
+function boundedInteger(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
 function getSuspiciousPartialSyncThreshold() {
-  const parsed = Number(process.env.SUSPICIOUS_PARTIAL_PRODUCT_SYNC_THRESHOLD ?? "0.5");
+  const parsed = Number(
+    process.env.SUSPICIOUS_PARTIAL_PRODUCT_SYNC_THRESHOLD ?? "0.5",
+  );
   if (!Number.isFinite(parsed)) return 0.5;
   return Math.max(0, Math.min(1, parsed));
 }
 
-function getProductSyncIngestBatchSize() {
-  const parsed = Number(process.env.PRODUCT_SYNC_INGEST_BATCH_SIZE || 2500);
-  if (!Number.isFinite(parsed)) return 2500;
-  return Math.max(250, Math.min(10000, Math.trunc(parsed)));
-}
-
-function getProductSyncProgressIntervalMs() {
-  const parsed = Number(process.env.PRODUCT_SYNC_PROGRESS_INTERVAL_MS || 15000);
-  if (!Number.isFinite(parsed)) return 15000;
-  return Math.max(1000, Math.trunc(parsed));
-}
-
-function getProductSyncProgressProductInterval() {
-  const parsed = Number(process.env.PRODUCT_SYNC_PROGRESS_PRODUCT_INTERVAL || 10000);
-  if (!Number.isFinite(parsed)) return 10000;
-  return Math.max(1000, Math.trunc(parsed));
-}
-
-function getProductSyncStreamStallTimeoutMs() {
-  const parsed = Number(process.env.PRODUCT_SYNC_STREAM_STALL_TIMEOUT_MS || 120_000);
-  if (!Number.isFinite(parsed)) return 120_000;
-  return Math.max(30_000, Math.trunc(parsed));
-}
-
-function createSyncStageTimer(shop, syncBatchId) {
-  const startedAt = Date.now();
-  const marks = new Map();
-
-  return {
-    mark(stage, details = {}) {
-      const now = Date.now();
-      const previous = marks.get(stage) || now;
-      marks.set(stage, now);
-      console.info("[sync:stage_timing]", {
-        shop,
-        syncBatchId,
-        stage,
-        elapsedMs: now - startedAt,
-        stageDeltaMs: now - previous,
-        ...details,
-      });
-    },
-  };
-}
-
 function parseTypedMetafieldValue(rawType, rawValue) {
   const valueType = typeof rawType === "string" ? rawType.trim() : "";
-  const textValue = rawValue === null || rawValue === undefined ? null : String(rawValue);
-  const normalizedText = textValue ? textValue.trim().toLowerCase() : null;
+  const textValue =
+    rawValue === null || rawValue === undefined
+      ? null
+      : String(rawValue);
+  const normalizedText = textValue
+    ? textValue.trim().toLowerCase()
+    : null;
 
   let valueNumber = null;
   let valueBoolean = null;
   let valueDate = null;
 
-  if (textValue && ["number_integer", "number_decimal", "rating", "money"].includes(valueType)) {
+  if (
+    textValue &&
+    ["number_integer", "number_decimal", "rating", "money"].includes(
+      valueType,
+    )
+  ) {
     const parsed = Number(textValue);
-    if (!Number.isNaN(parsed)) {
-      valueNumber = parsed.toString();
-    }
+    if (!Number.isNaN(parsed)) valueNumber = parsed.toString();
   }
 
   if (normalizedText === "true") valueBoolean = true;
   if (normalizedText === "false") valueBoolean = false;
 
   if (textValue && ["date", "date_time"].includes(valueType)) {
-    const ms = Date.parse(textValue);
-    if (!Number.isNaN(ms)) {
-      valueDate = new Date(ms);
-    }
+    const milliseconds = Date.parse(textValue);
+    if (!Number.isNaN(milliseconds)) valueDate = new Date(milliseconds);
   }
 
   return {
@@ -112,40 +82,143 @@ function parseTypedMetafieldValue(rawType, rawValue) {
   };
 }
 
+function createProductAccumulator(node, collectMetaobjectRefs) {
+  const productMetafields = extractMetafields(node.metafields);
+  collectMetaobjectRefs(productMetafields);
+
+  return {
+    ...node,
+    variants: extractVariants(node.variants),
+    metafields: productMetafields,
+    collections: extractCollections(node.collections),
+    options: Array.isArray(node.options) ? node.options : [],
+    featuredMedia: node.featuredMedia || null,
+  };
+}
+
+function attachChildToOwner({
+  child,
+  productsById,
+  variantsById,
+  inventoryItemsById,
+  collectMetaobjectRefs,
+}) {
+  const parentId = String(child?.__parentId || "").trim();
+  if (!parentId) return false;
+
+  if (child.__typename === "ProductVariant") {
+    const product = productsById.get(parentId);
+    if (!product) return false;
+
+    const variant = {
+      id: child.id,
+      title: child.title,
+      sku: child.sku,
+      barcode: child.barcode,
+      price: child.price,
+      compareAtPrice: child.compareAtPrice,
+      inventoryQuantity: child.inventoryQuantity,
+      inventoryPolicy: child.inventoryPolicy,
+      taxable: child.taxable,
+      taxCode: child.taxCode,
+      position: child.position,
+      selectedOptions: Array.isArray(child.selectedOptions)
+        ? child.selectedOptions
+        : [],
+      inventoryItem: child.inventoryItem || null,
+      metafields: [],
+    };
+
+    product.variants.push(variant);
+    variantsById.set(String(child.id), { product, variant });
+    if (variant.inventoryItem?.id) {
+      variant.inventoryItem.inventoryLevels = variant.inventoryItem.inventoryLevels || { edges: [] };
+      inventoryItemsById.set(String(variant.inventoryItem.id), { product, variant, inventoryItem: variant.inventoryItem });
+    }
+    return true;
+  }
+
+  if (child.__typename === "InventoryLevel") {
+    const owner = inventoryItemsById.get(parentId);
+    if (!owner) return false;
+    const container = owner.inventoryItem.inventoryLevels || { edges: [] };
+    if (!Array.isArray(container.edges)) container.edges = [];
+    container.edges.push({ node: child });
+    owner.inventoryItem.inventoryLevels = container;
+    return true;
+  }
+
+  if (child.__typename === "Collection") {
+    const product = productsById.get(parentId);
+    if (!product) return false;
+    product.collections.push({
+      id: child.id,
+      title: child.title,
+    });
+    return true;
+  }
+
+  if (child.__typename === "Metafield") {
+    const metafield = {
+      id: child.id || null,
+      namespace: child.namespace,
+      key: child.key,
+      type: child.type,
+      value: child.value,
+    };
+
+    const product = productsById.get(parentId);
+    if (product) {
+      product.metafields.push(metafield);
+      collectMetaobjectRefs([metafield]);
+      return true;
+    }
+
+    const variantOwner = variantsById.get(parentId);
+    if (variantOwner) {
+      variantOwner.variant.metafields.push(metafield);
+      collectMetaobjectRefs([metafield]);
+      return true;
+    }
+
+    return false;
+  }
+
+  if (child.__typename === "MediaImage") {
+    const product = productsById.get(parentId);
+    if (!product) return false;
+    product.featuredMedia = child;
+    return true;
+  }
+
+  return false;
+}
+
 export async function startBulkOperationToFetchProducts({
   session,
   isInitialSync = false,
 }) {
-  console.log(`[sync:start] shop=${session.shop} isInitialSync=${isInitialSync}`);
+  const shop = String(session?.shop || "").trim();
+  if (!shop) throw new Error("Shopify session shop is required");
 
   await ensureStoreForShop({
-    shop: session.shop,
+    shop,
     accessToken: session.accessToken,
     scope: session.scope,
   });
 
-  const { bulkOperationId, responseBody } = await runProductBulkFetch({ session });
-  console.log(
-    `[sync:bulk_created] shop=${session.shop} bulkOperationId=${bulkOperationId}`,
-  );
+  await markProductSyncStarted({ shop });
 
-  await markProductSyncStarted({ shop: session.shop });
-
-  console.log(
-    `[sync:queue_start] shop=${session.shop} bulkOperationId=${bulkOperationId}`,
-  );
+  const { bulkOperationId, responseBody } =
+    await runProductBulkFetch({ session });
 
   const syncHistory = await queueProductSyncStart({
-    shop: session.shop,
+    shop,
     bulkOperationId,
     isInitialSync,
   });
 
-  console.log(
-    `[sync:history_created] shop=${session.shop} syncHistoryId=${syncHistory.id} syncBatchId=${syncHistory.syncBatchId}`,
-  );
-
-  await clearProductSyncCache(session.shop);
+  await clearProductSyncCache(shop);
 
   return {
     message: "Bulk product sync started",
@@ -163,14 +236,30 @@ export async function formatAndSyncProductsToDB({
   syncBatchId,
   syncHistoryId = null,
 }) {
-  if (!syncBatchId) {
-    throw new Error("syncBatchId is required for staged product sync");
+  if (!shop || !syncBatchId) {
+    throw new Error("shop and syncBatchId are required");
   }
 
-  console.log(`[sync:stream_start] shop=${shop} syncBatchId=${syncBatchId} syncHistoryId=${syncHistoryId}`);
-  const stageTimer = createSyncStageTimer(shop, syncBatchId);
+  const batchSize = boundedInteger(
+    process.env.PRODUCT_SYNC_INGEST_BATCH_SIZE,
+    2_500,
+    250,
+    10_000,
+  );
+  const maxPendingChildren = boundedInteger(
+    process.env.PRODUCT_SYNC_MAX_PENDING_CHILDREN,
+    100_000,
+    1_000,
+    1_000_000,
+  );
+  const stallTimeoutMs = boundedInteger(
+    process.env.PRODUCT_SYNC_STREAM_STALL_TIMEOUT_MS,
+    120_000,
+    30_000,
+    900_000,
+  );
 
-  let metaobjectLookup = new Map();
+  let streamStallTimer = null;
 
   try {
     await markMirrorBatchStatus({
@@ -178,67 +267,90 @@ export async function formatAndSyncProductsToDB({
       syncBatchId,
       status: "FILE_DOWNLOADED",
     });
+    await stageProductMirrorBatch({ shop, syncBatchId, syncHistoryId });
 
-    const PRODUCT_BATCH_SIZE = getProductSyncIngestBatchSize();
-    const PROGRESS_INTERVAL_MS = getProductSyncProgressIntervalMs();
-    const PROGRESS_PRODUCT_INTERVAL = getProductSyncProgressProductInterval();
-    const STREAM_STALL_TIMEOUT_MS = getProductSyncStreamStallTimeoutMs();
-    let productBatch = [];
+    const productsById = new Map();
+    const variantsById = new Map();
+    const inventoryItemsById = new Map();
+    const pendingChildrenByParent = new Map();
+    const pendingMetaobjectIds = new Set();
+    const metaobjectLookup = new Map();
+
+    let lineCount = 0;
+    let unresolvedChildCount = 0;
     let totalProductsProcessed = 0;
     let totalVariantsProcessed = 0;
-    let lineCount = 0;
-    let currentProduct = null;
-    let lastProgressWriteAt = 0;
-    let lastProgressProductCount = 0;
-    let lastInitialProgressProductCount = 0;
-    const pendingMetaobjectIds = new Set();
 
-    const collectMetaobjectRefsFromMetafields = (metafields = []) => {
+    const collectMetaobjectRefs = (metafields = []) => {
       for (const metafield of metafields) {
         for (const id of extractMetaobjectIds(metafield?.value)) {
-          if (!metaobjectLookup.has(id)) {
-            pendingMetaobjectIds.add(id);
-          }
+          if (!metaobjectLookup.has(id)) pendingMetaobjectIds.add(id);
         }
       }
     };
 
-    const flushMetaobjectLookup = async () => {
+    const queuePendingChild = (child) => {
+      unresolvedChildCount += 1;
+      if (unresolvedChildCount > maxPendingChildren) {
+        throw new Error(
+          `MIRROR_PENDING_CHILD_LIMIT_EXCEEDED: ${maxPendingChildren}`,
+        );
+      }
+
+      const parentId = String(child.__parentId || "");
+      const rows = pendingChildrenByParent.get(parentId) || [];
+      rows.push(child);
+      pendingChildrenByParent.set(parentId, rows);
+    };
+
+    const retryPendingChildren = (parentId) => {
+      const pending = pendingChildrenByParent.get(parentId);
+      if (!pending?.length) return;
+
+      const remaining = [];
+      for (const child of pending) {
+        const attached = attachChildToOwner({
+          child,
+          productsById,
+          variantsById,
+          inventoryItemsById,
+          collectMetaobjectRefs,
+        });
+
+        if (attached) unresolvedChildCount -= 1;
+        else remaining.push(child);
+      }
+
+      if (remaining.length > 0) {
+        pendingChildrenByParent.set(parentId, remaining);
+      } else {
+        pendingChildrenByParent.delete(parentId);
+      }
+    };
+
+    const flushMetaobjects = async () => {
       if (!session?.accessToken || pendingMetaobjectIds.size === 0) return;
+
       const ids = Array.from(pendingMetaobjectIds);
       pendingMetaobjectIds.clear();
+
       try {
         const resolved = await fetchMetaobjectLookupByIds(session, ids);
         for (const [gid, label] of resolved.entries()) {
           metaobjectLookup.set(gid, label);
         }
       } catch (error) {
-        console.error(
-          `Failed to resolve metaobject labels for shop ${shop}: ${error.message}`,
-        );
+        console.error("[sync:metaobject_lookup_failed]", {
+          shop,
+          syncBatchId,
+          message: error.message,
+        });
       }
     };
 
-    const normalizeProductNode = (node) => {
-      const productMetafields = extractMetafields(node.metafields);
-      collectMetaobjectRefsFromMetafields(productMetafields);
-      return {
-        ...node,
-        variants: extractVariants(node.variants),
-        metafields: productMetafields,
-        collections: extractCollections(node.collections),
-        options: Array.isArray(node.options) ? node.options : [],
-        featuredMedia: node.featuredMedia || null,
-      };
-    };
-
-    const flushProductsAndVariants = async () => {
-      if (productBatch.length === 0) return;
-      const flushStartedAt = Date.now();
-      await flushMetaobjectLookup();
-
-      const currentProducts = productBatch;
-      productBatch = [];
+    const flushProducts = async (products) => {
+      if (products.length === 0) return;
+      await flushMetaobjects();
 
       const productRows = [];
       const variantRows = [];
@@ -246,32 +358,30 @@ export async function formatAndSyncProductsToDB({
       const inventoryLevelRows = [];
       const productCollectionRows = [];
       const metafieldRows = [];
+      const productMediaRows = [];
 
-      for (const rawProduct of currentProducts) {
-        productRows.push(flattenProduct(rawProduct, shop, metaobjectLookup));
-        const productCollections = Array.isArray(rawProduct.collections)
-          ? rawProduct.collections
-          : [];
-        const productMetafields = Array.isArray(rawProduct.metafields)
-          ? rawProduct.metafields
-          : [];
+      for (const product of products) {
+        productRows.push(flattenProduct(product, shop, metaobjectLookup));
 
-        for (const collection of productCollections) {
+        for (const collection of product.collections || []) {
           if (!collection?.id) continue;
           productCollectionRows.push({
             shop,
-            productId: rawProduct.id,
+            productId: product.id,
             collectionId: collection.id,
           });
         }
 
-        for (const metafield of productMetafields) {
+        for (const metafield of product.metafields || []) {
           if (!metafield?.namespace || !metafield?.key) continue;
-          const typed = parseTypedMetafieldValue(metafield.type || null, metafield.value);
+          const typed = parseTypedMetafieldValue(
+            metafield.type,
+            metafield.value,
+          );
           metafieldRows.push({
             shop,
             ownerType: "PRODUCT",
-            ownerId: rawProduct.id,
+            ownerId: product.id,
             namespace: metafield.namespace,
             key: metafield.key,
             valueType: metafield.type || null,
@@ -280,43 +390,105 @@ export async function formatAndSyncProductsToDB({
             valueNumber: typed.valueNumber,
             valueBoolean: typed.valueBoolean,
             valueDate: typed.valueDate,
-            valueJson: typeof metafield.value === "string" ? null : metafield.value,
+            valueJson:
+              typeof metafield.value === "string"
+                ? null
+                : metafield.value,
           });
         }
 
-        const rawVariants = Array.isArray(rawProduct.variants)
-          ? rawProduct.variants
-          : [];
+        if (product.featuredMedia?.id) {
+          productMediaRows.push({
+            shop,
+            productId: product.id,
+            mediaId: product.featuredMedia.id,
+            mediaType: product.featuredMedia.mediaContentType || "IMAGE",
+            url:
+              product.featuredMedia.image?.url ||
+              product.featuredMedia.url ||
+              null,
+            alt:
+              product.featuredMedia.image?.altText ||
+              product.featuredMedia.alt ||
+              null,
+            position: product.featuredMedia.position ?? null,
+            status: product.featuredMedia.status ?? null,
+          });
+        }
 
-        for (const rawVariant of rawVariants) {
-          if (!rawVariant?.id) continue;
-          const flattenedVariant = flattenVariant(rawProduct.id, rawVariant, shop);
-          variantRows.push(flattenedVariant);
+        for (const variant of product.variants || []) {
+          if (!variant?.id) continue;
 
-          if (flattenedVariant.inventoryItemId) {
+          const flattened = flattenVariant(product.id, variant, shop);
+          variantRows.push(flattened);
+
+          const inventoryItem = variant.inventoryItem || null;
+          if (flattened.inventoryItemId) {
             inventoryItemRows.push({
               shop,
-              id: flattenedVariant.inventoryItemId,
-              variantId: flattenedVariant.id,
-              productId: rawProduct.id,
-              tracked: flattenedVariant.tracked ?? null,
-              sku: flattenedVariant.sku ?? null,
-              cost: flattenedVariant.cost ?? null,
-              countryCodeOfOrigin: flattenedVariant.countryOfOrigin ?? null,
-              harmonizedSystemCode: flattenedVariant.hsTariffCode ?? null,
+              id: flattened.inventoryItemId,
+              variantId: flattened.id,
+              productId: product.id,
+              tracked: flattened.tracked ?? inventoryItem?.tracked ?? null,
+              sku: flattened.sku ?? null,
+              cost:
+                flattened.cost ??
+                inventoryItem?.unitCost?.amount ??
+                null,
+              countryCodeOfOrigin:
+                flattened.countryOfOrigin ??
+                inventoryItem?.countryCodeOfOrigin ??
+                null,
+              provinceCodeOfOrigin:
+                inventoryItem?.provinceCodeOfOrigin ?? null,
+              harmonizedSystemCode:
+                flattened.hsTariffCode ??
+                inventoryItem?.harmonizedSystemCode ??
+                null,
             });
+
+            const levels =
+              inventoryItem?.inventoryLevels?.edges ||
+              inventoryItem?.inventoryLevels?.nodes ||
+              [];
+
+            for (const wrapper of levels) {
+              const level = wrapper?.node || wrapper;
+              const locationId = level?.location?.id;
+              if (!locationId) continue;
+
+              const quantities = Array.isArray(level.quantities)
+                ? level.quantities
+                : [];
+              const quantityByName = new Map(
+                quantities.map((item) => [item.name, item.quantity]),
+              );
+
+              inventoryLevelRows.push({
+                shop,
+                inventoryItemId: flattened.inventoryItemId,
+                locationId,
+                available: quantityByName.get("available") ?? null,
+                onHand: quantityByName.get("on_hand") ?? null,
+                committed: quantityByName.get("committed") ?? null,
+                incoming: quantityByName.get("incoming") ?? null,
+                updatedAt: level.updatedAt
+                  ? new Date(level.updatedAt)
+                  : null,
+              });
+            }
           }
 
-          const variantMetafields = Array.isArray(rawVariant.metafields)
-            ? rawVariant.metafields
-            : [];
-          for (const metafield of variantMetafields) {
+          for (const metafield of variant.metafields || []) {
             if (!metafield?.namespace || !metafield?.key) continue;
-            const typed = parseTypedMetafieldValue(metafield.type || null, metafield.value);
+            const typed = parseTypedMetafieldValue(
+              metafield.type,
+              metafield.value,
+            );
             metafieldRows.push({
               shop,
               ownerType: "VARIANT",
-              ownerId: rawVariant.id,
+              ownerId: variant.id,
               namespace: metafield.namespace,
               key: metafield.key,
               valueType: metafield.type || null,
@@ -325,7 +497,10 @@ export async function formatAndSyncProductsToDB({
               valueNumber: typed.valueNumber,
               valueBoolean: typed.valueBoolean,
               valueDate: typed.valueDate,
-              valueJson: typeof metafield.value === "string" ? null : metafield.value,
+              valueJson:
+                typeof metafield.value === "string"
+                  ? null
+                  : metafield.value,
             });
           }
         }
@@ -338,206 +513,128 @@ export async function formatAndSyncProductsToDB({
         inventoryLevelRows,
         productCollectionRows,
         metafieldRows,
+        productMediaRows,
         syncBatchId,
       });
 
       totalProductsProcessed += productRows.length;
       totalVariantsProcessed += variantRows.length;
 
-      const now = Date.now();
-      const shouldWriteProgress =
-        now - lastProgressWriteAt >= PROGRESS_INTERVAL_MS ||
-        totalProductsProcessed - lastProgressProductCount >= PROGRESS_PRODUCT_INTERVAL;
-
-      if (shouldWriteProgress) {
-        console.info("[sync:flush]", {
+      if (totalProductsProcessed % 5_000 === 0) {
+        await updateInitialSyncProgress({
           shop,
-          syncBatchId,
-          productsInBatch: productRows.length,
-          variantsInBatch: variantRows.length,
           totalProductsProcessed,
-          totalVariantsProcessed,
-          durationMs: now - flushStartedAt,
         });
-        await markMirrorBatchStatus({
-          shop,
-          syncBatchId,
-          status: "INGESTING_TO_STAGING_BATCH",
-          counts: {
-            actualProducts: totalProductsProcessed,
-            actualVariants: totalVariantsProcessed,
-          },
-        });
-        lastProgressWriteAt = now;
-        lastProgressProductCount = totalProductsProcessed;
       }
+    };
 
-      if (
-        totalProductsProcessed > 0 &&
-        totalProductsProcessed - lastInitialProgressProductCount >= 5000
-      ) {
-        await updateInitialSyncProgress({ shop, totalProductsProcessed });
-        lastInitialProgressProductCount = totalProductsProcessed;
-      }
+    const armStallTimer = () => {
+      if (streamStallTimer) clearTimeout(streamStallTimer);
+      streamStallTimer = setTimeout(() => {
+        dataStream.destroy(
+          new Error(
+            `Product sync JSONL stream stalled for ${stallTimeoutMs}ms after ${lineCount} lines`,
+          ),
+        );
+      }, stallTimeoutMs);
+      streamStallTimer.unref?.();
     };
 
     const rl = readline.createInterface({
       input: dataStream,
       crlfDelay: Infinity,
     });
-    let streamStallTimer = null;
-    const armStreamStallTimer = () => {
-      if (streamStallTimer) clearTimeout(streamStallTimer);
-      streamStallTimer = setTimeout(() => {
-        dataStream.destroy(
-          new Error(
-            `Product sync JSONL stream stalled for ${STREAM_STALL_TIMEOUT_MS}ms after ${lineCount} lines`,
-          ),
-        );
-      }, STREAM_STALL_TIMEOUT_MS);
-      streamStallTimer.unref?.();
-    };
-    armStreamStallTimer();
 
-    console.log(`[sync:staging_start] shop=${shop} syncBatchId=${syncBatchId}`);
-    stageTimer.mark("staging_start", { batchSize: PRODUCT_BATCH_SIZE });
-    await stageProductMirrorBatch({ shop, syncBatchId, syncHistoryId });
-    console.log(`[sync:staging_done] shop=${shop}`);
-    stageTimer.mark("staging_ready");
-
-    const finalizeCurrentProduct = async () => {
-      if (!currentProduct) return;
-      productBatch.push(currentProduct);
-      currentProduct = null;
-      if (productBatch.length >= PRODUCT_BATCH_SIZE) {
-        await flushProductsAndVariants();
-      }
-    };
+    armStallTimer();
 
     for await (const line of rl) {
-      armStreamStallTimer();
+      armStallTimer();
       if (!line.trim()) continue;
-      lineCount++;
+      lineCount += 1;
 
-      if (lineCount <= 10 || lineCount % 1000 === 0) {
-        console.info("[sync:stream_reading]", {
-          shop,
-          syncBatchId,
-          linesRead: lineCount,
-          totalProductsProcessed,
-          pendingProducts: productBatch.length,
-        });
-      }
-
-      let json;
+      let row;
       try {
-        json = JSON.parse(line);
+        row = JSON.parse(line);
       } catch (error) {
-        throw new Error(`Product sync JSONL parse error: ${error.message}`);
+        throw new Error(
+          `Product sync JSONL parse error at line ${lineCount}: ${error.message}`,
+        );
       }
 
-      if (!json.__parentId && json.__typename === "Product") {
-        await finalizeCurrentProduct();
-        currentProduct = normalizeProductNode(json);
-        continue;
-      }
+      if (!row.__parentId && row.__typename === "Product") {
+        const product = createProductAccumulator(
+          row,
+          collectMetaobjectRefs,
+        );
+        productsById.set(String(product.id), product);
+        retryPendingChildren(String(product.id));
+      } else {
+        const attached = attachChildToOwner({
+          child: row,
+          productsById,
+          variantsById,
+          inventoryItemsById,
+          collectMetaobjectRefs,
+        });
 
-      const parent = currentProduct && currentProduct.id === json.__parentId
-        ? currentProduct
-        : null;
-      if (!parent) continue;
-
-      switch (json.__typename) {
-        case "ProductVariant":
-          parent.variants.push({
-            id: json.id,
-            title: json.title,
-            sku: json.sku,
-            barcode: json.barcode,
-            price: json.price,
-            compareAtPrice: json.compareAtPrice,
-            inventoryQuantity: json.inventoryQuantity,
-            inventoryPolicy: json.inventoryPolicy,
-            taxable: json.taxable,
-            taxCode: json.taxCode,
-            position: json.position,
-            selectedOptions: Array.isArray(json.selectedOptions)
-              ? json.selectedOptions
-              : [],
-            inventoryItem: json.inventoryItem || null,
-          });
-          break;
-
-        case "Collection":
-          parent.collections.push({
-            id: json.id,
-            title: json.title,
-          });
-          break;
-
-        case "Metafield":
-          parent.metafields.push({
-            namespace: json.namespace,
-            key: json.key,
-            type: json.type,
-            value: json.value,
-          });
-          collectMetaobjectRefsFromMetafields([json]);
-          break;
-
-        case "MediaImage":
-          parent.featuredMedia = json;
-          break;
-
-        default:
-          break;
+        if (!attached) queuePendingChild(row);
+        if (row?.id) retryPendingChildren(String(row.id));
       }
     }
+
     if (streamStallTimer) clearTimeout(streamStallTimer);
-    await finalizeCurrentProduct();
-    await flushProductsAndVariants();
-    console.log(`[sync:stream_done] shop=${shop} totalLinesRead=${lineCount} totalProducts=${totalProductsProcessed}`);
-    stageTimer.mark("stream_parsed", {
-      lineCount,
-      totalProductsProcessed,
-      totalVariantsProcessed,
-    });
 
-    await markMirrorBatchStatus({
-      shop,
-      syncBatchId,
-      status: "INGESTING_TO_STAGING_BATCH",
-      counts: {
-        actualProducts: totalProductsProcessed,
-        actualVariants: totalVariantsProcessed,
-      },
-    });
+    // A second deterministic resolution pass catches children that appeared
+    // before their owner but whose owner arrived near the end of the stream.
+    for (const parentId of [...pendingChildrenByParent.keys()]) {
+      retryPendingChildren(parentId);
+    }
 
-    console.log(`[sync:activating] shop=${shop} syncBatchId=${syncBatchId} totalProductsProcessed=${totalProductsProcessed}`);
+    if (unresolvedChildCount > 0) {
+      const samples = [...pendingChildrenByParent.entries()]
+        .slice(0, 10)
+        .map(([parentId, rows]) => ({
+          parentId,
+          childTypes: rows.slice(0, 5).map((row) => row.__typename),
+        }));
 
-    const previousMirrorState = await db.store.findUnique({
+      throw new Error(
+        `MIRROR_UNRESOLVED_CHILDREN: count=${unresolvedChildCount} samples=${JSON.stringify(samples)}`,
+      );
+    }
+
+    const allProducts = [...productsById.values()];
+    for (let index = 0; index < allProducts.length; index += batchSize) {
+      await flushProducts(allProducts.slice(index, index + batchSize));
+    }
+
+    const previousState = await db.store.findUnique({
       where: { shopUrl: shop },
       select: {
         activeMirrorBatchId: true,
         storeTotalProducts: true,
       },
     });
-    const previousProductCount = Number(previousMirrorState?.storeTotalProducts || 0);
-    const hasExistingMirror = Boolean(previousMirrorState?.activeMirrorBatchId);
-    const parsedNoProducts = totalProductsProcessed === 0;
-    const partialSyncThreshold = getSuspiciousPartialSyncThreshold();
 
-    if (parsedNoProducts && hasExistingMirror && previousProductCount > 0) {
+    const previousCount = Number(previousState?.storeTotalProducts || 0);
+    const hasExistingMirror = Boolean(previousState?.activeMirrorBatchId);
+    const threshold = getSuspiciousPartialSyncThreshold();
+
+    if (
+      totalProductsProcessed === 0 &&
+      hasExistingMirror &&
+      previousCount > 0
+    ) {
       throw new Error(
-        `Refusing to activate empty product mirror batch. previousProductCount=${previousProductCount} lineCount=${lineCount}`,
+        `Refusing empty mirror activation. previousCount=${previousCount}`,
       );
     }
 
     if (
-      partialSyncThreshold > 0 &&
+      threshold > 0 &&
       hasExistingMirror &&
-      previousProductCount > 0 &&
-      totalProductsProcessed < previousProductCount * partialSyncThreshold
+      previousCount > 0 &&
+      totalProductsProcessed < previousCount * threshold
     ) {
       await recordMirrorAnomaly({
         shop,
@@ -545,18 +642,18 @@ export async function formatAndSyncProductsToDB({
         type: "partial_product_sync_suspect",
         entityType: "mirrorBatch",
         entityId: syncBatchId,
-        message: "Product sync parsed a suspiciously small replacement batch; activation was blocked.",
+        message:
+          "Product sync parsed a suspiciously small replacement batch",
         details: {
-          previousProductCount,
+          previousCount,
           totalProductsProcessed,
-          threshold: partialSyncThreshold,
+          threshold,
           lineCount,
-          syncHistoryId,
         },
       }).catch(() => {});
 
       throw new Error(
-        `Refusing to activate suspicious partial product mirror batch. totalProductsProcessed=${totalProductsProcessed} previousProductCount=${previousProductCount} threshold=${partialSyncThreshold}`,
+        `Refusing suspicious partial mirror. current=${totalProductsProcessed} previous=${previousCount}`,
       );
     }
 
@@ -569,58 +666,42 @@ export async function formatAndSyncProductsToDB({
         actualVariants: totalVariantsProcessed,
       },
     });
-    stageTimer.mark("validated", {
-      totalProductsProcessed,
-      totalVariantsProcessed,
-    });
 
-    await markMirrorBatchStatus({
+    const finalized = await validateAndFinalizeProductMirrorBatch({
       shop,
       syncBatchId,
-      status: "ACTIVATING_BATCH",
-      counts: {
-        actualProducts: totalProductsProcessed,
-        actualVariants: totalVariantsProcessed,
-      },
+      unresolvedChildCount,
     });
-    stageTimer.mark("activation_start");
-
 
     await activateProductMirrorBatch({
       shop,
       syncBatchId,
-      totalProductsProcessed,
-      totalVariantsProcessed,
+      expectedActiveBatchId:
+        previousState?.activeMirrorBatchId ?? null,
       syncHistoryId,
     });
 
-    console.log(`[sync:complete] shop=${shop} syncBatchId=${syncBatchId} totalProductsProcessed=${totalProductsProcessed} totalVariantsProcessed=${totalVariantsProcessed}`);
-    stageTimer.mark("complete", {
-      totalProductsProcessed,
-      totalVariantsProcessed,
-    });
-
-
     return {
-      totalProductsProcessed,
-      totalVariantsProcessed,
+      totalProductsProcessed: finalized.productCount,
+      totalVariantsProcessed: finalized.variantCount,
       syncBatchId,
     };
   } catch (error) {
-     console.error(`[sync:failed] shop=${shop} syncBatchId=${syncBatchId} syncHistoryId=${syncHistoryId} error=${error.message}`);
-    console.error(error.stack);
-    
+    if (streamStallTimer) clearTimeout(streamStallTimer);
+
     await markSyncHistoryFailed({
       shop,
       syncHistoryId,
       errorMessage: error.message,
     });
+
     await markMirrorBatchStatus({
       shop,
       syncBatchId,
       status: "FAILED",
       failureReason: error.message,
-    });
+    }).catch(() => {});
+
     throw error;
   }
 }

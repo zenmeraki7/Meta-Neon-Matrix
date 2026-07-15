@@ -4,7 +4,6 @@ import { db } from "../../repositories/repositoryDb.js";
 import { getSession } from "../../utils/sessionHandler.js";
 import { adminGraphqlWithRetry } from "../../utils/shopifyAdminApi.js";
 import { getSyncCursor, setSyncCursor } from "../../db/syncCursors.js";
-import { upsertFromSync } from "../../db/variantMetafields.js";
 import logger from "../../utils/loggerUtils.js";
 import { acquireRedisLock, releaseRedisLock } from "../../utils/redisLockUtils.js";
 import { enqueueCatalogMissedUpdatesPollingTick } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
@@ -14,19 +13,7 @@ const POLL_INTERVAL_MS = 15 * 60 * 1000;
 const LEADER_LOCK_KEY = "leader:catalog-missed-updates-polling:scheduler";
 const LEADER_LOCK_TTL_MS = 45_000;
 const CURSOR_RESOURCE = "products";
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_SAFE_PAGE_SIZE = 50;
-const REQUIRED_TABLES = ["sync_cursors", "variant_metafields"];
-
-function resolveSafePageSize(value = process.env.CATALOG_MISSED_UPDATES_PAGE_SIZE) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    return DEFAULT_PAGE_SIZE;
-  }
-  return Math.min(parsed, MAX_SAFE_PAGE_SIZE);
-}
-
-const PAGE_SIZE = resolveSafePageSize();
+const PAGE_SIZE = Math.min(Math.max(Number.parseInt(process.env.CATALOG_MISSED_UPDATES_PAGE_SIZE || "50", 10), 1), 50);
 
 const PRODUCTS_UPDATED_QUERY = `#graphql
   query ProductsUpdatedSince($first: Int!, $after: String, $query: String!) {
@@ -38,261 +25,160 @@ const PRODUCTS_UPDATED_QUERY = `#graphql
           nodes {
             id
             metafields(first: 100) {
-              nodes {
-                id
-                namespace
-                key
-                type
-                value
-                compareDigest
-              }
+              nodes { id namespace key type value compareDigest }
             }
           }
         }
       }
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
+      pageInfo { hasNextPage endCursor }
     }
   }
 `;
 
-function toNumericId(gid) {
-  const raw = String(gid || "").trim();
-  const match = raw.match(/\/(\d+)$/);
-  return match ? match[1] : null;
-}
-
-function toIsoOrNull(value) {
-  if (!value) return null;
-  const dt = new Date(value);
-  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
-}
-
 function buildUpdatedAtQuery(cursorIso) {
-  // Include a small overlap window to avoid timestamp-edge misses.
-  const cursorDate = cursorIso ? new Date(cursorIso) : new Date(Date.now() - POLL_INTERVAL_MS);
-  const safe = Number.isNaN(cursorDate.getTime())
-    ? new Date(Date.now() - POLL_INTERVAL_MS)
-    : new Date(cursorDate.getTime() - 1000);
-  const stamp = safe.toISOString();
-  return `updated_at:>'${stamp}'`;
+  const cursor = cursorIso ? new Date(cursorIso) : new Date(Date.now() - POLL_INTERVAL_MS);
+  const safe = Number.isNaN(cursor.getTime()) ? new Date(Date.now() - POLL_INTERVAL_MS) : new Date(cursor.getTime() - 1000);
+  return `updated_at:>'${safe.toISOString()}'`;
 }
 
-function buildMetafieldRows(products = []) {
-  const rows = [];
-  for (const product of Array.isArray(products) ? products : []) {
-    for (const variant of product?.variants?.nodes || []) {
-      const variantId = toNumericId(variant?.id);
-      if (!variantId) continue;
-      for (const metafield of variant?.metafields?.nodes || []) {
-        const namespace = String(metafield?.namespace || "").trim();
-        const key = String(metafield?.key || "").trim();
-        if (!namespace || !key) continue;
-        rows.push({
-          variantId,
-          namespace,
-          key,
-          type: metafield?.type == null ? null : String(metafield.type),
-          value: metafield?.value == null ? null : String(metafield.value),
-          compareDigest: metafield?.compareDigest == null ? null : String(metafield.compareDigest),
-          shopifyMetafieldId: metafield?.id == null ? null : String(metafield.id),
-          sourceUpdatedAt: product?.updatedAt || null,
-        });
+function parseTyped(type, value) {
+  const text = value == null ? null : String(value);
+  const normalized = text == null ? null : text.trim().toLowerCase();
+  const numberTypes = new Set(["number_integer", "number_decimal", "rating", "money"]);
+  const numeric = text != null && numberTypes.has(type) && Number.isFinite(Number(text)) ? String(Number(text)) : null;
+  const bool = normalized === "true" ? true : normalized === "false" ? false : null;
+  const date = text && ["date", "date_time"].includes(type) && !Number.isNaN(Date.parse(text)) ? new Date(text) : null;
+  return { text, normalized, numeric, bool, date };
+}
+
+async function applyCanonicalMetafields(shop, products) {
+  const store = await db.store.findUnique({ where: { shopUrl: shop }, select: { activeMirrorBatchId: true } });
+  const mirrorBatchId = store?.activeMirrorBatchId;
+  if (!mirrorBatchId) return 0;
+
+  let count = 0;
+  await db.$transaction(async (tx) => {
+    for (const product of products) {
+      for (const variant of product?.variants?.nodes || []) {
+        for (const metafield of variant?.metafields?.nodes || []) {
+          if (!variant?.id || !metafield?.namespace || !metafield?.key) continue;
+          const typed = parseTyped(String(metafield.type || ""), metafield.value);
+          await tx.metafieldMirror.upsert({
+            where: {
+              shop_ownerType_ownerId_namespace_key_mirrorBatchId: {
+                shop,
+                ownerType: "VARIANT",
+                ownerId: variant.id,
+                namespace: metafield.namespace,
+                key: metafield.key,
+                mirrorBatchId,
+              },
+            },
+            create: {
+              shop,
+              ownerType: "VARIANT",
+              ownerId: variant.id,
+              namespace: metafield.namespace,
+              key: metafield.key,
+              valueType: metafield.type || null,
+              valueText: typed.text,
+              valueTextNormalized: typed.normalized,
+              valueNumber: typed.numeric,
+              valueBoolean: typed.bool,
+              valueDate: typed.date,
+              mirrorBatchId,
+            },
+            update: {
+              valueType: metafield.type || null,
+              valueText: typed.text,
+              valueTextNormalized: typed.normalized,
+              valueNumber: typed.numeric,
+              valueBoolean: typed.bool,
+              valueDate: typed.date,
+              updatedAt: new Date(),
+            },
+          });
+          const journal = await tx.mirrorMutationJournal.create({
+            data: {
+              shop,
+              entityType: "METAFIELD",
+              entityId: metafield.id || `${variant.id}:${metafield.namespace}:${metafield.key}`,
+              productId: product.id,
+              mutationType: "METAFIELD_UPSERT",
+              payload: { ownerType: "VARIANT", ownerId: variant.id, namespace: metafield.namespace, key: metafield.key, type: metafield.type, value: metafield.value },
+              sourceEventAt: product.updatedAt ? new Date(product.updatedAt) : new Date(),
+            },
+            select: { sequence: true },
+          });
+          await tx.mirrorReconcileSignal.updateMany({
+            where: { shop, entityType: "product", entityId: product.id },
+            data: { mutationSequence: journal.sequence, status: "pending", updatedAt: new Date() },
+          });
+          count += 1;
+        }
       }
     }
-  }
-  return rows;
+  }, { maxWait: 10000, timeout: 60000 });
+  return count;
 }
 
-async function pollMissedUpdatesForShop(shop) {
+async function pollShop(shop) {
   const cursor = await getSyncCursor(shop, CURSOR_RESOURCE);
-  const queryString = buildUpdatedAtQuery(cursor);
-
+  const session = await getSession(shop);
   let after = null;
-  let hasNext = true;
+  let hasNextPage = true;
   let maxUpdatedAt = cursor;
   let processedProducts = 0;
-  let stagedMetafields = 0;
+  let metafields = 0;
 
-  const session = await getSession(shop);
-  while (hasNext) {
+  while (hasNextPage) {
     const response = await adminGraphqlWithRetry({
       session,
+      shop,
       operationName: "catalog-missed-updates-poll",
-      data: {
-        query: PRODUCTS_UPDATED_QUERY,
-        variables: {
-          first: PAGE_SIZE,
-          after,
-          query: queryString,
-        },
-      },
+      data: { query: PRODUCTS_UPDATED_QUERY, variables: { first: PAGE_SIZE, after, query: buildUpdatedAtQuery(cursor) } },
     });
-
-    const payload = response?.body?.data?.products || {};
-    const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
-    const pageInfo = payload?.pageInfo || {};
-
-    processedProducts += nodes.length;
-    const metafieldRows = buildMetafieldRows(nodes);
-    if (metafieldRows.length > 0) {
-      await upsertFromSync(shop, metafieldRows);
-      stagedMetafields += metafieldRows.length;
+    const errors = response?.body?.errors || [];
+    if (errors.length) throw new Error(errors.map((item) => item.message).join("; "));
+    const products = response?.body?.data?.products?.nodes || [];
+    processedProducts += products.length;
+    metafields += await applyCanonicalMetafields(shop, products);
+    for (const product of products) {
+      if (product?.updatedAt && (!maxUpdatedAt || product.updatedAt > maxUpdatedAt)) maxUpdatedAt = product.updatedAt;
     }
-
-    for (const product of nodes) {
-      const iso = toIsoOrNull(product?.updatedAt);
-      if (!iso) continue;
-      if (!maxUpdatedAt || iso > maxUpdatedAt) {
-        maxUpdatedAt = iso;
-      }
-    }
-
-    hasNext = Boolean(pageInfo?.hasNextPage);
-    after = pageInfo?.endCursor || null;
+    const pageInfo = response?.body?.data?.products?.pageInfo || {};
+    hasNextPage = Boolean(pageInfo.hasNextPage);
+    after = pageInfo.endCursor || null;
   }
 
   await setSyncCursor(shop, CURSOR_RESOURCE, maxUpdatedAt || new Date().toISOString());
-  return { shop, processedProducts, stagedMetafields, cursorBefore: cursor, cursorAfter: maxUpdatedAt };
+  return { shop, processedProducts, metafields };
 }
 
-async function pollMissedUpdates() {
-  const readiness = await getPollingReadiness();
-  if (!readiness.ready) {
-    logger.warn("Catalog missed-updates polling skipped: required tables missing", {
-      worker: "catalogMissedUpdatesPollingWorker",
-      missingTables: readiness.missingTables,
-    });
-    return {
-      skipped: true,
-      reason: "required_tables_missing",
-      missingTables: readiness.missingTables,
-    };
-  }
-
+async function pollAll() {
   const stores = await db.store.findMany({
-    where: {
-      isUnInstalled: false,
-    },
-    select: {
-      shopUrl: true,
-      accessToken: true,
-      accessTokenEncrypted: true,
-    },
+    where: { isUnInstalled: false },
+    select: { shopUrl: true, accessToken: true, accessTokenEncrypted: true },
     take: 200,
   });
-
-  const activeShops = stores
-    .filter((store) => store?.shopUrl && (store?.accessToken || store?.accessTokenEncrypted))
-    .map((store) => String(store.shopUrl));
-
-  let scanned = 0;
-  let synced = 0;
-  const failures = [];
-
-  for (const shop of activeShops) {
-    scanned += 1;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await pollMissedUpdatesForShop(shop);
-      synced += 1;
-    } catch (error) {
-      failures.push({
-        shop,
-        message: error?.message || String(error),
-      });
-      logger.error("Catalog missed-updates polling failed for shop", {
-        worker: "catalogMissedUpdatesPollingWorker",
-        shop,
-        message: error?.message || String(error),
-      });
-    }
+  const results = [];
+  for (const store of stores) {
+    if (!store.shopUrl || (!store.accessToken && !store.accessTokenEncrypted)) continue;
+    try { results.push(await pollShop(store.shopUrl)); }
+    catch (error) { logger.error("Catalog missed-updates polling failed for shop", { shop: store.shopUrl, message: error.message }); }
   }
-
-  return { scanned, synced, failed: failures.length, failures };
+  return { scanned: stores.length, results };
 }
 
-async function getPollingReadiness() {
-  const missingTables = [];
-  for (const table of REQUIRED_TABLES) {
-    // eslint-disable-next-line no-await-in-loop
-    const rows = await db.$queryRaw`
-      SELECT to_regclass(${`public.${table}`})::text AS regclass
-    `;
-    if (!rows?.[0]?.regclass) {
-      missingTables.push(table);
-    }
-  }
-  return {
-    ready: missingTables.length === 0,
-    missingTables,
-  };
-}
-
-export const catalogMissedUpdatesPollingWorker = new Worker(
-  QUEUE_NAME,
-  async () => pollMissedUpdates(),
-  {
-    connection,
-    concurrency: 1,
-  },
-);
-
-catalogMissedUpdatesPollingWorker.on("completed", (job, result) => {
-  logger.info("Catalog missed-updates polling completed", {
-    worker: "catalogMissedUpdatesPollingWorker",
-    jobId: job?.id,
-    result,
-  });
-});
-
-catalogMissedUpdatesPollingWorker.on("failed", (job, error) => {
-  logger.error("Catalog missed-updates polling failed", {
-    worker: "catalogMissedUpdatesPollingWorker",
-    jobId: job?.id,
-    message: error?.message || String(error),
-  });
-});
+export const catalogMissedUpdatesPollingWorker = new Worker(QUEUE_NAME, pollAll, { connection, concurrency: 1 });
+catalogMissedUpdatesPollingWorker.on("failed", (job, error) => logger.error("Catalog missed-updates polling failed", { jobId: job?.id, message: error.message }));
 
 async function registerRepeatableTick() {
-  const readiness = await getPollingReadiness();
-  if (!readiness.ready) {
-    logger.warn("Catalog missed-updates polling scheduler not registered: required tables missing", {
-      worker: "catalogMissedUpdatesPollingWorker",
-      missingTables: readiness.missingTables,
-    });
-    return;
-  }
-
-  const leaderLock = await acquireRedisLock({
-    connection,
-    key: LEADER_LOCK_KEY,
-    ttlMs: LEADER_LOCK_TTL_MS,
-  });
-  if (!leaderLock.acquired) return;
-
-  try {
-    await enqueueCatalogMissedUpdatesPollingTick({
-      queueName: QUEUE_NAME,
-      repeatEveryMs: POLL_INTERVAL_MS,
-    });
-  } finally {
-    await releaseRedisLock({
-      connection,
-      key: leaderLock.key,
-      token: leaderLock.token,
-    }).catch(() => {});
-  }
+  const lock = await acquireRedisLock({ connection, key: LEADER_LOCK_KEY, ttlMs: LEADER_LOCK_TTL_MS });
+  if (!lock.acquired) return;
+  try { await enqueueCatalogMissedUpdatesPollingTick({ queueName: QUEUE_NAME, repeatEveryMs: POLL_INTERVAL_MS }); }
+  finally { await releaseRedisLock({ connection, key: lock.key, token: lock.token }).catch(() => {}); }
 }
 
-await registerRepeatableTick().catch((error) => {
-  logger.error("Catalog missed-updates polling scheduler registration failed", {
-    worker: "catalogMissedUpdatesPollingWorker",
-    message: error?.message || String(error),
-  });
-});
-
+await registerRepeatableTick().catch((error) => logger.error("Catalog polling scheduler registration failed", { message: error.message }));
 export default catalogMissedUpdatesPollingWorker;
-

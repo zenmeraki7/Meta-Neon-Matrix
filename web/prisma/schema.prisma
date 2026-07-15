@@ -473,32 +473,42 @@ model SyncHistory {
 }
 
 model MirrorBatch {
-  id                  String             @id
-  shop                String
-  resourceType        MirrorResourceType @default(PRODUCT_CATALOG)
-  status              MirrorBatchStatus  @default(SYNC_REQUESTED)
-  syncHistoryId       String?            @unique
-  bulkOperationId     String?
-  expectedProducts    Int?
-  actualProducts      Int?
-  expectedVariants    Int?
-  actualVariants      Int?
-  expectedCollections Int?
-  actualCollections   Int?
-  expectedMetafields  Int?
-  actualMetafields    Int?
-  activatedAt         DateTime?
-  failedAt            DateTime?
-  failureReason       String?
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
-  store               Store              @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
-  syncHistory         SyncHistory?       @relation(fields: [syncHistoryId], references: [id], onDelete: SetNull)
+  id                    String             @id
+  shop                  String
+  resourceType          MirrorResourceType @default(PRODUCT_CATALOG)
+  status                MirrorBatchStatus  @default(SYNC_REQUESTED)
+  syncHistoryId         String?            @unique
+  bulkOperationId       String?
+  expectedProducts      Int?
+  actualProducts        Int?
+  expectedVariants      Int?
+  actualVariants        Int?
+  expectedCollections   Int?
+  actualCollections     Int?
+  expectedMetafields    Int?
+  actualMetafields      Int?
+  activatedAt           DateTime?
+  failedAt              DateTime?
+  failureReason         String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  store                 Store              @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
+  syncHistory           SyncHistory?       @relation(fields: [syncHistoryId], references: [id], onDelete: SetNull)
+  expectedActiveBatchId String?
+  syncStartSequence     BigInt?
+  finalizedSequence     BigInt?
+  finalizedAt           DateTime?
+  retiredAt             DateTime?
+  cleanupStartedAt      DateTime?
+  cleanedAt             DateTime?
 
   @@unique([shop, id])
   @@index([shop, resourceType, status])
   @@index([shop, status, createdAt])
   @@index([shop, bulkOperationId])
+  @@index([shop, syncStartSequence])
+  @@index([shop, finalizedSequence])
+  @@index([shop, status, retiredAt])
 }
 
 model EditHistory {
@@ -1754,9 +1764,11 @@ model MirrorReconcileSignal {
   lastError             String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @default(now())
+  mutationSequence      BigInt?
 
   @@unique([shop, entityType, entityId])
   @@index([shop, status, updatedAt])
+  @@index([shop, mutationSequence])
   @@index([status, updatedAt])
 }
 
@@ -1879,6 +1891,7 @@ model ProductTombstone {
   id               String    @id
   shop             String
   productId        String
+  mutationSequence BigInt
   sourceUpdatedAt  DateTime?
   sourceEventAt    DateTime?
   deletedAt        DateTime?
@@ -1886,12 +1899,29 @@ model ProductTombstone {
   lastReconciledAt DateTime?
   purgeAfter       DateTime?
   createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@unique([shop, productId])
+  @@index([shop, mutationSequence])
   @@index([shop, deletedAt])
   @@index([shop, purgeAfter])
   @@index([shop, updatedAt])
+}
+
+model MirrorMutationJournal {
+  sequence      BigInt    @id @default(autoincrement())
+  shop          String
+  entityType    String
+  entityId      String
+  productId     String?
+  mutationType  String
+  payload       Json?
+  sourceEventAt DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([shop, sequence])
+  @@index([shop, productId, sequence])
+  @@index([shop, entityType, entityId, sequence])
 }
 
 model WebhookDelivery {
@@ -2011,10 +2041,14 @@ enum MirrorBatchStatus {
   FILE_DOWNLOADED
   INGESTING_TO_STAGING_BATCH
   VALIDATING_BATCH
+  REPLAYING_MUTATIONS
+  FINALIZED
   ACTIVATING_BATCH
   ACTIVE
-  FAILED
   RETIRED
+  CLEANING
+  CLEANED
+  FAILED
 }
 
 enum SyncOperationType {

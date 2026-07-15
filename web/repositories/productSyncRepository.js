@@ -8,27 +8,31 @@ import {
   createMirrorBatchId,
   markFullSyncStarted,
 } from "../services/mirrorHealthService.js";
+import { enqueueRetiredMirrorCleanup } from "../Jobs/Queues/mirrorCleanupQueue.js";
 
-const ACTIVATION_PRESERVE_CHUNK_SIZE = 500;
 const PRODUCT_SYNC_CACHE_KEYS = [":sync_details", ":sync_summary"];
 
-function chunk(items, size = ACTIVATION_PRESERVE_CHUNK_SIZE) {
-  const rows = Array.isArray(items) ? items : [];
-  const chunks = [];
-  for (let i = 0; i < rows.length; i += size) {
-    chunks.push(rows.slice(i, i + size));
-  }
-  return chunks;
+function buildCodedError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
 }
 
-async function transitionMirrorSyncLedgerBySyncHistoryId(tx, {
-  shop,
-  syncHistoryId,
-  from,
-  to,
-  data = {},
-}) {
+async function getLatestMutationSequence(tx, shop) {
+  const latest = await tx.mirrorMutationJournal.findFirst({
+    where: { shop },
+    orderBy: { sequence: "desc" },
+    select: { sequence: true },
+  });
+  return latest?.sequence ?? 0n;
+}
+
+async function transitionMirrorSyncLedgerBySyncHistoryId(
+  tx,
+  { shop, syncHistoryId, from, to, data = {} },
+) {
   if (!shop || !syncHistoryId) return 0;
+
   const updated = await tx.operationFingerprint.updateMany({
     where: {
       shop,
@@ -43,17 +47,30 @@ async function transitionMirrorSyncLedgerBySyncHistoryId(tx, {
       updatedAt: new Date(),
     },
   });
+
   return Number(updated?.count || 0);
 }
 
-async function upsertMirrorBatch(tx, {
-  id,
-  shop,
-  syncHistoryId = null,
-  bulkOperationId = null,
-  resourceType = "PRODUCT_CATALOG",
-  status = "SYNC_REQUESTED",
-}) {
+async function upsertMirrorBatch(
+  tx,
+  {
+    id,
+    shop,
+    syncHistoryId = null,
+    bulkOperationId = null,
+    resourceType = "PRODUCT_CATALOG",
+    status = "SYNC_REQUESTED",
+    expectedActiveBatchId = undefined,
+    syncStartSequence = undefined,
+  },
+) {
+  const optionalData = {
+    ...(expectedActiveBatchId !== undefined
+      ? { expectedActiveBatchId }
+      : {}),
+    ...(syncStartSequence !== undefined ? { syncStartSequence } : {}),
+  };
+
   return tx.mirrorBatch.upsert({
     where: { id },
     update: {
@@ -64,6 +81,7 @@ async function upsertMirrorBatch(tx, {
       status,
       failureReason: null,
       failedAt: null,
+      ...optionalData,
     },
     create: {
       id,
@@ -72,6 +90,7 @@ async function upsertMirrorBatch(tx, {
       bulkOperationId,
       resourceType,
       status,
+      ...optionalData,
     },
   });
 }
@@ -82,24 +101,44 @@ export async function markMirrorBatchStatus({
   status,
   failureReason = null,
   counts = {},
+  finalizedSequence = undefined,
 }) {
-  if (!syncBatchId) return;
+  if (!shop || !syncBatchId) {
+    throw new Error("shop and syncBatchId are required");
+  }
 
   const data = {
     status,
     ...(failureReason ? { failureReason } : {}),
     ...(status === "FAILED" ? { failedAt: new Date() } : {}),
+    ...(status === "FINALIZED" ? { finalizedAt: new Date() } : {}),
     ...(status === "ACTIVE" ? { activatedAt: new Date() } : {}),
-    ...(typeof counts.actualProducts === "number" ? { actualProducts: counts.actualProducts } : {}),
-    ...(typeof counts.actualVariants === "number" ? { actualVariants: counts.actualVariants } : {}),
-    ...(typeof counts.actualCollections === "number" ? { actualCollections: counts.actualCollections } : {}),
-    ...(typeof counts.actualMetafields === "number" ? { actualMetafields: counts.actualMetafields } : {}),
+    ...(finalizedSequence !== undefined ? { finalizedSequence } : {}),
+    ...(typeof counts.actualProducts === "number"
+      ? { actualProducts: counts.actualProducts }
+      : {}),
+    ...(typeof counts.actualVariants === "number"
+      ? { actualVariants: counts.actualVariants }
+      : {}),
+    ...(typeof counts.actualCollections === "number"
+      ? { actualCollections: counts.actualCollections }
+      : {}),
+    ...(typeof counts.actualMetafields === "number"
+      ? { actualMetafields: counts.actualMetafields }
+      : {}),
   };
 
-  await prisma.mirrorBatch.updateMany({
+  const result = await prisma.mirrorBatch.updateMany({
     where: { id: syncBatchId, shop },
     data,
   });
+
+  if (result.count !== 1) {
+    throw buildCodedError(
+      "MIRROR_BATCH_NOT_FOUND",
+      `Mirror batch ${syncBatchId} was not found for shop ${shop}`,
+    );
+  }
 }
 
 export async function markProductSyncStarted({ shop }) {
@@ -113,59 +152,72 @@ export async function queueProductSyncStart({
 }) {
   const syncBatchId = createMirrorBatchId("product_sync");
 
-  const syncHistory = await prisma.$transaction(async (tx) => {
-    const store = await ensureStoreForShop({ shop }, tx);
-    logStoreMutation("queueProductSyncStart.store.updateMany", {
-      shop,
-      storeId: store.id,
-      syncBatchId,
-      bulkOperationId,
-    });
-    await tx.store.updateMany({
-      where: { shopUrl: shop },
-      data: {
-        isProductSyncing: true,
-        isProductInitialySyning: isInitialSync,
-        shopifyBulkJobCompleted: false,
-        syncProgressStage: "SHOPIFY_BULK_RUNNING",
-        staleReason: "FULL_SYNC_RUNNING",
-        lastSyncErrorSummary: null,
-        mirrorUnsafeSince: new Date(),
-      },
-    });
+  return prisma.$transaction(
+    async (tx) => {
+      const store = await ensureStoreForShop({ shop }, tx);
+      const syncStartSequence = await getLatestMutationSequence(tx, shop);
+      const expectedActiveBatchId = store.activeMirrorBatchId ?? null;
 
-    const createdHistory = await tx.syncHistory.create({
-      data: {
+      logStoreMutation("queueProductSyncStart.store.updateMany", {
         shop,
-        bulkOperationId,
+        storeId: store.id,
         syncBatchId,
-        status: "processing",
-        stage: "SHOPIFY_BULK_RUNNING",
-        operationType: "Product",
-        isInitialProductSync: isInitialSync,
-        recordCount: 0,
-        duration: 0,
-      },
-    });
+        bulkOperationId,
+      });
 
-    await upsertMirrorBatch(tx, {
-      id: syncBatchId,
-      shop,
-      syncHistoryId: createdHistory.id,
-      bulkOperationId,
-      resourceType: "PRODUCT_CATALOG",
-      status: "BULK_OPERATION_STARTED",
-    });
+      await tx.store.updateMany({
+        where: { shopUrl: shop },
+        data: {
+          isProductSyncing: true,
+          isProductInitialySyning: isInitialSync,
+          shopifyBulkJobCompleted: false,
+          syncProgressStage: "SHOPIFY_BULK_RUNNING",
+          staleReason: "FULL_SYNC_RUNNING",
+          lastSyncErrorSummary: null,
+          mirrorUnsafeSince: new Date(),
+        },
+      });
 
-    return createdHistory;
-  });
+      const createdHistory = await tx.syncHistory.create({
+        data: {
+          shop,
+          bulkOperationId,
+          syncBatchId,
+          status: "processing",
+          stage: "SHOPIFY_BULK_RUNNING",
+          operationType: "Product",
+          isInitialProductSync: isInitialSync,
+          recordCount: 0,
+          duration: 0,
+        },
+      });
 
-  return syncHistory;
+      await upsertMirrorBatch(tx, {
+        id: syncBatchId,
+        shop,
+        syncHistoryId: createdHistory.id,
+        bulkOperationId,
+        resourceType: "PRODUCT_CATALOG",
+        status: "BULK_OPERATION_STARTED",
+        expectedActiveBatchId,
+        syncStartSequence,
+      });
+
+      return createdHistory;
+    },
+    {
+      isolationLevel: "Serializable",
+      maxWait: 10_000,
+      timeout: 20_000,
+    },
+  );
 }
 
 export async function clearProductSyncCache(shop) {
-  await Promise.all(
-    PRODUCT_SYNC_CACHE_KEYS.map((suffix) => clearKeyCaches(`${shop}${suffix}`)),
+  await Promise.allSettled(
+    PRODUCT_SYNC_CACHE_KEYS.map((suffix) =>
+      clearKeyCaches(`${shop}${suffix}`),
+    ),
   );
 }
 
@@ -174,144 +226,499 @@ export async function stageProductMirrorBatch({
   syncBatchId,
   syncHistoryId = null,
 }) {
-  await prisma.$transaction(async (tx) => {
-    const store = await ensureStoreForShop({ shop }, tx);
-    logStoreMutation("stageProductMirrorBatch.store.updateMany", {
-      shop,
-      storeId: store.id,
-      syncHistoryId,
-      syncBatchId,
-    });
-    await tx.store.updateMany({
-      where: { shopUrl: shop },
-      data: {
-        syncProgressStage: "MIRROR_STAGING",
-        staleReason: "FULL_SYNC_RUNNING",
-      },
-    });
+  await prisma.$transaction(
+    async (tx) => {
+      const store = await ensureStoreForShop({ shop }, tx);
 
-    if (syncHistoryId) {
-      await tx.syncHistory.update({
-        where: { id: syncHistoryId },
+      logStoreMutation("stageProductMirrorBatch.store.updateMany", {
+        shop,
+        storeId: store.id,
+        syncHistoryId,
+        syncBatchId,
+      });
+
+      await tx.store.updateMany({
+        where: { shopUrl: shop },
         data: {
-          stage: "MIRROR_STAGING",
+          syncProgressStage: "MIRROR_STAGING",
+          staleReason: "FULL_SYNC_RUNNING",
         },
       });
-    }
 
-    await upsertMirrorBatch(tx, {
-      id: syncBatchId,
-      shop,
-      syncHistoryId,
-      resourceType: "PRODUCT_CATALOG",
-      status: "INGESTING_TO_STAGING_BATCH",
-    });
-    await transitionMirrorSyncLedgerBySyncHistoryId(tx, {
-      shop,
-      syncHistoryId,
-      from: ["RUNNING", "STARTING_BULK_QUERY"],
-      to: "INGESTING",
-    });
+      if (syncHistoryId) {
+        await tx.syncHistory.updateMany({
+          where: { id: syncHistoryId, shop, status: "processing" },
+          data: { stage: "MIRROR_STAGING" },
+        });
+      }
 
-    await tx.variant.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.inventoryLevelMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.inventoryItemMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.productCollection.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-    await tx.metafieldMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
+      await tx.mirrorBatch.updateMany({
+        where: {
+          id: syncBatchId,
+          shop,
+          status: {
+            in: [
+              "BULK_OPERATION_STARTED",
+              "FILE_DOWNLOADED",
+              "INGESTING_TO_STAGING_BATCH",
+            ],
+          },
+        },
+        data: { status: "INGESTING_TO_STAGING_BATCH" },
+      });
 
-    await tx.product.deleteMany({
-      where: {
+      await transitionMirrorSyncLedgerBySyncHistoryId(tx, {
         shop,
-        mirrorBatchId: syncBatchId,
-      },
-    });
-  }, {
-    maxWait: 10_000,
-    timeout: 60_000,
-  });
+        syncHistoryId,
+        from: ["RUNNING", "STARTING_BULK_QUERY"],
+        to: "INGESTING",
+      });
+
+      await tx.inventoryLevelMirror.deleteMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+      });
+      await tx.inventoryItemMirror.deleteMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+      });
+      await tx.productCollection.deleteMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+      });
+      await tx.productMediaMirror.deleteMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+      });
+      await tx.metafieldMirror.deleteMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+      });
+      await tx.variant.deleteMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+      });
+      await tx.product.deleteMany({
+        where: { shop, mirrorBatchId: syncBatchId },
+      });
+    },
+    {
+      maxWait: 10_000,
+      timeout: 60_000,
+    },
+  );
 }
 
 export async function insertProductMirrorBatch({
-  productRows,
-  variantRows,
-  inventoryItemRows,
-  inventoryLevelRows,
-  productCollectionRows,
-  metafieldRows,
+  productRows = [],
+  variantRows = [],
+  inventoryItemRows = [],
+  inventoryLevelRows = [],
+  productCollectionRows = [],
+  metafieldRows = [],
+  productMediaRows = [],
   syncBatchId,
 }) {
+  if (!syncBatchId) throw new Error("syncBatchId is required");
+
   const operations = [];
 
-  if (productRows.length > 0) {
-    operations.push(prisma.product.createMany({
-      data: productRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
-    }));
-  }
+  const pushCreateMany = (model, rows) => {
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    operations.push(
+      model.createMany({
+        data: rows.map((row) => ({
+          ...row,
+          mirrorBatchId: syncBatchId,
+        })),
+        skipDuplicates: true,
+      }),
+    );
+  };
 
-  if (variantRows.length > 0) {
-    operations.push(prisma.variant.createMany({
-      data: variantRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
-    }));
-  }
-
-  if (Array.isArray(inventoryItemRows) && inventoryItemRows.length > 0) {
-    operations.push(prisma.inventoryItemMirror.createMany({
-      data: inventoryItemRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
-    }));
-  }
-
-  if (Array.isArray(inventoryLevelRows) && inventoryLevelRows.length > 0) {
-    operations.push(prisma.inventoryLevelMirror.createMany({
-      data: inventoryLevelRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
-    }));
-  }
-
-  if (Array.isArray(productCollectionRows) && productCollectionRows.length > 0) {
-    operations.push(prisma.productCollection.createMany({
-      data: productCollectionRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
-    }));
-  }
-
-  if (Array.isArray(metafieldRows) && metafieldRows.length > 0) {
-    operations.push(prisma.metafieldMirror.createMany({
-      data: metafieldRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
-    }));
-  }
+  pushCreateMany(prisma.product, productRows);
+  pushCreateMany(prisma.variant, variantRows);
+  pushCreateMany(prisma.inventoryItemMirror, inventoryItemRows);
+  pushCreateMany(prisma.inventoryLevelMirror, inventoryLevelRows);
+  pushCreateMany(prisma.productCollection, productCollectionRows);
+  pushCreateMany(prisma.metafieldMirror, metafieldRows);
+  pushCreateMany(prisma.productMediaMirror, productMediaRows);
 
   if (operations.length > 0) {
     await prisma.$transaction(operations);
   }
+}
+
+export async function applyProductTombstonesToCandidate({
+  shop,
+  syncBatchId,
+}) {
+  const batch = await prisma.mirrorBatch.findFirst({
+    where: { id: syncBatchId, shop },
+    select: { syncStartSequence: true },
+  });
+
+  if (!batch) throw buildCodedError("MIRROR_BATCH_NOT_FOUND", syncBatchId);
+
+  const tombstones = await prisma.productTombstone.findMany({
+    where: {
+      shop,
+      mutationSequence: {
+        gt: batch.syncStartSequence ?? 0n,
+      },
+    },
+    select: { productId: true },
+  });
+
+  const productIds = [...new Set(tombstones.map((row) => row.productId))];
+  if (productIds.length === 0) return 0;
+
+  const variants = await prisma.variant.findMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+      productId: { in: productIds },
+    },
+    select: { id: true },
+  });
+  const variantIds = variants.map((row) => row.id);
+
+  const inventoryItems = await prisma.inventoryItemMirror.findMany({
+    where: {
+      shop,
+      mirrorBatchId: syncBatchId,
+      productId: { in: productIds },
+    },
+    select: { id: true },
+  });
+  const inventoryItemIds = inventoryItems.map((row) => row.id);
+
+  await prisma.$transaction([
+    prisma.inventoryLevelMirror.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+        ...(inventoryItemIds.length > 0
+          ? { inventoryItemId: { in: inventoryItemIds } }
+          : { inventoryItemId: "__none__" }),
+      },
+    }),
+    prisma.inventoryItemMirror.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+        productId: { in: productIds },
+      },
+    }),
+    prisma.productCollection.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+        productId: { in: productIds },
+      },
+    }),
+    prisma.productMediaMirror.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+        productId: { in: productIds },
+      },
+    }),
+    prisma.metafieldMirror.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+        OR: [
+          { ownerType: "PRODUCT", ownerId: { in: productIds } },
+          ...(variantIds.length > 0
+            ? [{ ownerType: "VARIANT", ownerId: { in: variantIds } }]
+            : []),
+        ],
+      },
+    }),
+    prisma.variant.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+        productId: { in: productIds },
+      },
+    }),
+    prisma.product.deleteMany({
+      where: {
+        shop,
+        mirrorBatchId: syncBatchId,
+        id: { in: productIds },
+      },
+    }),
+  ]);
+
+  return productIds.length;
+}
+
+export async function validateAndFinalizeProductMirrorBatch({
+  shop,
+  syncBatchId,
+  unresolvedChildCount,
+}) {
+  if (unresolvedChildCount !== 0) {
+    throw buildCodedError(
+      "MIRROR_UNRESOLVED_CHILDREN",
+      `Candidate contains ${unresolvedChildCount} unresolved child rows`,
+    );
+  }
+
+  await applyProductTombstonesToCandidate({ shop, syncBatchId });
+
+  const [
+    productCount,
+    variantCount,
+    metafieldCount,
+    collectionCount,
+    invalidVariantCount,
+    invalidInventoryItemCount,
+  ] = await Promise.all([
+    prisma.product.count({ where: { shop, mirrorBatchId: syncBatchId } }),
+    prisma.variant.count({ where: { shop, mirrorBatchId: syncBatchId } }),
+    prisma.metafieldMirror.count({
+      where: { shop, mirrorBatchId: syncBatchId },
+    }),
+    prisma.productCollection.count({
+      where: { shop, mirrorBatchId: syncBatchId },
+    }),
+    prisma.$queryRaw`
+      SELECT COUNT(*)::int AS "count"
+      FROM "Variant" v
+      LEFT JOIN "Product" p
+        ON p."shop" = v."shop"
+       AND p."id" = v."productId"
+       AND p."mirrorBatchId" = v."mirrorBatchId"
+      WHERE v."shop" = ${shop}
+        AND v."mirrorBatchId" = ${syncBatchId}
+        AND p."id" IS NULL
+    `,
+    prisma.$queryRaw`
+      SELECT COUNT(*)::int AS "count"
+      FROM "InventoryItemMirror" i
+      LEFT JOIN "Variant" v
+        ON v."shop" = i."shop"
+       AND v."id" = i."variantId"
+       AND v."mirrorBatchId" = i."mirrorBatchId"
+      WHERE i."shop" = ${shop}
+        AND i."mirrorBatchId" = ${syncBatchId}
+        AND v."id" IS NULL
+    `,
+  ]);
+
+  const invalidVariants = Number(invalidVariantCount?.[0]?.count || 0);
+  const invalidInventoryItems = Number(
+    invalidInventoryItemCount?.[0]?.count || 0,
+  );
+
+  if (invalidVariants > 0 || invalidInventoryItems > 0) {
+    throw buildCodedError(
+      "MIRROR_RELATION_VALIDATION_FAILED",
+      `Invalid variants=${invalidVariants}, invalidInventoryItems=${invalidInventoryItems}`,
+    );
+  }
+
+  const finalizedSequence = await getLatestMutationSequence(prisma, shop);
+
+  const updated = await prisma.mirrorBatch.updateMany({
+    where: {
+      id: syncBatchId,
+      shop,
+      status: {
+        in: ["INGESTING_TO_STAGING_BATCH", "VALIDATING_BATCH"],
+      },
+    },
+    data: {
+      status: "FINALIZED",
+      finalizedSequence,
+      finalizedAt: new Date(),
+      actualProducts: productCount,
+      actualVariants: variantCount,
+      actualMetafields: metafieldCount,
+      actualCollections: collectionCount,
+    },
+  });
+
+  if (updated.count !== 1) {
+    throw buildCodedError(
+      "MIRROR_FINALIZE_TRANSITION_REJECTED",
+      "Candidate could not transition to FINALIZED",
+    );
+  }
+
+  return {
+    productCount,
+    variantCount,
+    metafieldCount,
+    collectionCount,
+    finalizedSequence,
+  };
+}
+
+export async function activateProductMirrorBatch({
+  shop,
+  syncBatchId,
+  expectedActiveBatchId,
+  syncHistoryId,
+}) {
+  const completedAt = new Date();
+
+  const activation = await prisma.$transaction(
+    async (tx) => {
+      const candidate = await tx.mirrorBatch.findFirst({
+        where: {
+          id: syncBatchId,
+          shop,
+          resourceType: "PRODUCT_CATALOG",
+          status: "FINALIZED",
+          expectedActiveBatchId,
+        },
+      });
+
+      if (!candidate) {
+        throw buildCodedError(
+          "CANDIDATE_NOT_FINALIZED",
+          "Candidate is missing, stale, or not FINALIZED",
+        );
+      }
+
+      const storeActivated = await tx.store.updateMany({
+        where:
+          expectedActiveBatchId === null
+            ? { shopUrl: shop, activeMirrorBatchId: null }
+            : {
+                shopUrl: shop,
+                activeMirrorBatchId: expectedActiveBatchId,
+              },
+        data: {
+          activeMirrorBatchId: syncBatchId,
+          mirrorHealthState: "HEALTHY",
+          staleReason: null,
+          repairRequired: false,
+          mirrorUnsafeSince: null,
+          lastSyncErrorSummary: null,
+          lastFullSyncAt: completedAt,
+          isProductSyncing: false,
+          isProductInitialySyning: false,
+          syncProgressStage: "IDLE",
+          shopifyBulkJobCompleted: true,
+          storeTotalProducts: candidate.actualProducts ?? 0,
+          productInitialSyncProgress: candidate.actualProducts ?? 0,
+          lastProductSyncAt: completedAt,
+          productSyncStartedAt: null,
+          productSyncRecoveryRequired: false,
+        },
+      });
+
+      if (storeActivated.count !== 1) {
+        throw buildCodedError(
+          "STALE_ACTIVE_GENERATION",
+          "Active mirror changed before candidate promotion",
+        );
+      }
+
+      const candidateActivated = await tx.mirrorBatch.updateMany({
+        where: {
+          id: syncBatchId,
+          shop,
+          status: "FINALIZED",
+        },
+        data: {
+          status: "ACTIVE",
+          activatedAt: completedAt,
+        },
+      });
+
+      if (candidateActivated.count !== 1) {
+        throw buildCodedError(
+          "CANDIDATE_ACTIVATION_REJECTED",
+          "Candidate activation state transition failed",
+        );
+      }
+
+      if (
+        expectedActiveBatchId &&
+        expectedActiveBatchId !== syncBatchId
+      ) {
+        await tx.mirrorBatch.updateMany({
+          where: {
+            id: expectedActiveBatchId,
+            shop,
+            status: "ACTIVE",
+          },
+          data: {
+            status: "RETIRED",
+            retiredAt: completedAt,
+          },
+        });
+      }
+
+      if (syncHistoryId) {
+        const historyUpdated = await tx.syncHistory.updateMany({
+          where: {
+            id: syncHistoryId,
+            shop,
+            status: "processing",
+          },
+          data: {
+            status: "completed",
+            stage: "MIRROR_ACTIVATED",
+            recordCount: candidate.actualProducts ?? 0,
+            completedAt,
+          },
+        });
+
+        if (historyUpdated.count !== 1) {
+          throw buildCodedError(
+            "SYNC_HISTORY_ACTIVATION_TRANSITION_REJECTED",
+            "Sync history completion transition failed",
+          );
+        }
+
+        await transitionMirrorSyncLedgerBySyncHistoryId(tx, {
+          shop,
+          syncHistoryId,
+          from: ["QUEUED", "STARTING_BULK_QUERY", "RUNNING", "INGESTING"],
+          to: "COMPLETED",
+        });
+      }
+
+      await tx.mirrorReconcileSignal.updateMany({
+        where: {
+          shop,
+          status: "pending",
+          mutationSequence: {
+            lte: candidate.finalizedSequence ?? 0n,
+          },
+        },
+        data: {
+          status: "resolved",
+          reconciledAt: completedAt,
+          updatedAt: completedAt,
+        },
+      });
+
+      return {
+        retiredBatchId:
+          expectedActiveBatchId && expectedActiveBatchId !== syncBatchId
+            ? expectedActiveBatchId
+            : null,
+      };
+    },
+    {
+      isolationLevel: "Serializable",
+      maxWait: 10_000,
+      timeout: 15_000,
+    },
+  );
+
+  await clearProductSyncCache(shop);
+
+  if (activation.retiredBatchId) {
+    await enqueueRetiredMirrorCleanup({
+      shop,
+      mirrorBatchId: activation.retiredBatchId,
+    });
+  }
+
+  return activation;
 }
 
 export async function markSyncHistoryFailed({
@@ -321,31 +728,16 @@ export async function markSyncHistoryFailed({
 }) {
   await prisma.$transaction(async (tx) => {
     if (syncHistoryId) {
-      const syncHistory = await tx.syncHistory.findUnique({
-        where: { id: syncHistoryId },
+      const history = await tx.syncHistory.findFirst({
+        where: { id: syncHistoryId, shop },
       });
-      if (!syncHistory) {
-        console.warn("[sync:history_missing_on_fail]", {
-          shop,
-          syncHistoryId,
-          errorMessage,
-        });
-      } else {
-        const updatedSyncHistoryResult = await tx.syncHistory.updateMany({
+
+      if (history) {
+        await tx.syncHistory.updateMany({
           where: {
             id: syncHistoryId,
-            shop: syncHistory.shop,
+            shop,
             status: "processing",
-            stage: {
-              in: [
-                "SHOPIFY_BULK_RUNNING",
-                "MIRROR_STAGING",
-                "INGESTING_TO_STAGING_BATCH",
-                "VALIDATING_BATCH",
-                "ACTIVATING_BATCH",
-                "ACTIVE",
-              ],
-            },
           },
           data: {
             status: "failed",
@@ -353,27 +745,10 @@ export async function markSyncHistoryFailed({
             errorMessage,
           },
         });
-        if (updatedSyncHistoryResult.count !== 1) {
-          console.warn("[sync:history_fail_transition_skipped]", {
-            shop,
-            syncHistoryId,
-            currentStatus: syncHistory.status,
-            currentStage: syncHistory.stage,
-          });
-        } else if (syncHistory.syncBatchId) {
-          await upsertMirrorBatch(tx, {
-            id: syncHistory.syncBatchId,
-            shop: syncHistory.shop,
-            syncHistoryId: syncHistory.id,
-            bulkOperationId: syncHistory.bulkOperationId || null,
-            resourceType: "PRODUCT_CATALOG",
-            status: "FAILED",
-          });
+
+        if (history.syncBatchId) {
           await tx.mirrorBatch.updateMany({
-            where: {
-              id: syncHistory.syncBatchId,
-              shop: syncHistory.shop,
-            },
+            where: { id: history.syncBatchId, shop },
             data: {
               status: "FAILED",
               failedAt: new Date(),
@@ -381,444 +756,29 @@ export async function markSyncHistoryFailed({
             },
           });
         }
-
-        await transitionMirrorSyncLedgerBySyncHistoryId(tx, {
-          shop: syncHistory.shop,
-          syncHistoryId: syncHistory.id,
-          from: ["QUEUED", "STARTING_BULK_QUERY", "RUNNING", "INGESTING"],
-          to: "FAILED",
-          data: { lastError: errorMessage || null },
-        });
       }
     }
 
-    if (shop) {
-      const store = await ensureStoreForShop({ shop }, tx);
-      const hasActivatedMirror = Boolean(store.activeMirrorBatchId);
-      logStoreMutation("markSyncHistoryFailed.store.updateMany", {
-        shop,
-        storeId: store.id,
-        syncHistoryId,
-      });
-      await tx.store.updateMany({
-        where: { shopUrl: shop },
-        data: {
-          isProductSyncing: false,
-          isProductInitialySyning: false,
-          syncProgressStage: "IDLE",
-          shopifyBulkJobCompleted: false,
-          // A failed refresh never activates its staging batch. Keep the last
-          // successfully activated batch available for read-only previews.
-          mirrorHealthState: hasActivatedMirror ? "DEGRADED" : "UNSAFE",
-          staleReason: "FULL_SYNC_FAILED",
-          repairRequired: !hasActivatedMirror,
-          mirrorUnsafeSince: hasActivatedMirror ? null : new Date(),
-          productSyncRecoveryRequired: true,
-          lastSyncErrorSummary: errorMessage,
-        },
-      });
-    }
-  });
-  if (shop) {
-    await clearProductSyncCache(shop);
-  }
-}
+    const store = await ensureStoreForShop({ shop }, tx);
+    const hasActiveMirror = Boolean(store.activeMirrorBatchId);
 
-async function preserveNewerPreviousBatchProducts(tx, {
-  shop,
-  previousBatchId,
-  syncBatchId,
-}) {
-  const candidates = await tx.$queryRaw`
-    SELECT previous_product."id"
-    FROM "Product" previous_product
-    LEFT JOIN "Product" staged_product
-      ON staged_product."shop" = previous_product."shop"
-     AND staged_product."id" = previous_product."id"
-     AND staged_product."mirrorBatchId" = ${syncBatchId}
-    WHERE previous_product."shop" = ${shop}
-      AND previous_product."mirrorBatchId" = ${previousBatchId}
-      AND (
-        staged_product."id" IS NULL
-        OR (
-          previous_product."updatedAt" IS NOT NULL
-          AND (
-            staged_product."updatedAt" IS NULL
-            OR previous_product."updatedAt" > staged_product."updatedAt"
-          )
-        )
-      )
-  `;
-
-  const productIds = candidates
-    .map((row) => String(row?.id || "").trim())
-    .filter(Boolean);
-
-  let preserved = 0;
-  for (const productIdChunk of chunk(productIds)) {
-    const products = await tx.product.findMany({
-      where: {
-        shop,
-        mirrorBatchId: previousBatchId,
-        id: { in: productIdChunk },
-      },
-    });
-    if (!products.length) continue;
-
-    const variants = await tx.variant.findMany({
-      where: {
-        shop,
-        mirrorBatchId: previousBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-    const variantIds = variants.map((variant) => variant.id);
-
-    const inventoryItems = await tx.inventoryItemMirror.findMany({
-      where: {
-        shop,
-        mirrorBatchId: previousBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-    const inventoryItemIds = inventoryItems.map((item) => item.id);
-
-    const inventoryLevels = inventoryItemIds.length
-      ? await tx.inventoryLevelMirror.findMany({
-          where: {
-            shop,
-            mirrorBatchId: previousBatchId,
-            inventoryItemId: { in: inventoryItemIds },
-          },
-        })
-      : [];
-
-    const productCollections = await tx.productCollection.findMany({
-      where: {
-        shop,
-        mirrorBatchId: previousBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-
-    const productMedia = await tx.productMediaMirror.findMany({
-      where: {
-        shop,
-        mirrorBatchId: previousBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-
-    const metafields = await tx.metafieldMirror.findMany({
-      where: {
-        shop,
-        mirrorBatchId: previousBatchId,
-        OR: [
-          { ownerType: "PRODUCT", ownerId: { in: productIdChunk } },
-          ...(variantIds.length
-            ? [{ ownerType: "VARIANT", ownerId: { in: variantIds } }]
-            : []),
-        ],
-      },
-    });
-
-    if (inventoryItemIds.length) {
-      await tx.inventoryLevelMirror.deleteMany({
-        where: {
-          shop,
-          mirrorBatchId: syncBatchId,
-          inventoryItemId: { in: inventoryItemIds },
-        },
-      });
-    }
-    await tx.inventoryItemMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-    await tx.productCollection.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-    await tx.productMediaMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-    await tx.metafieldMirror.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-        OR: [
-          { ownerType: "PRODUCT", ownerId: { in: productIdChunk } },
-          ...(variantIds.length
-            ? [{ ownerType: "VARIANT", ownerId: { in: variantIds } }]
-            : []),
-        ],
-      },
-    });
-    await tx.variant.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-        productId: { in: productIdChunk },
-      },
-    });
-    await tx.product.deleteMany({
-      where: {
-        shop,
-        mirrorBatchId: syncBatchId,
-        id: { in: productIdChunk },
-      },
-    });
-
-    await tx.product.createMany({
-      data: products.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
-    });
-    if (variants.length) {
-      await tx.variant.createMany({
-        data: variants.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-        skipDuplicates: true,
-      });
-    }
-    if (inventoryItems.length) {
-      await tx.inventoryItemMirror.createMany({
-        data: inventoryItems.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-        skipDuplicates: true,
-      });
-    }
-    if (inventoryLevels.length) {
-      await tx.inventoryLevelMirror.createMany({
-        data: inventoryLevels.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-        skipDuplicates: true,
-      });
-    }
-    if (productCollections.length) {
-      await tx.productCollection.createMany({
-        data: productCollections.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-        skipDuplicates: true,
-      });
-    }
-    if (productMedia.length) {
-      await tx.productMediaMirror.createMany({
-        data: productMedia.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-        skipDuplicates: true,
-      });
-    }
-    if (metafields.length) {
-      await tx.metafieldMirror.createMany({
-        data: metafields.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-        skipDuplicates: true,
-      });
-    }
-
-    preserved += products.length;
-  }
-
-  return preserved;
-}
-
-export async function activateProductMirrorBatch({
-  shop,
-  syncBatchId,
-  totalProductsProcessed = null,
-  totalVariantsProcessed = null,
-  syncHistoryId,
-}) {
-  const store = await ensureStoreForShop({ shop });
-  const mirrorState = await prisma.store.findUnique({
-    where: { shopUrl: shop },
-    select: { activeMirrorBatchId: true },
-  });
-
-  const previousBatchId = mirrorState?.activeMirrorBatchId || null;
-  const completedAt = new Date();
-
-  await prisma.$transaction(async (tx) => {
-    const transactionStore = await ensureStoreForShop({ shop }, tx);
-    if (previousBatchId && previousBatchId !== syncBatchId) {
-      await preserveNewerPreviousBatchProducts(tx, {
-        shop,
-        previousBatchId,
-        syncBatchId,
-      });
-    }
-
-    const shouldCountFinalRows = Boolean(previousBatchId && previousBatchId !== syncBatchId);
-    const finalProductCount = shouldCountFinalRows || typeof totalProductsProcessed !== "number"
-      ? await tx.product.count({ where: { shop, mirrorBatchId: syncBatchId } })
-      : totalProductsProcessed;
-    const finalVariantCount = shouldCountFinalRows || typeof totalVariantsProcessed !== "number"
-      ? await tx.variant.count({ where: { shop, mirrorBatchId: syncBatchId } })
-      : totalVariantsProcessed;
-
-    logStoreMutation("activateProductMirrorBatch.store.updateMany", {
-      shop,
-      storeId: transactionStore.id || store.id,
-      syncHistoryId,
-      syncBatchId,
-    });
-    const storeActivated = await tx.store.updateMany({
-      where: {
-        shopUrl: shop,
-      },
+    await tx.store.updateMany({
+      where: { shopUrl: shop },
       data: {
-        activeMirrorBatchId: syncBatchId,
-        mirrorHealthState: "HEALTHY",
-        staleReason: null,
-        repairRequired: false,
-        mirrorUnsafeSince: null,
-        lastSyncErrorSummary: null,
-        lastFullSyncAt: completedAt,
         isProductSyncing: false,
         isProductInitialySyning: false,
         syncProgressStage: "IDLE",
-        shopifyBulkJobCompleted: true,
-        storeTotalProducts: finalProductCount,
-        productInitialSyncProgress: finalProductCount,
-        lastProductSyncAt: completedAt,
-        productSyncStartedAt: null,
-        productSyncRecoveryRequired: false,
+        shopifyBulkJobCompleted: false,
+        mirrorHealthState: hasActiveMirror ? "DEGRADED" : "UNSAFE",
+        staleReason: "FULL_SYNC_FAILED",
+        repairRequired: !hasActiveMirror,
+        mirrorUnsafeSince: hasActiveMirror ? null : new Date(),
+        productSyncRecoveryRequired: true,
+        lastSyncErrorSummary: errorMessage,
       },
     });
-    if (storeActivated.count !== 1) {
-      console.warn("[sync:store_activation_transition_unexpected]", {
-        shop,
-        syncBatchId,
-        syncHistoryId,
-        updatedCount: storeActivated.count,
-      });
-    }
-
-    if (syncHistoryId) {
-      const updatedSyncHistory = await tx.syncHistory.updateMany({
-        where: {
-          id: syncHistoryId,
-          shop,
-          status: "processing",
-          stage: {
-            in: ["MIRROR_STAGING", "INGESTING_TO_STAGING_BATCH", "VALIDATING_BATCH", "ACTIVATING_BATCH"],
-          },
-        },
-        data: {
-          status: "completed",
-          stage: "MIRROR_ACTIVATED",
-          recordCount: finalProductCount,
-          completedAt,
-          updatedAt: completedAt,
-        },
-      });
-      if (updatedSyncHistory.count !== 1) {
-        throw new Error("SYNC_HISTORY_ACTIVATION_TRANSITION_REJECTED");
-      }
-
-      await upsertMirrorBatch(tx, {
-        id: syncBatchId,
-        shop,
-        syncHistoryId,
-        bulkOperationId: null,
-        resourceType: "PRODUCT_CATALOG",
-        status: "ACTIVE",
-      });
-      await tx.mirrorBatch.updateMany({
-        where: {
-          id: syncBatchId,
-          shop,
-          status: {
-            in: [
-              "BULK_OPERATION_STARTED",
-              "FILE_DOWNLOADED",
-              "INGESTING_TO_STAGING_BATCH",
-              "VALIDATING_BATCH",
-              "ACTIVATING_BATCH",
-              "ACTIVE",
-            ],
-          },
-        },
-        data: {
-          status: "ACTIVE",
-          activatedAt: completedAt,
-          actualProducts: finalProductCount,
-          actualVariants: finalVariantCount,
-          failureReason: null,
-          failedAt: null,
-        },
-      });
-      await transitionMirrorSyncLedgerBySyncHistoryId(tx, {
-        shop,
-        syncHistoryId,
-        from: ["QUEUED", "STARTING_BULK_QUERY", "RUNNING", "INGESTING"],
-        to: "COMPLETED",
-      });
-    }
-
-    if (!syncHistoryId) {
-      await tx.mirrorBatch.updateMany({
-        where: {
-          id: syncBatchId,
-          shop,
-          status: {
-            in: [
-              "BULK_OPERATION_STARTED",
-              "FILE_DOWNLOADED",
-              "INGESTING_TO_STAGING_BATCH",
-              "VALIDATING_BATCH",
-              "ACTIVATING_BATCH",
-            ],
-          },
-        },
-        data: {
-          status: "ACTIVE",
-          activatedAt: completedAt,
-          actualProducts: finalProductCount,
-          actualVariants: finalVariantCount,
-          failureReason: null,
-          failedAt: null,
-        },
-      });
-    }
-
-    if (previousBatchId && previousBatchId !== syncBatchId) {
-      await tx.variant.deleteMany({
-        where: { shop, mirrorBatchId: previousBatchId },
-      });
-      await tx.inventoryLevelMirror.deleteMany({
-        where: { shop, mirrorBatchId: previousBatchId },
-      });
-      await tx.inventoryItemMirror.deleteMany({
-        where: { shop, mirrorBatchId: previousBatchId },
-      });
-      await tx.productCollection.deleteMany({
-        where: { shop, mirrorBatchId: previousBatchId },
-      });
-      await tx.metafieldMirror.deleteMany({
-        where: { shop, mirrorBatchId: previousBatchId },
-      });
-      await tx.product.deleteMany({
-        where: { shop, mirrorBatchId: previousBatchId },
-      });
-    }
-
-    await tx.mirrorReconcileSignal.updateMany({
-      where: { shop, status: "pending" },
-      data: {
-        status: "resolved",
-        reconciledAt: completedAt,
-        updatedAt: completedAt,
-      },
-    });
-  }, {
-    maxWait: 10_000,
-    timeout: 60_000,
   });
+
   await clearProductSyncCache(shop);
 }
 
@@ -826,11 +786,6 @@ export async function updateInitialSyncProgress({
   shop,
   totalProductsProcessed,
 }) {
-  const store = await ensureStoreForShop({ shop });
-  logStoreMutation("updateInitialSyncProgress.store.updateMany", {
-    shop,
-    storeId: store.id,
-  });
   await prisma.store.updateMany({
     where: { shopUrl: shop },
     data: {

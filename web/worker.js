@@ -1,48 +1,30 @@
 import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { scheduleReconciliationJob } from "./Jobs/Queues/reconciliationJob.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
 if (!process.env.HOST && process.env.SHOPIFY_APP_URL) {
-  process.env.HOST = process.env.SHOPIFY_APP_URL
-    .replace(/^https?:\/\//, "")
-    .replace(/\/$/, "");
+  process.env.HOST = process.env.SHOPIFY_APP_URL.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
-const requiredEnv = [
-  "SHOPIFY_API_KEY",
-  "SHOPIFY_API_SECRET",
-  "HOST",
-  "DATABASE_URL",
-];
-
+const requiredEnv = ["SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", "HOST", "DATABASE_URL"];
 const missing = requiredEnv.filter((key) => !process.env[key]);
-const hasRedisUrl = Boolean(process.env.REDIS_URL);
-const hasRedisHostPort = Boolean(process.env.REDIS_HOST && process.env.REDIS_PORT);
-if (!hasRedisUrl && !hasRedisHostPort) {
+if (!process.env.REDIS_URL && !(process.env.REDIS_HOST && process.env.REDIS_PORT)) {
   missing.push("REDIS_URL|REDIS_HOST+REDIS_PORT");
 }
-if (missing.length > 0) {
-  throw new Error(`Worker missing required env vars: ${missing.join(", ")}`);
-}
-
+if (missing.length) throw new Error(`Worker missing required env vars: ${missing.join(", ")}`);
 if (String(process.env.WEB_PROCESS || "").toLowerCase() === "true") {
   throw new Error("Refusing to start workers in web process (WEB_PROCESS=true)");
-}
-if (String(process.env.WORKER_PROCESS || "").toLowerCase() !== "true") {
-  console.warn("WORKER_PROCESS is not explicitly true; starting workers anyway");
 }
 
 const [{ connection: redis }, { default: db }] = await Promise.all([
   import("./config/redis.js"),
   import("./repositories/repositoryDb.js"),
 ]);
-
-console.log(`Worker process ${process.pid} starting`);
 
 const workerModulePaths = [
   "./Jobs/Workers/bulkEditPipelineWorker.js",
@@ -83,74 +65,37 @@ const workerModulePaths = [
   "./Jobs/Workers/bulkEditVerificationWorker.js",
   "./Jobs/Workers/subscriptionBillingWorker.js",
   "./Jobs/Workers/reconciliationWorker.js",
+  "./Jobs/Workers/mirrorCleanupWorker.js",
 ];
+
+await scheduleReconciliationJob().catch((error) => {
+  console.error("[reconciliation] scheduler registration failed", error.message);
+});
 
 const closables = [];
 for (const modPath of workerModulePaths) {
-  // eslint-disable-next-line no-await-in-loop
   const mod = await import(modPath);
-  if (typeof mod?.startBulkEditPipelineWorker === "function") {
-    mod.startBulkEditPipelineWorker();
-  }
-  if (typeof mod?.startBulkEditExecuteWorker === "function") {
-    mod.startBulkEditExecuteWorker();
-  }
-  if (typeof mod?.startBulkEditVerificationWorker === "function") {
-    mod.startBulkEditVerificationWorker();
-  }
-  if (typeof mod?.startBulkEditItemApplyWorker === "function") {
-    mod.startBulkEditItemApplyWorker();
+  for (const starter of ["startBulkEditPipelineWorker", "startBulkEditExecuteWorker", "startBulkEditVerificationWorker", "startBulkEditItemApplyWorker"]) {
+    if (typeof mod?.[starter] === "function") mod[starter]();
   }
   for (const value of Object.values(mod || {})) {
-    if (value && typeof value.close === "function") {
-      closables.push(value);
-    }
+    if (value && typeof value.close === "function") closables.push(value);
   }
 }
-
-console.log(`Worker process ${process.pid} started`);
 
 let shuttingDown = false;
-let redisClosed = false;
-
-async function closeRedisOnce() {
-  if (redisClosed) return;
-  redisClosed = true;
-
-  try {
-    await redis.quit();
-  } catch {
-    try {
-      redis.disconnect();
-    } catch {
-      // noop
-    }
-  }
-}
-
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`Worker ${process.pid} received ${signal}; shutting down`);
-  const hardExitTimer = setTimeout(() => {
-    console.error(`Worker ${process.pid} forced exit after shutdown timeout`);
-    process.exit(1);
-  }, 15000);
-  hardExitTimer.unref();
-  await Promise.allSettled(closables.map((c) => c.close()));
+  const timer = setTimeout(() => process.exit(1), 15_000);
+  timer.unref();
+  await Promise.allSettled(closables.map((item) => item.close()));
   await Promise.allSettled([db.$disconnect()]);
-  await closeRedisOnce();
-  clearTimeout(hardExitTimer);
+  try { await redis.quit(); } catch { redis.disconnect(); }
+  clearTimeout(timer);
   process.exit(0);
 }
-
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("uncaughtException", async (err) => {
-  console.error("Uncaught Exception:", err);
-  await shutdown("uncaughtException");
-});
-process.on("unhandledRejection", async (err) => {
-  console.error("Unhandled Rejection:", err);
-  await shutdown("unhandledRejection");
-});
+process.on("uncaughtException", async (error) => { console.error(error); await shutdown("uncaughtException"); });
+process.on("unhandledRejection", async (error) => { console.error(error); await shutdown("unhandledRejection"); });

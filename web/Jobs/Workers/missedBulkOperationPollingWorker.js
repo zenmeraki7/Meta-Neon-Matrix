@@ -8,14 +8,9 @@ import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleSta
 import { addbulkEditResultIngestJob } from "../Queues/bulkEditResultIngestJob.js";
 import { addbulkUndoResultIngestJob } from "../Queues/bulkUndoResultIngestJob.js";
 import { addbulkOperatonQueryJob } from "../Queues/bulkOperationQueryJob.js";
-import {
-  acquireRedisLock,
-  releaseRedisLock,
-} from "../../utils/redisLockUtils.js";
-import {
-  enqueueMissedBulkOperationPollingJob,
-  enqueueMissedBulkOperationPollingTick,
-} from "../../queues/adapters/workerSchedulerQueueAdapter.js";
+import { acquireRedisLock, releaseRedisLock } from "../../utils/redisLockUtils.js";
+import { enqueueMissedBulkOperationPollingTick } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
+import { createMirrorBatchId } from "../../services/mirrorHealthService.js";
 
 const QUEUE_NAME = "missed-bulk-operation-polling";
 const POLL_COOLDOWN_MS = 2 * 60 * 1000;
@@ -26,290 +21,192 @@ const LEADER_LOCK_TTL_MS = 45_000;
 const BULK_OPERATION_RESULT_QUERY = `#graphql
   query BulkOperationResult($id: ID!) {
     node(id: $id) {
-      ... on BulkOperation {
-        id
-        status
-        type
-        url
-        partialDataUrl
-      }
+      ... on BulkOperation { id status type url partialDataUrl query createdAt }
     }
   }
 `;
 
-function buildPollCooldownKey(shop, bulkOperationId) {
-  return `missed-webhook-poll:${shop}:${bulkOperationId}`;
-}
-
-async function fetchBulkOperationStatus({ shop, bulkOperationId }) {
-  const session = await getSession(shop);
-  if (!session?.shop || session.shop !== shop) {
-    throw new Error("Shop session not available for missed-webhook polling");
+const CURRENT_QUERY_OPERATION = `#graphql
+  query CurrentQueryBulkOperation {
+    currentBulkOperation(type: QUERY) {
+      id status type url partialDataUrl query createdAt
+    }
   }
+`;
 
+function terminal(status) {
+  return new Set(["COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "CANCELED", "CANCELLED", "EXPIRED"]).has(String(status || "").toUpperCase());
+}
+
+async function graphql(shop, query, variables = {}) {
+  const session = await getSession(shop);
+  if (!session?.shop || session.shop !== shop) throw new Error("SHOP_SESSION_UNAVAILABLE");
   const client = new shopify.api.clients.Graphql({ session });
-  const response = await client.query({
-    data: {
-      query: BULK_OPERATION_RESULT_QUERY,
-      variables: { id: bulkOperationId },
-    },
-  });
-
-  const node = response?.body?.data?.node || null;
-  return {
-    id: node?.id || null,
-    status: String(node?.status || "").toUpperCase(),
-    type: String(node?.type || "").toUpperCase(),
-    url: node?.url || null,
-    partialDataUrl: node?.partialDataUrl || null,
-  };
+  const response = await client.query({ data: { query, variables } });
+  const errors = response?.body?.errors || [];
+  if (errors.length) throw new Error(errors.map((item) => item.message).join("; "));
+  return response?.body?.data || {};
 }
 
-function isTerminalStatus(status) {
-  return ["COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "CANCELED", "CANCELLED", "EXPIRED"].includes(
-    String(status || "").toUpperCase(),
-  );
-}
-
-async function pollMissedBulkOperations() {
-  const cutoff = new Date(Date.now() - 2 * 60 * 1000);
-
-  const [candidates, productSyncCandidates] = await Promise.all([
-    db.editHistory.findMany({
+async function recoverSubmittingMirrorSyncs() {
+  const cutoff = new Date(Date.now() - 60_000);
+  const attempts = await db.operationFingerprint.findMany({
     where: {
-      OR: [
-        {
-          executionState: {
-            in: [
-              OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
-              OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-            ],
-          },
-          updatedAt: { lt: cutoff },
-          batch: {
-            path: ["resultIngestion", "ingestedAt"],
-            equals: null,
-          },
-        },
-        {
-          undo: {
-            path: ["status"],
-            equals: "processing",
-          },
-          updatedAt: { lt: cutoff },
-        },
-      ],
+      operationType: "MIRROR_SYNC",
+      status: { in: ["SUBMITTING", "RECONCILE_SUBMITTED"] },
+      updatedAt: { lt: cutoff },
     },
-    select: {
-      id: true,
-      shop: true,
-      executionIdentity: true,
-      bulkOperationId: true,
-      batch: true,
-      undo: true,
-    },
+    select: { id: true, shop: true, fingerprint: true, resourceId: true },
     take: 50,
     orderBy: { updatedAt: "asc" },
+  });
+
+  let recovered = 0;
+  for (const attempt of attempts) {
+    try {
+      const data = await graphql(attempt.shop, CURRENT_QUERY_OPERATION);
+      const operation = data?.currentBulkOperation;
+      if (!operation?.id) continue;
+
+      const syncType = String(attempt.fingerprint || "").startsWith("collection:") ? "Collection" : "Product";
+      let history = await db.syncHistory.findFirst({
+        where: { shop: attempt.shop, bulkOperationId: operation.id },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!history) {
+        const syncBatchId = createMirrorBatchId(syncType === "Collection" ? "collection_sync" : "product_sync");
+        history = await db.$transaction(async (tx) => {
+          const store = await tx.store.findUnique({
+            where: { shopUrl: attempt.shop },
+            select: { activeMirrorBatchId: true, activeCollectionBatchId: true },
+          });
+          const created = await tx.syncHistory.create({
+            data: {
+              shop: attempt.shop,
+              bulkOperationId: operation.id,
+              syncBatchId,
+              status: "processing",
+              stage: "SHOPIFY_BULK_RUNNING",
+              operationType: syncType,
+              recordCount: 0,
+              duration: 0,
+            },
+          });
+          const latest = await tx.mirrorMutationJournal.findFirst({
+            where: { shop: attempt.shop },
+            orderBy: { sequence: "desc" },
+            select: { sequence: true },
+          });
+          await tx.mirrorBatch.create({
+            data: {
+              id: syncBatchId,
+              shop: attempt.shop,
+              syncHistoryId: created.id,
+              bulkOperationId: operation.id,
+              resourceType: syncType === "Collection" ? "COLLECTION_CATALOG" : "PRODUCT_CATALOG",
+              status: "BULK_OPERATION_STARTED",
+              expectedActiveBatchId: syncType === "Collection" ? store?.activeCollectionBatchId || null : store?.activeMirrorBatchId || null,
+              syncStartSequence: latest?.sequence ?? 0n,
+            },
+          });
+          return created;
+        }, { isolationLevel: "Serializable", maxWait: 10000, timeout: 20000 });
+      }
+
+      await db.operationFingerprint.updateMany({
+        where: { id: attempt.id, shop: attempt.shop, status: { in: ["SUBMITTING", "RECONCILE_SUBMITTED"] } },
+        data: {
+          status: "RUNNING",
+          resourceType: "shopify_bulk_operation",
+          resourceId: operation.id,
+          lastError: null,
+          updatedAt: new Date(),
+        },
+      });
+
+      if (terminal(operation.status)) {
+        await addbulkOperatonQueryJob({
+          shop: attempt.shop,
+          admin_graphql_api_id: operation.id,
+          id: operation.id,
+          type: "QUERY",
+          source: "submission_recovery",
+        });
+      }
+      recovered += 1;
+    } catch (error) {
+      logger.error("Mirror submission recovery failed", { shop: attempt.shop, attemptId: attempt.id, message: error.message });
+    }
+  }
+  return recovered;
+}
+
+async function pollExistingOperations() {
+  const cutoff = new Date(Date.now() - 2 * 60 * 1000);
+  const [edits, syncs] = await Promise.all([
+    db.editHistory.findMany({
+      where: {
+        OR: [
+          { executionState: { in: [OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING, OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS] }, updatedAt: { lt: cutoff } },
+          { undo: { path: ["status"], equals: "processing" }, updatedAt: { lt: cutoff } },
+        ],
+      },
+      select: { id: true, shop: true, executionIdentity: true, bulkOperationId: true, batch: true, undo: true },
+      take: 50,
+      orderBy: { updatedAt: "asc" },
     }),
     db.syncHistory.findMany({
-      where: {
-        operationType: "Product",
-        status: "processing",
-        bulkOperationId: { not: null },
-        stage: {
-          in: [
-            "SHOPIFY_BULK_RUNNING",
-            "MIRROR_DOWNLOAD_STARTED",
-            "MIRROR_STAGING",
-            "INGESTING_TO_STAGING_BATCH",
-          ],
-        },
-        updatedAt: { lt: cutoff },
-      },
-      select: {
-        id: true,
-        shop: true,
-        bulkOperationId: true,
-      },
+      where: { status: "processing", bulkOperationId: { not: null }, updatedAt: { lt: cutoff } },
+      select: { id: true, shop: true, bulkOperationId: true },
       take: 50,
       orderBy: { updatedAt: "asc" },
     }),
   ]);
 
-  let scanned = 0;
   let enqueued = 0;
-  let skipped = 0;
-
-  for (const history of candidates) {
-    scanned += 1;
+  for (const history of edits) {
     const undo = history.undo || {};
-    const isUndo =
-      undo?.status === "processing"
-      && undo?.state === "awaiting_shopify"
-      && undo?.bulkOperationId;
-
-    const bulkOperationId = isUndo
-      ? String(undo.bulkOperationId)
-      : String(
-        history.batch?.shopifyBulkOperation?.id
-          || history.batch?.shopifyBulkOperationId
-          || history.bulkOperationId
-          || "",
-      );
-
-    if (!bulkOperationId) {
-      skipped += 1;
-      continue;
-    }
-
-    const cooldownKey = buildPollCooldownKey(history.shop, bulkOperationId);
-    const claimed = await connection.set(cooldownKey, String(Date.now()), "NX", "PX", POLL_COOLDOWN_MS);
-    if (claimed !== "OK") {
-      skipped += 1;
-      continue;
-    }
-
-    try {
-      const op = await fetchBulkOperationStatus({
-        shop: history.shop,
-        bulkOperationId,
-      });
-
-      if (!isTerminalStatus(op.status)) {
-        skipped += 1;
-        continue;
-      }
-
-      if (isUndo) {
-        await addbulkUndoResultIngestJob({
-          shop: history.shop,
-          bulkOperationId,
-          source: "missed_webhook_polling",
-        });
-      } else {
-        await addbulkEditResultIngestJob({
-          shop: history.shop,
-          bulkOperationId,
-          executionId: history.executionIdentity || null,
-          source: "missed_webhook_polling",
-        });
-      }
-      enqueued += 1;
-    } catch (error) {
-      skipped += 1;
-      logger.error("Missed webhook polling failed", {
-        worker: "missedBulkOperationPollingWorker",
-        historyId: history.id,
-        shop: history.shop,
-        bulkOperationId,
-        message: error?.message || String(error),
-      });
-    }
+    const isUndo = undo?.status === "processing" && undo?.state === "awaiting_shopify" && undo?.bulkOperationId;
+    const bulkOperationId = String(isUndo ? undo.bulkOperationId : history.batch?.shopifyBulkOperation?.id || history.batch?.shopifyBulkOperationId || history.bulkOperationId || "");
+    if (!bulkOperationId) continue;
+    const claimed = await connection.set(`missed-webhook-poll:${history.shop}:${bulkOperationId}`, String(Date.now()), "NX", "PX", POLL_COOLDOWN_MS);
+    if (claimed !== "OK") continue;
+    const data = await graphql(history.shop, BULK_OPERATION_RESULT_QUERY, { id: bulkOperationId });
+    const operation = data?.node;
+    if (!terminal(operation?.status)) continue;
+    if (isUndo) await addbulkUndoResultIngestJob({ shop: history.shop, bulkOperationId, source: "missed_webhook_polling" });
+    else await addbulkEditResultIngestJob({ shop: history.shop, bulkOperationId, executionId: history.executionIdentity || null, source: "missed_webhook_polling" });
+    enqueued += 1;
   }
 
-  for (const sync of productSyncCandidates) {
-    scanned += 1;
+  for (const sync of syncs) {
     const bulkOperationId = String(sync.bulkOperationId || "");
-    if (!sync.shop || !bulkOperationId) {
-      skipped += 1;
-      continue;
-    }
-
-    const cooldownKey = buildPollCooldownKey(sync.shop, bulkOperationId);
-    const claimed = await connection.set(cooldownKey, String(Date.now()), "NX", "PX", POLL_COOLDOWN_MS);
-    if (claimed !== "OK") {
-      skipped += 1;
-      continue;
-    }
-
-    try {
-      const op = await fetchBulkOperationStatus({
-        shop: sync.shop,
-        bulkOperationId,
-      });
-
-      if (!isTerminalStatus(op.status)) {
-        skipped += 1;
-        continue;
-      }
-
-      await addbulkOperatonQueryJob({
-        shop: sync.shop,
-        admin_graphql_api_id: bulkOperationId,
-        id: bulkOperationId,
-        type: "QUERY",
-        source: "missed_webhook_polling",
-      });
-      enqueued += 1;
-    } catch (error) {
-      skipped += 1;
-      logger.error("Missed product sync bulk operation polling failed", {
-        worker: "missedBulkOperationPollingWorker",
-        syncHistoryId: sync.id,
-        shop: sync.shop,
-        bulkOperationId,
-        message: error?.message || String(error),
-      });
-    }
+    if (!bulkOperationId) continue;
+    const claimed = await connection.set(`missed-webhook-poll:${sync.shop}:${bulkOperationId}`, String(Date.now()), "NX", "PX", POLL_COOLDOWN_MS);
+    if (claimed !== "OK") continue;
+    const data = await graphql(sync.shop, BULK_OPERATION_RESULT_QUERY, { id: bulkOperationId });
+    if (!terminal(data?.node?.status)) continue;
+    await addbulkOperatonQueryJob({ shop: sync.shop, admin_graphql_api_id: bulkOperationId, id: bulkOperationId, type: "QUERY", source: "missed_webhook_polling" });
+    enqueued += 1;
   }
-
-  return { scanned, enqueued, skipped };
+  return enqueued;
 }
 
-export const missedBulkOperationPollingWorker = new Worker(
-  QUEUE_NAME,
-  async () => pollMissedBulkOperations(),
-  {
-    connection,
-    concurrency: 1,
-  },
-);
-
-missedBulkOperationPollingWorker.on("completed", (job, result) => {
-  logger.info("Missed bulk operation polling completed", {
-    worker: "missedBulkOperationPollingWorker",
-    jobId: job?.id,
-    result,
-  });
-});
-
-missedBulkOperationPollingWorker.on("failed", (job, error) => {
-  logger.error("Missed bulk operation polling failed", {
-    worker: "missedBulkOperationPollingWorker",
-    jobId: job?.id,
-    message: error?.message || String(error),
-  });
-});
-
-async function enqueuePollingJob() {
-  try {
-    await enqueueMissedBulkOperationPollingJob();
-  } catch (error) {
-    logger.error("Failed to enqueue missed bulk operation polling job", {
-      worker: "missedBulkOperationPollingWorker",
-      message: error?.message || String(error),
-    });
-  }
+async function poll() {
+  const recovered = await recoverSubmittingMirrorSyncs();
+  const enqueued = await pollExistingOperations();
+  return { recovered, enqueued };
 }
+
+export const missedBulkOperationPollingWorker = new Worker(QUEUE_NAME, poll, { connection, concurrency: 1 });
+missedBulkOperationPollingWorker.on("failed", (job, error) => logger.error("Missed bulk operation polling failed", { jobId: job?.id, message: error.message }));
 
 async function registerRepeatableTick() {
-  const leaderLock = await acquireRedisLock({
-    connection,
-    key: LEADER_LOCK_KEY,
-    ttlMs: LEADER_LOCK_TTL_MS,
-  });
-  if (!leaderLock.acquired) return;
-
-  try {
-    await enqueueMissedBulkOperationPollingTick(POLL_INTERVAL_MS);
-  } finally {
-    await releaseRedisLock({
-      connection,
-      key: leaderLock.key,
-      token: leaderLock.token,
-    }).catch(() => {});
-  }
+  const lock = await acquireRedisLock({ connection, key: LEADER_LOCK_KEY, ttlMs: LEADER_LOCK_TTL_MS });
+  if (!lock.acquired) return;
+  try { await enqueueMissedBulkOperationPollingTick(POLL_INTERVAL_MS); }
+  finally { await releaseRedisLock({ connection, key: lock.key, token: lock.token }).catch(() => {}); }
 }
-
-await registerRepeatableTick();
-
+await registerRepeatableTick().catch((error) => logger.error("Missed operation scheduler registration failed", { message: error.message }));
+export default missedBulkOperationPollingWorker;

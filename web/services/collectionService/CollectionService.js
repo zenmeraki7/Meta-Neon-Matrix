@@ -18,6 +18,7 @@ import {
   acquireExclusiveShopWork,
   releaseExclusiveShopWork,
   LOCK_NS,
+  
 } from "../shopWorkLeaseService.js";
 
 export const metrics = {
@@ -231,8 +232,17 @@ export class CollectionService {
         error.code = "INTERNAL_ERROR";
         throw error;
       }
-      const bulkOperationId =
-        bulkResponse.body.data.bulkOperationRunQuery.bulkOperation.id;
+      const result = bulkResponse?.body?.data?.bulkOperationRunQuery;
+      const userErrors = Array.isArray(result?.userErrors) ? result.userErrors : [];
+      if (userErrors.length) {
+        const error = new Error(userErrors.map((item) => item.message).join("; "));
+        error.code = "SHOPIFY_USER_ERROR";
+        throw error;
+      }
+      const bulkOperationId = result?.bulkOperation?.id;
+      if (!bulkOperationId) {
+        throw new Error("COLLECTION_BULK_OPERATION_ID_MISSING");
+      }
       const syncBatchId = createMirrorBatchId("collection_sync");
 
       const store = await ensureStoreForShop({

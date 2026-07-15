@@ -587,24 +587,7 @@ shopSyncWorker.on("completed", async (job, result) => {
       });
     });
 
-    await db.mirrorReconcileSignal.updateMany({
-      where: {
-        shop,
-        status: "pending",
-        entityType: { in: ["product", "inventory_item"] },
-      },
-      data: {
-        status: "resolved",
-        resolvedAt: new Date(),
-        updatedAt: new Date(),
-      },
-    }).catch((err) => {
-      logger.error("Failed to resolve mirrorReconcileSignals", {
-        worker: "shopSyncWorker",
-        shop,
-        message: err.message,
-      });
-    });
+ 
   }
 });
 

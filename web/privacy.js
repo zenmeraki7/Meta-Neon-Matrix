@@ -15,7 +15,6 @@ import crypto from "crypto";
 import { normalizeWebhookDeliveryStatus } from "./utils/normalizedStateUtils.js";
 import { requireShopScope } from "./utils/shopScope.js";
 
-
 function safeParseJson(body) {
   try {
     return JSON.parse(body);

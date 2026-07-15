@@ -16,13 +16,12 @@ export const graphqlProductsBulkSyncQuery = `{
         publishedAt
         onlineStoreUrl
         descriptionHtml
+        totalInventory
 
         seo {
           title
           description
         }
-
-        totalInventory
 
         category {
           __typename
@@ -34,6 +33,7 @@ export const graphqlProductsBulkSyncQuery = `{
           edges {
             node {
               __typename
+              id
               namespace
               key
               type
@@ -87,12 +87,24 @@ export const graphqlProductsBulkSyncQuery = `{
               inventoryQuantity
               inventoryPolicy
               taxable
-              taxCode
               position
 
               selectedOptions {
                 name
                 value
+              }
+
+              metafields(first: 100) {
+                edges {
+                  node {
+                    __typename
+                    id
+                    namespace
+                    key
+                    type
+                    value
+                  }
+                }
               }
 
               inventoryItem {
@@ -140,13 +152,12 @@ export const graphqlProductsExportQuery = `
           publishedAt
           onlineStoreUrl
           descriptionHtml
+          totalInventory
 
           seo {
             title
             description
           }
-
-          totalInventory
 
           category {
             id
@@ -178,7 +189,6 @@ export const graphqlProductsExportQuery = `
                 inventoryQuantity
                 inventoryPolicy
                 taxable
-                taxCode
                 position
 
                 selectedOptions {
@@ -187,6 +197,7 @@ export const graphqlProductsExportQuery = `
                 }
 
                 inventoryItem {
+                  id
                   tracked
                   requiresShipping
 
