@@ -162,3 +162,18 @@ test("edit history summary remains materially smaller than detail payload (paylo
   assert.ok(historyService.includes("async getHistorySummary("));
   assert.ok(editDetailsPage.includes("/api/history/get-edit-history-summary/"));
 });
+
+test("snapshot-backed history changes project persisted row-level undo evidence", () => {
+  const source = read("web/services/historyService/historyService.js");
+  const snapshotHistoryBranch = source.slice(
+    source.indexOf("if (snapshotSetId && history.isSpreadsheetEdit !== true)"),
+    source.indexOf("const totalCount = await db.changeRecord.count"),
+  );
+
+  assert.ok(snapshotHistoryBranch.includes("undoStatus: true"));
+  assert.ok(snapshotHistoryBranch.includes("undoPayload: true"));
+  assert.ok(snapshotHistoryBranch.includes("undoErrorCode: true"));
+  assert.ok(snapshotHistoryBranch.includes("undoErrorMessage: true"));
+  assert.ok(snapshotHistoryBranch.includes("undoneAt: true"));
+  assert.ok(snapshotHistoryBranch.includes("buildUndoResultProjection(row)"));
+});

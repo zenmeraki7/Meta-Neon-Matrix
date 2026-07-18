@@ -30,7 +30,6 @@ import Papa from "papaparse";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { buildOperationTimeline } from "../utils/operationTimeline";
-import { operationStatusBadge } from "../../../shared/components/StatusBadge";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
@@ -179,7 +178,7 @@ const ChangeValueHistory = React.memo(function ChangeValueHistory({ row }) {
             tone={row.undoVerified ? "success" : "critical"}
             fontWeight="semibold"
           >
-            {row.restoredValue} {row.undoVerified ? "restored" : "not verified"}
+            {row.restoredValue} {row.undoVerified ? "restored" : "undo failed"}
           </Text>
         </>
       ) : null}
@@ -187,7 +186,7 @@ const ChangeValueHistory = React.memo(function ChangeValueHistory({ row }) {
   );
 });
 
-const UndoVerificationCell = React.memo(function UndoVerificationCell({ row }) {
+const UndoStatusCell = React.memo(function UndoStatusCell({ row }) {
   if (!row.hasUndoResult) {
     return (
       <Text as="span" tone="subdued">
@@ -197,24 +196,9 @@ const UndoVerificationCell = React.memo(function UndoVerificationCell({ row }) {
   }
 
   return (
-    <BlockStack gap="100">
-      <Badge tone={row.undoVerified ? "success" : "critical"}>
-        {row.undoVerified ? "Succeeded" : "Verification failed"}
-      </Badge>
-      <Text as="span" variant="bodySm">
-        Restored value: {row.restoredValue}
-      </Text>
-      <Text as="span" variant="bodySm">
-        Current Shopify value: {row.currentShopifyValue}
-      </Text>
-      <Text
-        as="span"
-        variant="bodySm"
-        tone={row.undoVerified ? "success" : "critical"}
-      >
-        Verified: {row.undoVerified ? "Yes" : "No"}
-      </Text>
-    </BlockStack>
+    <Badge tone={row.undoVerified ? "success" : "critical"}>
+      {row.undoVerified ? "Undo succeeded" : "Undo failed"}
+    </Badge>
   );
 });
 
@@ -1089,8 +1073,7 @@ export default function EditDetails() {
                         { title: "Scope" },
                         { title: "Field" },
                         { title: "Value history" },
-                        { title: "Edit status" },
-                        { title: "Undo verification" },
+                        { title: "Undo status" },
                       ]}
                     >
                       {flattenedRows.map((item, index) => (
@@ -1130,24 +1113,7 @@ export default function EditDetails() {
                           </IndexTable.Cell>
                           <IndexTable.Cell>
                             <CellErrorBoundary fallback="[render error]">
-                              {operationStatusBadge(
-                                item.status,
-                                t(
-                                  `historyStatus.${String(
-                                    item.status || "pending"
-                                  ).toLowerCase()}`,
-                                  {
-                                    defaultValue: String(
-                                      item.status || "pending"
-                                    ),
-                                  }
-                                )
-                              )}
-                            </CellErrorBoundary>
-                          </IndexTable.Cell>
-                          <IndexTable.Cell>
-                            <CellErrorBoundary fallback="[render error]">
-                              <UndoVerificationCell row={item} />
+                              <UndoStatusCell row={item} />
                             </CellErrorBoundary>
                           </IndexTable.Cell>
                         </IndexTable.Row>
