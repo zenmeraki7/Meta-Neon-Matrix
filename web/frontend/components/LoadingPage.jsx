@@ -7,15 +7,15 @@ export default function LoadingPage() {
 
   return (
     <Box
-      padding="600"
-      minHeight="60vh"
-      display="flex"
-      alignItems="center"
-      justifyContent="center"
+      padding={"600"}
+      minHeight={"60vh"}
+      display={"flex"}
+      alignItems={"center"}
+      justifyContent={"center"}
     >
-      <BlockStack align="center" gap="200">
-        <Spinner accessibilityLabel={t("loading")} size="large" />
-        <Text variant="bodyLg" as="p" tone="subdued">
+      <BlockStack align={"center"} gap={"200"}>
+        <Spinner accessibilityLabel={t("loading")} size={"large"} />
+        <Text variant={"bodyLg"} as={"p"} tone={"subdued"}>
           {t("loading")}
         </Text>
       </BlockStack>

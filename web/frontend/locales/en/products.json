@@ -104,5 +104,6 @@
   "undoEditConfirmationHelpText": "Large undo requests require typed confirmation before they can be queued.",
   "undoEditAcceptedMessage": "Undo request accepted. You can track progress in history.",
   "undoEditNoRecordedTargets": "This edit has no recorded affected products or variants. Undo may not be available.",
-  "noEditActionsAvailable": "No edit actions are available for this field."
+  "noEditActionsAvailable": "No edit actions are available for this field.",
+  "searchButton": "Search Button"
 }

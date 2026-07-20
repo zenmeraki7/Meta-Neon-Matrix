@@ -5,10 +5,13 @@ import {
   Icon,
 } from "@shopify/polaris";
 import { SearchIcon } from "@shopify/polaris-icons";
+import { useTranslation } from "react-i18next";
 
 export function Header() {
+  const { t } = useTranslation();
   const [searchValue, setSearchValue] = useState("");
 
+  
   const handleSearchChange = (value) => setSearchValue(value);
 
   return (
@@ -16,13 +19,13 @@ export function Header() {
       showNavigationToggle
       secondaryMenu={
         <TextField
-          label="Search"
+          label={t("searchButton")}
           labelHidden
           value={searchValue}
           onChange={handleSearchChange}
-          placeholder="Search products, variants..."
-          prefix={<Icon source={SearchIcon} tone="subdued" />}
-          autoComplete="off"
+          placeholder={t("searchPlaceholder")}
+          prefix={<Icon source={SearchIcon} tone={"subdued"} />}
+          autoComplete={"off"}
         />
       }
     />

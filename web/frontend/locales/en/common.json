@@ -29,8 +29,8 @@
   "clearFilters": "Clear Filters",
   "loadingProductTable": "Loading product table...",
   "loading": "Loading...",
-  "searchPlaceholder": "Search products by title, vendor, type...",
-  "searchButton": "Search",
+  "searchPlaceholder": "Search Placeholder",
+  "searchButton": "Search Button",
   "addFilter": "Add Filter",
   "clear": "Clear",
   "searchFilters": "Search filters",
@@ -1389,5 +1389,35 @@
   "common.errors.statusClass.5xx": "Server error. Please try again shortly.",
   "common.errors.statusClass.4xx": "Request failed. Please try again.",
   "nav.spreadsheetEdit": "Upload Spreadsheet",
-  "history.downloadLogs": "Download Logs"
+  "history.downloadLogs": "Download Logs",
+  "mirrorFreshness": {
+    "tooltip": "Preview and targeting use the app mirror snapshot. Shopify Admin remains the final source of truth for live catalog state.",
+    "sourceOfTruth": "   Source of truth: Shopify"
+  },
+  "routeError": {
+    "title": "Something went wrong",
+    "currentPage": "this page",
+    "unableToRender": "Unable to render {{route}}. You can retry or go back safely.",
+    "retry": "Retry",
+    "back": "Back",
+    "shellActive": "The rest of the app shell is still active."
+  },
+  "tableError": {
+    "renderFailed": "Table render failed.",
+    "retry": "Retry table"
+  },
+  "planBanner": {
+    "limitReachedTitle": "Free Plan Limit Reached",
+    "usageTitle": "Free Plan Usage",
+    "limitReachedMessage": "You've reached your free plan limit! ({{current}}/{{maximum}} edits).",
+    "usageMessage": "Free Plan: {{current}}/{{maximum}} edits used this month. Max {{products}} products per edit.",
+    "upgradeNow": "Upgrade Now",
+    "upgrade": "Upgrade"
+  },
+  "dashboardStatus": {
+    "freeAccessTitle": "Free access active",
+    "requestExtension": "Request extension",
+    "productSyncTitle": "Product sync in progress",
+    "checkStatus": "Check status"
+  }
 }

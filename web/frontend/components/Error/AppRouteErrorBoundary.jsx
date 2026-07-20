@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Banner, BlockStack, Box, Button, Card, InlineStack, Page, Text } from "@shopify/polaris";
 
@@ -26,28 +27,29 @@ class AppRouteErrorBoundaryInner extends React.Component {
 
   render() {
     if (this.state.hasError) {
-      const routeLabel = this.props.routePath || "this page";
+      const { t } = this.props;
+      const routeLabel = this.props.routePath || t("routeError.currentPage");
       return (
-        <Page title="Something went wrong">
+        <Page title={t("routeError.title")}>
           <Card>
             <Box padding="500">
               <BlockStack gap="300">
                 <Banner tone="critical">
-                  <p>Unable to render {routeLabel}. You can retry or go back safely.</p>
+                  <p>{t("routeError.unableToRender", { route: routeLabel })}</p>
                   {this.state.errorMessage ? (
                     <p>{this.state.errorMessage}</p>
                   ) : null}
                 </Banner>
                 <InlineStack gap="200">
                   <Button variant="primary" onClick={this.handleRetry}>
-                    Retry
+                    {t("routeError.retry")}
                   </Button>
                   <Button onClick={this.props.onBack}>
-                    Back
+                    {t("routeError.back")}
                   </Button>
                 </InlineStack>
                 <Text as="p" tone="subdued" variant="bodySm">
-                  The rest of the app shell is still active.
+                  {t("routeError.shellActive")}
                 </Text>
               </BlockStack>
             </Box>
@@ -62,10 +64,13 @@ class AppRouteErrorBoundaryInner extends React.Component {
 
 export default function AppRouteErrorBoundary({ children, routePath }) {
   const navigate = useNavigate();
+  const { t } = useTranslation();
+
   return (
     <AppRouteErrorBoundaryInner
       routePath={routePath}
       onBack={() => navigate(-1)}
+      t={t}
     >
       {children}
     </AppRouteErrorBoundaryInner>

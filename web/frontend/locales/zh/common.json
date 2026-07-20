@@ -1336,5 +1336,17 @@
   "common.errors.statusClass.422": "Some inputs are invalid. Review the form and try again.",
   "common.errors.statusClass.429": "Too many requests. Please wait a moment and retry.",
   "common.errors.statusClass.5xx": "Server error. Please try again shortly.",
-  "common.errors.statusClass.4xx": "Request failed. Please try again."
+  "common.errors.statusClass.4xx": "Request failed. Please try again.",
+  "mirrorFreshness": {
+    "tooltip": "预览和定位使用应用程序镜像快照。 \nShopify 管理员仍然是实时目录状态的最终真相来源。",
+    "sourceOfTruth": "事实来源：Shopify"
+  },
+  "routeError": {
+    "title": "出了点问题",
+    "currentPage": "本页",
+    "unableToRender": "无法渲染 {{route}}。\n您可以重试或安全返回。",
+    "retry": "重试",
+    "back": "后退",
+    "shellActive": "应用程序 shell 的其余部分仍然处于活动状态。"
+  }
 }

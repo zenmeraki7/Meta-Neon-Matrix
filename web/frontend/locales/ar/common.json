@@ -30,7 +30,7 @@
   "loadingProductTable": "يتم تحميل جدول المنتجات...",
   "loading": "جارٍ التحميل...",
   "searchPlaceholder": "ابحث عن المنتجات حسب العنوان أو المورد أو النوع...",
-  "searchButton": "بحث",
+  "searchButton": "",
   "addFilter": "أضف فلتر",
   "clear": "مسح",
   "sortBy": "الفرز حسب",
@@ -1352,5 +1352,17 @@
   "common.errors.statusClass.422": "Some inputs are invalid. Review the form and try again.",
   "common.errors.statusClass.429": "Too many requests. Please wait a moment and retry.",
   "common.errors.statusClass.5xx": "Server error. Please try again shortly.",
-  "common.errors.statusClass.4xx": "Request failed. Please try again."
+  "common.errors.statusClass.4xx": "Request failed. Please try again.",
+  "mirrorFreshness": {
+    "tooltip": "تستخدم المعاينة والاستهداف لقطة مرآة التطبيق. \nيظل Shopify Admin هو المصدر النهائي للحقيقة فيما يتعلق بحالة الكتالوج المباشر.",
+    "sourceOfTruth": "مصدر الحقيقة: شوبيفاي"
+  },
+  "routeError": {
+    "title": "حدث خطأ ما",
+    "currentPage": "هذه الصفحة",
+    "unableToRender": "غير قادر على تقديم {{route}}. \nيمكنك إعادة المحاولة أو العودة بأمان.",
+    "retry": "أعد المحاولة",
+    "back": "خلف",
+    "shellActive": "لا يزال باقي غلاف التطبيق نشطًا."
+  }
 }

@@ -12,7 +12,6 @@ import {
 } from "@shopify/polaris";
 import { PlayIcon } from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
-import styles from "./DemoVideo.module.css";
 
 const DemoVideo = () => {
   const { t } = useTranslation();
@@ -31,7 +30,7 @@ const DemoVideo = () => {
             overflowY="hidden"
             background="bg-surface"
           >
-            <Box padding="0" className={styles.previewBackdrop}>
+            <Box padding="0" background="bg-surface-secondary">
               <Box padding="800">
                 <BlockStack gap="700" inlineAlign="center">
                   <InlineStack align="center">
@@ -51,31 +50,36 @@ const DemoVideo = () => {
                       <Box
                         borderRadius="300"
                         minHeight="280px"
-                        position="relative"
                         overflowX="hidden"
                         overflowY="hidden"
-                        className={styles.videoShell}
+                        background="bg-surface-inverse"
+                        paddingBlockStart="800"
+                        paddingBlockEnd="800"
+                        paddingInlineStart="500"
+                        paddingInlineEnd="500"
                       >
-                        <Box className={styles.glowTop} />
-                        <Box className={styles.glowBottom} />
-
-                        <Box className={styles.videoCenter}>
+                        <InlineStack align="center" blockAlign="center">
                           <BlockStack gap="400" inlineAlign="center">
                             <Box
-                              background="bg-fill-brand"
+                              background="bg-fill-inverse-active"
+                              color="text-inverse"
                               borderRadius="full"
                               padding="500"
                               shadow="500"
                             >
-                              <Icon source={PlayIcon} tone="base" />
+                              <Icon source={PlayIcon} tone="inherit" />
                             </Box>
 
                             <BlockStack gap="100" inlineAlign="center">
-                              <Text variant="headingSm" as="p" tone="text-inverse">
+                              <Text
+                                variant="headingSm"
+                                as="p"
+                                tone="text-inverse"
+                              >
                                 {t("watchDemo", "Watch Demo")}
                               </Text>
 
-                              <Text variant="bodySm" as="p" tone="subdued">
+                              <Text variant="bodySm" as="p" tone="text-inverse">
                                 {t(
                                   "watchDemoSubtext",
                                   "See the product flow in a quick guided walkthrough."
@@ -83,7 +87,7 @@ const DemoVideo = () => {
                               </Text>
                             </BlockStack>
                           </BlockStack>
-                        </Box>
+                        </InlineStack>
                       </Box>
                     </Box>
                   </Box>
@@ -94,7 +98,12 @@ const DemoVideo = () => {
                     </Text>
 
                     <Box maxWidth="580px">
-                      <Text variant="bodyLg" tone="subdued" alignment="center" as="p">
+                      <Text
+                        variant="bodyLg"
+                        tone="subdued"
+                        alignment="center"
+                        as="p"
+                      >
                         {t("watchDemoSubtext")}
                       </Text>
                     </Box>
@@ -127,7 +136,7 @@ const DemoVideo = () => {
                     <Text variant="headingMd" as="h3">
                       {t("demoVideo")}
                     </Text>
-                  <Badge tone="success">{t("playing")}</Badge>
+                    <Badge tone="success">{t("playing")}</Badge>
                   </InlineStack>
 
                   <Text variant="bodySm" tone="subdued" as="p">
@@ -152,12 +161,11 @@ const DemoVideo = () => {
                 borderStyle="solid"
               >
                 <Box
-                  position="relative"
                   borderRadius="300"
                   overflowX="hidden"
                   overflowY="hidden"
                   background="bg-surface"
-                  className={styles.videoFrame}
+                  shadow="400"
                 >
                   {!videoLoaded && (
                     <Box minHeight="450px" padding="800">
@@ -172,22 +180,18 @@ const DemoVideo = () => {
                     </Box>
                   )}
 
-                  <Box
-                    className={videoLoaded ? styles.videoVisible : styles.videoHidden}
-                  >
-                    <iframe
-                      width="100%"
-                      height="100%"
-                      src="https://www.youtube.com/embed/014uZYpNdMY?si=TWzKvsDA0TnE_gXe"
-                      title={t("metamatrixDemoVideo", "Metamatrix Demo Video")}
-                      frameBorder="0"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      referrerPolicy="strict-origin-when-cross-origin"
-                      allowFullScreen
-                      onLoad={() => setVideoLoaded(true)}
-                      className={styles.videoIframe}
-                    />
-                  </Box>
+                  <iframe
+                    width="100%"
+                    height="450"
+                    src="https://www.youtube.com/embed/014uZYpNdMY?si=TWzKvsDA0TnE_gXe"
+                    title={t("metamatrixDemoVideo", "Metamatrix Demo Video")}
+                    frameBorder="0"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    allowFullScreen
+                    onLoad={() => setVideoLoaded(true)}
+                    hidden={!videoLoaded}
+                  />
                 </Box>
               </Box>
 

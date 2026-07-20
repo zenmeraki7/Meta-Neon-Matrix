@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
   Badge,
@@ -53,6 +54,7 @@ function formatJson(value) {
 }
 
 export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const fetchFn = useAuthenticatedFetch();
   const isNew = !snippetId;
@@ -103,7 +105,12 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
         });
       } catch (err) {
         if (active) {
-          setPageError(err.message || "Failed to load snippet");
+          setPageError(
+            err.message ||
+              t("snippetDetail.errors.load", {
+                defaultValue: "Failed to load snippet",
+              })
+          );
         }
       } finally {
         if (active) {
@@ -127,7 +134,7 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
         const products = await searchPreviewProducts(
           fetchFn,
           debouncedProductSearch,
-          { signal: controller.signal },
+          { signal: controller.signal }
         );
         if (!active) return;
 
@@ -138,7 +145,7 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
               : product.title,
             value: product.id,
             product,
-          })),
+          }))
         );
       } catch (_err) {
         if (_err?.name === "AbortError") {
@@ -158,16 +165,18 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
   }, [debouncedProductSearch, fetchFn]);
 
   const selectedProduct = useMemo(() => {
-    const option = productOptions.find((item) => item.value === selectedProductId);
+    const option = productOptions.find(
+      (item) => item.value === selectedProductId
+    );
     return option?.product || previewResult?.product || null;
   }, [previewResult, productOptions, selectedProductId]);
   const normalizedOutputJson = useMemo(
     () => formatJson(previewResult?.normalizedOutput ?? null),
-    [previewResult?.normalizedOutput],
+    [previewResult?.normalizedOutput]
   );
   const rulePreviewJson = useMemo(
     () => formatJson(previewResult?.rulePreview ?? null),
-    [previewResult?.rulePreview],
+    [previewResult?.rulePreview]
   );
 
   const isArchived = (savedSnippet?.status || formState.status) === "ARCHIVED";
@@ -175,12 +184,15 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
     ? Boolean(formState.title || formState.code)
     : Boolean(
         savedSnippet &&
-        (savedSnippet.title !== formState.title ||
-          savedSnippet.status !== formState.status ||
-          savedSnippet.code !== formState.code),
+          (savedSnippet.title !== formState.title ||
+            savedSnippet.status !== formState.status ||
+            savedSnippet.code !== formState.code)
       );
 
-  const canSave = !isArchived && !saving && Boolean(formState.title.trim() && formState.code.trim());
+  const canSave =
+    !isArchived &&
+    !saving &&
+    Boolean(formState.title.trim() && formState.code.trim());
   const canValidate = !isNew && !isDirty && !isArchived && !validating;
   const canPreview =
     !isNew &&
@@ -273,13 +285,22 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
         status: snippet.status,
         code: snippet.code,
       });
-      setValidationMessage("Snippet saved and validated successfully.");
+      setValidationMessage(
+        t("snippetDetail.messages.savedAndValidated", {
+          defaultValue: "Snippet saved and validated successfully.",
+        })
+      );
 
       if (isNew) {
         navigate(`/product-code-snippets/${snippet.id}`, { replace: true });
       }
     } catch (err) {
-      setPageError(err.message || "Failed to save snippet");
+      setPageError(
+        err.message ||
+          t("snippetDetail.errors.save", {
+            defaultValue: "Failed to save snippet",
+          })
+      );
     } finally {
       setSaving(false);
     }
@@ -296,12 +317,26 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
       const result = await validateProductCodeSnippet(fetchFn, snippetId);
       setSavedSnippet(result.snippet);
       if (result.validationStatus === "VALID") {
-        setValidationMessage("Snippet validation passed.");
+        setValidationMessage(
+          t("snippetDetail.messages.validationPassed", {
+            defaultValue: "Snippet validation passed.",
+          })
+        );
       } else {
-        setPageError(result.error || "Snippet validation failed");
+        setPageError(
+          result.error ||
+            t("snippetDetail.errors.validationFailed", {
+              defaultValue: "Snippet validation failed",
+            })
+        );
       }
     } catch (err) {
-      setPageError(err.message || "Validation failed");
+      setPageError(
+        err.message ||
+          t("snippetDetail.errors.validation", {
+            defaultValue: "Validation failed",
+          })
+      );
     } finally {
       setValidating(false);
     }
@@ -314,10 +349,19 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
     setPageError("");
 
     try {
-      const result = await previewProductCodeSnippet(fetchFn, snippetId, selectedProductId);
+      const result = await previewProductCodeSnippet(
+        fetchFn,
+        snippetId,
+        selectedProductId
+      );
       setPreviewResult(result);
     } catch (err) {
-      setPageError(err.message || "Preview failed");
+      setPageError(
+        err.message ||
+          t("snippetDetail.errors.preview", {
+            defaultValue: "Preview failed",
+          })
+      );
       setPreviewResult(null);
     } finally {
       setPreviewing(false);
@@ -334,7 +378,12 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
       await archiveProductCodeSnippet(fetchFn, savedSnippet.id);
       navigate("/product-code-snippets");
     } catch (err) {
-      setPageError(err.message || "Failed to archive snippet");
+      setPageError(
+        err.message ||
+          t("snippetDetail.errors.archive", {
+            defaultValue: "Failed to archive snippet",
+          })
+      );
     } finally {
       setSaving(false);
       setShowDeleteModal(false);
@@ -346,10 +395,17 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
       <Page
         fullWidth
         backAction={{
-          content: "Back to snippets",
+          content: t("snippetDetail.actions.back", {
+            defaultValue: "Back to snippets",
+          }),
           onAction: () => navigate("/product-code-snippets"),
         }}
-        title={isNew ? "New snippet" : savedSnippet?.title || "Snippet"}
+        title={
+          isNew
+            ? t("snippetDetail.newTitle", { defaultValue: "New snippet" })
+            : savedSnippet?.title ||
+              t("snippetDetail.fallbackTitle", { defaultValue: "Snippet" })
+        }
         titleMetadata={
           <InlineStack gap="200">
             {!isNew && (
@@ -357,25 +413,54 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                 {savedSnippet?.status}
               </Badge>
             )}
-            {isDirty && <Badge tone="attention">Unsaved changes</Badge>}
+            {isDirty && (
+              <Badge tone="attention">
+                {t("snippetDetail.unsavedChanges", {
+                  defaultValue: "Unsaved changes",
+                })}
+              </Badge>
+            )}
           </InlineStack>
         }
-        subtitle="Write safe product logic, validate it against the snippet DSL, and preview the normalized edit payload before using it anywhere else."
+        subtitle={t("snippetDetail.subtitle", {
+          defaultValue:
+            "Write safe product logic, validate it against the snippet DSL, and preview the normalized edit payload before using it anywhere else.",
+        })}
         primaryAction={{
-          content: saving ? "Saving" : isNew ? "Save snippet" : "Save changes",
+          content: saving
+            ? t("snippetDetail.actions.saving", { defaultValue: "Saving" })
+            : isNew
+            ? t("snippetDetail.actions.saveSnippet", {
+                defaultValue: "Save snippet",
+              })
+            : t("snippetDetail.actions.saveChanges", {
+                defaultValue: "Save changes",
+              }),
           onAction: handleSave,
           loading: saving,
           disabled: !canSave,
         }}
         secondaryActions={[
           {
-            content: validating ? "Validating" : "Validate",
+            content: validating
+              ? t("snippetDetail.actions.validating", {
+                  defaultValue: "Validating",
+                })
+              : t("snippetDetail.actions.validate", {
+                  defaultValue: "Validate",
+                }),
             onAction: handleValidate,
             disabled: !canValidate,
             loading: validating,
           },
           {
-            content: previewing ? "Previewing" : "Run preview",
+            content: previewing
+              ? t("snippetDetail.actions.previewing", {
+                  defaultValue: "Previewing",
+                })
+              : t("snippetDetail.actions.runPreview", {
+                  defaultValue: "Run preview",
+                }),
             onAction: handlePreview,
             disabled: !canPreview,
             loading: previewing,
@@ -383,7 +468,9 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
           ...(!isNew
             ? [
                 {
-                  content: "Archive",
+                  content: t("snippetDetail.actions.archive", {
+                    defaultValue: "Archive",
+                  }),
                   destructive: true,
                   onAction: () => setShowDeleteModal(true),
                 },
@@ -406,13 +493,23 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
               ) : (
                 <>
                   {pageError && (
-                    <Banner tone="critical" title="Snippet issue">
+                    <Banner
+                      tone="critical"
+                      title={t("snippetDetail.banners.issue", {
+                        defaultValue: "Snippet issue",
+                      })}
+                    >
                       <p>{pageError}</p>
                     </Banner>
                   )}
 
                   {validationMessage && (
-                    <Banner tone="success" title="Snippet ready">
+                    <Banner
+                      tone="success"
+                      title={t("snippetDetail.banners.ready", {
+                        defaultValue: "Snippet ready",
+                      })}
+                    >
                       <p>{validationMessage}</p>
                     </Banner>
                   )}
@@ -420,25 +517,50 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                   {isDirty && (
                     <Banner
                       tone="info"
-                      title="Unsaved changes"
+                      title={t("snippetDetail.unsavedChanges", {
+                        defaultValue: "Unsaved changes",
+                      })}
                       action={{
-                        content: saving ? "Saving" : "Save changes",
+                        content: saving
+                          ? t("snippetDetail.actions.saving", {
+                              defaultValue: "Saving",
+                            })
+                          : t("snippetDetail.actions.saveChanges", {
+                              defaultValue: "Save changes",
+                            }),
                         onAction: handleSave,
                         disabled: !canSave || saving,
                       }}
                       secondaryAction={{
-                        content: "Discard",
+                        content: t("snippetDetail.actions.discard", {
+                          defaultValue: "Discard",
+                        }),
                         onAction: handleDiscardChanges,
                         disabled: saving,
                       }}
                     >
-                      <p>Review and save or discard changes before validating and previewing.</p>
+                      <p>
+                        {t("snippetDetail.banners.unsavedMessage", {
+                          defaultValue:
+                            "Review and save or discard changes before validating and previewing.",
+                        })}
+                      </p>
                     </Banner>
                   )}
 
                   {isArchived && (
-                    <Banner tone="warning" title="Archived snippet">
-                      <p>This snippet is archived and read-only.</p>
+                    <Banner
+                      tone="warning"
+                      title={t("snippetDetail.banners.archived", {
+                        defaultValue: "Archived snippet",
+                      })}
+                    >
+                      <p>
+                        {t("snippetDetail.banners.archivedMessage", {
+                          defaultValue:
+                            "This snippet is archived and read-only.",
+                        })}
+                      </p>
                     </Banner>
                   )}
 
@@ -448,17 +570,26 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                         <InlineStack align="space-between" blockAlign="center">
                           <BlockStack gap="100">
                             <Text as="h2" variant="headingMd">
-                              Snippet details
+                              {t("snippetDetail.sections.details", {
+                                defaultValue: "Snippet details",
+                              })}
                             </Text>
                             <Text variant="bodySm" tone="subdued">
-                              Give the snippet a clear name and keep it in draft until the preview looks right.
+                              {t("snippetDetail.sections.detailsDescription", {
+                                defaultValue:
+                                  "Give the snippet a clear name and keep it in draft until the preview looks right.",
+                              })}
                             </Text>
                           </BlockStack>
-                          <Badge tone={getStatusTone(formState.status)}>{formState.status}</Badge>
+                          <Badge tone={getStatusTone(formState.status)}>
+                            {formState.status}
+                          </Badge>
                         </InlineStack>
 
                         <TextField
-                          label="Snippet title"
+                          label={t("snippetDetail.fields.title", {
+                            defaultValue: "Snippet title",
+                          })}
                           value={formState.title}
                           onChange={handleFieldChange("title")}
                           autoComplete="off"
@@ -466,12 +597,24 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                         />
 
                         <Select
-                          label="Snippet status"
+                          label={t("snippetDetail.fields.status", {
+                            defaultValue: "Snippet status",
+                          })}
                           value={formState.status}
                           onChange={handleFieldChange("status")}
                           options={[
-                            { label: "Draft", value: "DRAFT" },
-                            { label: "Active", value: "ACTIVE" },
+                            {
+                              label: t("snippetDetail.status.draft", {
+                                defaultValue: "Draft",
+                              }),
+                              value: "DRAFT",
+                            },
+                            {
+                              label: t("snippetDetail.status.active", {
+                                defaultValue: "Active",
+                              }),
+                              value: "ACTIVE",
+                            },
                           ]}
                           disabled={isArchived}
                         />
@@ -484,15 +627,22 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                       <BlockStack gap="400">
                         <BlockStack gap="100">
                           <Text as="h2" variant="headingMd">
-                            Snippet logic
+                            {t("snippetDetail.sections.logic", {
+                              defaultValue: "Snippet logic",
+                            })}
                           </Text>
                           <Text variant="bodySm" tone="subdued">
-                            Use the safe JSON snippet DSL with optional <code>when</code>, required <code>then</code>, and optional <code>else</code> objects.
+                            {t("snippetDetail.sections.logicDescription", {
+                              defaultValue:
+                                "Use the safe JSON snippet DSL with optional when, required then, and optional else objects.",
+                            })}
                           </Text>
                         </BlockStack>
 
                         <TextField
-                          label="Snippet code"
+                          label={t("snippetDetail.fields.code", {
+                            defaultValue: "Snippet code",
+                          })}
                           value={formState.code}
                           onChange={handleFieldChange("code")}
                           autoComplete="off"
@@ -507,18 +657,29 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                     <Box padding="400">
                       <BlockStack gap="300">
                         <Text as="h2" variant="headingMd">
-                          Supported schema
+                          {t("snippetDetail.sections.schema", {
+                            defaultValue: "Supported schema",
+                          })}
                         </Text>
                         <Text variant="bodySm" tone="subdued">
-                          Condition fields: {supportedInputFields}
+                          {t("snippetDetail.schema.conditionFields", {
+                            defaultValue: "Condition fields: {{fields}}",
+                            fields: supportedInputFields,
+                          })}
                         </Text>
                         <Divider />
                         <Text variant="bodySm" tone="subdued">
-                          Output fields: {supportedOutputFields}
+                          {t("snippetDetail.schema.outputFields", {
+                            defaultValue: "Output fields: {{fields}}",
+                            fields: supportedOutputFields,
+                          })}
                         </Text>
                         <Divider />
                         <Text variant="bodySm" tone="subdued">
-                          Supported operators: equals, notEquals, contains, notContains, greaterThan, greaterThanOrEqual, lessThan, lessThanOrEqual, in, notIn, exists, isEmpty.
+                          {t("snippetDetail.schema.operators", {
+                            defaultValue:
+                              "Supported operators: equals, notEquals, contains, notContains, greaterThan, greaterThanOrEqual, lessThan, lessThanOrEqual, in, notIn, exists, isEmpty.",
+                          })}
                         </Text>
                       </BlockStack>
                     </Box>
@@ -534,26 +695,46 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                 <Box padding="400">
                   <BlockStack gap="300">
                     <Text as="h2" variant="headingMd">
-                      Preview with a product
+                      {t("snippetDetail.sections.previewProduct", {
+                        defaultValue: "Preview with a product",
+                      })}
                     </Text>
                     <Text variant="bodySm" tone="subdued">
-                      Choose a real product from your mirror data, then run a non-mutating preview of the normalized output.
+                      {t("snippetDetail.sections.previewProductDescription", {
+                        defaultValue:
+                          "Choose a real product from your mirror data, then run a non-mutating preview of the normalized output.",
+                      })}
                     </Text>
 
                     <TextField
-                      label="Find product"
+                      label={t("snippetDetail.fields.findProduct", {
+                        defaultValue: "Find product",
+                      })}
                       value={productSearch}
                       onChange={setProductSearch}
-                      placeholder="Search by title, handle, or vendor"
+                      placeholder={t("snippetDetail.fields.productSearch", {
+                        defaultValue: "Search by title, handle, or vendor",
+                      })}
                       autoComplete="off"
                     />
 
                     <Select
-                      label="Preview product"
+                      label={t("snippetDetail.fields.previewProduct", {
+                        defaultValue: "Preview product",
+                      })}
                       value={selectedProductId}
                       onChange={setSelectedProductId}
                       options={[
-                        { label: productOptions.length ? "Select a product" : "No products found", value: "" },
+                        {
+                          label: productOptions.length
+                            ? t("snippetDetail.products.select", {
+                                defaultValue: "Select a product",
+                              })
+                            : t("snippetDetail.products.noneFound", {
+                                defaultValue: "No products found",
+                              }),
+                          value: "",
+                        },
                         ...productOptions.map((item) => ({
                           label: item.label,
                           value: item.value,
@@ -566,17 +747,25 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                       onClick={handlePreview}
                       disabled={!canPreview}
                     >
-                      Run preview
+                      {t("snippetDetail.actions.runPreview", {
+                        defaultValue: "Run preview",
+                      })}
                     </Button>
 
                     {isNew && (
                       <Text variant="bodySm" tone="subdued">
-                        Save the snippet once to enable validation and preview.
+                        {t("snippetDetail.preview.saveFirst", {
+                          defaultValue:
+                            "Save the snippet once to enable validation and preview.",
+                        })}
                       </Text>
                     )}
                     {!isNew && isDirty && (
                       <Text variant="bodySm" tone="subdued">
-                        Save your latest edits before running preview.
+                        {t("snippetDetail.preview.saveLatest", {
+                          defaultValue:
+                            "Save your latest edits before running preview.",
+                        })}
                       </Text>
                     )}
                   </BlockStack>
@@ -587,28 +776,50 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                 <Box padding="400">
                   <BlockStack gap="200">
                     <Text as="h2" variant="headingMd">
-                      Selected product
+                      {t("snippetDetail.sections.selectedProduct", {
+                        defaultValue: "Selected product",
+                      })}
                     </Text>
 
                     {!selectedProduct ? (
                       <EmptyState
-                        heading="No product selected"
+                        heading={t("snippetDetail.products.noneSelected", {
+                          defaultValue: "No product selected",
+                        })}
                         image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                       >
-                        <p>Choose a product to unlock preview testing.</p>
+                        <p>
+                          {t("snippetDetail.products.chooseToPreview", {
+                            defaultValue:
+                              "Choose a product to unlock preview testing.",
+                          })}
+                        </p>
                       </EmptyState>
                     ) : (
                       <BlockStack gap="100">
                         <Text variant="headingSm">{selectedProduct.title}</Text>
                         <Text variant="bodySm" tone="subdued">
-                          {selectedProduct.handle ? `Handle: ${selectedProduct.handle}` : "No handle"}
+                          {selectedProduct.handle
+                            ? t("snippetDetail.products.handle", {
+                                defaultValue: "Handle: {{handle}}",
+                                handle: selectedProduct.handle,
+                              })
+                            : t("snippetDetail.products.noHandle", {
+                                defaultValue: "No handle",
+                              })}
                         </Text>
                         <Text variant="bodySm" tone="subdued">
-                          Status: {selectedProduct.status}
+                          {t("snippetDetail.products.status", {
+                            defaultValue: "Status: {{status}}",
+                            status: selectedProduct.status,
+                          })}
                         </Text>
                         {selectedProduct.vendor && (
                           <Text variant="bodySm" tone="subdued">
-                            Vendor: {selectedProduct.vendor}
+                            {t("snippetDetail.products.vendor", {
+                              defaultValue: "Vendor: {{vendor}}",
+                              vendor: selectedProduct.vendor,
+                            })}
                           </Text>
                         )}
                       </BlockStack>
@@ -622,30 +833,54 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                   <BlockStack gap="300">
                     <InlineStack align="space-between" blockAlign="center">
                       <Text as="h2" variant="headingMd">
-                        Preview result
+                        {t("snippetDetail.sections.previewResult", {
+                          defaultValue: "Preview result",
+                        })}
                       </Text>
                       {previewing && <Spinner size="small" />}
                     </InlineStack>
 
                     {!previewResult ? (
                       <EmptyState
-                        heading="No preview yet"
+                        heading={t("snippetDetail.preview.noneYet", {
+                          defaultValue: "No preview yet",
+                        })}
                         image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                       >
-                        <p>Run a preview to inspect the normalized output and rule mapping.</p>
+                        <p>
+                          {t("snippetDetail.preview.runToInspect", {
+                            defaultValue:
+                              "Run a preview to inspect the normalized output and rule mapping.",
+                          })}
+                        </p>
                       </EmptyState>
                     ) : (
                       <BlockStack gap="300">
                         {!previewResult.matched && (
-                          <Banner tone="warning" title="Conditions did not match this product">
-                            <p>The snippet evaluated successfully, but the preview product did not meet the rule conditions.</p>
+                          <Banner
+                            tone="warning"
+                            title={t("snippetDetail.preview.noMatchTitle", {
+                              defaultValue:
+                                "Conditions did not match this product",
+                            })}
+                          >
+                            <p>
+                              {t("snippetDetail.preview.noMatchMessage", {
+                                defaultValue:
+                                  "The snippet evaluated successfully, but the preview product did not meet the rule conditions.",
+                              })}
+                            </p>
                           </Banner>
                         )}
 
                         {previewResult.hasOutput ? (
                           <>
                             <BlockStack gap="150">
-                              <Text variant="headingSm">Normalized output</Text>
+                              <Text variant="headingSm">
+                                {t("snippetDetail.preview.normalizedOutput", {
+                                  defaultValue: "Normalized output",
+                                })}
+                              </Text>
                               <Box
                                 as="pre"
                                 background="bg-surface-secondary"
@@ -658,7 +893,11 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                             </BlockStack>
 
                             <BlockStack gap="150">
-                              <Text variant="headingSm">Bulk rule mapping</Text>
+                              <Text variant="headingSm">
+                                {t("snippetDetail.preview.ruleMapping", {
+                                  defaultValue: "Bulk rule mapping",
+                                })}
+                              </Text>
                               <Box
                                 as="pre"
                                 background="bg-surface-secondary"
@@ -672,10 +911,17 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
                           </>
                         ) : (
                           <EmptyState
-                            heading="No output returned"
+                            heading={t("snippetDetail.preview.noOutput", {
+                              defaultValue: "No output returned",
+                            })}
                             image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                           >
-                            <p>This snippet resolved without any editable output for the selected product.</p>
+                            <p>
+                              {t("snippetDetail.preview.noOutputMessage", {
+                                defaultValue:
+                                  "This snippet resolved without any editable output for the selected product.",
+                              })}
+                            </p>
                           </EmptyState>
                         )}
                       </BlockStack>
@@ -691,23 +937,32 @@ export default function ProductCodeSnippetDetailPage({ snippetId = null }) {
       <Modal
         open={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
-        title="Archive snippet"
+        title={t("snippetDetail.archiveModal.title", {
+          defaultValue: "Archive snippet",
+        })}
         primaryAction={{
-          content: "Archive",
+          content: t("snippetDetail.actions.archive", {
+            defaultValue: "Archive",
+          }),
           destructive: true,
           onAction: handleArchive,
           loading: saving,
         }}
         secondaryActions={[
           {
-            content: "Cancel",
+            content: t("snippetDetail.actions.cancel", {
+              defaultValue: "Cancel",
+            }),
             onAction: () => setShowDeleteModal(false),
           },
         ]}
       >
         <Modal.Section>
           <Text>
-            Archived snippets stay available for reference, but they are removed from active editing workflows.
+            {t("snippetDetail.archiveModal.description", {
+              defaultValue:
+                "Archived snippets stay available for reference, but they are removed from active editing workflows.",
+            })}
           </Text>
         </Modal.Section>
       </Modal>

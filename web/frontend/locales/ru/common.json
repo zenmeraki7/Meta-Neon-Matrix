@@ -1321,5 +1321,17 @@
   "common.errors.statusClass.422": "Some inputs are invalid. Review the form and try again.",
   "common.errors.statusClass.429": "Too many requests. Please wait a moment and retry.",
   "common.errors.statusClass.5xx": "Server error. Please try again shortly.",
-  "common.errors.statusClass.4xx": "Request failed. Please try again."
+  "common.errors.statusClass.4xx": "Request failed. Please try again.",
+  "mirrorFreshness": {
+    "tooltip": "Для предварительного просмотра и таргетинга используется снимок зеркала приложения. \nАдминистратор Shopify остается последним источником достоверной информации о состоянии живого каталога.",
+    "sourceOfTruth": "Источник правды: Shopify"
+  },
+  "routeError": {
+    "title": "Что-то пошло не так",
+    "currentPage": "эта страница",
+    "unableToRender": "Невозможно отобразить {{маршрут}}. \nВы можете повторить попытку или безопасно вернуться назад.",
+    "retry": "Повторить попытку",
+    "back": "Назад",
+    "shellActive": "Остальная часть оболочки приложения все еще активна."
+  }
 }

@@ -1,6 +1,14 @@
 // web/frontend/domains/subscription/components/PlanGrid.jsx
 import React, { memo } from "react";
-import { Spinner, Text, Banner, Box, InlineStack, BlockStack } from "@shopify/polaris";
+import { useTranslation } from "react-i18next";
+import {
+  Spinner,
+  Text,
+  Banner,
+  Box,
+  InlineStack,
+  BlockStack,
+} from "@shopify/polaris";
 import PlanCard from "./PlanCard";
 
 /**
@@ -20,18 +28,29 @@ const PlanGrid = memo(
     isSubscribing, // track subscription processing
     selectedPlan, // identify which plan is being processed
   }) => {
+    const { t } = useTranslation();
+
     if (isLoading) {
       return (
         <BlockStack alignment="center" blockAlignment="center" spacing="500">
           <Spinner size="large" />
-          <Text variant="bodyMd">Loading subscription plans...</Text>
+          <Text variant="bodyMd">
+            {t("planGrid.loading", {
+              defaultValue: "Loading subscription plans...",
+            })}
+          </Text>
         </BlockStack>
       );
     }
 
     if (error) {
       return (
-        <Banner tone="critical" title="Error Loading Plans">
+        <Banner
+          tone="critical"
+          title={t("planGrid.errorTitle", {
+            defaultValue: "Error Loading Plans",
+          })}
+        >
           <Text as="p">{error}</Text>
         </Banner>
       );
@@ -39,10 +58,17 @@ const PlanGrid = memo(
 
     if (!plans || plans.length === 0) {
       return (
-        <Banner tone="info" title="No Plans Available">
+        <Banner
+          tone="info"
+          title={t("planGrid.emptyTitle", {
+            defaultValue: "No Plans Available",
+          })}
+        >
           <Text as="p">
-            There are currently no subscription plans available. Please check
-            back later.
+            {t("planGrid.emptyDescription", {
+              defaultValue:
+                "There are currently no subscription plans available. Please check back later.",
+            })}
           </Text>
         </Banner>
       );

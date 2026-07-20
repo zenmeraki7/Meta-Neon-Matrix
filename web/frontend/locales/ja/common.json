@@ -1339,5 +1339,17 @@
   "common.errors.statusClass.422": "Some inputs are invalid. Review the form and try again.",
   "common.errors.statusClass.429": "Too many requests. Please wait a moment and retry.",
   "common.errors.statusClass.5xx": "Server error. Please try again shortly.",
-  "common.errors.statusClass.4xx": "Request failed. Please try again."
+  "common.errors.statusClass.4xx": "Request failed. Please try again.",
+  "mirrorFreshness": {
+    "tooltip": "プレビューとターゲティングでは、アプリのミラー スナップショットを使用します。 \nShopify Admin は、ライブカタログの状態に関する最終的な信頼できる情報源であり続けます。",
+    "sourceOfTruth": "真実の情報源: Shopify"
+  },
+  "routeError": {
+    "title": "何か問題が発生しました",
+    "currentPage": "このページ",
+    "unableToRender": "{{route}} をレンダリングできません。\n再試行するか、安全に戻ることができます。",
+    "retry": "リトライ",
+    "back": "戻る",
+    "shellActive": "App Shell の残りの部分はまだアクティブです。"
+  }
 }

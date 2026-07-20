@@ -31,7 +31,7 @@ import { useApiClient } from "../../../hooks/useApiClient";
 import { hydrateSubscriptionSnapshot } from "../../../store/slices/subscriptionSlice";
 
 const PromotionalContent = React.lazy(() =>
-  import("../components/PromotionalContent"),
+  import("../components/PromotionalContent")
 );
 
 const LANGUAGE_OPTIONS = [
@@ -178,7 +178,10 @@ export default function DashboardPage() {
         // ignore
       }
     };
-    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.requestIdleCallback === "function"
+    ) {
       window.requestIdleCallback(persistLanguage);
     } else {
       setTimeout(persistLanguage, 0);
@@ -209,7 +212,7 @@ export default function DashboardPage() {
         tone: "attention",
       },
     ],
-    [storeAccess, t],
+    [storeAccess, t]
   );
   const shouldShowDashboardStatusRail =
     Boolean(storeAccess?.isCreditAvailable) ||
@@ -220,13 +223,11 @@ export default function DashboardPage() {
       fullWidth
       title={t("dashboard")}
       subtitle={t("manageStoreOperations")}
-
     >
       <Layout>
         <Layout.Section>
           <Card roundedAbove="sm">
             <Box padding="500">
-
               <Grid>
                 <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 3, lg: 7, xl: 7 }}>
                   <Box paddingBlock="200">
@@ -282,7 +283,7 @@ export default function DashboardPage() {
                             </Text>
 
                             <Select
-                              label="Language"
+                              label={t("language")}
                               labelHidden
                               options={LANGUAGE_OPTIONS}
                               value={i18n.language}
@@ -305,9 +306,9 @@ export default function DashboardPage() {
               {storeAccess?.isCreditAvailable && (
                 <Banner
                   tone="success"
-                  title="Free access active"
+                  title={t("dashboardStatus.freeAccessTitle")}
                   action={{
-                    content: "Request extension",
+                    content: t("dashboardStatus.requestExtension"),
                     onAction: () => navigate("/suggestionpage"),
                   }}
                 >
@@ -318,9 +319,9 @@ export default function DashboardPage() {
               {storeAccess?.isProductInitialySyning && (
                 <Banner
                   tone="info"
-                  title="Product sync in progress"
+                  title={t("dashboardStatus.productSyncTitle")}
                   action={{
-                    content: "Check status",
+                    content: t("dashboardStatus.checkStatus"),
                     onAction: () => navigate("/refresh"),
                   }}
                 >
@@ -335,21 +336,21 @@ export default function DashboardPage() {
           <Grid>
             {loadingStoreData
               ? metricCards.map((card) => (
-                <Grid.Cell
-                  key={card.key}
-                  columnSpan={{ xs: 6, sm: 3, md: 2, lg: 4, xl: 4 }}
-                >
-                  <MetricSkeleton />
-                </Grid.Cell>
-              ))
+                  <Grid.Cell
+                    key={card.key}
+                    columnSpan={{ xs: 6, sm: 3, md: 2, lg: 4, xl: 4 }}
+                  >
+                    <MetricSkeleton />
+                  </Grid.Cell>
+                ))
               : metricCards.map((card) => (
-                <Grid.Cell
-                  key={card.key}
-                  columnSpan={{ xs: 6, sm: 3, md: 2, lg: 4, xl: 4 }}
-                >
-                  <MetricCard {...card} />
-                </Grid.Cell>
-              ))}
+                  <Grid.Cell
+                    key={card.key}
+                    columnSpan={{ xs: 6, sm: 3, md: 2, lg: 4, xl: 4 }}
+                  >
+                    <MetricCard {...card} />
+                  </Grid.Cell>
+                ))}
           </Grid>
         </Layout.Section>
 
@@ -432,7 +433,12 @@ export default function DashboardPage() {
                     borderColor="border-secondary"
                     borderStyle="solid"
                   >
-                    <InlineStack align="space-between" blockAlign="center" wrap gap="300">
+                    <InlineStack
+                      align="space-between"
+                      blockAlign="center"
+                      wrap
+                      gap="300"
+                    >
                       <Text as="p" variant="bodyMd" tone="subdued">
                         {t("learnAndOptimizeDescription")}
                       </Text>

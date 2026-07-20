@@ -178,10 +178,10 @@ const SyncStatusBanner = memo(function SyncStatusBanner({
     return (
       <Banner
         title={t("productSync.unableToCheckBannerTitle", { defaultValue: "Unable to check sync status" })}
-        tone="critical"
+          tone={"critical"}
         icon={AlertCircleIcon}
       >
-        <BlockStack gap="200">
+        <BlockStack gap={"200"}>
           <p>{queryErrorMessage}</p>
           <InlineStack>
             <Button onClick={onRetryStatus}>{t("actions.retry", { defaultValue: "Retry" })}</Button>
@@ -195,10 +195,10 @@ const SyncStatusBanner = memo(function SyncStatusBanner({
     return (
       <Banner
         title={t("productSync.reauthBannerTitle", { defaultValue: "Reconnect Shopify session" })}
-        tone="critical"
+        tone={"critical"}
         icon={AlertCircleIcon}
       >
-        <BlockStack gap="200">
+        <BlockStack gap={"200"}>
           <p>
             {syncStatus.message ||
               t("productSync.reauthBannerMessage", {
@@ -206,7 +206,7 @@ const SyncStatusBanner = memo(function SyncStatusBanner({
               })}
           </p>
           <InlineStack>
-            <Button variant="primary" onClick={onReconnect} loading={isReconnecting} disabled={isReconnecting}>
+            <Button variant={"primary"} onClick={onReconnect} loading={isReconnecting} disabled={isReconnecting}>
               {t("actions.reconnect", { defaultValue: "Reconnect" })}
             </Button>
           </InlineStack>
@@ -219,10 +219,10 @@ const SyncStatusBanner = memo(function SyncStatusBanner({
     return (
       <Banner
         title={t("productSync.failedBannerTitle", { defaultValue: "Sync failed" })}
-        tone="critical"
+        tone={"critical"}
         icon={AlertCircleIcon}
       >
-        <BlockStack gap="200">
+        <BlockStack gap={"200"}>
           <p>
             {syncStatus.message ||
               t("productSync.failedBannerMessage", { defaultValue: "Product sync could not be completed." })}
@@ -241,7 +241,7 @@ const SyncStatusBanner = memo(function SyncStatusBanner({
     return (
       <Banner
         title={t("productSync.cancelledBannerTitle", { defaultValue: "Sync cancelled" })}
-        tone="warning"
+        tone={"warning"}
         icon={AlertCircleIcon}
       >
         <p>
@@ -256,7 +256,7 @@ const SyncStatusBanner = memo(function SyncStatusBanner({
     return (
       <Banner
         title={t("productSync.completedBannerTitle", { defaultValue: "Sync completed successfully" })}
-        tone="success"
+        tone={"success"}
         icon={CheckCircleIcon}
       >
         <p>
@@ -272,7 +272,7 @@ const SyncStatusBanner = memo(function SyncStatusBanner({
     return (
       <Banner
         title={t("productSync.unknownBannerTitle", { defaultValue: "Unknown sync status" })}
-        tone="warning"
+        tone={"warning"}
         icon={AlertCircleIcon}
       >
         <p>
@@ -396,14 +396,14 @@ export default function ProductSyncPage({ verifyStoreAccess }) {
 
         <Card>
           <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
+            <InlineStack align={"space-between"} blockAlign={"center"}>
               <BlockStack gap="200">
-                <Text variant="headingMd" as="h2">
+                <Text variant={"headingMd"} as={"h2"}>
                   {statusTitle}
                 </Text>
                 <Text
-                  variant="bodyMd"
-                  as="p"
+                  variant={"bodyMd"}
+                  as={"p"}
                   tone={productTrackQuery.isError || showCriticalIcon ? "critical" : "subdued"}
                 >
                   {statusMessage}
@@ -412,22 +412,22 @@ export default function ProductSyncPage({ verifyStoreAccess }) {
 
               {showSyncSpinner ? (
                 <Box>
-                  <Spinner size="small" />
+                  <Spinner size={"small"} />
                 </Box>
               ) : null}
-              {showSuccessIcon ? <Icon source={CheckCircleIcon} tone="success" /> : null}
-              {showCriticalIcon ? <Icon source={AlertCircleIcon} tone="critical" /> : null}
+              {showSuccessIcon ? <Icon source={CheckCircleIcon} tone={"success"} /> : null}
+              {showCriticalIcon ? <Icon source={AlertCircleIcon} tone={"critical"} /> : null}
             </InlineStack>
 
             <BlockStack gap="300">
               <ProgressBar
                 progress={syncStatus.progress}
-                size="small"
+                size={"small"}
                 tone={getProgressTone(syncStatus, productTrackQuery.isError)}
               />
 
-              <InlineStack align="space-between">
-                <Text variant="bodySm" as="p" tone="subdued">
+              <InlineStack align={"space-between"}>
+                <Text variant={"bodySm"} as={"p"} tone={"subdued"}>
                   {t("productSync.productsProcessed", {
                     defaultValue: "{{processedProducts}} of {{totalProducts}} products processed",
                     processedProducts: syncStatus.processedProducts,
@@ -435,7 +435,7 @@ export default function ProductSyncPage({ verifyStoreAccess }) {
                   })}
                 </Text>
 
-                <Text variant="bodySm" as="p" fontWeight="semibold">
+                <Text variant={"bodySm"} as={"p"} fontWeight={"semibold"}>
                   {Math.round(syncStatus.progress)}%
                 </Text>
               </InlineStack>
@@ -446,11 +446,11 @@ export default function ProductSyncPage({ verifyStoreAccess }) {
         {isCompletedStatus(syncStatus.status) ? (
           <Card>
             <BlockStack gap="400">
-              <Text variant="headingSm" as="h3">
+              <Text variant={"headingSm"} as={"h3"}>
                 {t("productSync.readyTitle", { defaultValue: "Ready to start editing!" })}
               </Text>
 
-              <Text variant="bodyMd" as="p" tone="subdued">
+              <Text variant={"bodyMd"} as={"p"} tone={"subdued"}>
                 {t("productSync.readyMessage", {
                   defaultValue:
                     "Your products are now available in MetaMatrix. You can start making bulk edits, update pricing, manage inventory, and streamline your product management workflow.",
@@ -458,15 +458,15 @@ export default function ProductSyncPage({ verifyStoreAccess }) {
               </Text>
 
               {startError ? (
-                <Banner tone="critical" icon={AlertCircleIcon}>
+                <Banner tone={"critical"} icon={AlertCircleIcon}>
                   <p>{startError}</p>
                 </Banner>
               ) : null}
 
               <Box paddingBlockStart="200">
                 <Button
-                  variant="primary"
-                  size="large"
+                  variant={"primary"}
+                  size={"large"}
                   onClick={handleGetStarted}
                   loading={isStarting}
                   disabled={isStarting}
@@ -480,14 +480,14 @@ export default function ProductSyncPage({ verifyStoreAccess }) {
 
         <Card>
           <BlockStack gap="300">
-            <InlineStack gap="200" blockAlign="center">
-              <Icon source={RefreshIcon} tone="base" />
-              <Text variant="headingSm" as="h3">
+            <InlineStack gap="200" blockAlign={"center"}>
+              <Icon source={RefreshIcon} tone={"base"} />
+              <Text variant={"headingSm"} as={"h3"}>
                 {t("productSync.whatIsHappeningTitle", { defaultValue: "What's happening?" })}
               </Text>
             </InlineStack>
 
-            <Text variant="bodyMd" as="p" tone="subdued">
+            <Text variant={"bodyMd"} as={"p"} tone={"subdued"}>
               {t("productSync.whatIsHappeningMessage", {
                 defaultValue:
                   "MetaMatrix is importing your product catalog from Shopify. This process syncs product data including titles, descriptions, variants, prices, and inventory levels so you can edit them in bulk.",
@@ -495,18 +495,18 @@ export default function ProductSyncPage({ verifyStoreAccess }) {
             </Text>
 
             <BlockStack gap="200">
-              <Text variant="bodySm" as="p" tone="subdued">
+              <Text variant={"bodySm"} as={"p"} tone={"subdued"}>
                 {t("productSync.includesProductMetadata", {
                   defaultValue: "• Product information and metadata",
                 })}
               </Text>
-              <Text variant="bodySm" as="p" tone="subdued">
+              <Text variant={"bodySm"} as={"p"} tone={"subdued"}>
                 {t("productSync.includesVariantsPricing", { defaultValue: "• Variants and pricing" })}
               </Text>
-              <Text variant="bodySm" as="p" tone="subdued">
+              <Text variant={"bodySm"} as={"p"} tone={"subdued"}>
                 {t("productSync.includesInventorySkus", { defaultValue: "• Inventory and SKUs" })}
               </Text>
-              <Text variant="bodySm" as="p" tone="subdued">
+              <Text variant={"bodySm"} as={"p"} tone={"subdued"}>
                 {t("productSync.includesImagesCollections", {
                   defaultValue: "• Images and collections",
                 })}

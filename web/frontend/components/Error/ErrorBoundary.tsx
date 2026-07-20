@@ -1,13 +1,21 @@
 // web/frontend/components/ErrorBoundary.tsx
-import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { Banner, InlineStack, Text } from '@shopify/polaris';
-import { protectedApiPost } from '../../api/protectedApiClient';
-import styles from './ErrorBoundary.module.css';
+
+import React, { Component, type ErrorInfo, type ReactNode } from "react";
+
+import {
+  Banner,
+  BlockStack,
+  Box,
+  Button,
+  Collapsible,
+  Text,
+} from "@shopify/polaris";
+import { protectedApiPost } from "../../api/protectedApiClient";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
-  context?: string; // e.g. "Export Table" or "Dashboard" for a more descriptive message
+  context?: string;
 }
 
 interface ErrorBoundaryState {
@@ -15,9 +23,10 @@ interface ErrorBoundaryState {
   error?: Error;
   retryCount: number;
   reported: boolean;
+  errorDetailsOpen: boolean;
 }
 
-const MAX_RETRY = 3;
+const MAX_RETRY_ATTEMPTS = 3;
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public state: ErrorBoundaryState = {
@@ -25,124 +34,157 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     error: undefined,
     retryCount: 0,
     reported: false,
+    errorDetailsOpen: false,
   };
 
-  // Called when a child throws—sets the error state
-  public static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
-    return { hasError: true, error };
+  public static getDerivedStateFromError(
+    error: Error,
+  ): Partial<ErrorBoundaryState> {
+    return {
+      hasError: true,
+      error,
+      errorDetailsOpen: false,
+    };
   }
 
-  // Called after the error is thrown; we log/report once here
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Uncaught error in ErrorBoundary:', error, errorInfo);
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    console.error("Uncaught error in ErrorBoundary:", error, errorInfo);
 
-    // Only report once per error instance
-    if (
-      import.meta.env.PROD &&
-      this.state.hasError &&
-      !this.state.reported
-    ) {
-      this.reportError(error, errorInfo);
+    if (import.meta.env.PROD && !this.state.reported) {
       this.setState({ reported: true });
+
+      void this.reportError(error, errorInfo);
     }
   }
 
-  // Retry button handler
-  public retry = () => {
-    this.setState((prev: ErrorBoundaryState): ErrorBoundaryState => {
-      const nextCount = prev.retryCount + 1;
-      if (nextCount >= MAX_RETRY) {
-        // If they've hit the limit, keep hasError true so banner stays up with "Multiple attempts failed" text
-        return { 
-          ...prev,
-          retryCount: nextCount 
+  public retry = (): void => {
+    this.setState((previousState): ErrorBoundaryState => {
+      if (previousState.retryCount >= MAX_RETRY_ATTEMPTS) {
+        return {
+          ...previousState,
+          errorDetailsOpen: false,
         };
       }
-      // Clear the error and keep going
-      return { 
-        hasError: false, 
-        error: undefined, 
-        retryCount: nextCount, 
-        reported: false 
+
+      return {
+        hasError: false,
+        error: undefined,
+        retryCount: previousState.retryCount + 1,
+        reported: false,
+        errorDetailsOpen: false,
       };
     });
   };
 
-  // Report to your own logging endpoint
-  private async reportError(error: Error, errorInfo: ErrorInfo) {
+  private toggleErrorDetails = (): void => {
+    this.setState((previousState) => ({
+      errorDetailsOpen: !previousState.errorDetailsOpen,
+    }));
+  };
+
+  private async reportError(error: Error, errorInfo: ErrorInfo): Promise<void> {
     try {
-      await protectedApiPost('/api/log-error', {
-          message: error.message,
-          stack: error.stack,
-          componentInlineStack: errorInfo.componentInlineStack,
-          context: this.props.context || 'Unknown context',
-          retryCount: this.state.retryCount,
-          timestamp: new Date().toISOString(),
-          userAgent: navigator.userAgent,
+      await protectedApiPost("/api/log-error", {
+        message: error.message,
+        stack: error.stack,
+        componentStack: errorInfo.componentStack,
+        context: this.props.context ?? "Unknown context",
+        retryCount: this.state.retryCount,
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent,
       });
-    } catch (e) {
-      // Never throw from within componentDidCatch
-      console.warn('Failed to report error:', e);
+    } catch (reportingError) {
+      console.warn("Failed to report error:", reportingError);
     }
   }
 
-  public render() {
+  public render(): ReactNode {
     const { children, fallback, context } = this.props;
-    const { hasError, error, retryCount } = this.state;
-    const isDev = import.meta.env.DEV;
 
-    if (hasError) {
-      // If a custom fallback is provided, render it (no retry button shown)
-      if (fallback) {
-        return <>{fallback}</>;
-      }
+    const { hasError, error, retryCount, errorDetailsOpen } = this.state;
 
-      // Determine if we can still retry
-      const canRetry = retryCount < MAX_RETRY;
-
-      // Build a clear context message
-      const contextMsg = context
-        ? `An error occurred in "${context}". Please try again.`
-        : 'An unexpected error occurred. Please try again.';
-
-      return (
-        <Banner
-          tone="critical"
-          action={
-            canRetry
-              ? {
-                  content: `Try Again (${retryCount + 1}/${MAX_RETRY})`,
-                  onAction: this.retry,
-                }
-              : undefined
-          }
-        >
-          <InlineStack vertical spacing="tight">
-            <Text variant="bodyMd" as="p">{contextMsg}</Text>
-
-            {!canRetry && (
-              <Text variant="bodySm" as="p" color="subdued">
-                You've reached the maximum retry attempts. Please refresh the page or contact
-                support.
-              </Text>
-            )}
-
-            {isDev && error && (
-              <details>
-                <summary className={styles.errorSummary}>
-                  Error Details (Dev Only)
-                </summary>
-                <pre className={styles.errorStack}>
-                  {error.stack}
-                </pre>
-              </details>
-            )}
-          </InlineStack>
-        </Banner>
-      );
+    if (!hasError) {
+      return <>{children}</>;
     }
 
-    return <>{children}</>;
+    if (fallback) {
+      return <>{fallback}</>;
+    }
+
+    const canRetry = retryCount < MAX_RETRY_ATTEMPTS;
+
+    const isDevelopment = import.meta.env.DEV;
+
+    const contextMessage = context
+      ? `An error occurred in "${context}". Please try again.`
+      : "An unexpected error occurred. Please try again.";
+
+    const errorDetailsId = "error-boundary-development-details";
+
+    const errorDetails =
+      error?.stack ?? error?.message ?? "No error details are available.";
+
+    return (
+      <Banner
+        tone="critical"
+        action={
+          canRetry
+            ? {
+                content: `Try again (${retryCount + 1}/${MAX_RETRY_ATTEMPTS})`,
+                onAction: this.retry,
+              }
+            : undefined
+        }
+      >
+        <BlockStack gap="200">
+          <Text as="p" variant="bodyMd">
+            {contextMessage}
+          </Text>
+
+          {!canRetry ? (
+            <Text as="p" variant="bodySm" tone="subdued">
+              You have reached the maximum retry attempts. Please refresh the
+              page or contact support.
+            </Text>
+          ) : null}
+
+          {isDevelopment && error ? (
+            <BlockStack gap="200">
+              <Button
+                variant="plain"
+                textAlign="left"
+                disclosure={errorDetailsOpen ? "up" : "down"}
+                onClick={this.toggleErrorDetails}
+                ariaExpanded={errorDetailsOpen}
+                ariaControls={errorDetailsId}
+              >
+                Error details (development only)
+              </Button>
+
+              <Collapsible
+                id={errorDetailsId}
+                open={errorDetailsOpen}
+                transition={{
+                  duration: "200ms",
+                  timingFunction: "ease-in-out",
+                }}
+                expandOnPrint
+              >
+                <Box
+                  background="bg-surface-secondary"
+                  borderRadius="200"
+                  padding="400"
+                >
+                  <Text as="p" variant="bodySm" breakWord>
+                    {errorDetails}
+                  </Text>
+                </Box>
+              </Collapsible>
+            </BlockStack>
+          ) : null}
+        </BlockStack>
+      </Banner>
+    );
   }
 }
 

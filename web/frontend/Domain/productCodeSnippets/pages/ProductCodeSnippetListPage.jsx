@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
   Badge,
@@ -31,6 +32,7 @@ function getStatusTone(status) {
 }
 
 export default function ProductCodeSnippetListPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const fetchFn = useAuthenticatedFetch();
   const [searchInput, setSearchInput] = useState("");
@@ -45,7 +47,7 @@ export default function ProductCodeSnippetListPage() {
         dateStyle: "medium",
         timeStyle: "short",
       }),
-    [],
+    []
   );
 
   useEffect(() => {
@@ -65,12 +67,16 @@ export default function ProductCodeSnippetListPage() {
       setError("");
 
       try {
-        const data = await listProductCodeSnippets(fetchFn, {
-          search,
-          status,
-        }, {
-          signal: controller.signal,
-        });
+        const data = await listProductCodeSnippets(
+          fetchFn,
+          {
+            search,
+            status,
+          },
+          {
+            signal: controller.signal,
+          }
+        );
 
         if (active) {
           setSnippets(data);
@@ -80,7 +86,12 @@ export default function ProductCodeSnippetListPage() {
           return;
         }
         if (active) {
-          setError(err.message || "Failed to load snippets");
+          setError(
+            err.message ||
+              t("snippetList.errors.load", {
+                defaultValue: "Failed to load snippets",
+              })
+          );
         }
       } finally {
         if (active) {
@@ -94,48 +105,65 @@ export default function ProductCodeSnippetListPage() {
       active = false;
       controller.abort();
     };
-  }, [fetchFn, search, status]);
+  }, [fetchFn, search, status, t]);
 
   const formatUpdatedAt = useMemo(
     () => (value) => {
-      if (!value) return "Never";
+      if (!value) {
+        return t("snippetList.never", { defaultValue: "Never" });
+      }
       return dateTimeFormatter.format(new Date(value));
     },
-    [dateTimeFormatter],
+    [dateTimeFormatter, t]
   );
 
   const emptyState = useMemo(() => {
     if (search || status) {
       return {
-        heading: "No snippets match these filters",
+        heading: t("snippetList.empty.filteredHeading", {
+          defaultValue: "No snippets match these filters",
+        }),
         action: {
-          content: "Clear filters",
+          content: t("snippetList.actions.clearFilters", {
+            defaultValue: "Clear filters",
+          }),
           onAction: () => {
             setSearch("");
             setSearchInput("");
             setStatus("");
           },
         },
-        image: "https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png",
+        image:
+          "https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png",
       };
     }
 
     return {
-      heading: "Create your first logic snippet",
+      heading: t("snippetList.empty.firstHeading", {
+        defaultValue: "Create your first logic snippet",
+      }),
       action: {
-        content: "New snippet",
+        content: t("snippetList.actions.new", {
+          defaultValue: "New snippet",
+        }),
         onAction: () => navigate("/product-code-snippets/new"),
       },
-      image: "https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png",
+      image:
+        "https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png",
     };
-  }, [navigate, search, status]);
+  }, [navigate, search, status, t]);
 
   return (
     <Page
-      title="Snippet Studio"
-      subtitle="Build reusable product logic snippets with safe previewing against your product mirror."
+      title={t("snippetList.title", { defaultValue: "Snippet Studio" })}
+      subtitle={t("snippetList.subtitle", {
+        defaultValue:
+          "Build reusable product logic snippets with safe previewing against your product mirror.",
+      })}
       primaryAction={{
-        content: "New snippet",
+        content: t("snippetList.actions.new", {
+          defaultValue: "New snippet",
+        }),
         onAction: () => navigate("/product-code-snippets/new"),
       }}
       fullWidth
@@ -147,25 +175,51 @@ export default function ProductCodeSnippetListPage() {
               <InlineStack gap="300" wrap>
                 <Box minWidth="320px">
                   <TextField
-                    label="Search snippets"
+                    label={t("snippetList.filters.searchLabel", {
+                      defaultValue: "Search snippets",
+                    })}
                     labelHidden
                     value={searchInput}
                     onChange={setSearchInput}
-                    placeholder="Search by snippet title"
+                    placeholder={t("snippetList.filters.searchPlaceholder", {
+                      defaultValue: "Search by snippet title",
+                    })}
                     autoComplete="off"
                   />
                 </Box>
                 <Box minWidth="220px">
                   <Select
-                    label="Status"
+                    label={t("snippetList.filters.statusLabel", {
+                      defaultValue: "Status",
+                    })}
                     labelHidden
                     value={status}
                     onChange={setStatus}
                     options={[
-                      { label: "All statuses", value: "" },
-                      { label: "Active", value: "ACTIVE" },
-                      { label: "Draft", value: "DRAFT" },
-                      { label: "Archived", value: "ARCHIVED" },
+                      {
+                        label: t("snippetList.status.all", {
+                          defaultValue: "All statuses",
+                        }),
+                        value: "",
+                      },
+                      {
+                        label: t("snippetList.status.active", {
+                          defaultValue: "Active",
+                        }),
+                        value: "ACTIVE",
+                      },
+                      {
+                        label: t("snippetList.status.draft", {
+                          defaultValue: "Draft",
+                        }),
+                        value: "DRAFT",
+                      },
+                      {
+                        label: t("snippetList.status.archived", {
+                          defaultValue: "Archived",
+                        }),
+                        value: "ARCHIVED",
+                      },
                     ]}
                   />
                 </Box>
@@ -195,30 +249,59 @@ export default function ProductCodeSnippetListPage() {
                       borderBlockStartWidth={index === 0 ? "0" : "025"}
                       borderColor="border"
                     >
-                      <InlineStack align="space-between" blockAlign="start" gap="400">
+                      <InlineStack
+                        align="space-between"
+                        blockAlign="start"
+                        gap="400"
+                      >
                         <BlockStack gap="150">
                           <InlineStack gap="200" blockAlign="center">
                             <Button
                               variant="plain"
                               textAlign="left"
-                              onClick={() => navigate(`/product-code-snippets/${snippet.id}`)}
+                              onClick={() =>
+                                navigate(`/product-code-snippets/${snippet.id}`)
+                              }
                             >
                               {snippet.title}
                             </Button>
                             <Badge tone={getStatusTone(snippet.status)}>
-                              {snippet.status}
+                              {t(
+                                `snippetList.status.${String(
+                                  snippet.status || ""
+                                ).toLowerCase()}`,
+                                { defaultValue: snippet.status }
+                              )}
                             </Badge>
                           </InlineStack>
                           <Text tone="subdued" variant="bodySm">
-                            {snippet.language} • Updated {formatUpdatedAt(snippet.updatedAt)}
+                            {t("snippetList.updated", {
+                              defaultValue:
+                                "{{language}} • Updated {{updatedAt}}",
+                              language: snippet.language,
+                              updatedAt: formatUpdatedAt(snippet.updatedAt),
+                            })}
                           </Text>
                           <Text tone="subdued" variant="bodySm">
-                            Validation: {snippet.lastValidationStatus || "Not run"}
+                            {t("snippetList.validation", {
+                              defaultValue: "Validation: {{status}}",
+                              status:
+                                snippet.lastValidationStatus ||
+                                t("snippetList.validationNotRun", {
+                                  defaultValue: "Not run",
+                                }),
+                            })}
                           </Text>
                         </BlockStack>
 
-                        <Button onClick={() => navigate(`/product-code-snippets/${snippet.id}`)}>
-                          Open
+                        <Button
+                          onClick={() =>
+                            navigate(`/product-code-snippets/${snippet.id}`)
+                          }
+                        >
+                          {t("snippetList.actions.open", {
+                            defaultValue: "Open",
+                          })}
                         </Button>
                       </InlineStack>
                     </Box>

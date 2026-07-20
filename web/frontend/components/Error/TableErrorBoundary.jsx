@@ -1,7 +1,13 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Banner, Box, Button, InlineStack } from "@shopify/polaris";
 
-class TableErrorBoundary extends React.Component {
+const POLARIS_PROPS = Object.freeze({
+  criticalTone: "critical",
+  slimSize: "slim",
+});
+
+class TableErrorBoundaryInner extends React.Component {
   constructor(props) {
     super(props);
     this.state = { hasError: false };
@@ -21,13 +27,15 @@ class TableErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
+      const { t } = this.props;
+
       return (
         <Box padding="400">
-          <Banner tone="critical">
-            <p>Table render failed.</p>
+          <Banner tone={POLARIS_PROPS.criticalTone}>
+            <p>{t("tableError.renderFailed")}</p>
             <InlineStack gap="200">
-              <Button size="slim" onClick={this.handleRetry}>
-                Retry table
+              <Button size={POLARIS_PROPS.slimSize} onClick={this.handleRetry}>
+                {t("tableError.retry")}
               </Button>
             </InlineStack>
           </Banner>
@@ -39,5 +47,8 @@ class TableErrorBoundary extends React.Component {
   }
 }
 
-export default TableErrorBoundary;
+export default function TableErrorBoundary({ children }) {
+  const { t } = useTranslation();
 
+  return <TableErrorBoundaryInner t={t}>{children}</TableErrorBoundaryInner>;
+}

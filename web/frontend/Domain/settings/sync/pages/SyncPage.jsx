@@ -24,7 +24,6 @@ import {
   useSyncStatusHelpers,
 } from "../../../../hooks/useSyncStatusQuery";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
-import heroStyles from "../../../shared/styles/HeroSurface.module.css";
 
 const rows = [{ key: "products", api: "/api/sync/products" }];
 
@@ -34,11 +33,11 @@ export default function DataSyncPage() {
   const queryClient = useQueryClient();
   const { showSuccess, showError } = useAppToast();
   const { dateTimeFormatter } = useLocaleFormatters();
-const {
-  syncStatus: dataSources,
-  isSyncInProgress,
-  isSyncStale,
-} = useSyncStatusHelpers();
+  const {
+    syncStatus: dataSources,
+    isSyncInProgress,
+    isSyncStale,
+  } = useSyncStatusHelpers();
   const startProductSync = useStartProductSyncMutation();
 
   const wasSyncingRef = useRef(false);
@@ -61,13 +60,13 @@ const {
     syncNeeded &&
     !isSyncInProgress &&
     !startProductSync.isPending;
-const isAnySyncRunning =
-  !isSyncStale &&
-  (
-    isSyncInProgress ||
-    dataSources?.isProductTypeSyncing ||
-    dataSources?.isCollectionSyncing
-  );
+  const isAnySyncRunning =
+    !isSyncStale &&
+    (
+      isSyncInProgress ||
+      dataSources?.isProductTypeSyncing ||
+      dataSources?.isCollectionSyncing
+    );
 
   useEffect(() => {
     const isSyncing = Boolean(isAnySyncRunning);
@@ -85,26 +84,26 @@ const isAnySyncRunning =
   }, [dataSources, isAnySyncRunning, showSuccess, t]);
 
   const handleRefresh = async (row) => {
-  if (!isSyncStale && (isAnySyncRunning || startProductSync.isPending)) {
-    showError(t("syncAlreadyRunning"));
-    return;
-  }
+    if (!isSyncStale && (isAnySyncRunning || startProductSync.isPending)) {
+      showError(t("syncAlreadyRunning"));
+      return;
+    }
 
-  try {
-    await startProductSync.mutateAsync({ force: true });
+    try {
+      await startProductSync.mutateAsync({ force: true });
 
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
-      queryClient.invalidateQueries({ queryKey: ["product-sync-status"] }),
-      queryClient.invalidateQueries({ queryKey: ["bootstrap-products"] }),
-      queryClient.invalidateQueries({ queryKey: ["products"] }),
-    ]);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["product-sync-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["bootstrap-products"] }),
+        queryClient.invalidateQueries({ queryKey: ["products"] }),
+      ]);
 
-    showSuccess(t("syncStarted", { item: getRowLabel(row.key) }));
-  } catch (error) {
-    showError(toSafeErrorMessage(t, error, "common.errors.generic"));
-  }
-};
+      showSuccess(t("syncStarted", { item: getRowLabel(row.key) }));
+    } catch (error) {
+      showError(toSafeErrorMessage(t, error, "common.errors.generic"));
+    }
+  };
   const getDate = useCallback(
     (key) => {
       if (!dataSources) return null;
@@ -239,7 +238,7 @@ const isAnySyncRunning =
                 borderRadius="300"
                 overflowX="hidden"
                 overflowY="hidden"
-                className={heroStyles.heroSurface}
+                background="bg-surface-secondary"
               >
                 <BlockStack gap="400">
                   <InlineStack
@@ -264,7 +263,7 @@ const isAnySyncRunning =
                         ? t("syncBadgeInProgress")
                         : productSyncNeedsAttention
                           ? t("syncBadgeNeeded", { defaultValue: "Sync needed" })
-                        : t("syncBadgeReady")}
+                          : t("syncBadgeReady")}
                     </Badge>
                   </InlineStack>
 

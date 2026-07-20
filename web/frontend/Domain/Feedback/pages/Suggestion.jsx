@@ -20,7 +20,6 @@ import { useSuggestionForm } from "../hooks/useSuggestionForm";
 import { useTranslation } from "react-i18next";
 import { i18n as appI18n } from "../../../utils/i18nUtils";
 import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
-import heroStyles from "../../shared/styles/HeroSurface.module.css";
 
 /**
  * Page component for suggestion/feedback submission
@@ -78,7 +77,7 @@ const Suggestion = () => {
                       borderRadius="300"
                       overflowX="hidden"
                       overflowY="hidden"
-                      className={heroStyles.heroSurface}
+                      background="bg-surface-secondary"
                     >
                       <BlockStack gap="400">
                         <BlockStack gap="200">

@@ -1,7 +1,15 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Banner, Box, Button } from "@shopify/polaris";
 
+const POLARIS_PROPS = Object.freeze({
+  primaryVariant: "primary",
+  slimSize: "slim",
+});
+
 const PlanBanner = ({ plan }) => {
+  const { t } = useTranslation();
+
   // If no plan data or user is on premium plan, don't show banner
   if (!plan || plan.active) return null;
 
@@ -9,28 +17,32 @@ const PlanBanner = ({ plan }) => {
 
   return (
     <Banner
-      title={editLimitReached ? "Free Plan Limit Reached" : "Free Plan Usage"}
+      title={t(
+        editLimitReached
+          ? "planBanner.limitReachedTitle"
+          : "planBanner.usageTitle"
+      )}
       tone={editLimitReached ? "critical" : "info"}
     >
       <p>
-        {editLimitReached ? (
-          <>
-            You've reached your free plan limit! ({plan.currentEditCount}/{plan.maxEdits} edits).
-          </>
-        ) : (
-          <>
-            Free Plan: {plan.currentEditCount}/{plan.maxEdits} edits used this month. 
-            Max {plan.maxProductsPerEdit} products per edit.
-          </>
-        )}
+        {editLimitReached
+          ? t("planBanner.limitReachedMessage", {
+            current: plan.currentEditCount,
+            maximum: plan.maxEdits,
+          })
+          : t("planBanner.usageMessage", {
+            current: plan.currentEditCount,
+            maximum: plan.maxEdits,
+            products: plan.maxProductsPerEdit,
+          })}
       </p>
       <Box paddingBlockStart="200">
         <Button
-          variant="primary"
-          size="slim"
+          variant={POLARIS_PROPS.primaryVariant}
+          size={POLARIS_PROPS.slimSize}
           url="/plans"
         >
-          {editLimitReached ? "Upgrade Now" : "Upgrade"}
+          {t(editLimitReached ? "planBanner.upgradeNow" : "planBanner.upgrade")}
         </Button>
       </Box>
     </Banner>

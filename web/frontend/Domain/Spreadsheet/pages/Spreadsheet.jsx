@@ -20,7 +20,6 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useApiClient } from "../../../hooks/useApiClient";
 import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
-import heroStyles from "../../shared/styles/HeroSurface.module.css";
 
 export default function Spreadsheet() {
     const { t } = useTranslation();
@@ -208,7 +207,7 @@ export default function Spreadsheet() {
                         borderRadius="300"
                         overflowX="hidden"
                         overflowY="hidden"
-                        className={heroStyles.heroSurface}
+                        background="bg-surface-secondary"
                     >
                         <BlockStack gap="400">
                             <BlockStack gap="200">

@@ -1334,5 +1334,17 @@
   "common.errors.statusClass.422": "Some inputs are invalid. Review the form and try again.",
   "common.errors.statusClass.429": "Too many requests. Please wait a moment and retry.",
   "common.errors.statusClass.5xx": "Server error. Please try again shortly.",
-  "common.errors.statusClass.4xx": "Request failed. Please try again."
+  "common.errors.statusClass.4xx": "Request failed. Please try again.",
+  "mirrorFreshness": {
+    "tooltip": "L'aperçu et le ciblage utilisent l'instantané miroir de l'application. \nShopify Admin reste la dernière source de vérité sur l’état du catalogue en direct.",
+    "sourceOfTruth": "Source de vérité : Shopify"
+  },
+  "routeError": {
+    "title": "Quelque chose s'est mal passé",
+    "currentPage": "cette page",
+    "unableToRender": "Impossible de restituer {{route}}. \nVous pouvez réessayer ou revenir en toute sécurité.",
+    "retry": "Réessayer",
+    "back": "Dos",
+    "shellActive": "Le reste du shell de l’application est toujours actif."
+  }
 }
