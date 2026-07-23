@@ -84,7 +84,7 @@ function PricingCard({ plan, isSubscribing, onSelectPlan, t, planText }) {
           <BlockStack gap="200">
             {isFree ? (
               <Text variant="heading3xl" as="p" fontWeight="bold">
-                Free
+                {t("FreePrice", { defaultValue: "Free" })}
               </Text>
             ) : (
               <InlineStack align="start" blockAlign="end" gap="200" wrap={false}>

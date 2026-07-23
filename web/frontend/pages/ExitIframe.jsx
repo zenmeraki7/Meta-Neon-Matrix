@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Banner, BlockStack, Box, Button, Layout, Page, Spinner } from "@shopify/polaris";
+import { useTranslation } from "react-i18next";
 import { useEmbeddedRedirect } from "../hooks/useEmbeddedRedirect";
 
 export default function ExitIframe() {
+  const { t } = useTranslation(["common"]);
   const { redirectRemote } = useEmbeddedRedirect();
   const { search } = useLocation();
   const [showWarning, setShowWarning] = useState(false);
@@ -42,8 +44,15 @@ export default function ExitIframe() {
       <Layout>
         <Layout.Section>
           <Box paddingBlockStart="1600">
-            <Banner title="Redirecting outside of Shopify" tone="warning">
-              Apps can only use /exitiframe to reach Shopify or the app itself.
+            <Banner
+              title={t("exitIframeWarningTitle", {
+                defaultValue: "Redirecting outside of Shopify",
+              })}
+              tone="warning"
+            >
+              {t("exitIframeWarningBody", {
+                defaultValue: "Apps can only use /exitiframe to reach Shopify or the app itself.",
+              })}
             </Banner>
           </Box>
         </Layout.Section>
@@ -58,11 +67,14 @@ export default function ExitIframe() {
         <Layout.Section>
           <Box paddingBlockStart="1600">
             <BlockStack inlineAlign="center" gap="300">
-            <Spinner accessibilityLabel="Redirecting" size="large" />
+            <Spinner
+              accessibilityLabel={t("redirecting", { defaultValue: "Redirecting" })}
+              size="large"
+            />
             {redirectUri ? (
               <Box paddingBlockStart="300">
                 <Button onClick={() => redirectRemote(redirectUri)}>
-                  Continue
+                  {t("continue", { defaultValue: "Continue" })}
                 </Button>
               </Box>
             ) : null}
