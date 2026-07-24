@@ -421,7 +421,7 @@ export default function ProductsPage() {
       );
     }
 
-   if (isSyncInProgress && !isSyncStale) {
+    if (isSyncInProgress && !isSyncStale) {
       return (
         <Text variant="bodySm" tone="subdued">
           {t("productsSyncingInBackground")}
@@ -500,7 +500,9 @@ export default function ProductsPage() {
         {shouldShowProductStatusRail ? (
           <Layout.Section>
             {pageError ? (
-              <Banner tone="critical" title="Products could not be loaded">
+              <Banner tone="critical" title={t("productsPage.loadErrorTitle", {
+                defaultValue: "Products could not be loaded",
+              })}>
                 <p>{pageError}</p>
               </Banner>
             ) : shouldShowSyncNeededState || shouldShowMirrorUnavailableState ? (
@@ -508,27 +510,46 @@ export default function ProductsPage() {
                 tone="warning"
                 title={
                   isSyncStale
-                    ? "Product sync is stuck"
+                    ? t("productsPage.syncStuckTitle", {
+                      defaultValue: "Product sync is stuck",
+                    })
                     : shouldShowMirrorUnavailableState
-                      ? "Product mirror needs repair"
-                      : "Product sync needed"
+                      ? t("productsPage.mirrorNeedsRepairTitle", {
+                        defaultValue: "Product mirror needs repair",
+                      })
+                      : t("productsPage.syncNeededTitle", {
+                        defaultValue: "Product sync needed",
+                      })
                 }
               >
                 <p>
                   {productUnavailableReason ||
-                    "No product mirror is available yet. Start product sync to load product rows."}
+                    t("productsPage.mirrorUnavailableMessage", {
+                      defaultValue:
+                        "No product mirror is available yet. Start product sync to load product rows.",
+                    })}
                 </p>
                 <Button variant="plain" onClick={() => navigate("/refresh")}>
                   {t("Syncyourproducts")}
                 </Button>
               </Banner>
             ) : isSyncInProgress && !isSyncStale && !products.length ? (
-              <Banner tone="info" title="Sync in progress">
-                <p>Products are still syncing. Counts and rows will fill in automatically as the mirror updates.</p>
+              <Banner tone="info" title={t("productsPage.syncInProgressTitle", {
+                defaultValue: "Sync in progress",
+              })}>
+                <p> {t("productsPage.syncInProgressMessage", {
+                  defaultValue:
+                    "Products are still syncing. Counts and rows will fill in automatically as the mirror updates.",
+                })}</p>
               </Banner>
             ) : shouldShowFilteredEmptyState ? (
-              <Banner tone="info" title="No products match the current filters">
-                <p>Try changing or clearing filters to broaden the product set.</p>
+              <Banner tone="info" title={t("productsPage.filteredEmptyTitle", {
+                defaultValue: "No products match the current filters",
+              })}>
+                <p> {t("productsPage.filteredEmptyMessage", {
+                  defaultValue:
+                    "Try changing or clearing filters to broaden the product set.",
+                })}</p>
               </Banner>
             ) : null}
           </Layout.Section>
@@ -571,11 +592,15 @@ export default function ProductsPage() {
           <Card padding="0">
             {Boolean(variantsGridQuery.data?.isStale) ? (
               <Box padding="300">
-                <Banner tone="warning" title="Mirror data may be outdated">
+                <Banner tone="warning" title={t("productsPage.mirrorStaleTitle", {
+                  defaultValue: "Mirror data may be outdated",
+                })}>
                   <p>
-                    Data may be outdated.{" "}
+                    {t("productsPage.mirrorStaleMessage", {
+                      defaultValue: "Data may be outdated.",
+                    })}{" "}
                     <Button variant="plain" onClick={() => navigate("/refresh")}>
-                      Refresh
+                      {t("productsPage.refresh", { defaultValue: "Refresh" })}
                     </Button>
                   </p>
                 </Banner>
@@ -592,18 +617,18 @@ export default function ProductsPage() {
                   ? "Sync products to show rows"
                   : shouldShowMirrorUnavailableState
                     ? "Products temporarily unavailable"
-                  : shouldShowFilteredEmptyState
-                    ? "No products match the current filters"
-                  : undefined
+                    : shouldShowFilteredEmptyState
+                      ? "No products match the current filters"
+                      : undefined
               }
               emptyText={
                 shouldShowSyncNeededState
                   ? "The product mirror does not have an active batch yet. Run product sync, then this table will fill automatically."
                   : shouldShowMirrorUnavailableState
                     ? productUnavailableReason
-                  : shouldShowFilteredEmptyState
-                    ? "Try changing or clearing filters to broaden the product set."
-                  : undefined
+                    : shouldShowFilteredEmptyState
+                      ? "Try changing or clearing filters to broaden the product set."
+                      : undefined
               }
             />
           </Card>

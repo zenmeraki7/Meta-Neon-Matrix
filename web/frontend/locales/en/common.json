@@ -967,7 +967,68 @@
     "back": "Export History"
   },
   "common": {
-    "seconds": "Seconds"
+    "seconds": "Seconds",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "undoStatus": {
+    "notRun": "Not run",
+    "succeeded": "Undo succeeded",
+    "failed": "Undo failed"
+  },
+
+  "matchingProductsTable": {
+    "title": "Matching products",
+    "emptyHeading": "No products match the current filters",
+    "emptyMessage": "Try changing or clearing filters to broaden the product set.",
+    "pricesLoadError": "Unable to load current prices.",
+    "resourceSingular": "product",
+    "resourcePlural": "products",
+    "columnProduct": "Product",
+    "columnCurrentPrice": "Current price",
+    "columnNewPrice": "New price",
+    "columnStatus": "Status",
+    "columnInventory": "Inventory",
+    "columnProductType": "Product type",
+    "columnVendor": "Vendor",
+    "columnCurrentValue": "Current value",
+    "columnPreviewValue": "Preview value",
+    "showingPage": "Showing {{page}} of {{totalPages}}"
+  },
+  "defaultVariantTitle": "Default Title",
+  "productsPage": {
+    "loadErrorTitle": "Products could not be loaded",
+    "syncStuckTitle": "Product sync is stuck",
+    "mirrorNeedsRepairTitle": "Product mirror needs repair",
+    "syncNeededTitle": "Product sync needed",
+    "mirrorUnavailableMessage": "No product mirror is available yet. Start product sync to load product rows.",
+    "syncInProgressTitle": "Sync in progress",
+    "syncInProgressMessage": "Products are still syncing. Counts and rows will fill in automatically as the mirror updates.",
+    "filteredEmptyTitle": "No products match the current filters",
+    "filteredEmptyMessage": "Try changing or clearing filters to broaden the product set.",
+    "mirrorStaleTitle": "Mirror data may be outdated",
+    "mirrorStaleMessage": "Data may be outdated.",
+    "refresh": "Refresh"
+  },
+
+  "missingHistoryId": "Missing history ID.",
+  "missingHistoryIdDetail": "Open this edit from History or run the edit again.",
+  "backToHistory": "Back to history",
+  "unableToLoadHistoryDetails": "Unable to load history details",
+  "retry": "Retry",
+  "executionTransparencyTitle": "Execution Transparency",
+  "transparency": {
+    "targetsFrozen": "Targets frozen:",
+    "executionMethod": "Execution method:",
+    "submittedToShopify": "Submitted to Shopify:",
+    "shopifyStatus": "Shopify status:",
+    "processed": "Processed:",
+    "resultIngest": "Result ingest: success",
+    "failed": "failed",
+    "skipped": "skipped",
+    "verified": "Verified:",
+    "failedItems": "Failed items:",
+    "undoAvailable": "Undo available:"
   },
   "historyStatus": {
     "planned": "Waiting to prepare targets",

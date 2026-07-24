@@ -103,8 +103,8 @@ const ValueInput = ({
   const searchReplaceError =
     inputType === InputType.SEARCH_REPLACE && searchValue.length === 0
       ? t("errors.searchValueRequired", {
-          defaultValue: "Search value is required.",
-        })
+        defaultValue: "Search value is required.",
+      })
       : undefined;
 
   const isPercentage = editType?.valueKind === ValueKind.PERCENTAGE;
@@ -186,14 +186,14 @@ const ValueInput = ({
     enabled: shouldFetchAutocomplete,
     staleTime: REFERENCE_DATA_STALE_TIME,
     queryFn: async ({ signal }) => {
-        const params = new URLSearchParams({
-          isNameOnly: "true",
-          limit: String(AUTOCOMPLETE_RESULT_LIMIT),
-        });
+      const params = new URLSearchParams({
+        isNameOnly: "true",
+        limit: String(AUTOCOMPLETE_RESULT_LIMIT),
+      });
 
-        if (normalizedAutocompleteQuery) {
-          params.set("search", normalizedAutocompleteQuery);
-        }
+      if (normalizedAutocompleteQuery) {
+        params.set("search", normalizedAutocompleteQuery);
+      }
 
       const separator = config.apiEndpoint.includes("?") ? "&" : "?";
       const url = `${config.apiEndpoint}${separator}${params.toString()}`;
@@ -202,8 +202,8 @@ const ValueInput = ({
       const rawItems = getArrayPayload(json);
 
       return rawItems.slice(0, AUTOCOMPLETE_RESULT_LIMIT).map((item) => ({
-          value: String(item[resourceValueKey]),
-          label: String(item[resourceLabelKey] ?? ""),
+        value: String(item[resourceValueKey]),
+        label: String(item[resourceLabelKey] ?? ""),
       }));
     },
   });
@@ -238,9 +238,9 @@ const ValueInput = ({
 
     const values = allowMultiple
       ? rawValue
-          .split(",")
-          .map((entry) => entry.trim())
-          .filter(Boolean)
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
       : [rawValue];
 
     setSelectedOptions(values);
@@ -555,8 +555,8 @@ const ValueInput = ({
               error={
                 confirmationValue && confirmationValue !== "CONFIRM"
                   ? t("errors.confirmationMismatch", {
-                      defaultValue: "You must type CONFIRM exactly.",
-                    })
+                    defaultValue: "You must type CONFIRM exactly.",
+                  })
                   : undefined
               }
               autoComplete={AUTOCOMPLETE_OFF}

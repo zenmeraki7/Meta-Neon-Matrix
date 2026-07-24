@@ -102,10 +102,10 @@ function getUndoStatus(historyItem) {
     return historyItem?.undo?.verification?.verified === true
       ? { key: "undo_verified", tone: "success", isTerminal: true }
       : {
-          key: "undo_verification_failed",
-          tone: "critical",
-          isTerminal: true,
-        };
+        key: "undo_verification_failed",
+        tone: "critical",
+        isTerminal: true,
+      };
   }
 
   if (undoStatus === "failed") {
@@ -187,17 +187,20 @@ const ChangeValueHistory = React.memo(function ChangeValueHistory({ row }) {
 });
 
 const UndoStatusCell = React.memo(function UndoStatusCell({ row }) {
+  const { t } = useTranslation();
   if (!row.hasUndoResult) {
     return (
       <Text as="span" tone="subdued">
-        Not run
+        {t("undoStatus.notRun", { defaultValue: "Not run" })}
       </Text>
     );
   }
 
   return (
     <Badge tone={row.undoVerified ? "success" : "critical"}>
-      {row.undoVerified ? "Undo succeeded" : "Undo failed"}
+      {row.undoVerified
+        ? t("undoStatus.succeeded", { defaultValue: "Undo succeeded" })
+        : t("undoStatus.failed", { defaultValue: "Undo failed" })}
     </Badge>
   );
 });
@@ -340,10 +343,10 @@ export default function EditDetails() {
                 : []),
               ...(Array.isArray(item?.variantFieldChanges)
                 ? item.variantFieldChanges.flatMap((variant) =>
-                    Array.isArray(variant?.changes)
-                      ? variant.changes.map((c) => c?.field)
-                      : []
-                  )
+                  Array.isArray(variant?.changes)
+                    ? variant.changes.map((c) => c?.field)
+                    : []
+                )
                 : []),
             ])
             .find(Boolean) || "";
@@ -439,28 +442,75 @@ export default function EditDetails() {
 
       const productRows = Array.isArray(change?.productFieldChanges)
         ? change.productFieldChanges.map((fieldChange, fieldIndex) => {
+          const rawField = fieldChange?.field || changeField || "N/A"; // ✅ store raw first
+          const undoEvidence = findUndoFieldEvidence(
+            change,
+            "product",
+            rawField
+          );
+          return {
+            rowKey: buildStableChangeRowKey({
+              changeId: change?.id || "",
+              scope: "product",
+              field: rawField,
+              productId: change?.productId || "",
+              position: fieldIndex,
+            }),
+            image: productImage,
+            title: productTitle,
+            scope: t("scope.product"),
+            status: String(
+              change?.status ||
+              historyItem?.primaryStatus?.key ||
+              historyItem?.status ||
+              "pending"
+            ),
+            field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }), // ✅ translate
+            oldValue: formatAuditValue(fieldChange?.oldValue),
+            newValue: formatAuditValue(fieldChange?.newValue),
+            hasUndoResult: Boolean(change?.undoResult),
+            undoVerified: undoEvidence?.verified === true,
+            restoredValue: formatAuditValue(undoEvidence?.restoredValue),
+            currentShopifyValue: formatAuditValue(
+              undoEvidence?.currentShopifyValue
+            ),
+          };
+        })
+        : [];
+
+      const variantRows = Array.isArray(change?.variantFieldChanges)
+        ? change.variantFieldChanges.flatMap((variantChange, variantIndex) => {
+          if (!Array.isArray(variantChange?.changes)) return [];
+          return variantChange.changes.map((fieldChange, fieldIndex) => {
             const rawField = fieldChange?.field || changeField || "N/A"; // ✅ store raw first
+            const variantId =
+              variantChange?.variantId ||
+              variantChange?.id ||
+              String(variantIndex);
             const undoEvidence = findUndoFieldEvidence(
               change,
-              "product",
-              rawField
+              "variant",
+              rawField,
+              variantId
             );
             return {
               rowKey: buildStableChangeRowKey({
                 changeId: change?.id || "",
-                scope: "product",
+                scope: "variant",
                 field: rawField,
+                variantId,
                 productId: change?.productId || "",
                 position: fieldIndex,
               }),
               image: productImage,
-              title: productTitle,
-              scope: t("scope.product"),
+              title: `${productTitle} - ${variantChange?.variantTitle || "Default Title"
+                }`,
+              scope: t("scope.variant"),
               status: String(
                 change?.status ||
-                  historyItem?.primaryStatus?.key ||
-                  historyItem?.status ||
-                  "pending"
+                historyItem?.primaryStatus?.key ||
+                historyItem?.status ||
+                "pending"
               ),
               field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }), // ✅ translate
               oldValue: formatAuditValue(fieldChange?.oldValue),
@@ -472,56 +522,8 @@ export default function EditDetails() {
                 undoEvidence?.currentShopifyValue
               ),
             };
-          })
-        : [];
-
-      const variantRows = Array.isArray(change?.variantFieldChanges)
-        ? change.variantFieldChanges.flatMap((variantChange, variantIndex) => {
-            if (!Array.isArray(variantChange?.changes)) return [];
-            return variantChange.changes.map((fieldChange, fieldIndex) => {
-              const rawField = fieldChange?.field || changeField || "N/A"; // ✅ store raw first
-              const variantId =
-                variantChange?.variantId ||
-                variantChange?.id ||
-                String(variantIndex);
-              const undoEvidence = findUndoFieldEvidence(
-                change,
-                "variant",
-                rawField,
-                variantId
-              );
-              return {
-                rowKey: buildStableChangeRowKey({
-                  changeId: change?.id || "",
-                  scope: "variant",
-                  field: rawField,
-                  variantId,
-                  productId: change?.productId || "",
-                  position: fieldIndex,
-                }),
-                image: productImage,
-                title: `${productTitle} - ${
-                  variantChange?.variantTitle || "Default Title"
-                }`,
-                scope: t("scope.variant"),
-                status: String(
-                  change?.status ||
-                    historyItem?.primaryStatus?.key ||
-                    historyItem?.status ||
-                    "pending"
-                ),
-                field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }), // ✅ translate
-                oldValue: formatAuditValue(fieldChange?.oldValue),
-                newValue: formatAuditValue(fieldChange?.newValue),
-                hasUndoResult: Boolean(change?.undoResult),
-                undoVerified: undoEvidence?.verified === true,
-                restoredValue: formatAuditValue(undoEvidence?.restoredValue),
-                currentShopifyValue: formatAuditValue(
-                  undoEvidence?.currentShopifyValue
-                ),
-              };
-            });
-          })
+          });
+        })
         : [];
 
       return [...productRows, ...variantRows];
@@ -576,12 +578,19 @@ export default function EditDetails() {
               <Box padding="500">
                 <BlockStack gap="300">
                   <Text as="h2" variant="headingMd">
-                    Missing history ID.
+                    {t("missingHistoryId", {
+                      defaultValue: "Missing history ID.",
+                    })}
                   </Text>
                   <Text as="p" tone="subdued">
-                    Open this edit from History or run the edit again.
+                    {t("missingHistoryIdDetail", {
+                      defaultValue: "Open this edit from History or run the edit again.",
+                    })}
                   </Text>
-                  <Button onClick={handleBack}>Back to history</Button>
+                  <Button onClick={handleBack}>
+                    {t("backToHistory", { defaultValue: "Back to history" })}
+                  </Button>
+
                 </BlockStack>
               </Box>
             </Card>
@@ -629,7 +638,9 @@ export default function EditDetails() {
               <Box padding="500">
                 <BlockStack gap="300">
                   <Text as="h2" variant="headingMd">
-                    Unable to load history details
+                    {t("unableToLoadHistoryDetails", {
+                      defaultValue: "Unable to load history details",
+                    })}
                   </Text>
                   <Text as="p" tone="subdued">
                     {error}
@@ -642,9 +653,12 @@ export default function EditDetails() {
                         fetchHistoryDetail();
                       }}
                     >
-                      Retry
+                      {t("retry", { defaultValue: "Retry" })}
                     </Button>
-                    <Button onClick={handleBack}>Back to history</Button>
+                    <Button onClick={handleBack}>
+                      {t("backToHistory", { defaultValue: "Back to history" })}
+                    </Button>
+
                   </InlineStack>
                 </BlockStack>
               </Box>
@@ -659,9 +673,9 @@ export default function EditDetails() {
 
   const title = historyItem?.titleKey
     ? t(historyItem.titleKey, {
-        ...(historyItem.titleParams || {}),
-        defaultValue: historyItem?.title || "",
-      })
+      ...(historyItem.titleParams || {}),
+      defaultValue: historyItem?.title || "",
+    })
     : historyItem?.title || "";
 
   const primaryStatus = getPrimaryStatus(historyItem);
@@ -681,14 +695,14 @@ export default function EditDetails() {
 
   const undoStatusLabel = undoStatus
     ? t(`historyStatus.${undoStatus.key}`, {
-        defaultValue: undoStatus.label || undoStatus.key,
-      })
+      defaultValue: undoStatus.label || undoStatus.key,
+    })
     : null;
 
   const undoStatusDetail = undoStatus
     ? t(`historyStatusDetail.${undoStatus.key}`, {
-        defaultValue: undoStatus.detail || "",
-      })
+      defaultValue: undoStatus.detail || "",
+    })
     : "";
 
   const undoBadge = undoStatus
@@ -703,19 +717,19 @@ export default function EditDetails() {
     ),
     percent:
       Number(historyItem?.targetSnapshotCount || historyItem?.totalItems || 0) >
-      0
+        0
         ? Math.round(
-            (Number(
-              historyItem?.progressCount || historyItem?.processedCount || 0
-            ) /
-              Number(
-                historyItem?.targetSnapshotCount || historyItem?.totalItems || 1
-              )) *
-              100
-          )
+          (Number(
+            historyItem?.progressCount || historyItem?.processedCount || 0
+          ) /
+            Number(
+              historyItem?.targetSnapshotCount || historyItem?.totalItems || 1
+            )) *
+          100
+        )
         : primaryStatus.key === "completed"
-        ? 100
-        : 0,
+          ? 100
+          : 0,
     label: "",
   };
   const undoProcessed = Number(historyItem?.undo?.processedCount || 0);
@@ -787,18 +801,17 @@ export default function EditDetails() {
                     primaryStatus.key === "completed"
                       ? "success"
                       : primaryStatus.key === "failed"
-                      ? "critical"
-                      : primaryStatus.key === "partial"
-                      ? "warning"
-                      : "primary"
+                        ? "critical"
+                        : primaryStatus.key === "partial"
+                          ? "warning"
+                          : "primary"
                   }
                 />
 
                 <InlineStack align="space-between">
                   <Text tone="subdued">
                     {mainProgress.label ||
-                      `${mainProgress.current} / ${
-                        mainProgress.total || mainProgress.current
+                      `${mainProgress.current} / ${mainProgress.total || mainProgress.current
                       }`}
                   </Text>
 
@@ -861,8 +874,8 @@ export default function EditDetails() {
                     stage.status === "completed"
                       ? "success"
                       : stage.status === "active"
-                      ? "info"
-                      : "attention";
+                        ? "info"
+                        : "attention";
                   return (
                     <InlineStack
                       key={stage.key}
@@ -891,55 +904,79 @@ export default function EditDetails() {
           <Card>
             <Box padding="400">
               <BlockStack gap="200">
-                <Text variant="headingMd">Execution Transparency</Text>
+                <Text variant="headingMd">
+                  {t("executionTransparencyTitle", {
+                    defaultValue: "Execution Transparency",
+                  })}
+                </Text>
+
                 <Text tone="subdued">
-                  Targets frozen:{" "}
+                  {t("transparency.targetsFrozen", { defaultValue: "Targets frozen:" })}{" "}
                   {Number(transparencyFreeze.frozen || 0).toLocaleString()} /{" "}
                   {Number(transparencyFreeze.total || 0).toLocaleString()}
                 </Text>
+
                 <Text tone="subdued">
-                  Execution method: {transparencyPlan.apiStrategy || "UNKNOWN"}{" "}
+                  {t("transparency.executionMethod", {
+                    defaultValue: "Execution method:",
+                  })}{" "}
+                  {transparencyPlan.apiStrategy || "UNKNOWN"}{" "}
                   ({transparencyPlan.mutationType || "N/A"})
                 </Text>
+
                 <Text tone="subdued">
-                  Submitted to Shopify:{" "}
-                  {transparencyShopifySubmission.submitted ? "Yes" : "No"}
+                  {t("transparency.submittedToShopify", {
+                    defaultValue: "Submitted to Shopify:",
+                  })}{" "}
+                  {transparencyShopifySubmission.submitted
+                    ? t("common.yes", { defaultValue: "Yes" })
+                    : t("common.no", { defaultValue: "No" })}
                 </Text>
+
                 <Text tone="subdued">
-                  Shopify status: {transparencyShopifyStatus}
+                  {t("transparency.shopifyStatus", {
+                    defaultValue: "Shopify status:",
+                  })}{" "}
+                  {transparencyShopifyStatus}
                 </Text>
+
                 <Text tone="subdued">
-                  Processed:{" "}
-                  {Number(transparencyProcessed.current || 0).toLocaleString()}{" "}
-                  / {Number(transparencyProcessed.total || 0).toLocaleString()}
+                  {t("transparency.processed", { defaultValue: "Processed:" })}{" "}
+                  {Number(transparencyProcessed.current || 0).toLocaleString()} /{" "}
+                  {Number(transparencyProcessed.total || 0).toLocaleString()}
                 </Text>
+
                 <Text tone="subdued">
-                  Result ingest: success{" "}
-                  {Number(
-                    transparencyIngest.successCount || 0
-                  ).toLocaleString()}
-                  , failed{" "}
+                  {t("transparency.resultIngest", {
+                    defaultValue: "Result ingest: success",
+                  })}{" "}
+                  {Number(transparencyIngest.successCount || 0).toLocaleString()}
+                  , {t("transparency.failed", { defaultValue: "failed" })}{" "}
                   {Number(transparencyIngest.failedCount || 0).toLocaleString()}
-                  , skipped{" "}
-                  {Number(
-                    transparencyIngest.skippedCount || 0
-                  ).toLocaleString()}
+                  , {t("transparency.skipped", { defaultValue: "skipped" })}{" "}
+                  {Number(transparencyIngest.skippedCount || 0).toLocaleString()}
                 </Text>
+
                 <Text tone="subdued">
-                  Verified:{" "}
-                  {Number(
-                    transparencyVerify.verifiedCount || 0
-                  ).toLocaleString()}{" "}
+                  {t("transparency.verified", { defaultValue: "Verified:" })}{" "}
+                  {Number(transparencyVerify.verifiedCount || 0).toLocaleString()}{" "}
                   ({transparencyVerify.status || "UNKNOWN"})
                 </Text>
+
                 <Text tone="subdued">
-                  Failed items:{" "}
+                  {t("transparency.failedItems", { defaultValue: "Failed items:" })}{" "}
                   {Number(
                     (transparency.itemLevelFailures || {}).failedCount || 0
                   ).toLocaleString()}
                 </Text>
+
                 <Text tone="subdued">
-                  Undo available: {transparencyUndo.available ? "Yes" : "No"}
+                  {t("transparency.undoAvailable", {
+                    defaultValue: "Undo available:",
+                  })}{" "}
+                  {transparencyUndo.available
+                    ? t("common.yes", { defaultValue: "Yes" })
+                    : t("common.no", { defaultValue: "No" })}
                 </Text>
               </BlockStack>
             </Box>
@@ -964,8 +1001,8 @@ export default function EditDetails() {
                       undoTotal > 0
                         ? Math.round((undoProcessed / undoTotal) * 100)
                         : undoStatus.key === "undo_verified"
-                        ? 100
-                        : 0
+                          ? 100
+                          : 0
                     }
                     animated={isActiveStatus(undoStatus)}
                     size="small"
@@ -975,8 +1012,8 @@ export default function EditDetails() {
                       )
                         ? "critical"
                         : undoStatus.key === "undo_verified"
-                        ? "success"
-                        : "warning"
+                          ? "success"
+                          : "warning"
                     }
                   />
 
@@ -1037,12 +1074,11 @@ export default function EditDetails() {
                   <Text variant="headingMd">{t("ProductChanges")}</Text>
                   <Text tone="subdued">
                     {totalChanges > 0
-                      ? `${t("Showing")} ${
-                          (currentPage - 1) * itemsPerPage + 1
-                        }-${Math.min(
-                          currentPage * itemsPerPage,
-                          totalChanges
-                        )} ${t("of")} ${totalChanges}`
+                      ? `${t("Showing")} ${(currentPage - 1) * itemsPerPage + 1
+                      }-${Math.min(
+                        currentPage * itemsPerPage,
+                        totalChanges
+                      )} ${t("of")} ${totalChanges}`
                       : `${t("Showing")} 0-0 ${t("of")} 0`}
                   </Text>
                 </InlineStack>
@@ -1147,3 +1183,6 @@ export default function EditDetails() {
     </Page>
   );
 }
+
+
+

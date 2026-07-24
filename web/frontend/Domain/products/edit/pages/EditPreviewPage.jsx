@@ -95,11 +95,11 @@ const AUTOCOMPLETE_OFF = "off";
 function getProductRowId(product) {
   return String(
     product?.__rowId ||
-      product?.shopifyProductId ||
-      product?.adminGraphqlApiId ||
-      product?.gid ||
-      product?.id ||
-      ""
+    product?.shopifyProductId ||
+    product?.adminGraphqlApiId ||
+    product?.gid ||
+    product?.id ||
+    ""
   ).trim();
 }
 
@@ -154,6 +154,7 @@ function MatchingProductsTable({
   variantsLoading = false,
   variantsError = null,
 }) {
+  const { t } = useTranslation();
   const previewByProductId = useMemo(() => {
     const map = new Map();
     for (const row of previewRows) {
@@ -201,7 +202,7 @@ function MatchingProductsTable({
         rows.push({
           key: variantId || `${productId}:variant-${rows.length}`,
           product,
-          variantTitle: variant?.title || "Default Title",
+          variantTitle: variant?.title || t("defaultVariantTitle", { defaultValue: "Default Title" }),
           currentValue:
             variant?.oldValue?.displayText ??
             variant?.oldValue ??
@@ -213,7 +214,7 @@ function MatchingProductsTable({
     }
 
     return rows;
-  }, [isPriceField, previewByProductId, safeProducts, variantsByProductId]);
+  }, [isPriceField, previewByProductId, safeProducts, t, variantsByProductId]);
 
   if (loading) {
     return (
@@ -228,8 +229,13 @@ function MatchingProductsTable({
   if (!safeProducts.length) {
     return (
       <Card>
-        <EmptyState heading="No products match the current filters">
-          <p>Try changing or clearing filters to broaden the product set.</p>
+        <EmptyState heading={t("matchingProductsTable.emptyHeading", {
+          defaultValue: "No products match the current filters",
+        })}>
+          <p> {t("matchingProductsTable.emptyMessage", {
+            defaultValue:
+              "Try changing or clearing filters to broaden the product set.",
+          })}</p>
         </EmptyState>
       </Card>
     );
@@ -241,10 +247,14 @@ function MatchingProductsTable({
         <Box padding="400" borderBlockEndWidth="1" borderColor="border">
           <BlockStack gap="100">
             <Text as="h2" variant="headingMd">
-              Matching products
+             {t("matchingProductsTable.title", {
+                defaultValue: "Matching products",
+              })}
             </Text>
             {variantsError ? (
-              <Banner tone="critical" title="Unable to load current prices." />
+              <Banner tone="critical"  title={t("matchingProductsTable.pricesLoadError", {
+                  defaultValue: "Unable to load current prices.",
+                })} />
             ) : null}
           </BlockStack>
         </Box>
@@ -254,13 +264,32 @@ function MatchingProductsTable({
           </Box>
         ) : (
           <IndexTable
-            resourceName={{ singular: "product", plural: "products" }}
+            resourceName={{
+              singular: t("matchingProductsTable.resourceSingular", {
+                defaultValue: "product",
+              }),
+              plural: t("matchingProductsTable.resourcePlural", {
+                defaultValue: "products",
+              }),
+            }}
             itemCount={priceRows.length}
             selectable={false}
             headings={[
-              { title: "Product" },
-              { title: "Current price" },
-              { title: "New price" },
+              {
+                title: t("matchingProductsTable.columnProduct", {
+                  defaultValue: "Product",
+                }),
+              },
+              {
+                title: t("matchingProductsTable.columnCurrentPrice", {
+                  defaultValue: "Current price",
+                }),
+              },
+              {
+                title: t("matchingProductsTable.columnNewPrice", {
+                  defaultValue: "New price",
+                }),
+              },
             ]}
           >
             {priceRows.map((row, index) => (
@@ -295,9 +324,14 @@ function MatchingProductsTable({
         )}
         <Box padding="400" borderBlockStartWidth="1" borderColor="border">
           <InlineStack align="space-between" blockAlign="center">
-            <Text as="p" variant="bodySm" tone="subdued">
-              Showing {pagination?.page || 1} of {pagination?.totalPages || 1}
+             <Text as="p" variant="bodySm" tone="subdued">
+              {t("matchingProductsTable.showingPage", {
+                page: pagination?.page || 1,
+                totalPages: pagination?.totalPages || 1,
+                defaultValue: "Showing {{page}} of {{totalPages}}",
+              })}
             </Text>
+            
             <Pagination
               hasPrevious={Boolean(pagination?.hasPrevPage)}
               onPrevious={onPrev}
@@ -314,21 +348,59 @@ function MatchingProductsTable({
     <Card padding="0">
       <Box padding="400" borderBlockEndWidth="1" borderColor="border">
         <Text as="h2" variant="headingMd">
-          Matching products
+           {t("matchingProductsTable.title", {
+            defaultValue: "Matching products",
+          })}
         </Text>
       </Box>
       <IndexTable
-        resourceName={{ singular: "product", plural: "products" }}
+        resourceName={{
+          singular: t("matchingProductsTable.resourceSingular", {
+            defaultValue: "product",
+          }),
+          plural: t("matchingProductsTable.resourcePlural", {
+            defaultValue: "products",
+          }),
+        }}
         itemCount={safeProducts.length}
         selectable={false}
-        headings={[
-          { title: "Product" },
-          { title: "Status" },
-          { title: "Inventory" },
-          { title: "Product type" },
-          { title: "Vendor" },
-          { title: "Current value" },
-          { title: "Preview value" },
+        
+       headings={[
+          {
+            title: t("matchingProductsTable.columnProduct", {
+              defaultValue: "Product",
+            }),
+          },
+          {
+            title: t("matchingProductsTable.columnStatus", {
+              defaultValue: "Status",
+            }),
+          },
+          {
+            title: t("matchingProductsTable.columnInventory", {
+              defaultValue: "Inventory",
+            }),
+          },
+          {
+            title: t("matchingProductsTable.columnProductType", {
+              defaultValue: "Product type",
+            }),
+            },
+          {
+            title: t("matchingProductsTable.columnVendor", {
+              defaultValue: "Vendor",
+            }),
+          },
+          {
+            title: t("matchingProductsTable.columnCurrentValue", {
+              defaultValue: "Current value",
+            }),
+          },
+          {
+            title: t("matchingProductsTable.columnPreviewValue", {
+              defaultValue: "Preview value",
+            }),
+          },
         ]}
       >
         {safeProducts.map((product, index) => {
@@ -377,9 +449,14 @@ function MatchingProductsTable({
       </IndexTable>
       <Box padding="400" borderBlockStartWidth="1" borderColor="border">
         <InlineStack align="space-between" blockAlign="center">
-          <Text as="p" variant="bodySm" tone="subdued">
-            Showing {pagination?.page || 1} of {pagination?.totalPages || 1}
+           <Text as="p" variant="bodySm" tone="subdued">
+            {t("matchingProductsTable.showingPage", {
+              page: pagination?.page || 1,
+              totalPages: pagination?.totalPages || 1,
+              defaultValue: "Showing {{page}} of {{totalPages}}",
+            })}
           </Text>
+         
           <Pagination
             hasPrevious={Boolean(pagination?.hasPrevPage)}
             onPrevious={onPrev}
@@ -434,8 +511,8 @@ function getDefaultEditTypeValue(field) {
 function getRunEditHistoryId(response) {
   const data =
     response?.data &&
-    typeof response.data === "object" &&
-    !Array.isArray(response.data)
+      typeof response.data === "object" &&
+      !Array.isArray(response.data)
       ? response.data
       : {};
   const candidate =
@@ -738,7 +815,7 @@ export default function EditPreviewPage() {
       const fieldError = previewValidationErrors[0]?.message;
       showError(
         fieldError ||
-          toSafeErrorMessage(t, previewQuery.error, "common.errors.generic")
+        toSafeErrorMessage(t, previewQuery.error, "common.errors.generic")
       );
     }
   }, [previewQuery.error, previewValidationErrors, showError, t]);
@@ -759,11 +836,11 @@ export default function EditPreviewPage() {
   const [hasGeneratedPreview, setHasGeneratedPreview] = useState(false);
   const previewRegistryVersion = previewData?.previewFingerprint
     ? {
-        fieldRegistryVersion:
-          previewData.previewFingerprint.fieldRegistryVersion || null,
-        operatorRegistryVersion:
-          previewData.previewFingerprint.operatorRegistryVersion || null,
-      }
+      fieldRegistryVersion:
+        previewData.previewFingerprint.fieldRegistryVersion || null,
+      operatorRegistryVersion:
+        previewData.previewFingerprint.operatorRegistryVersion || null,
+    }
     : null;
 
   useEffect(() => {
@@ -802,12 +879,12 @@ export default function EditPreviewPage() {
   }, [editType, draftInputValue, searchReplace?.search, selectedField]);
   const hasFreshPreview = Boolean(
     previewFingerprint?.previewId &&
-      previewFingerprint?.filterHash &&
-      previewFingerprint?.mirrorBatchId &&
-      previewRegistryVersion?.fieldRegistryVersion &&
-      previewRegistryVersion?.operatorRegistryVersion &&
-      previewRequestKey &&
-      previewRequestKey === currentPreviewRequestKey
+    previewFingerprint?.filterHash &&
+    previewFingerprint?.mirrorBatchId &&
+    previewRegistryVersion?.fieldRegistryVersion &&
+    previewRegistryVersion?.operatorRegistryVersion &&
+    previewRequestKey &&
+    previewRequestKey === currentPreviewRequestKey
   );
   const shouldShowPreviewStale = hasGeneratedPreview && !hasFreshPreview;
   const matchingTotal = Number(matchingProductsQuery.totalCount || 0);
@@ -855,11 +932,11 @@ export default function EditPreviewPage() {
   );
   const hasPreviewRegistryMismatch = Boolean(
     previewRegistryVersion &&
-      filterRegistryVersions &&
-      (String(previewRegistryVersion.fieldRegistryVersion || "") !==
-        String(filterRegistryVersions.fieldRegistryVersion || "") ||
-        String(previewRegistryVersion.operatorRegistryVersion || "") !==
-          String(filterRegistryVersions.operatorRegistryVersion || ""))
+    filterRegistryVersions &&
+    (String(previewRegistryVersion.fieldRegistryVersion || "") !==
+      String(filterRegistryVersions.fieldRegistryVersion || "") ||
+      String(previewRegistryVersion.operatorRegistryVersion || "") !==
+      String(filterRegistryVersions.operatorRegistryVersion || ""))
   );
   const requiresLocationSelection =
     editType?.inputType === InputType.LOCATION_SELECT;
@@ -1229,13 +1306,13 @@ export default function EditPreviewPage() {
                           onChange={setDestructiveConfirmationValue}
                           error={
                             destructiveConfirmationValue &&
-                            destructiveConfirmationValue !==
+                              destructiveConfirmationValue !==
                               fieldConfirmationPhrase
                               ? t("errors.confirmationMismatch", {
-                                  phrase: fieldConfirmationPhrase,
-                                  defaultValue:
-                                    "You must type {{phrase}} exactly.",
-                                })
+                                phrase: fieldConfirmationPhrase,
+                                defaultValue:
+                                  "You must type {{phrase}} exactly.",
+                              })
                               : undefined
                           }
                           autoComplete={AUTOCOMPLETE_OFF}

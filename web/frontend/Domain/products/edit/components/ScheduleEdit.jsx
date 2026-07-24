@@ -372,19 +372,19 @@ function ScheduleEdit({
       >
         <Modal.Section>
           <FormLayout>
-    {scheduleUpgradeMessage && (
-  <Banner
-    tone="warning"
-    title={t("upgradeRequiredTitle", { defaultValue: "Upgrade Required" })}
-    onDismiss={scheduleUpgradeRequired ? undefined : () => setUpgradeWarning(null)}
-    action={{
-      content: t("upgradePlanButton", { defaultValue: "Upgrade plan" }),
-      onAction: () => navigate(resolvedBillingUrl),
-    }}
-  >
-    <p>{scheduleUpgradeMessage}</p>
-  </Banner>
-)}
+            {scheduleUpgradeMessage && (
+              <Banner
+                tone="warning"
+                title={t("upgradeRequiredTitle", { defaultValue: "Upgrade Required" })}
+                onDismiss={scheduleUpgradeRequired ? undefined : () => setUpgradeWarning(null)}
+                action={{
+                  content: t("upgradePlanButton", { defaultValue: "Upgrade plan" }),
+                  onAction: () => navigate(resolvedBillingUrl),
+                }}
+              >
+                <p>{scheduleUpgradeMessage}</p>
+              </Banner>
+            )}
 
 
             {error && (
@@ -465,8 +465,8 @@ function ScheduleEdit({
                   error={
                     undoStartEditChecked && !undoStartEditDate
                       ? t("undoDateRequired", {
-                          defaultValue: "Choose an undo date.",
-                        })
+                        defaultValue: "Choose an undo date.",
+                      })
                       : undefined
                   }
                 />
@@ -479,8 +479,8 @@ function ScheduleEdit({
                   error={
                     undoStartEditChecked && !undoStartEditTime
                       ? t("undoTimeRequired", {
-                          defaultValue: "Choose an undo time.",
-                        })
+                        defaultValue: "Choose an undo time.",
+                      })
                       : undefined
                   }
                 />
