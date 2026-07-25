@@ -9,20 +9,20 @@ datasource db {
 }
 
 model Product {
-  shop                        String
-  id                          String
-  mirrorBatchId               String
-  title                       String
-  handle                      String?
-  status                      String
-  productType                 String?
-  vendor                      String?
-  tags                        String[]
-  templateSuffix              String?
+  shop           String
+  id             String
+  mirrorBatchId  String
+  title          String
+  handle         String?
+  status         String
+  productType    String?
+  vendor         String?
+  tags           String[]
+  templateSuffix String?
 
   // split raw html from filterable text
-  descriptionHtml             String?
-  descriptionText             String?
+  descriptionHtml String?
+  descriptionText String?
 
   createdAt                   DateTime?
   updatedAt                   DateTime?
@@ -123,7 +123,6 @@ model Product {
   @@index([shop, mirrorBatchId, option3Name])
   @@index([shop, mirrorBatchId, productType])
   @@index([shop, mirrorBatchId, vendor])
-
   // add this because search/filter now uses descriptionText
   @@index([shop, mirrorBatchId, descriptionText])
 }
@@ -567,8 +566,8 @@ model ExportHistory {
   scheduledTask String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  @@unique([scheduledTask])
 
+  @@unique([scheduledTask])
   @@index([shop, createdAt])
   @@index([shop, status])
   @@index([shop, isFavourite])

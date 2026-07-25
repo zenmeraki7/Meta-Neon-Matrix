@@ -1,5 +1,4 @@
 // web/shopify.js
-
 import {
   BillingInterval,
   LATEST_API_VERSION,
