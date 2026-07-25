@@ -1,0 +1,36 @@
+name: Layer Boundary Enforcement
+
+on:
+  pull_request:
+    paths:
+      - "web/controllers/**"
+      - "web/routes/**"
+      - "web/services/**"
+      - "web/Jobs/Workers/**"
+      - "web/repositories/**"
+      - "web/layerBoundary.prismaImport.contract.test.js"
+      - "package.json"
+      - ".github/workflows/layer-boundary-enforcement.yml"
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  enforce-layer-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run layer-boundary contract
+        run: npm run test:layer-boundary

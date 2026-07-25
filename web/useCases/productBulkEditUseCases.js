@@ -1,0 +1,486 @@
+import ProductBulkService from "../services/productService/productBulkEditService.js";
+import UndoEditService from "../services/productService/productBulkUndoService.js";
+import { clearAllCachesForShop } from "../utils/cacheUtils.js";
+import { getTargetingVersionBundle } from "../services/targeting/versioning.js";
+
+import { requestEditHistoryCancellation } from "../services/operationCancellationService.js";
+import {
+  requestPauseEditOperation,
+  resumeEditOperation,
+} from "../services/operationPauseResumeService.js";
+
+const EMPTY_OBJECT = Object.freeze({});
+const EMPTY_ARRAY = Object.freeze([]);
+
+function buildUseCaseError(message, code = "VALIDATION_FAILED") {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function assertPlainCommand(command) {
+  if (!command || typeof command !== "object" || Array.isArray(command)) {
+    throw buildUseCaseError("Invalid bulk edit command");
+  }
+
+  if (!command.shop || typeof command.shop !== "string") {
+    throw buildUseCaseError("Authentication required", "UNAUTHENTICATED");
+  }
+
+  return command;
+}
+
+function assertRequiredString(value, fieldName, code = "VALIDATION_FAILED") {
+  if (!value || typeof value !== "string") {
+    throw buildUseCaseError(`${fieldName} is required`, code);
+  }
+
+  return value;
+}
+
+function assertMutationCommand(command) {
+  command = assertPlainCommand(command);
+
+  assertRequiredString(
+    command.idempotencyKey,
+    "Idempotency-Key",
+    "IDEMPOTENCY_KEY_REQUIRED"
+  );
+
+  return command;
+}
+
+function assertHistoryMutationCommand(command) {
+  command = assertMutationCommand(command);
+  assertRequiredString(command.historyId, "historyId");
+  return command;
+}
+
+function assertUndoCommand(command) {
+  command = assertHistoryMutationCommand(command);
+  assertRequiredString(
+    command.confirmationOperationId,
+    "confirmationOperationId",
+    "INVALID_OPERATION_ID"
+  );
+  return command;
+}
+
+function assertEditPayload(command) {
+  assertRequiredString(command.editedField, "editedField");
+  assertRequiredString(command.editType, "editType");
+
+  return command;
+}
+
+function assertScheduledCommand(command) {
+  command = assertMutationCommand(command);
+
+  assertRequiredString(command.scheduledAt, "scheduledAt");
+  assertRequiredString(command.timezone, "timezone");
+  assertRequiredString(command.freezeMode, "freezeMode");
+  if (String(command.freezeMode || "") !== "STATIC_AT_SCHEDULE_CREATE") {
+    throw buildUseCaseError(
+      "Scheduled edits must freeze the approved preview at schedule creation",
+      "STATIC_SCHEDULE_FREEZE_REQUIRED"
+    );
+  }
+  assertRequiredString(
+    command.previewContractId || command.previewId,
+    "previewContractId",
+    "PREVIEW_ID_REQUIRED"
+  );
+  if (
+    !Number.isInteger(command.approvedTargetCount) ||
+    command.approvedTargetCount < 0
+  ) {
+    throw buildUseCaseError(
+      "approvedTargetCount is required",
+      "APPROVED_TARGET_COUNT_REQUIRED"
+    );
+  }
+
+  return command;
+}
+
+function assertPreviewFingerprint(command) {
+  assertRequiredString(command.previewId, "previewId", "PREVIEW_ID_REQUIRED");
+
+  assertRequiredString(
+    command.previewFilterHash,
+    "previewFilterHash",
+    "PREVIEW_FINGERPRINT_REQUIRED"
+  );
+
+  assertRequiredString(
+    command.previewFieldRegistryVersion,
+    "previewFieldRegistryVersion",
+    "PREVIEW_REGISTRY_VERSION_REQUIRED"
+  );
+
+  assertRequiredString(
+    command.previewOperatorRegistryVersion,
+    "previewOperatorRegistryVersion",
+    "PREVIEW_REGISTRY_VERSION_REQUIRED"
+  );
+}
+
+function assertPreviewRegistryVersionMatches(command) {
+  const current = getTargetingVersionBundle();
+
+  const expectedFieldRegistryVersion = String(
+    current?.fieldRegistryVersion || ""
+  );
+
+  const expectedOperatorRegistryVersion = String(
+    current?.operatorRegistryVersion || ""
+  );
+
+  const actualFieldRegistryVersion = String(
+    command.previewFieldRegistryVersion || ""
+  );
+
+  const actualOperatorRegistryVersion = String(
+    command.previewOperatorRegistryVersion || ""
+  );
+
+  if (
+    actualFieldRegistryVersion !== expectedFieldRegistryVersion ||
+    actualOperatorRegistryVersion !== expectedOperatorRegistryVersion
+  ) {
+    throw buildUseCaseError(
+      "PREVIEW_REGISTRY_VERSION_MISMATCH",
+      "PREVIEW_REGISTRY_VERSION_MISMATCH"
+    );
+  }
+}
+
+function buildServiceContext(command) {
+  return Object.freeze({
+    shop: command.shop,
+    accessToken: command.accessToken || null,
+    oauthScopes: command.oauthScopes || null,
+    actor: command.actor || null,
+    subscription: command.subscription || null,
+    entitlement: command.entitlement || null,
+    activePlan: command.activePlan || EMPTY_OBJECT,
+  });
+}
+
+function createProductBulkService(command) {
+  return new ProductBulkService(buildServiceContext(command));
+}
+
+function createUndoEditService(command) {
+  return new UndoEditService(buildServiceContext(command));
+}
+
+function requireResult(result, message = "Operation failed") {
+  if (!result) {
+    throw buildUseCaseError(message, "INTERNAL_ERROR");
+  }
+
+  return result;
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : EMPTY_ARRAY;
+}
+
+async function clearShopCachesBestEffort(shop) {
+  try {
+    await clearAllCachesForShop(shop);
+  } catch (error) {
+    console.warn("[productBulkEditUseCases] Cache invalidation failed", {
+      shop,
+      code: error?.code || "CACHE_INVALIDATION_FAILED",
+      message: error?.message || "Unknown cache invalidation failure",
+    });
+  }
+}
+
+function toPreviewServiceInput(command) {
+  return Object.freeze({
+    shop: command.shop,
+
+    field: command.editedField,
+    editedField: command.editedField,
+    operation: command.operation || null,
+    editType: command.editType,
+    editValue: command.editValue,
+
+    rawFilterInput: safeArray(command.rawFilterInput),
+    filterAst: command.filterAst || null,
+    searchKey: command.searchKey || null,
+    replaceText: command.replaceText || null,
+    supportValue: command.supportValue,
+    locationId: command.locationId || null,
+    rounding: command.rounding || "NONE",
+    operationKey: command.operationKey || null,
+    productIds: safeArray(command.productIds),
+
+    lang: command.lang || "en",
+    cursor: command.cursor || null,
+    page: command.page || 1,
+    limit: command.limit || null,
+
+    actor: command.actor || null,
+    subscription: command.subscription || null,
+    entitlement: command.entitlement || null,
+    activePlan: command.activePlan || EMPTY_OBJECT,
+    actorId: command.actor?.actorId || command.actor?.userId || null,
+  });
+}
+
+function toExecuteInnerCommand(command) {
+  return Object.freeze({
+    editedField: command.editedField,
+    operation: command.operation || null,
+    editType: command.editType,
+    editValue: command.editValue,
+
+    searchKey: command.searchKey || null,
+    replaceText: command.replaceText || null,
+    supportValue: command.supportValue,
+    locationId: command.locationId || null,
+
+    rawFilterInput: safeArray(command.rawFilterInput),
+    filterAst: command.filterAst || null,
+
+    previewId: command.previewId,
+    previewContractId: command.previewContractId || command.previewId,
+    previewSignature: command.previewSignature || null,
+    previewFilterHash: command.previewFilterHash,
+    previewMirrorBatchId: command.previewMirrorBatchId || null,
+    previewFieldRegistryVersion: command.previewFieldRegistryVersion,
+    previewOperatorRegistryVersion: command.previewOperatorRegistryVersion,
+
+    confirmBroadTarget: Boolean(command.confirmBroadTarget),
+    criticalConfirmationText: command.criticalConfirmationText || null,
+
+    operationKey: command.operationKey || null,
+    productIds: safeArray(command.productIds),
+    title: command.title || null,
+    cursor: command.cursor || null,
+    limit: command.limit || null,
+  });
+}
+
+function toExecuteServiceInput(command) {
+  return Object.freeze({
+    shop: command.shop,
+    command: toExecuteInnerCommand(command),
+    idempotencyKey: command.idempotencyKey,
+
+    actor: command.actor || null,
+    subscription: command.subscription || null,
+    entitlement: command.entitlement || null,
+    activePlan: command.activePlan || EMPTY_OBJECT,
+  });
+}
+
+function toScheduleInnerCommand(command) {
+  return Object.freeze({
+    title: command.title || null,
+    scheduledAt: command.scheduledAt,
+    scheduledUndoAt: command.scheduledUndoAt || null,
+    freezeMode: command.freezeMode,
+
+    previewId: command.previewId || null,
+    previewContractId: command.previewContractId || command.previewId,
+    previewFilterHash: command.previewFilterHash || null,
+    previewMirrorBatchId: command.previewMirrorBatchId || null,
+    previewFieldRegistryVersion: command.previewFieldRegistryVersion || null,
+    previewOperatorRegistryVersion:
+      command.previewOperatorRegistryVersion || null,
+    approvedTargetCount: command.approvedTargetCount,
+    previewSignature: command.previewSignature || null,
+    timezone: command.timezone || null,
+    scheduleConfirmationText: command.scheduleConfirmationText || null,
+  });
+}
+
+function toScheduleServiceInput(command) {
+  return Object.freeze({
+    shop: command.shop,
+    command: toScheduleInnerCommand(command),
+    idempotencyKey: command.idempotencyKey,
+
+    actor: command.actor || null,
+    subscription: command.subscription || null,
+    entitlement: command.entitlement || null,
+    activePlan: command.activePlan || EMPTY_OBJECT,
+  });
+}
+
+function toHistoryLifecycleInput(command) {
+  return Object.freeze({
+    shop: command.shop,
+    historyId: command.historyId,
+    idempotencyKey: command.idempotencyKey,
+
+    actor: command.actor || null,
+    subscription: command.subscription || null,
+    entitlement: command.entitlement || null,
+    activePlan: command.activePlan || EMPTY_OBJECT,
+  });
+}
+
+function toUndoServiceInput(command) {
+  return Object.freeze({
+    ...toHistoryLifecycleInput(command),
+    confirmationOperationId: command.confirmationOperationId,
+  });
+}
+
+function toRetryFailedOnlyServiceInput(command) {
+  return Object.freeze({
+    ...toHistoryLifecycleInput(command),
+  });
+}
+
+function toCancelServiceInput(command) {
+  return Object.freeze({
+    ...toHistoryLifecycleInput(command),
+    reason: command.reason || null,
+  });
+}
+
+function shouldValidateSchedulePreview(command) {
+  return String(command.freezeMode || "") === "STATIC_AT_SCHEDULE_CREATE";
+}
+
+function assertSchedulePreviewPolicy(command) {
+  if (!shouldValidateSchedulePreview(command)) {
+    return;
+  }
+
+  assertPreviewFingerprint(command);
+  assertPreviewRegistryVersionMatches(command);
+}
+
+export const productBulkEditUseCases = Object.freeze({
+  async preview(command) {
+    command = assertPlainCommand(command);
+    assertEditPayload(command);
+
+    const service = createProductBulkService(command);
+
+    const result = await service.trackEditProducts(
+      toPreviewServiceInput(command)
+    );
+
+    return requireResult(result, "Preview generation failed");
+  },
+
+  async execute(command) {
+    command = assertMutationCommand(command);
+    assertRequiredString(
+      command.previewContractId || command.previewId,
+      "previewContractId",
+      "PREVIEW_ID_REQUIRED"
+    );
+
+    const service = createProductBulkService(command);
+
+    const result = await service.bulkEditProducts(
+      toExecuteServiceInput(command)
+    );
+
+    requireResult(result, "Bulk edit execution failed");
+
+    await clearShopCachesBestEffort(command.shop);
+
+    return result;
+  },
+
+  async schedule(command) {
+    command = assertScheduledCommand(command);
+    assertSchedulePreviewPolicy(command);
+
+    const service = createProductBulkService(command);
+
+    const result = await service.createScheduledEdit(
+      toScheduleServiceInput(command)
+    );
+
+    return requireResult(result, "Scheduled edit creation failed");
+  },
+
+  async previewVariantDetails(command) {
+    command = assertPlainCommand(command);
+    assertRequiredString(command.previewId, "previewId");
+    assertRequiredString(command.productId, "productId");
+
+    const service = createProductBulkService(command);
+    const result = await service.getPreviewVariantDetails({
+      previewId: command.previewId,
+      productId: command.productId,
+      page: command.page || 1,
+      limit: command.limit || 50,
+      actorId: command.actor?.actorId || command.actor?.userId || null,
+    });
+    return requireResult(result, "Variant preview details failed");
+  },
+});
+
+export const productBulkUndoUseCases = Object.freeze({
+  async undo(command) {
+    command = assertUndoCommand(command);
+
+    const service = createUndoEditService(command);
+    const undoInput = toUndoServiceInput(command);
+    const result = await service.undoEdit(undoInput.historyId, {
+      idempotencyKey: undoInput.idempotencyKey,
+      confirmationOperationId: undoInput.confirmationOperationId,
+      actor: undoInput.actor || null,
+      subscription: undoInput.subscription || null,
+      entitlement: undoInput.entitlement || null,
+      activePlan: undoInput.activePlan || EMPTY_OBJECT,
+    });
+
+    return requireResult(result, "Undo operation failed");
+  },
+});
+
+export const productOperationLifecycleUseCases = Object.freeze({
+  async cancel(command) {
+    command = assertHistoryMutationCommand(command);
+
+    const result = await requestEditHistoryCancellation(
+      toCancelServiceInput(command)
+    );
+
+    return requireResult(result, "Cancellation request failed");
+  },
+
+  async pause(command) {
+    command = assertHistoryMutationCommand(command);
+
+    const result = await requestPauseEditOperation(
+      toHistoryLifecycleInput(command)
+    );
+
+    return requireResult(result, "Pause request failed");
+  },
+
+  async resume(command) {
+    command = assertHistoryMutationCommand(command);
+
+    const result = await resumeEditOperation(toHistoryLifecycleInput(command));
+
+    return requireResult(result, "Resume request failed");
+  },
+
+  async retryFailedOnly(command) {
+    command = assertHistoryMutationCommand(command);
+
+    const service = createProductBulkService(command);
+
+    const result = await service.retryFailedOnly(
+      toRetryFailedOnlyServiceInput(command)
+    );
+
+    return requireResult(result, "Retry failed-only request failed");
+  },
+});

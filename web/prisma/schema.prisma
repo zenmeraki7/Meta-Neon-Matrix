@@ -1,0 +1,2452 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  shop             String
+  id               String
+  mirrorBatchId    String
+  title            String
+  handle           String?
+  status           String
+  statusNormalized ShopifyProductStatus @default(UNKNOWN)
+  productType      String?
+  vendor           String?
+  tags             String[]
+  templateSuffix   String?
+
+  // split raw html from filterable text
+  descriptionHtml String?
+  descriptionText String?
+
+  createdAt                   DateTime?
+  updatedAt                   DateTime?
+  publishedAt                 DateTime?
+  seoTitle                    String?
+  seoDescription              String?
+  totalInventory              Int?
+  categoryId                  String?
+  categoryName                String?
+  googleShoppingEnabled       Boolean?
+  googleShoppingAgeGroup      String?
+  googleShoppingCategory      String?
+  googleShoppingColor         String?
+  googleShoppingCondition     String?
+  googleShoppingCustomLabel0  String?
+  googleShoppingCustomLabel1  String?
+  googleShoppingCustomLabel2  String?
+  googleShoppingCustomLabel3  String?
+  googleShoppingCustomLabel4  String?
+  googleShoppingCustomProduct Boolean?
+  googleShoppingGender        String?
+  googleShoppingMpn           String?
+  googleShoppingMaterial      String?
+  googleShoppingSize          String?
+  googleShoppingSizeSystem    String?
+  googleShoppingSizeType      String?
+  categoryAgeGroup            String?
+  categoryColor               String?
+  categoryFabric              String?
+  categoryFit                 String?
+  categorySize                String?
+  categoryTargetGender        String?
+  categoryWaistRise           String?
+  featuredImageUrl            String?
+  featuredImageAltText        String?
+  optionsJson                 Json?
+  collectionsJson             Json?
+  option1Name                 String?
+  option2Name                 String?
+  option3Name                 String?
+  variantCount                Int?      @default(0)
+  visibleOnlineStore          Boolean?
+  lastSourceEntityUpdatedAt   DateTime? @map("lastSourceUpdatedAt")
+  lastSourceEventOccurredAt   DateTime? @map("lastSourceEventAt")
+  lastChangeSource            String?   @map("lastSourceKind")
+  reconciliationCompletedAt   DateTime? @map("lastReconciledAt")
+  variants                    Variant[]
+  mirrorBatch                 MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
+  media                       ProductMediaMirror[]
+  inventoryItems              InventoryItemMirror[]
+  collections                 ProductCollection[]
+
+  @@id([shop, id, mirrorBatchId])
+  @@index([shop, mirrorBatchId])
+  @@index([shop, mirrorBatchId, categoryAgeGroup])
+  @@index([shop, mirrorBatchId, categoryColor])
+  @@index([shop, mirrorBatchId, categoryName])
+  @@index([shop, mirrorBatchId, categorySize])
+  @@index([shop, mirrorBatchId, categoryTargetGender])
+  @@index([shop, mirrorBatchId, googleShoppingCategory])
+  @@index([shop, mirrorBatchId, googleShoppingCondition])
+  @@index([shop, mirrorBatchId, googleShoppingGender])
+  @@index([shop, mirrorBatchId, googleShoppingAgeGroup])
+  @@index([shop, mirrorBatchId, googleShoppingColor])
+  @@index([shop, mirrorBatchId, googleShoppingMaterial])
+  @@index([shop, mirrorBatchId, googleShoppingMpn])
+  @@index([shop, mirrorBatchId, googleShoppingSize])
+  @@index([shop, mirrorBatchId, option1Name])
+  @@index([shop, mirrorBatchId, option2Name])
+  @@index([shop, mirrorBatchId, option3Name])
+  @@index([shop, mirrorBatchId, productType])
+  @@index([shop, mirrorBatchId, vendor])
+  @@index([shop, mirrorBatchId, statusNormalized])
+  @@index([shop, mirrorBatchId, title, id])
+  @@index([shop, mirrorBatchId, handle, id])
+  @@index([shop, mirrorBatchId, createdAt, id])
+  @@index([shop, mirrorBatchId, updatedAt, id])
+  @@index([shop, mirrorBatchId, publishedAt, id])
+  @@index([shop, mirrorBatchId, variantCount])
+  @@index([shop, mirrorBatchId, templateSuffix])
+}
+
+enum ShopifyProductStatus {
+  ACTIVE
+  DRAFT
+  ARCHIVED
+  UNKNOWN
+}
+
+model Variant {
+  shop                String
+  id                  String
+  productId           String
+  mirrorBatchId       String
+  inventoryItemId     String?
+  title               String?
+  sku                 String?
+  barcode             String?
+  price               Decimal? @db.Decimal(20, 6)
+  compareAtPrice      Decimal? @db.Decimal(20, 6)
+  inventoryQuantity   Int?
+  inventoryPolicy     String?
+  taxable             Boolean?
+  taxCode             String?
+  position            Int?
+  selectedOptionsJson Json?
+  cost                Decimal? @db.Decimal(20, 6)
+  countryOfOrigin     String?
+  hsTariffCode        String?
+  weight              Decimal? @db.Decimal(20, 6)
+  weightUnit          String?
+  option1Value        String?
+  option2Value        String?
+  option3Value        String?
+  physicalProduct     Boolean?
+  profitMargin        Decimal? @db.Decimal(20, 6)
+  tracked             Boolean?
+  product             Product  @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+  inventoryItems      InventoryItemMirror[]
+
+  @@id([shop, id, mirrorBatchId])
+  @@index([shop, mirrorBatchId])
+  // Required by cross-batch product-delete webhook cleanup.
+  @@index([shop, productId])
+  @@index([shop, mirrorBatchId, title])
+  @@index([shop, mirrorBatchId, cost])
+  @@index([shop, mirrorBatchId, countryOfOrigin])
+  @@index([shop, mirrorBatchId, hsTariffCode])
+  @@index([shop, mirrorBatchId, inventoryPolicy])
+  @@index([shop, mirrorBatchId, weight])
+  @@index([shop, mirrorBatchId, option1Value])
+  @@index([shop, mirrorBatchId, option2Value])
+  @@index([shop, mirrorBatchId, option3Value])
+  @@index([shop, mirrorBatchId, weightUnit])
+  @@index([shop, mirrorBatchId, sku])
+  @@index([shop, mirrorBatchId, barcode])
+  @@index([shop, mirrorBatchId, inventoryItemId])
+  @@index([shop, mirrorBatchId, price])
+  @@index([shop, mirrorBatchId, compareAtPrice])
+  @@index([shop, mirrorBatchId, inventoryQuantity])
+  @@index([shop, mirrorBatchId, position])
+  @@index([shop, mirrorBatchId, productId, position])
+}
+
+/// Legacy compatibility table. Store.shopUrl is the authoritative tenant key.
+/// No operational model may reference this table.
+model LegacyShop {
+  id            String    @id
+  shopifyDomain String    @unique @map("shopify_domain")
+  oauthScopes   String @map("scope")
+  plan          String    @default("free")
+  legacyActive  Boolean   @default(true) @map("active")
+  installedAt   DateTime  @default(now()) @map("installed_at")
+  uninstalledAt DateTime? @map("uninstalled_at")
+  legacyLastSyncedAt DateTime? @map("last_synced_at")
+
+  @@map("shops")
+}
+
+model VariantMetafield {
+  id                 BigInt     @id @default(autoincrement())
+  shopDomain             String     @map("shop_id")
+  variantId          BigInt     @map("variant_id")
+  shopifyMetafieldId String?    @map("shopify_metafield_id")
+  namespace          String
+  key                String
+  metafieldType      String? @map("type")
+  value              String?
+  pendingValue       String?    @map("pending_value")
+  compareDigest      String?    @map("compare_digest")
+  shopifyVersion     BigInt     @default(0) @map("shopify_version")
+  editStatus         EditStatus @default(SYNCED) @map("edit_status")
+  isDirty            Boolean    @default(false) @map("is_dirty")
+  lastEditedAt       DateTime?  @map("last_edited_at")
+  shopifySynchronizedAt DateTime? @map("last_synced_at")
+
+  shop    Store            @relation(fields: [shopDomain], references: [shopUrl], onDelete: Cascade)
+  changes BulkEditChange[]
+
+  @@unique([shopDomain, variantId, namespace, key])
+  @@unique([shopDomain, id])
+  @@index([shopDomain, isDirty])
+  @@map("variant_metafields")
+}
+
+model DeadLetterChange {
+  id             String   @id @db.Uuid
+  originalChange Json     @map("original_change")
+  errorCode      String   @map("error_code")
+  failedAt       DateTime @default(now()) @map("failed_at")
+  shopDomain         String   @map("shop_id")
+  notified       Boolean  @default(false)
+
+  @@index([shopDomain, failedAt])
+  @@index([notified, failedAt])
+  @@map("dead_letter_changes")
+}
+
+model BulkEditSession {
+  id        BigInt        @id @default(autoincrement())
+  shopDomain    String        @map("shop_id")
+  status    SessionStatus @default(DRAFT)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  shop    Store            @relation(fields: [shopDomain], references: [shopUrl], onDelete: Cascade)
+  changes BulkEditChange[]
+
+  @@index([shopDomain, status, updatedAt])
+  @@index([shopDomain, createdAt, id])
+  @@unique([shopDomain, id])
+  @@map("bulk_edit_sessions")
+}
+
+model BulkEditChange {
+  id                 BigInt       @id @default(autoincrement())
+  shopDomain             String       @map("shop_id")
+  sessionId          BigInt       @map("session_id")
+  variantMetafieldId BigInt       @map("variant_metafield_id")
+  newValue           String       @map("new_value")
+  compareDigest      String       @map("compare_digest")
+  status             ChangeStatus @default(PENDING)
+  errorCode          String?      @map("error_code")
+  retryable          Boolean      @default(true)
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  session          BulkEditSession  @relation(fields: [shopDomain, sessionId], references: [shopDomain, id])
+  variantMetafield VariantMetafield @relation(fields: [shopDomain, variantMetafieldId], references: [shopDomain, id])
+
+  @@unique([shopDomain, sessionId, variantMetafieldId])
+  @@index([shopDomain, sessionId, status])
+  @@index([shopDomain, status, updatedAt])
+  @@map("bulk_edit_changes")
+}
+
+model SyncCursor {
+  id           BigInt    @id @default(autoincrement())
+  shopDomain       String    @map("shop_id")
+  syncResourceType String @map("resource_type")
+  cursorValue  String?   @map("cursor_value")
+  cursorAdvancedAt DateTime? @map("last_synced_at")
+
+  shop Store @relation(fields: [shopDomain], references: [shopUrl], onDelete: Cascade)
+
+  @@unique([shopDomain, syncResourceType])
+  @@map("sync_cursors")
+}
+
+model SpreadsheetFile {
+  id                 String    @id @default(cuid())
+  shop               String
+  editHistoryId      String?
+  operationType      String?
+  operationId        String?
+  status             String    @default("UPLOADED")
+  originalFilename   String?
+  storageKey         String?
+  fileChecksum       String? @map("checksum")
+  rowParseErrorCount Int?      @default(0)
+  validatedAt        DateTime?
+  downloadUrl        String?  @map("fileUrl")
+  columnMappings     Json?
+  totalRows          Int?
+  expiresAt          DateTime?
+  storageDeletedAt  DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([shop])
+  @@index([shop, editHistoryId])
+  @@index([shop, operationType, operationId])
+  @@index([expiresAt, id])
+}
+
+model Store {
+  id                              String            @id @default(cuid())
+  shopUrl                         String            @unique
+  shopEmail                       String?
+  /// Transitional fallback only; cleared after successful encryption/backfill.
+  accessToken                     String?
+  /// Authoritative application credential store.
+  accessTokenEncrypted            String?
+  accessTokenKeyVersion           String?
+  currentProductMirrorBatchId     String? @map("activeMirrorBatchId")
+  mirrorMutationVersion           BigInt            @default(0)
+  currentCollectionMirrorBatchId  String? @map("activeCollectionBatchId")
+  isCollectionSyncing             Boolean           @default(false)
+  lastCollectionSyncAt            DateTime?
+  isProductTypeSyncing            Boolean           @default(false)
+  lastProductTypeSyncAt           DateTime?
+  isProductInitiallySyncing       Boolean           @default(false) @map("isProductInitialySyning")
+  productInitialSyncProgress      Int               @default(0)
+  /// Authoritative product-sync lifecycle state. Boolean fields are compatibility projections.
+  syncProgressStage               SyncProgressStage @default(IDLE)
+  hasCompletedShopifyBulkJob      Boolean           @default(false) @map("shopifyBulkJobCompleted")
+  storeTotalProducts              Int               @default(0)
+  isProductSyncing                Boolean           @default(false)
+  lastProductSyncAt               DateTime?
+  lastProductSyncAttemptAt        DateTime?
+  lastProductSyncSubmittedAt      DateTime?
+  productSyncStartedAt            DateTime?
+  requiresProductSyncRecovery     Boolean           @default(false) @map("productSyncRecoveryRequired")
+  mirrorHealthState               MirrorHealthState @default(HEALTHY)
+  staleReason                     String?
+  requiresMirrorRepair            Boolean           @default(false) @map("repairRequired")
+  lastFullSyncAt                  DateTime?
+  lastIncrementalSyncAt           DateTime?
+  lastWebhookProcessedAt          DateTime?
+  lastReconcileAt                 DateTime?
+  lastInventoryReconcileAt        DateTime?
+  lastCollectionReconcileAt       DateTime?
+  mirrorUnsafeSince               DateTime?
+  lastSyncErrorSummary            String?
+  oauthScopes                     String?           @default("") @map("scope")
+  installedAt                     DateTime?
+  uninstalledAt                   DateTime?          @map("unInstalledAt")
+  installationStatus              StoreInstallationStatus @default(INSTALLED)
+  /// Compatibility projection only; installationStatus is authoritative.
+  legacyIsUninstalled             Boolean            @default(false) @map("isUnInstalled")
+  referralCode                    String?           @unique
+  referralLink                    String?           @unique
+  referredBy                      String?
+  refIsFirstSubscriptionCompleted Boolean           @default(false)
+  refSubscribedDate               DateTime?
+  refRewardExpiresAt              DateTime?
+  refRewarded                     Boolean           @default(false)
+  refSubscribedPlanDetails        Json?
+  refEarnedPrice                  Decimal           @default(0) @db.Decimal(20, 6)
+  isCreditAvailable               Boolean           @default(false)
+  lastActivityAt                  DateTime?
+  createdAt                       DateTime          @default(now())
+  updatedAt                       DateTime          @updatedAt
+  mirrorBatches                   MirrorBatch[]
+  currentProductMirrorBatch       MirrorBatch?       @relation("ActiveMirrorBatch", fields: [shopUrl, currentProductMirrorBatchId], references: [shop, id], onDelete: Restrict)
+  currentCollectionMirrorBatch    MirrorBatch?       @relation("ActiveCollectionBatch", fields: [shopUrl, currentCollectionMirrorBatchId], references: [shop, id], onDelete: Restrict)
+  productTombstones               ProductTombstone[]
+  mirrorMutationJournals          MirrorMutationJournal[]
+  variantMetafields               VariantMetafield[]
+  bulkEditSessions                BulkEditSession[]
+  syncCursors                     SyncCursor[]
+
+  @@index([isProductSyncing])
+  @@index([syncProgressStage, updatedAt])
+  @@index([lastProductSyncAt])
+  @@index([lastProductSyncAttemptAt])
+  @@index([lastProductSyncSubmittedAt])
+  @@index([productSyncStartedAt])
+  @@index([requiresProductSyncRecovery])
+  @@index([isCollectionSyncing])
+  @@index([lastCollectionSyncAt])
+  @@index([lastProductTypeSyncAt])
+  @@index([referredBy])
+  @@index([lastActivityAt])
+  @@index([installationStatus])
+  @@index([installedAt])
+  @@index([createdAt])
+}
+
+model Subscription {
+  id                    String             @id @default(cuid())
+  shop                  String             @unique
+  planKey               String?
+  planName              String?
+  subscriptionId        String?
+  status                SubscriptionStatus @default(FREE)
+  pendingSubscriptionId String?
+  pendingPlanKey        String?
+  pendingPlanName       String?
+  trialEndsAt           DateTime?
+  currentPeriodEnd      DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+}
+
+model Suggestion {
+  id         String   @id @default(cuid())
+  email      String
+  emailNormalized String
+  suggestion String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([emailNormalized])
+}
+
+model SyncHistory {
+  id                   String             @id @default(cuid())
+  shop                 String
+  shopifyBulkOperationId      String?            @map("bulkOperationId")
+  mirrorBatchId          String?            @map("syncBatchId")
+  sourceResponseUrl    String?   @map("responseUrl")
+  status               SyncStatus         @default(processing)
+  stage                String?
+  errorMessage         String?
+  duration             Int?               @default(0)
+  recordCount          Int?
+  operationType        SyncOperationType?
+  isInitialProductSync Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  executionState       String             @default("planned")
+  executionIdentity    String?
+  lastHeartbeatAt      DateTime?
+  completedAt          DateTime?
+  mirrorBatch          MirrorBatch?
+
+  @@unique([shop, id])
+  @@index([shop, createdAt, id])
+  @@index([shop, status, updatedAt, id])
+  @@index([shop, operationType])
+  @@index([shop, executionState])
+}
+
+model MirrorBatch {
+  id                    String
+  shop                  String
+  mirrorResourceType    MirrorResourceType @default(PRODUCT_CATALOG) @map("resourceType")
+  status                MirrorBatchStatus  @default(SYNC_REQUESTED)
+  syncHistoryId         String?
+  shopifyBulkOperationId       String?             @map("bulkOperationId")
+  expectedProducts      Int?
+  actualProducts        Int?
+  expectedVariants      Int?
+  actualVariants        Int?
+  expectedCollections   Int?
+  actualCollections     Int?
+  expectedMetafields    Int?
+  actualMetafields      Int?
+  activatedAt           DateTime?
+  failedAt              DateTime?
+  failureReason         String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  store                 Store              @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
+  syncHistory           SyncHistory?       @relation(fields: [shop, syncHistoryId], references: [shop, id], onDelete: Restrict)
+  expectedPreviousActiveBatchId      String? @map("expectedActiveBatchId")
+  replayStartSequence                BigInt? @map("syncStartSequence")
+  replayFinalizedThroughSequence     BigInt? @map("finalizedSequence")
+  finalizedAt           DateTime?
+  retiredAt             DateTime?
+  cleanupStartedAt      DateTime?
+  cleanedAt             DateTime?
+  products              Product[]
+  collections           Collection[]
+  metafields            MetafieldMirror[]
+  targetSnapshots       TargetSnapshot[]
+  targetSnapshotSets    TargetSnapshotSet[]
+  activeForStores       Store[]             @relation("ActiveMirrorBatch")
+  activeForCollectionStores Store[]          @relation("ActiveCollectionBatch")
+
+  @@id([shop, id])
+  @@unique([shop, syncHistoryId])
+  @@index([shop, mirrorResourceType, status])
+  @@index([shop, status, createdAt])
+  @@index([shop, shopifyBulkOperationId], map: "MirrorBatch_shop_bulkOperationId_idx")
+  @@index([shop, replayStartSequence])
+  @@index([shop, replayFinalizedThroughSequence])
+  @@index([shop, status, retiredAt])
+}
+
+model EditHistory {
+  id                        String                           @id @default(cuid())
+  shop                      String
+  shopifyBulkOperationId           String?                          @map("bulkOperationId")
+  /// Legacy lifecycle detail; workflow selection must use executionStateNormalized.
+  executionState            String                           @default("planned")
+  executionStateNormalized  EditHistoryExecutionState        @default(PLANNED)
+  executionIdentity         String?
+  targetSnapshotCount       Int                              @default(0)
+  targetProductMirrorBatchId String?                          @map("targetMirrorBatchId")
+  failureStage              String?
+  title                     Json?
+  legacyQueryFilter         String                           @default("") @map("queryFilter")
+  editedType                String?
+  rules                     Json?
+  affectedFieldKeys         Json?                            @map("affectedFields")
+  locationId                String?
+  /// Legacy source/UI projection; workflow selection must use statusNormalized.
+  status                    String                           @default("pending")
+  statusNormalized          EditHistoryStatus                @default(PENDING)
+  scheduledAt               DateTime?
+  scheduledUndoAt           DateTime?
+  processedCount            Int                              @default(0)
+  totalItems                Int                              @default(0)
+  totalRows                 Int                              @default(0)
+  durationMs                Int                              @default(0)
+  requestedAt               DateTime                         @default(now()) @map("editTime")
+  startedAt                 DateTime
+  completedAt               DateTime?
+  undo                      Json?
+  batch                     Json?
+  editType                  String?                          @default("Manual edit") @map("type")
+  processingChunkId         String?                          @map("processingBatchId")
+  scheduledTask             String?
+  legacyUser                String?                          @map("user")
+  isFavourite               Boolean                          @default(false)
+  isSpreadsheetEdit         Boolean                          @default(false)
+  isRecurring               Boolean                          @default(false)
+  recurringEditId           String?
+  recurringRunId            String?
+  snapshotSetId             String?
+  automaticProductRuleId    String?
+  automaticProductRuleRunId String?                          @unique
+  triggerType               EditHistoryTriggerType           @default(MANUAL)
+  error                     Json?
+  createdAt                 DateTime                         @default(now())
+  updatedAt                 DateTime                         @updatedAt
+  filterVersion             Int?
+  canonicalFilterKey        String?
+  filterAst                 Json?
+  normalizedFilterAst       Json?
+  targetingSnapshotMeta     Json?
+  targetFreezeMode          String?                          @map("targetingMode")
+  targetGranularity         String?
+  targetingCompilerVersion  String?
+  fieldRegistryVersion      String?
+  operatorRegistryVersion   String?
+  normalizedFilterHash      String?                          @map("filterHash")
+  targetResolvedAt          DateTime?
+  entitlementSnapshot       Json?
+  actorType                 String?
+  actorId                   String?
+  actorEmail                String?
+  actorDisplayName          String?                          @map("actorName")
+  cancelRequestedAt         DateTime?
+  cancelledAt               DateTime?
+  cancelReason              String?
+  pauseRequestedAt          DateTime?
+  pausedAt                  DateTime?
+  resumedAt                 DateTime?
+  changeRecords             ChangeRecord[]
+  ingestionCheckpoints      EditHistoryIngestionCheckpoint[]
+  undoOperations            UndoOperation[]
+  recoveryAudits            BulkEditRecoveryAudit[]
+  snapshotSet               TargetSnapshotSet?               @relation(fields: [snapshotSetId], references: [id], onDelete: SetNull)
+
+  @@index([shop])
+  @@index([shop, executionStateNormalized])
+  @@unique([shop, id])
+  @@unique([shop, executionIdentity])
+  @@index([shop, statusNormalized, editType, updatedAt], map: "shop_status_norm_type_recent")
+  @@index([shop, createdAt, id])
+  @@index([shop, statusNormalized, updatedAt, id])
+  @@index([isSpreadsheetEdit])
+  @@index([recurringEditId])
+  @@index([recurringRunId])
+  @@index([shop, snapshotSetId])
+  @@index([automaticProductRuleId])
+  @@index([automaticProductRuleRunId])
+  @@index([shop, canonicalFilterKey])
+}
+
+model UndoOperation {
+  id                  String    @id @default(cuid())
+  shop                String
+  sourceEditHistoryId String
+  executionIdentity   String
+  idempotencyKeyHash  String?
+  /// Durable domain result (pending/completed/partial/failed).
+  outcomeStatus       String    @default("pending") @map("status")
+  /// Runtime state used by claims, retries, and Shopify dispatch.
+  executionState      String    @default("queued") @map("state")
+  shopifyBulkOperationId     String?   @map("bulkOperationId")
+  processedCount      Int       @default(0)
+  totalEligibleCount  Int       @default(0)
+  restoredCount       Int       @default(0)
+  failedCount         Int       @default(0)
+  skippedCount        Int       @default(0)
+  conflictedCount     Int       @default(0)
+  failureCode         String?   @map("errorCode")
+  failureMessage      String?   @map("errorMessage")
+  requestedAt         DateTime  @default(now())
+  startedAt           DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  editHistory    EditHistory                  @relation(fields: [shop, sourceEditHistoryId], references: [shop, id], onDelete: Cascade)
+  command        UndoCommand?
+  conflictChunks UndoOperationConflictChunk[]
+
+  @@unique([shop, sourceEditHistoryId])
+  @@unique([shop, id])
+  @@unique([shop, executionIdentity])
+  @@index([shop, outcomeStatus, updatedAt], map: "UndoOperation_shop_status_updatedAt_idx")
+}
+
+model UndoCommand {
+  id                  String   @id @default(cuid())
+  shop                String
+  undoOperationId     String   @unique
+  sourceEditHistoryId String
+  commandVersion      Int      @default(1)
+  commandHash         String
+  commandJson         Json
+  createdAt           DateTime @default(now())
+
+  undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, commandHash])
+  @@index([shop, sourceEditHistoryId])
+}
+
+model UndoOperationConflictChunk {
+  id              String   @id @default(cuid())
+  shop            String
+  undoOperationId String
+  chunkType       String
+  chunkIndex      Int
+  totalItems      Int      @default(0)
+  payload         Json
+  createdAt       DateTime @default(now())
+
+  undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, undoOperationId, chunkType, chunkIndex])
+  @@index([shop, undoOperationId, chunkType, chunkIndex])
+}
+
+model BulkEditRecoveryAudit {
+  id         String   @id @default(cuid())
+  shop       String
+  historyId  String
+  mode       String
+  reason     String
+  actorType  String?
+  actorId    String?
+  actorEmail String?
+  result     String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  editHistory EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Cascade)
+
+  @@index([shop, historyId, createdAt])
+}
+
+model EditHistoryIngestionCheckpoint {
+  id                String   @id @default(cuid())
+  shop              String
+  historyId         String
+  ingestionRunId    String
+  attempt           Int      @default(1)
+  status            String   @default("IN_PROGRESS")
+  rowOffset         Int      @default(0)
+  rowCount          Int      @default(0)
+  successCount      Int      @default(0)
+  failureCount      Int      @default(0)
+  unmappedRowCount  Int      @default(0)
+  malformedRowCount Int      @default(0)
+  ingestionRollingChecksum String? @map("rollingChecksum")
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  editHistory EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, historyId, ingestionRunId])
+  @@index([shop, historyId, status, updatedAt])
+  @@index([shop, historyId, updatedAt])
+}
+
+model RecurringEdit {
+  id                       String                @id @default(cuid())
+  shop                     String
+  title                    String
+  status                   RecurringEditStatus   @default(ACTIVE)
+  scheduleType             RecurringScheduleType
+  timezone                 String
+  scheduleConfig           Json
+  cronExpression           String?
+  intervalMinutes          Int?
+  startAt                  DateTime?
+  endAt                    DateTime?
+  rawFilterInput           Json                 @map("filterParams")
+  rules                    Json
+  runCount                 Int                   @default(0)
+  lastRunAt                DateTime?
+  nextRunAt                DateTime?
+  lastSuccessAt            DateTime?
+  lastFailureAt            DateTime?
+  lastFailureReason        String?
+  isDeleted                Boolean               @default(false)
+  revision                 Int                   @default(1)
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  filterVersion            Int                   @default(1)
+  canonicalFilterKey       String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetFreezeMode         String?              @map("targetingMode")
+  targetGranularity        String?
+  targetingCompilerVersion String?
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  normalizedFilterHash     String?              @map("filterHash")
+  actorType                String?
+  actorId                  String?
+  actorEmail               String?
+  actorDisplayName         String?               @map("actorName")
+  runs                     RecurringEditRun[]
+
+  @@unique([shop, id])
+  @@index([shop])
+  @@index([shop, status])
+  @@index([shop, nextRunAt])
+  @@index([shop, canonicalFilterKey])
+}
+
+model RecurringEditRun {
+  id                       String                 @id @default(cuid())
+  recurringEditId          String
+  shop                     String
+  scheduledFor             DateTime
+  startedAt                DateTime?
+  completedAt              DateTime?
+  status                   RecurringEditRunStatus @default(PENDING)
+  executionDedupeKey             String                 @map("executionKey")
+  mirrorBatchId            String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetFreezeMode         String?              @map("targetingMode")
+  targetGranularity        String?
+  targetingCompilerVersion String?
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  normalizedFilterHash     String?              @map("filterHash")
+  targetResolvedAt         DateTime?
+  errorMessage             String?
+  editHistoryId            String?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+  recurringEdit            RecurringEdit          @relation(fields: [shop, recurringEditId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, executionDedupeKey], map: "RecurringEditRun_shop_executionKey_key")
+  @@index([recurringEditId])
+  @@index([shop, status])
+  @@index([shop, scheduledFor, id])
+  @@index([shop, mirrorBatchId])
+  @@index([editHistoryId])
+}
+
+model AutomaticProductRule {
+  id                         String                             @id @default(cuid())
+  shop                       String
+  title                      String
+  name                       String?
+  status                     AutomaticProductRuleStatus         @default(ACTIVE)
+  revision                   Int                                @default(1)
+  commandVersion             Int                                @default(1)
+  ruleConfigHash             String?                             @map("configFingerprint")
+  triggerType                AutomaticProductRuleTriggerType
+  scheduleType               AutomaticRuleScheduleType?
+  timezone                   String?
+  scheduleConfig             Json?
+  scheduleJson               Json?
+  cronExpression             String?
+  intervalMinutes            Int?
+  targetResolutionMode       String?                             @map("targetMode")
+  legacyFilterAst            Json?                               @map("filterAstJson")
+  savedTargetSetId           String?
+  editOperationJson          Json?
+  safetyConfirmationJson     Json?
+  expectedPreviewFingerprint String?
+  startAt                    DateTime?
+  endAt                      DateTime?
+  targetResourceType         AutomaticProductRuleScopeType       @map("scopeType")
+  conditions                 Json
+  actions                    Json
+  applyMode                  String
+  priority                   Int                                @default(100)
+  cooldownMinutes            Int?
+  maxAffectedPerRun          Int?
+  runCount                   Int                                @default(0)
+  lastRunAt                  DateTime?
+  nextRunAt                  DateTime?
+  lastSuccessAt              DateTime?
+  lastFailureAt              DateTime?
+  lastFailureReason          String?
+  createdByActorId           String?                             @map("createdBy")
+  updatedByActorId           String?                             @map("updatedBy")
+  /// Compatibility projection only; deletedAt is authoritative.
+  legacyIsDeleted            Boolean                            @default(false) @map("isDeleted")
+  deletedAt                  DateTime?
+  deletedByActorId           String?                             @map("deletedBy")
+  pausedAt                   DateTime?
+  pausedByActorId            String?                             @map("pausedBy")
+  resumedAt                  DateTime?
+  resumedByActorId           String?                             @map("resumedBy")
+  schedulerDisabledAt        DateTime?
+  createdAt                  DateTime                           @default(now())
+  updatedAt                  DateTime                           @updatedAt
+  filterVersion              Int                                @default(1)
+  canonicalFilterKey         String?
+  filterAst                  Json?
+  normalizedFilterAst        Json?
+  targetingSnapshotMeta      Json?
+  targetFreezeMode           String?                             @map("targetingMode")
+  targetGranularity          String?
+  targetingCompilerVersion   String?
+  fieldRegistryVersion       String?
+  operatorRegistryVersion    String?
+  normalizedFilterHash       String?                             @map("filterHash")
+  actorType                  String?
+  actorId                    String?
+  actorEmail                 String?
+  actorDisplayName           String?                           @map("actorName")
+  productStates              AutomaticProductRuleProductState[]
+  runs                       AutomaticProductRuleRun[]
+  applications               AutomaticRuleApplication[]
+  revisions                  AutomaticProductRuleRevision[]
+  scheduleState              AutomaticProductRuleScheduleState?
+
+  @@unique([shop, id])
+  @@index([shop, status])
+  @@index([shop, nextRunAt])
+  @@index([shop, triggerType])
+  @@index([shop, priority, status])
+  @@index([shop, createdAt])
+  @@index([shop, canonicalFilterKey])
+  @@index([shop, id])
+  @@index([shop, status, nextRunAt])
+  @@index([shop, deletedAt])
+  @@index([shop, status, deletedAt])
+  @@index([shop, status, schedulerDisabledAt])
+}
+
+/// Immutable, versioned rule command used by preview and execution.
+model AutomaticProductRuleRevision {
+  shop               String
+  automaticProductRuleId String
+  revision           Int
+  commandVersion     Int
+  ruleConfigHash      String?  @map("configFingerprint")
+  commandSnapshot    Json
+  createdByActorId   String?  @map("createdBy")
+  createdAt          DateTime @default(now())
+  rule               AutomaticProductRule @relation(fields: [shop, automaticProductRuleId], references: [shop, id], onDelete: Cascade)
+
+  @@id([shop, automaticProductRuleId, revision])
+  @@index([shop, createdAt])
+}
+
+/// Narrow scheduler-owned state; claims no longer rewrite the wide rule definition.
+model AutomaticProductRuleScheduleState {
+  shop                   String
+  automaticProductRuleId String
+  ruleRevision           Int
+  scheduleVersion        Int      @default(1)
+  scheduleConfig         Json?
+  nextRunAt              DateTime?
+  lastRunAt              DateTime?
+  lastSuccessAt          DateTime?
+  lastFailureAt          DateTime?
+  lastFailureReason      String?
+  disabledAt             DateTime?
+  claimedAt              DateTime?
+  claimOwner             String?
+  fencingToken           BigInt   @default(0)
+  updatedAt              DateTime @updatedAt
+  rule                   AutomaticProductRule @relation(fields: [shop, automaticProductRuleId], references: [shop, id], onDelete: Cascade)
+
+  @@id([shop, automaticProductRuleId])
+  @@index([nextRunAt, automaticProductRuleId])
+  @@index([shop, nextRunAt, automaticProductRuleId])
+}
+
+model AutomaticProductRuleRun {
+  id                       String                               @id @default(cuid())
+  automaticProductRuleId   String
+  shop                     String
+  triggerSource            AutomaticProductRuleRunTriggerSource
+  triggerReference         String?
+  scheduledFor             DateTime?
+  startedAt                DateTime?
+  processingStartedAt      DateTime?
+  heartbeatAt              DateTime?
+  completedAt              DateTime?
+  status                   AutomaticProductRuleRunStatus        @default(TARGET_FREEZE_QUEUED)
+  executionDedupeKey             String                               @map("executionKey")
+  requestIdempotencyKey          String?                              @map("idempotencyKey")
+  changeSource             String?                              @map("source")
+  ruleRevision             Int?
+  ruleConfigHash          String?                              @map("configFingerprint")
+  requestedByJson          Json?
+  cancelledAt              DateTime?
+  cancelledByActorId       String?                              @map("cancelledBy")
+  cancelReason             String?
+  processingToken          String?
+  processingOwner          String?
+  operationId              String?
+  mirrorBatchId            String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetFreezeMode         String?                              @map("targetingMode")
+  targetGranularity        String?
+  targetingCompilerVersion String?
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  normalizedFilterHash     String?                              @map("filterHash")
+  targetResolvedAt         DateTime?
+  ruleSnapshot             Json?
+  conditionsSnapshot       Json?
+  actionsSnapshot          Json?
+  scopeTypeSnapshot        AutomaticProductRuleScopeType?
+  applyModeSnapshot        String?
+  matchedCount             Int                                  @default(0)
+  affectedCount            Int                                  @default(0)
+  attemptCount             Int                                  @default(0)
+  lastExecutionAttemptAt   DateTime?                             @map("lastAttemptAt")
+  queuedAt                 DateTime?
+  errorMessage             String?
+  editHistoryId            String?
+  createdAt                DateTime                             @default(now())
+  updatedAt                DateTime                             @updatedAt
+  automaticProductRule     AutomaticProductRule                 @relation(fields: [shop, automaticProductRuleId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, requestIdempotencyKey], map: "AutomaticProductRuleRun_shop_idempotencyKey_key")
+  @@unique([shop, executionDedupeKey], map: "AutomaticProductRuleRun_shop_executionKey_key")
+  @@index([shop, status, createdAt])
+  @@index([shop, status, startedAt])
+  @@index([shop, status, heartbeatAt])
+  @@index([shop, mirrorBatchId])
+  @@index([shop, editHistoryId])
+  @@index([shop, automaticProductRuleId, status])
+  @@index([shop, automaticProductRuleId, createdAt])
+  @@index([shop, operationId])
+  @@index([automaticProductRuleId, createdAt])
+  @@index([automaticProductRuleId, status, createdAt])
+  @@index([automaticProductRuleId, scheduledFor])
+  @@index([editHistoryId])
+}
+
+model TargetFreezeCommand {
+  id                String   @id @default(cuid())
+  shop              String
+  operationId       String?
+  /// Workflow source identity; not interchangeable with owner/entity/resource pairs.
+  sourceType        String
+  sourceId          String
+  sourceRevision    Int?
+  ruleConfigHash    String? @map("configFingerprint")
+  mirrorBatchId     String?
+  targetResolutionMode String? @map("targetMode")
+  filterAst            Json?   @map("filterAstJson")
+  savedTargetSetId  String?
+  editOperationJson Json?
+  status            TargetFreezeCommandStatus
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([shop, operationId])
+  @@index([status, createdAt, id])
+}
+
+/// Transactional domain-event publication. Concrete worker enqueue commands
+/// belong in OperationEnqueueIntent, not in this event stream.
+model OutboxEvent {
+  id            String    @id @default(cuid())
+  shop          String
+  /// Domain-event aggregate identity; validate against the event's aggregate allow-list.
+  aggregateType String
+  aggregateId   String
+  domainEventType String @map("eventType")
+  eventDedupeKey String?   @map("eventIdentity")
+  payloadJson   Json?
+  /// Legacy projection kept synchronized during the enum transition.
+  status        String
+  statusNormalized OutboxEventStatus @default(PENDING)
+  attemptCount  Int       @default(0)
+  nextAttemptAt DateTime  @default(now())
+  lockedAt      DateTime?
+  lockedBy      String?
+  lastErrorCode String?
+  lastErrorAt   DateTime?
+  dispatchedAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([shop, eventDedupeKey], map: "OutboxEvent_shop_eventIdentity_key")
+  @@index([statusNormalized, nextAttemptAt, createdAt])
+  @@index([shop, statusNormalized, nextAttemptAt])
+  @@index([shop, aggregateType, aggregateId])
+}
+
+model AutomaticProductRuleProductState {
+  id                     String                         @id @default(cuid())
+  automaticProductRuleId String
+  shop                   String
+  targetResourceType     AutomaticProductRuleTargetType @default(PRODUCT) @map("targetType")
+  productId              String?
+  variantId              String?
+  targetIdentity         String
+  lastMatchedAt          DateTime?
+  lastAppliedAt          DateTime?
+  lastFingerprint        String?
+  suppressedUntil        DateTime?
+  lastMirrorBatchId      String?
+  lastTriggerReference   String?
+  lastAutomaticRuleRunId              String?                        @map("lastRunId")
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
+  automaticProductRule   AutomaticProductRule           @relation(fields: [shop, automaticProductRuleId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([automaticProductRuleId, shop, targetIdentity])
+  @@index([shop, targetResourceType, productId])
+  @@index([shop, targetResourceType, variantId])
+  @@index([shop, productId])
+  @@index([shop, variantId])
+  @@index([shop, lastMirrorBatchId])
+  @@index([shop, lastAutomaticRuleRunId], map: "AutomaticProductRuleProductState_shop_lastRunId_idx")
+  @@index([automaticProductRuleId, suppressedUntil])
+  @@index([automaticProductRuleId, targetResourceType])
+  @@index([automaticProductRuleId, lastFingerprint])
+  @@index([shop, automaticProductRuleId, lastFingerprint])
+}
+
+model AutomaticRuleApplication {
+  id                   String                         @id @default(cuid())
+  shop                 String
+  ruleId               String
+  automaticRuleRunId   String                         @map("runId")
+  targetResourceType   AutomaticProductRuleTargetType @map("targetType")
+  productId            String?
+  variantId            String?
+  targetIdentity       String
+  triggerReference     String?
+  targetRowHash         String                         @map("fingerprint")
+  status               AutomaticRuleApplicationStatus @default(RESERVED)
+  errorMessage         String?
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+  automaticProductRule AutomaticProductRule           @relation(fields: [shop, ruleId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, ruleId, targetRowHash], map: "AutomaticRuleApplication_shop_ruleId_fingerprint_key")
+  @@index([shop, automaticRuleRunId], map: "AutomaticRuleApplication_shop_runId_idx")
+  @@index([shop, targetIdentity])
+  @@index([shop, targetResourceType, productId])
+  @@index([shop, targetResourceType, variantId])
+}
+
+model ProductCodeSnippet {
+  id                   String                              @id @default(cuid())
+  shop                 String
+  title                String
+  status               ProductCodeSnippetStatus            @default(DRAFT)
+  language             ProductCodeSnippetLanguage          @default(SNIPPET_DSL)
+  code                 String
+  normalizedAst        Json?
+  lastValidationStatus ProductCodeSnippetValidationStatus?
+  lastValidationError  String?
+  lastPreviewedAt      DateTime?
+  createdByActorId     String?                             @map("createdBy")
+  updatedByActorId     String?                             @map("updatedBy")
+  actorType            String?
+  actorId              String?
+  actorEmail           String?
+  actorDisplayName     String?                            @map("actorName")
+  isDeleted            Boolean                             @default(false)
+  revision             Int                                 @default(1)
+  createdAt            DateTime                            @default(now())
+  updatedAt            DateTime                            @updatedAt
+
+  @@index([shop, status])
+  @@index([shop, createdAt])
+  @@index([shop, updatedAt])
+}
+
+model Collection {
+  shop          String
+  shopifyId     String
+  mirrorBatchId String
+  title         String?
+  handle        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  mirrorBatch   MirrorBatch       @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
+  products      ProductCollection[]
+
+  @@id([shop, shopifyId, mirrorBatchId])
+  @@index([updatedAt])
+  @@index([shop, mirrorBatchId])
+  @@index([shop, title])
+  @@index([shop, mirrorBatchId, title])
+}
+
+model ExportHistory {
+  id            String    @id @default(cuid())
+  shop          String
+  generatedFilename String @map("filename")
+  rawFilterInput Json   @map("filters")
+  downloadUrl   String? @map("fileUrl")
+  storageKey    String?
+  fileChecksum  String? @map("checksum")
+  sizeBytes     BigInt?
+  status        String
+  duration      String
+  totalItems    Int?
+  errorMessage  String?
+  exportTime    DateTime?
+  exportType    String    @default("Manual export") @map("type")
+  isFavourite   Boolean   @default(false)
+  scheduledTask String?
+  expiresAt     DateTime?
+  storageDeletedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  /// NULL means no idempotency identity; multiple manual exports are intentional.
+  @@index([shop, createdAt, id])
+  @@index([shop, status])
+  @@index([shop, isFavourite])
+  @@index([shop, exportType], map: "ExportHistory_shop_type_idx")
+  @@index([shop, exportTime])
+  @@index([expiresAt, id])
+}
+
+model ScheduledExport {
+  id                       String                @id @default(cuid())
+  shop                     String
+  title                    String
+  status                   ScheduledExportStatus @default(ACTIVE)
+  scheduleType             RecurringScheduleType
+  timezone                 String
+  scheduleConfig           Json
+  cronExpression           String?
+  intervalMinutes          Int?
+  startAt                  DateTime?
+  endAt                    DateTime?
+  rawFilterInput           Json                  @map("filterParams")
+  selectedFieldKeys        String[]              @map("fields")
+  generatedFilename        String                @map("filename")
+  runCount                 Int                   @default(0)
+  lastRunAt                DateTime?
+  nextRunAt                DateTime?
+  lastSuccessAt            DateTime?
+  lastFailureAt            DateTime?
+  lastFailureReason        String?
+  isDeleted                Boolean               @default(false)
+  deletedAt                DateTime?
+  deletedByActorId         String?                @map("deletedBy")
+  revision                 Int                   @default(1)
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  filterVersion            Int                   @default(1)
+  canonicalFilterKey       String?
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetFreezeMode         String?               @map("targetingMode")
+  targetGranularity        String?
+  targetingCompilerVersion String?
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  normalizedFilterHash     String?               @map("filterHash")
+  runs                     ScheduledExportRun[]
+
+  @@unique([shop, id])
+  @@index([shop])
+  @@index([shop, status])
+  @@index([shop, nextRunAt])
+  @@index([shop, canonicalFilterKey])
+}
+
+model ScheduledExportRun {
+  id                       String                   @id @default(cuid())
+  scheduledExportId        String
+  shop                     String
+  scheduledFor             DateTime
+  startedAt                DateTime?
+  completedAt              DateTime?
+  status                   ScheduledExportRunStatus @default(PENDING)
+  executionDedupeKey             String                   @map("executionKey")
+  targetProductMirrorBatchId String?               @map("targetMirrorBatchId")
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetFreezeMode         String?               @map("targetingMode")
+  targetGranularity        String?
+  targetingCompilerVersion String?
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  normalizedFilterHash     String?                 @map("filterHash")
+  targetResolvedAt         DateTime?
+  errorMessage             String?
+  exportJobId              String?
+  downloadUrl              String?               @map("fileUrl")
+  totalItems               Int?
+  durationMs               Int?
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  scheduledExport          ScheduledExport          @relation(fields: [shop, scheduledExportId], references: [shop, id], onDelete: Cascade)
+  exportJob                ExportJob?                @relation(fields: [shop, exportJobId], references: [shop, id], onDelete: Restrict)
+
+  @@unique([shop, executionDedupeKey], map: "ScheduledExportRun_shop_executionKey_key")
+  @@index([scheduledExportId])
+  @@index([shop, status])
+  @@index([shop, scheduledFor, id])
+  @@index([shop, targetProductMirrorBatchId])
+  @@index([exportJobId])
+}
+
+model ExportJob {
+  id                       String                  @id @default(cuid())
+  shop                     String
+  legacyFilterQuery        String                  @default("{}") @map("filterQuery")
+  /// Legacy lifecycle detail; workflow selection must use executionStateNormalized.
+  executionState           String                  @default("planned")
+  executionStateNormalized ExportJobExecutionState @default(PLANNED)
+  targetSnapshotCount      Int                     @default(0)
+  targetProductMirrorBatchId String?                 @map("targetMirrorBatchId")
+  filterAst                Json?
+  normalizedFilterAst      Json?
+  targetingSnapshotMeta    Json?
+  targetFreezeMode         String?                 @map("targetingMode")
+  targetGranularity        String?
+  targetingCompilerVersion String?
+  fieldRegistryVersion     String?
+  operatorRegistryVersion  String?
+  normalizedFilterHash     String?                   @map("filterHash")
+  targetResolvedAt         DateTime?
+  failureStage             String?
+  generatedFilename        String                  @map("filename")
+  selectedFieldKeys        String[]                @map("fields")
+  /// Legacy source/UI projection; workflow selection must use statusNormalized.
+  status                   String                  @default("PENDING")
+  statusNormalized         ExportJobStatus         @default(PENDING)
+  downloadUrl              String?                 @map("fileUrl")
+  storageKey               String?
+  fileChecksum             String?                   @map("checksum")
+  sizeBytes                BigInt?
+  expiresAt                DateTime?
+  storageDeletedAt         DateTime?
+  exportType               String                  @default("Manual export") @map("type")
+  isScheduled              Boolean                 @default(false)
+  scheduledExportId        String?
+  scheduledExportRunId     String?
+  triggerType              ExportJobTriggerType    @default(MANUAL)
+  totalItems               Int?
+  durationMs               Int?
+  startedAt                DateTime?
+  completedAt              DateTime?
+  error                    String?
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+  filterVersion            Int?
+  canonicalFilterKey       String?
+  entitlementSnapshot      Json?
+  actorType                String?
+  actorId                  String?
+  actorEmail               String?
+  actorDisplayName         String?                 @map("actorName")
+  cancelRequestedAt        DateTime?
+  cancelledAt              DateTime?
+  cancelReason             String?
+  pauseRequestedAt         DateTime?
+  pausedAt                 DateTime?
+  resumedAt                DateTime?
+  executionCursorOrdinal   Int?
+  scheduledExportRuns      ScheduledExportRun[]
+  checkpoints              ExportJobCheckpoint[]
+
+  @@unique([shop, id])
+  @@index([shop, statusNormalized, createdAt, id])
+  @@index([shop, executionStateNormalized, updatedAt, id])
+  @@index([shop, createdAt, id])
+  @@index([shop, scheduledExportId])
+  @@index([shop, scheduledExportRunId])
+  @@index([shop, canonicalFilterKey])
+  @@index([expiresAt, id])
+}
+
+model ExportJobCheckpoint {
+  shop        String
+  exportJobId String
+  ordinal     Int
+  status      String   @default("PENDING")
+  targetId    String?
+  cursorJson  Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  exportJob   ExportJob @relation(fields: [shop, exportJobId], references: [shop, id], onDelete: Cascade)
+
+  @@id([shop, exportJobId, ordinal])
+  @@index([shop, exportJobId, status, ordinal])
+}
+
+model ChangeRecord {
+  id                  String      @id @default(cuid())
+  editHistoryId       String
+  targetResourceType  String @map("targetType")
+  targetIdentity      String
+  productId           String
+  variantId           String?
+  shop                String
+  mirrorBatchId       String?
+  beforeValues        Json?
+  afterValues         Json?
+  failureCode         String?
+  failureMessage      String?
+  options             Json?
+  productFieldChanges Json?
+  variantFieldChanges Json?
+  image               String?
+  title               String?
+  changeScope         String @map("scope")
+  status              String      @default("pending")
+  shopifySubmissionBatchId String? @map("batchId")
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  editHistory         EditHistory @relation(fields: [shop, editHistoryId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, editHistoryId, shopifySubmissionBatchId, targetIdentity], map: "uniq_change_record_shop_history_batch_target")
+  @@index([shop, editHistoryId, status, id])
+  @@index([shop, editHistoryId, targetResourceType, id])
+  @@index([shop, editHistoryId, createdAt, id])
+  @@index([shop, editHistoryId, targetIdentity])
+  @@index([shop, productId])
+  @@index([shop, variantId])
+  @@index([shop, shopifySubmissionBatchId])
+}
+
+model BulkApplyRequest {
+  id             String @id @default(cuid())
+  shop           String
+  bulkApplyJobId      String @map("bulkJobId")
+  requestIdempotencyKey String @map("idempotencyKey")
+  status         BulkApplyRequestStatus @default(QUEUED)
+
+  eligibleItemCount  Int @default(0) @map("totalCount")
+  pendingItemCount   Int @default(0)
+  applyingItemCount  Int @default(0)
+  appliedItemCount   Int @default(0) @map("appliedCount")
+  failedItemCount    Int @default(0) @map("failedCount")
+  cancelledItemCount Int @default(0) @map("cancelledCount")
+  skippedItemCount   Int @default(0) @map("skippedCount")
+
+  lastError  String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  items      BulkApplyItem[]
+
+  @@unique([shop, bulkApplyJobId, requestIdempotencyKey], map: "BulkApplyRequest_shop_bulkJobId_idempotencyKey_key")
+  @@unique([shop, id])
+  @@index([shop, bulkApplyJobId], map: "BulkApplyRequest_shop_bulkJobId_idx")
+  @@index([shop, status, createdAt, id])
+}
+
+model BulkApplyItem {
+  id         String    @id @default(cuid())
+  shop       String
+  requestId  String
+  bulkApplyJobId  String @map("bulkJobId")
+  productId  String
+  status     BulkApplyItemStatus @default(PENDING)
+  error      String?
+  attempt    Int       @default(0)
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  request    BulkApplyRequest @relation(fields: [shop, requestId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, bulkApplyJobId, productId], map: "BulkApplyItem_shop_bulkJobId_productId_key")
+  @@index([shop, bulkApplyJobId], map: "BulkApplyItem_shop_bulkJobId_idx")
+  @@index([shop, requestId, status, createdAt, id])
+  @@index([shop, status, createdAt, id])
+}
+
+model ProductApplySnapshot {
+  id        String   @id @default(cuid())
+  shop      String
+  bulkApplyJobId String   @map("bulkJobId")
+  productId String
+  beforeValues Json @map("before")
+  createdAt DateTime @default(now())
+
+  @@unique([shop, bulkApplyJobId, productId], map: "ProductApplySnapshot_shop_bulkJobId_productId_key")
+  @@index([shop, bulkApplyJobId], map: "ProductApplySnapshot_shop_bulkJobId_idx")
+}
+
+model BulkSubmission {
+  id                     String   @id @default(cuid())
+  shop                   String
+  editHistoryId          String
+  executionIdentity      String?
+  shopifySubmissionBatchId String? @map("batchId")
+  commandType              String  @map("operationName")
+  mutationMode           String
+  shopifyStagedUploadPath String?  @map("stagedUploadPath")
+  shopifyBulkOperationId String
+  shopifyStatus          String?
+  submittedAt            DateTime @default(now())
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([shop, shopifyBulkOperationId])
+  @@index([shop, editHistoryId, submittedAt])
+  @@index([shop, executionIdentity])
+}
+
+model OperationStageProgress {
+  id            String    @id @default(cuid())
+  shop          String
+  operationType String
+  operationId   String
+  executionId   String?
+  workflowStageKey String @map("stageKey")
+  stageStatus   OperationStageStatus
+  startedAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  completedAt   DateTime?
+  counterA      Int?
+  counterB      Int?
+  counterC      Int?
+  detail        Json?
+
+  @@unique([shop, operationType, operationId, workflowStageKey], map: "uniq_operation_stage_progress")
+  @@index([shop, operationType, operationId])
+  @@index([shop, stageStatus, updatedAt])
+}
+
+model FilterTrack {
+  id                  String          @id @default(cuid())
+  shop                String
+  changeSource        String? @map("source")
+  userId              String?
+  expiresAt           DateTime?
+  rawFilterInput        Json? @map("filterParams")
+  previewRawFilterInput Json? @map("previewFilterParams")
+  respondProductCount Int?
+  previewResCount     Int?
+  filterTrackType     FilterTrackType @default(filter) @map("type")
+  field               String?
+  editOption          String?
+  searchKey           String?
+  replaceText         String?
+  supportValue        String?
+  value               Json?
+  en                  String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@index([shop, createdAt])
+  @@index([shop, expiresAt])
+  @@index([expiresAt])
+  @@index([shop, filterTrackType, createdAt], map: "FilterTrack_shop_type_createdAt_idx")
+}
+
+model ReferralCode {
+  id           String   @id @default(cuid())
+  shop         String
+  referralCode String
+  createdAt    DateTime @default(now())
+
+  @@unique([shop])
+}
+
+model AffiliateUser {
+  id                       String   @id @default(cuid())
+  name                     String
+  email                    String   @unique
+  referralCode             String   @unique
+  referralLink             String   @unique
+  numberOfReferrals        Int      @default(0)
+  numberOfStoresSubscribed Int      @default(0)
+  totalAmountEarned        Decimal  @default(0) @db.Decimal(20, 6)
+  phone                    String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+}
+
+model Location {
+  shop         String
+  id           String
+  name         String
+  shopifyActive Boolean? @map("active")
+  sourceFetchedAt DateTime? @map("lastSyncedAt")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@id([shop, id])
+  @@index([shop])
+}
+
+model ProductMediaMirror {
+  shop          String
+  productId     String
+  mediaId       String
+  mirrorBatchId String
+  mediaType     String?
+  url           String?
+  alt           String?
+  position      Int?
+  status        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  product       Product  @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+
+  @@id([shop, productId, mediaId, mirrorBatchId])
+  @@index([shop, mirrorBatchId, productId, position])
+}
+
+model InventoryItemMirror {
+  shop                 String
+  id                   String
+  variantId            String
+  productId            String
+  mirrorBatchId        String
+  tracked              Boolean?
+  sku                  String?
+  cost                 Decimal? @db.Decimal(20, 6)
+  countryCodeOfOrigin  String?
+  provinceCodeOfOrigin String?
+  harmonizedSystemCode String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  product              Product  @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+  variant              Variant  @relation(fields: [shop, variantId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+  levels               InventoryLevelMirror[]
+
+  @@id([shop, id, mirrorBatchId])
+  @@index([shop, mirrorBatchId, variantId])
+  @@index([shop, mirrorBatchId, productId])
+  @@index([shop, mirrorBatchId, tracked])
+}
+
+model InventoryLevelMirror {
+  shop            String
+  inventoryItemId String
+  locationId      String
+  mirrorBatchId   String
+  available       Int?
+  onHand          Int?
+  committed       Int?
+  incoming        Int?
+  updatedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  inventoryItem   InventoryItemMirror @relation(fields: [shop, inventoryItemId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+
+  @@id([shop, inventoryItemId, locationId, mirrorBatchId])
+  @@index([shop, mirrorBatchId, locationId])
+  @@index([shop, mirrorBatchId, inventoryItemId])
+  @@index([shop, mirrorBatchId, available])
+}
+
+model ErrorLog {
+  id          BigInt   @id @default(autoincrement())
+  shop        String
+  errorType   String @map("type")
+  level       String   @default("error")
+  message     String
+  stack       String?
+  errorSource String? @map("source")
+  requestId   String?
+  method      String?
+  path        String?
+  statusCode  Int?
+  safeContext Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shop, createdAt])
+  @@index([shop, level, createdAt])
+  @@index([shop, errorType, createdAt], map: "ErrorLog_shop_type_createdAt_idx")
+  @@index([level, createdAt])
+  @@index([createdAt])
+}
+
+model TargetSnapshot {
+  id                String   @id @default(cuid())
+  /// Snapshot owner identity; not a reconciliation entity or leased resource.
+  ownerType         String
+  ownerId           String
+  shop              String
+  mirrorBatchId     String
+  targetResourceType String @map("targetType")
+  changeSource      String? @map("source")
+  targetGranularity String?
+  productId         String?
+  variantId         String?
+  collectionId      String?
+  inventoryItemId   String?
+  locationId        String?
+  targetIdentity    String
+  ordinal           Int?
+  shard             Int?
+  beforeValues      Json?
+  normalizedFilterHash String? @map("filterHash")
+  targetRowHash        String? @map("targetHash")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  mirrorBatch       MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, ownerType, ownerId, targetIdentity])
+  @@index([shop, ownerType, ownerId], map: "idx_targetsnapshot_owner")
+  @@index([shop, ownerType, ownerId, mirrorBatchId], map: "idx_targetsnapshot_owner_batch")
+  @@index([shop, ownerType, ownerId, mirrorBatchId, targetResourceType, ordinal], map: "idx_targetsnapshot_owner_batch_type_ord")
+  @@index([shop, ownerType, ownerId, mirrorBatchId, ordinal], map: "idx_targetsnapshot_owner_batch_ord")
+  @@index([shop, ownerType, ownerId, mirrorBatchId, targetResourceType, ordinal, id], map: "idx_targetsnapshot_owner_batch_type_ord_id")
+  @@index([shop, ownerType, ownerId, mirrorBatchId, normalizedFilterHash, targetResourceType, ordinal], map: "idx_targetsnapshot_owner_batch_hash_type_ord")
+  @@index([shop, mirrorBatchId, targetResourceType], map: "idx_targetsnapshot_batch_type")
+  @@index([shop, productId], map: "idx_targetsnapshot_shop_product")
+  @@index([shop, variantId], map: "idx_targetsnapshot_shop_variant")
+  @@index([shop, ownerType, createdAt], map: "idx_targetsnapshot_owner_created")
+}
+
+model TargetSnapshotSet {
+  id                   String @id @default(cuid())
+  shop                 String
+  operationId          String
+  previewContractId    String
+  mirrorBatchId        String
+  targetDefinitionHash String @map("targetingFingerprint")
+
+  targetCount  Int @default(0)
+  productCount Int @default(0)
+  variantCount Int @default(0)
+  inventoryItemCount Int @default(0)
+  metafieldCount     Int @default(0)
+
+  mutationPendingCount   Int @default(0) @map("pendingCount")
+  mutationSubmittedCount Int @default(0) @map("submittedCount")
+  mutationSucceededCount Int @default(0) @map("succeededCount")
+  mutationFailedCount    Int @default(0) @map("failedCount")
+  mutationSkippedCount   Int @default(0) @map("skippedCount")
+
+  verificationPendingCount   Int @default(0)
+  verificationSucceededCount Int @default(0) @map("verifiedCount")
+  verificationFailedCount    Int @default(0)
+
+  undoNotRequiredCount Int @default(0)
+  undoPendingCount     Int @default(0)
+  undoSubmittedCount   Int @default(0)
+  undoSucceededCount   Int @default(0)
+  undoFailedCount      Int @default(0)
+  undoSkippedCount     Int @default(0)
+
+  targetSetHash     String? @map("checksum")
+  compilerVersion   String
+  projectionVersion String
+  plannerVersion    String?
+
+  status TargetSnapshotSetStatus @default(FREEZING)
+
+  freezeErrorCode    String?
+  freezeErrorMessage String?
+
+  createdAt DateTime  @default(now())
+  frozenAt  DateTime?
+  failedAt  DateTime?
+  expiresAt DateTime?
+
+  items         TargetSnapshotItem[]
+  editHistories EditHistory[]
+  mirrorBatch   MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
+
+  @@unique([shop, operationId])
+  @@unique([shop, id, mirrorBatchId])
+  @@unique([shop, id])
+  @@index([shop, previewContractId])
+  @@index([shop, mirrorBatchId, targetDefinitionHash])
+  @@index([shop, status])
+  @@index([shop, operationId, status])
+  @@index([shop, createdAt])
+  @@index([shop, expiresAt])
+}
+
+model TargetSnapshotItem {
+  id String @id @default(cuid())
+
+  snapshotSetId String
+  shop          String
+  operationId   String
+  mirrorBatchId String
+
+  productId  String
+  variantId  String?
+  targetKey  String
+  targetResourceType TargetSnapshotTargetType @map("targetType")
+
+  mutationGroupKey String?
+
+  beforeValues    Json
+  plannedMutation Json
+
+  targetRowHash String @map("targetFingerprint")
+  rowChecksum       String
+
+  executionStatus        TargetSnapshotItemExecutionStatus @default(PENDING)
+  verificationStatus     TargetSnapshotItemVerificationStatus?
+  executionAttemptCount  Int                               @default(0)
+  lastExecutionAttemptAt DateTime?
+
+  shopifyBulkLineNumber Int?
+  shopifyResultId       String?
+  shopifyErrorCode      String?
+  shopifyErrorMessage   String?
+
+  undoStatus        TargetSnapshotItemUndoStatus @default(NOT_REQUIRED)
+  undoAttemptCount  Int                          @default(0)
+  lastUndoAttemptAt DateTime?
+  undoMutation      Json? @map("undoPayload")
+  undoErrorCode     String?
+  undoErrorMessage  String?
+
+  createdAt       DateTime  @default(now())
+  submittedAt     DateTime?
+  executedAt      DateTime?
+  verifiedAt      DateTime?
+  undoSubmittedAt DateTime?
+  undoneAt        DateTime?
+
+  snapshotSet TargetSnapshotSet @relation(fields: [shop, snapshotSetId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+
+  @@unique([snapshotSetId, targetKey])
+  @@index([shop, snapshotSetId])
+  @@index([shop, operationId])
+  @@index([shop, operationId, executionStatus])
+  @@index([shop, operationId, undoStatus])
+  @@index([shop, snapshotSetId, executionStatus])
+  @@index([shop, snapshotSetId, verificationStatus])
+  @@index([shop, snapshotSetId, undoStatus])
+  @@index([shop, snapshotSetId, mutationGroupKey])
+  @@index([shop, mirrorBatchId])
+  @@index([shop, productId])
+  @@index([shop, variantId])
+  @@index([snapshotSetId, targetResourceType])
+}
+
+model ProductCollection {
+  shop          String
+  productId     String
+  collectionId  String
+  mirrorBatchId String
+  createdAt     DateTime @default(now())
+  product       Product    @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+  collection    Collection @relation(fields: [shop, collectionId, mirrorBatchId], references: [shop, shopifyId, mirrorBatchId], onDelete: Cascade)
+
+  @@id([shop, productId, collectionId, mirrorBatchId])
+  @@index([shop, mirrorBatchId, collectionId])
+  @@index([shop, mirrorBatchId, productId])
+}
+
+model MetafieldMirror {
+  shop                String
+  /// Shopify metafield owner identity; validate the supported Shopify owner types.
+  ownerType           String
+  ownerId             String
+  namespace           String
+  key                 String
+  valueType           String?
+  valueText           String?
+  valueTextNormalized String?
+  valueNumber         Decimal?  @db.Decimal(30, 10)
+  valueBoolean        Boolean?
+  valueDate           DateTime?
+  valueJson           Json?
+  mirrorBatchId       String
+  updatedAt           DateTime  @default(now())
+  mirrorBatch         MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
+
+  @@id([shop, ownerType, ownerId, namespace, key, mirrorBatchId])
+  @@index([shop, mirrorBatchId, ownerType, ownerId])
+  @@index([shop, mirrorBatchId, namespace, key, valueText])
+  @@index([shop, mirrorBatchId, ownerType, namespace, key])
+  @@index([shop, mirrorBatchId, namespace, key, valueTextNormalized])
+  @@index([shop, mirrorBatchId, namespace, key, valueNumber])
+  @@index([shop, mirrorBatchId, namespace, key, valueBoolean])
+  @@index([shop, mirrorBatchId, namespace, key, valueDate])
+}
+
+model MirrorAnomaly {
+  id         String   @id @default(cuid())
+  shop       String
+  severity   String
+  anomalyType String @map("type")
+  entityType String?
+  entityId   String?
+  message    String
+  details    Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([shop, createdAt])
+  @@index([shop, severity, createdAt])
+  @@index([shop, anomalyType, createdAt], map: "MirrorAnomaly_shop_type_createdAt_idx")
+}
+
+model ShopifySession {
+  id               String    @id @db.VarChar(255)
+  shop             String    @db.VarChar(255)
+  state            String    @db.VarChar(255)
+  isOnline         Boolean
+  scope            String?   @db.VarChar(1024)
+  /// Epoch expiry and token storage are owned by Shopify's PostgreSQLSessionStorage adapter.
+  expires          Int?
+  onlineAccessInfo String?
+  accessToken      String?
+
+  @@index([shop])
+  @@index([shop, isOnline])
+  @@index([shop, expires])
+  @@map("shopify_sessions")
+}
+
+model ShopifySessionMigration {
+  migrationName String @id @map("migration_name") @db.VarChar(255)
+
+  @@map("shopify_sessions_migrations")
+}
+
+model MirrorReconcileSignal {
+  shop                  String
+  /// Mirror reconciliation entity identity; not an aggregate or snapshot owner.
+  entityType            String
+  entityId              String
+  topic                 String?
+  status                MirrorReconcileSignalStatus @default(PENDING)
+  signalCount           Int       @default(1)
+  latestWebhookId       String?
+  latestPayloadHash     String?
+  latestSourceEventOccurredAt DateTime? @map("latestEventAt")
+  latestSourceEntityUpdatedAt DateTime? @map("latestSourceUpdatedAt")
+  latestChangeSource           String?   @map("latestSourceKind")
+  processingToken       String?
+  processingStartedAt   DateTime?
+  reconciliationCompletedAt DateTime? @map("reconciledAt")
+  lastError             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  mirrorMutationSequence BigInt? @map("mutationSequence")
+
+  @@id([shop, entityType, entityId])
+  @@index([shop, status, updatedAt, entityId])
+  @@index([shop, mirrorMutationSequence])
+  @@index([status, updatedAt])
+}
+
+model OperationFingerprint {
+  id            String                     @id
+  shop          String
+  operationType String
+  fingerprint   String
+  /// Idempotency resource identity scoped by operationType.
+  fingerprintResourceType String @map("resourceType")
+  resourceId    String?
+  status        OperationFingerprintStatus @default(RESERVED)
+  lastError     String?
+  expiresAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  @@unique([shop, operationType, fingerprint])
+  @@index([fingerprintResourceType, resourceId], map: "OperationFingerprint_resource_idx")
+  @@index([shop, status, createdAt])
+  @@index([shop, operationType, status, createdAt])
+  @@index([expiresAt])
+}
+
+enum OperationFingerprintStatus {
+  RESERVED
+  QUEUED
+  STARTING_BULK_QUERY
+  SUBMITTING
+  RUNNING
+  RETRYABLE_FAILURE
+  FAILED
+  ENQUEUE_FAILED
+  RECONCILE_SUBMITTED
+  INGESTING
+  COMPLETED
+  CANCELLED
+  CANCEL_REQUESTED
+}
+
+model PlanEntitlement {
+  planKey   String
+  key       String
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([planKey, key])
+}
+
+model BillingEvent {
+  id        String   @id @default(cuid())
+  shop      String
+  domainEventType String @map("eventType")
+  sourceSystem    String @map("source")
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([shop, createdAt])
+  @@index([shop, domainEventType, createdAt])
+}
+
+model OperationLease {
+  shop         String
+  namespace    String
+  /// Lease resource and lease-holder identities. ownerId is not a polymorphic owner pair.
+  resourceId   String
+  ownerId      String
+  fencingToken BigInt
+  expiresAt    DateTime
+  acquiredAt   DateTime  @default(now())
+  heartbeatAt  DateTime?
+  releasedAt   DateTime?
+
+  @@id([shop, namespace, resourceId])
+  @@index([expiresAt])
+  @@index([shop, namespace])
+}
+
+/// Durable command for dispatching one concrete queue job. Domain events are
+/// published through OutboxEvent so the two retry loops have separate ownership.
+model OperationEnqueueIntent {
+  id           String    @id @default(cuid())
+  shop         String
+  queueRoutingKey String @map("queueKey")
+  queueJobName    String @map("jobName")
+  payload      Json
+  options      Json?
+  dispatchDedupeKey String? @map("dedupeKey")
+  status       OperationEnqueueIntentStatus @default(PENDING)
+  dispatchAttemptCount Int @default(0) @map("attempts")
+  lastError    String?
+  availableAt  DateTime  @default(now()) @map("runAt")
+  dispatchedAt DateTime?
+  dispatchStartedAt DateTime?
+  dispatchHeartbeatAt DateTime?
+  dispatchOwnerId String? @map("dispatchOwner")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  /// NULL opts out of deduplication; non-null keys are unique via a SQL partial index.
+  @@index([shop, status, availableAt, id])
+  @@index([status, availableAt, id])
+  @@index([status, dispatchHeartbeatAt, id])
+}
+
+/// Terminal queue/job delivery failures. Per-record bulk mutation failures are
+/// stored in DeadLetterChange and have an independent recovery workflow.
+model DeadLetterJob {
+  id         String    @id @default(cuid())
+  shop       String?
+  queueName    String
+  queueJobName String? @map("jobName")
+  queueJobId   String? @map("jobId")
+  payload    Json?
+  error      String?
+  attempts   Int
+  failedAt   DateTime  @default(now())
+  resolvedAt DateTime?
+  resolution DeadLetterResolution?
+
+  @@index([shop, failedAt])
+  @@index([queueName, failedAt])
+  @@index([resolvedAt, failedAt])
+}
+
+model ProductTombstone {
+  shop             String
+  productId        String
+  tombstoneMutationSequence BigInt @map("mutationSequence")
+  sourceEntityUpdatedAt  DateTime? @map("sourceUpdatedAt")
+  sourceEventOccurredAt  DateTime? @map("sourceEventAt")
+  deletedAt        DateTime?
+  changeSource     String? @map("sourceKind")
+  reconciliationCompletedAt DateTime? @map("lastReconciledAt")
+  purgeAfter       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  store            Store     @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
+
+  @@id([shop, productId])
+  @@index([shop, tombstoneMutationSequence])
+  @@index([shop, deletedAt])
+  @@index([shop, purgeAfter])
+  @@index([shop, updatedAt])
+}
+
+model MirrorMutationJournal {
+  sequence      BigInt    @id @default(autoincrement())
+  shop          String
+  /// Mutated mirror entity identity; validate against journal-supported entity types.
+  entityType    String
+  entityId      String
+  productId     String?
+  mutationType  String
+  payload       Json?
+  payloadStorageKey String?
+  sourceEventOccurredAt DateTime? @map("sourceEventAt")
+  replayedAt    DateTime?
+  purgeAfter    DateTime?
+  createdAt     DateTime  @default(now())
+  store         Store     @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
+
+  @@index([shop, sequence])
+  @@index([shop, productId, sequence])
+  @@index([shop, entityType, entityId, sequence])
+  @@index([createdAt])
+  @@index([purgeAfter, sequence])
+}
+
+model WebhookDelivery {
+  /// Internal delivery/aggregation identity. Always derived with tenant scope.
+  id               String                @id
+  topic            String
+  shop             String
+  /// Original Shopify webhook identity; aggregation endpoints may leave it null.
+  shopifyWebhookId String?                @map("webhookId")
+  firstWebhookId   String?
+  lastWebhookId    String?
+  causalChainId    String?
+  entityId         String?
+  dedupeKey        String
+  payloadHash      String?
+  /// Legacy source projection; workflow selection must use statusNormalized.
+  status           String                @default("RECEIVED")
+  statusNormalized WebhookDeliveryStatus @default(RECEIVED)
+  processedAt      DateTime?
+  lastError        String?
+  attemptCount     Int                   @default(1)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([shop, dedupeKey])
+  @@index([shop, shopifyWebhookId])
+  @@index([shop, topic, createdAt])
+  @@index([statusNormalized, createdAt])
+}
+
+enum EditHistoryExecutionState {
+  PLANNED
+  QUEUED
+  DISPATCHING
+  AWAITING_SHOPIFY
+  FINALIZING
+  COMPLETED
+  FAILED
+  PARTIAL
+  CANCELLED
+  UNKNOWN
+}
+
+enum EditHistoryStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIAL
+  UNDO_PENDING
+  UNKNOWN
+}
+
+enum ExportJobExecutionState {
+  PLANNED
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  UNKNOWN
+}
+
+enum ExportJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  UNKNOWN
+}
+
+enum OutboxEventStatus {
+  PENDING
+  DISPATCHING
+  DISPATCHED
+  DEAD_LETTER
+}
+
+enum TargetFreezeCommandStatus {
+  PENDING
+  DISPATCHING
+  DISPATCHED
+}
+
+enum BulkApplyRequestStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  PARTIAL_FAILED
+  FAILED
+  CANCELLED
+}
+
+enum BulkApplyItemStatus {
+  PENDING
+  APPLYING
+  APPLIED
+  FAILED
+  FAILED_PERMANENT
+  CANCELLED
+  SKIPPED
+}
+
+enum OperationStageStatus {
+  PREPARED_JSONL
+  PENDING_SUBMIT
+  WAITING_SLOT
+  STAGED_UPLOAD_CREATED
+  UPLOADED
+  SUBMIT_RESPONSE_RECEIVED
+  SUBMITTED
+  WAITING
+  RUNNING
+  RETRYABLE_FAILURE
+  QUEUE_FAILED
+  COMPLETED_EMPTY
+  COMPLETED
+  PARTIAL_FAILED
+  FAILED
+  SKIPPED
+}
+
+enum OperationEnqueueIntentStatus {
+  PENDING
+  DISPATCHING
+  DISPATCHED
+  FAILED
+}
+
+enum DeadLetterResolution {
+  RECOVERABLE
+  UNRECOVERABLE
+  RETRIED
+  RESOLVED
+}
+
+enum MirrorReconcileSignalStatus {
+  PENDING
+  PROCESSING
+  RECONCILED
+  FAILED
+}
+
+enum WebhookDeliveryStatus {
+  RECEIVED
+  QUEUED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+  UNKNOWN
+}
+
+enum SubscriptionStatus {
+  FREE
+  PENDING
+  ACTIVE
+  CANCELLED
+  EXPIRED
+}
+
+enum SyncStatus {
+  completed
+  processing
+  failed
+}
+
+enum MirrorHealthState {
+  HEALTHY
+  DEGRADED
+  UNSAFE
+  REPAIR_REQUIRED
+}
+
+enum SyncProgressStage {
+  IDLE
+  SHOPIFY_BULK_RUNNING
+  MIRROR_STAGING
+  RECONCILING
+}
+
+enum StoreInstallationStatus {
+  INSTALLED
+  UNINSTALLED
+  SUSPENDED
+}
+
+enum MirrorResourceType {
+  PRODUCT_CATALOG
+  COLLECTION_CATALOG
+}
+
+enum MirrorBatchStatus {
+  SYNC_REQUESTED
+  BULK_OPERATION_STARTED
+  BULK_OPERATION_COMPLETED
+  FILE_DOWNLOADING
+  FILE_DOWNLOADED
+  INGESTING_TO_STAGING_BATCH
+  VALIDATING_BATCH
+  REPLAYING_MUTATIONS
+  FINALIZED
+  ACTIVATING_BATCH
+  ACTIVE
+  RETIRED
+  CLEANING
+  CLEANED
+  FAILED
+}
+
+enum SyncOperationType {
+  Collection
+  ProductType
+  Product
+}
+
+enum FilterTrackType {
+  filter
+  preview
+}
+
+enum EditStatus {
+  SYNCED
+  PENDING
+  WRITING
+  WRITTEN
+  ERROR
+}
+
+enum SessionStatus {
+  DRAFT
+  COMMITTED
+  WRITING
+  DONE
+  PARTIAL
+  FAILED
+}
+
+enum ChangeStatus {
+  PENDING
+  WRITING
+  WRITTEN
+  ERROR
+}
+
+enum RecurringEditStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum RecurringScheduleType {
+  ONE_TIME
+  CRON
+  DAILY
+  WEEKLY
+  MONTHLY
+  EVERY_X_MINUTES
+}
+
+enum RecurringEditRunStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum AutomaticProductRuleStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  /// Legacy database value only. New deletion decisions use deletedAt.
+  DELETED
+}
+
+enum AutomaticProductRuleTriggerType {
+  EVENT
+  SCHEDULED
+  HYBRID
+}
+
+enum AutomaticRuleScheduleType {
+  CRON
+  DAILY
+  WEEKLY
+  MONTHLY
+  EVERY_X_MINUTES
+}
+
+enum AutomaticProductRuleScopeType {
+  PRODUCT
+  VARIANT
+}
+
+enum AutomaticProductRuleRunStatus {
+  TARGET_FREEZE_QUEUED
+  TARGET_FREEZING
+  TARGET_FROZEN
+  EXECUTING
+  VERIFYING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  UNDO_PENDING
+  UNDO_EXECUTING
+}
+
+enum AutomaticProductRuleTargetType {
+  PRODUCT
+  VARIANT
+}
+
+enum AutomaticProductRuleRunTriggerSource {
+  SCHEDULE
+  WEBHOOK
+  MANUAL
+  REINDEX
+}
+
+enum AutomaticRuleApplicationStatus {
+  RESERVED
+  APPLIED
+  SKIPPED
+  FAILED
+  CANCELLED
+  UNKNOWN
+}
+
+enum ProductCodeSnippetStatus {
+  ACTIVE
+  DRAFT
+  ARCHIVED
+}
+
+enum ProductCodeSnippetLanguage {
+  SNIPPET_DSL
+}
+
+enum ProductCodeSnippetValidationStatus {
+  VALID
+  INVALID
+}
+
+enum EditHistoryTriggerType {
+  MANUAL
+  SCHEDULED_ONCE
+  RECURRING
+  AUTOMATIC_RULE
+}
+
+enum ScheduledExportStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ScheduledExportRunStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum ExportJobTriggerType {
+  MANUAL
+  SCHEDULED
+}
+
+enum TargetSnapshotSetStatus {
+  FREEZING
+  FROZEN
+  FREEZE_FAILED
+  EXPIRED
+  CANCELLED
+  CORRUPTED
+}
+
+enum TargetSnapshotTargetType {
+  PRODUCT
+  VARIANT
+  INVENTORY_ITEM
+  METAFIELD
+}
+
+enum TargetSnapshotItemExecutionStatus {
+  PENDING
+  SUBMITTED
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum TargetSnapshotItemVerificationStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum TargetSnapshotItemUndoStatus {
+  NOT_REQUIRED
+  PENDING
+  SUBMITTED
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}

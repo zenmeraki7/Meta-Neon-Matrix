@@ -1,0 +1,23 @@
+name: Operational Naming Enforcement
+
+on:
+  pull_request:
+    paths:
+      - "db/**"
+      - "workers/**"
+      - "web/**"
+      - "package.json"
+      - ".github/workflows/operational-naming-enforcement.yml"
+  push:
+    branches: [main, master]
+
+jobs:
+  audit-operational-naming:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Reject new ambiguous operational identities
+        run: npm run audit:naming

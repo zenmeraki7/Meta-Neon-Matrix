@@ -1,0 +1,77 @@
+import { Worker } from "bullmq";
+import { connection } from "../../config/redis.js";
+import { executeScheduledExportRun } from "../../services/scheduledExportExecutionService.js";
+import { SCHEDULED_EXPORT_EXECUTION_QUEUE } from "../../queues/adapters/scheduledExportQueueAdapter.js";
+import logger from "../../utils/loggerUtils.js";
+import {
+  getJobAttempt,
+  isRetryExhausted,
+  recordRetryExhausted,
+} from "../../utils/workerTelemetry.js";
+
+const scheduledExportExecutionWorker = new Worker(
+  SCHEDULED_EXPORT_EXECUTION_QUEUE,
+  async (job) => {
+    const { scheduledExportRunId, shop } = job.data || {};
+     logger.info("Scheduled export execution worker started", {
+      jobId: job?.id,
+      shop,
+      scheduledExportRunId,
+    });
+    if (!scheduledExportRunId || !shop) {
+      throw new Error("scheduled export execution job requires scheduledExportRunId and shop");
+    }
+
+    const result = await executeScheduledExportRun(scheduledExportRunId, shop);
+
+    // ✅ Add this
+    logger.info("Scheduled export execution completed", {
+      worker: "scheduledExportExecutionWorker",
+      jobId: job?.id,
+      shop,
+      scheduledExportRunId,
+    });
+
+    return result;
+  },
+  {
+    connection,
+    concurrency: 2,
+  },
+);
+
+scheduledExportExecutionWorker.on("completed", (job) => {
+  logger.info("Scheduled export execution worker completed", {
+    worker: "scheduledExportExecutionWorker",
+    queue: SCHEDULED_EXPORT_EXECUTION_QUEUE,
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    scheduledExportRunId: job?.data?.scheduledExportRunId,
+  });
+});
+scheduledExportExecutionWorker.on("failed", async (job, error) => {
+  logger.error("Scheduled export execution worker failed", {
+    worker: "scheduledExportExecutionWorker",
+    queue: SCHEDULED_EXPORT_EXECUTION_QUEUE,
+    jobId: job?.id,
+    shop: job?.data?.shop,
+    scheduledExportRunId: job?.data?.scheduledExportRunId,
+    attempt: getJobAttempt(job),
+    message: error.message,
+  });
+
+  if (isRetryExhausted(job)) {
+    await recordRetryExhausted({
+      job,
+      shop: job?.data?.shop,
+      worker: "scheduledExportExecutionWorker",
+      queue: SCHEDULED_EXPORT_EXECUTION_QUEUE,
+      entityType: "scheduledExportRun",
+      entityId: job?.data?.scheduledExportRunId,
+      executionId: job?.data?.scheduledExportRunId,
+      message: "Scheduled export execution worker exhausted retries",
+    });
+  }
+});
+
+export default scheduledExportExecutionWorker;

@@ -1,0 +1,56 @@
+import React, { createContext, useCallback, useContext, useState } from 'react';
+import { Toast } from '@shopify/polaris';
+
+const ToastContext = createContext();
+
+/**
+ * Custom hook to access toast functionality.
+ */
+export const useToast = () => useContext(ToastContext);
+
+/**
+ * Sets up the ToastProvider using Shopify Polaris Toast.
+ * Wrap your app with this provider to enable toast notifications.
+ */
+export function ToastProvider({ children }) {
+  const [toast, setToast] = useState({ content: '', error: false, active: false });
+
+  const showToast = useCallback((content, options = {}) => {
+    setToast({
+      content,
+      error: options.error || false,
+      active: true,
+      action: options.action || null,
+      duration: options.duration || undefined,
+    });
+  }, []);
+
+  const showSuccess = useCallback((content, options = {}) => {
+    showToast(content, { ...options, error: false });
+  }, [showToast]);
+
+  const showError = useCallback((content, options = {}) => {
+    showToast(content, { ...options, error: true });
+  }, [showToast]);
+
+  const hideToast = useCallback(() => {
+    setToast(prev => ({ ...prev, active: false }));
+  }, []);
+
+  const toastMarkup = toast.active ? (
+    <Toast
+      content={toast.content}
+      error={toast.error}
+      action={toast.action || undefined}
+      duration={toast.duration}
+      onDismiss={hideToast}
+    />
+  ) : null;
+
+  return (
+    <ToastContext.Provider value={{ showToast, showSuccess, showError }}>
+      {children}
+      {toastMarkup}
+    </ToastContext.Provider>
+  );
+}

@@ -1,0 +1,1149 @@
+import React, { useState, useCallback, useEffect, useMemo } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import {
+  Page,
+  Layout,
+  Card,
+  Text,
+  Badge,
+  IndexTable,
+  Pagination,
+  Banner,
+  InlineStack,
+  ProgressBar,
+  Box,
+  BlockStack,
+  Thumbnail,
+  EmptyState,
+  Icon,
+  Spinner,
+  Button,
+} from "@shopify/polaris";
+import {
+  ClockIcon,
+  PlayIcon,
+  CheckIcon,
+  XIcon,
+  RefreshIcon,
+} from "@shopify/polaris-icons";
+import Papa from "papaparse";
+import { useTranslation } from "react-i18next";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { buildOperationTimeline } from "../utils/operationTimeline";
+import { useApiClient } from "../../../../hooks/useApiClient";
+import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
+import { toSafeErrorMessage } from "../../../../utils/frontendError";
+import TableErrorBoundary from "../../../../components/Error/TableErrorBoundary";
+import CellErrorBoundary from "../../../../components/Error/CellErrorBoundary";
+
+const FALLBACK_IMAGE = "https://www.otithee.com/img/fallback/fallback-2.png";
+
+function normalizeRouteHistoryId(value) {
+  const historyId = String(value || "").trim();
+  return historyId && historyId !== "undefined" && historyId !== "null"
+    ? historyId
+    : null;
+}
+
+function formatDuration(ms = 0) {
+  if (!ms || ms < 0) return "0s";
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function getPrimaryStatus(historyItem) {
+  if (historyItem?.primaryStatus?.key) {
+    return {
+      key: historyItem.primaryStatus.key,
+      tone: historyItem.primaryStatus.tone || "info",
+      isTerminal: historyItem.primaryStatus.isTerminal === true,
+    };
+  }
+
+  const status = String(historyItem?.status || "").toLowerCase();
+
+  if (status === "completed") {
+    return { key: "completed", tone: "success", isTerminal: true };
+  }
+
+  if (status === "failed") {
+    return { key: "failed", tone: "critical", isTerminal: true };
+  }
+
+  if (status === "processing") {
+    return { key: "processing", tone: "info", isTerminal: false };
+  }
+
+  return { key: "pending", tone: "attention", isTerminal: false };
+}
+
+function getUndoStatus(historyItem) {
+  if (historyItem?.undoStatusSummary?.key) {
+    return {
+      key: historyItem.undoStatusSummary.key,
+      tone: historyItem.undoStatusSummary.tone || "info",
+      isTerminal: historyItem.undoStatusSummary.isTerminal === true,
+      label: historyItem.undoStatusSummary.label || null,
+      detail: historyItem.undoStatusSummary.detail || null,
+    };
+  }
+
+  const undoStatus = String(historyItem?.undo?.status || "").toLowerCase();
+  if (!undoStatus || undoStatus === "idle") return null;
+
+  if (undoStatus === "completed") {
+    return historyItem?.undo?.verification?.verified === true
+      ? { key: "undo_verified", tone: "success", isTerminal: true }
+      : {
+          key: "undo_verification_failed",
+          tone: "critical",
+          isTerminal: true,
+        };
+  }
+
+  if (undoStatus === "failed") {
+    return { key: "undo_failed", tone: "critical", isTerminal: true };
+  }
+
+  return { key: "undo_processing", tone: "info", isTerminal: false };
+}
+
+function getStatusIcon(statusKey) {
+  switch (statusKey) {
+    case "completed":
+    case "undo_completed":
+    case "undo_verified":
+      return CheckIcon;
+    case "failed":
+    case "undo_failed":
+    case "undo_verification_failed":
+    case "cancelled":
+    case "undo_cancelled":
+      return XIcon;
+    case "dispatching":
+    case "awaiting_shopify":
+    case "finalizing":
+    case "running":
+    case "processing":
+    case "undo_dispatching":
+    case "undo_awaiting_shopify":
+    case "undo_finalizing":
+    case "undo_processing":
+      return PlayIcon;
+    case "queued":
+    case "pending":
+    case "undo_queued":
+      return ClockIcon;
+    default:
+      return RefreshIcon;
+  }
+}
+
+function findUndoFieldEvidence(change, scope, field, variantId = null) {
+  const evidence = Array.isArray(change?.undoResult?.fields)
+    ? change.undoResult.fields
+    : [];
+  return (
+    evidence.find((entry) => {
+      if (String(entry?.scope || "").toLowerCase() !== scope) return false;
+      if (String(entry?.field || "") !== String(field || "")) return false;
+      if (scope !== "variant") return true;
+      return String(entry?.variantId || "") === String(variantId || "");
+    }) || null
+  );
+}
+
+const ChangeValueHistory = React.memo(function ChangeValueHistory({ row }) {
+  return (
+    <InlineStack gap="150" blockAlign="center" wrap>
+      <Text as="span">{row.oldValue}</Text>
+      <Text as="span" tone="subdued">
+        →
+      </Text>
+      <Text as="span">{row.newValue}</Text>
+      {row.hasUndoResult ? (
+        <>
+          <Text as="span" tone="subdued">
+            →
+          </Text>
+          <Text
+            as="span"
+            tone={row.undoVerified ? "success" : "critical"}
+            fontWeight="semibold"
+          >
+            {row.restoredValue} {row.undoVerified ? "restored" : "undo failed"}
+          </Text>
+        </>
+      ) : null}
+    </InlineStack>
+  );
+});
+
+const UndoStatusCell = React.memo(function UndoStatusCell({ row }) {
+  if (!row.hasUndoResult) {
+    return (
+      <Text as="span" tone="subdued">
+        Not run
+      </Text>
+    );
+  }
+
+  return (
+    <Badge tone={row.undoVerified ? "success" : "critical"}>
+      {row.undoVerified ? "Undo succeeded" : "Undo failed"}
+    </Badge>
+  );
+});
+
+function isActiveStatus(statusSummary) {
+  return Boolean(statusSummary) && statusSummary.isTerminal !== true;
+}
+
+function isActiveEditSummary(summary) {
+  if (!summary) return false;
+
+  const primaryStatus = getPrimaryStatus(summary);
+  const undoStatus = getUndoStatus(summary);
+  return isActiveStatus(primaryStatus) || isActiveStatus(undoStatus);
+}
+
+function normalizeErrors(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === "object") return [value];
+  return [{ message: String(value) }];
+}
+
+function buildStableChangeRowKey({
+  changeId,
+  scope,
+  field,
+  variantId = "",
+  productId = "",
+  position = 0,
+}) {
+  const base = [
+    changeId || productId || "change",
+    scope || "scope",
+    variantId || "variant",
+    field || "field",
+  ].join(":");
+  return `${base}:${position}`;
+}
+
+export default function EditDetails() {
+  const { id } = useParams();
+  const historyId = normalizeRouteHistoryId(id);
+  const navigate = useNavigate();
+  const { t, i18n } = useTranslation();
+  const { showError } = useAppToast();
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  const [historyItem, setHistoryItem] = useState(null);
+  const [changes, setChanges] = useState([]);
+  const [changeField, setChangeField] = useState("");
+  const [isVariantChange, setIsVariantChange] = useState(false);
+
+  const [isLoadingChanges, setIsLoadingChanges] = useState(true);
+
+  const [error, setError] = useState(null);
+  const [changesError, setChangesError] = useState(null);
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalChanges, setTotalChanges] = useState(0);
+
+  const itemsPerPage = 10;
+
+  const handleBack = useCallback(() => {
+    navigate("/history");
+  }, [navigate]);
+
+  const summaryQuery = useQuery({
+    queryKey: ["edit-history-summary", historyId || "", i18n.language || "en"],
+    enabled: Boolean(historyId),
+    queryFn: async ({ signal }) => {
+      const json = await api.get(
+        `/api/history/get-edit-history-summary/${encodeURIComponent(
+          historyId
+        )}?lang=${i18n.language}`,
+        { signal }
+      );
+      return json?.data || null;
+    },
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    refetchInterval: (query) =>
+      isActiveEditSummary(query.state.data) ? 3000 : false,
+    retry: false,
+  });
+
+  const fetchHistoryDetail = useCallback(async () => {
+    if (!historyId) return;
+
+    try {
+      const json = await api.get(
+        `/api/history/get-edit-history-details/${encodeURIComponent(
+          historyId
+        )}?lang=${i18n.language}`
+      );
+      setHistoryItem((previous) => ({
+        ...(previous || {}),
+        ...(json?.data || {}),
+      }));
+    } catch (_err) {
+      // Keep summary-visible UI stable even if detail enrichment fails.
+    }
+  }, [api, historyId, i18n.language]);
+
+  const fetchChanges = useCallback(
+    async (page = 1) => {
+      if (!historyId) return;
+
+      try {
+        setChangesError(null);
+        setIsLoadingChanges(true);
+
+        const json = await api.get(
+          `/api/history/get-edit-history/changes/${encodeURIComponent(
+            historyId
+          )}?page=${page}&limit=${itemsPerPage}&lang=${i18n.language}`
+        );
+        const changeRows = Array.isArray(json?.data) ? json.data : [];
+        const meta = json?.meta || {};
+
+        setChanges(changeRows);
+        setTotalPages(Number(meta?.totalPages) || 1);
+        setTotalChanges(Number(meta?.totalCount) || changeRows.length || 0);
+        setCurrentPage(Number(meta?.currentPage) || page);
+
+        const hasVariantChanges = changeRows.some(
+          (item) =>
+            Array.isArray(item?.variantFieldChanges) &&
+            item.variantFieldChanges.length > 0
+        );
+
+        setIsVariantChange(hasVariantChanges);
+
+        const firstField =
+          changeRows
+            .flatMap((item) => [
+              ...(Array.isArray(item?.productFieldChanges)
+                ? item.productFieldChanges.map((c) => c?.field)
+                : []),
+              ...(Array.isArray(item?.variantFieldChanges)
+                ? item.variantFieldChanges.flatMap((variant) =>
+                    Array.isArray(variant?.changes)
+                      ? variant.changes.map((c) => c?.field)
+                      : []
+                  )
+                : []),
+            ])
+            .find(Boolean) || "";
+
+        setChangeField(firstField);
+      } catch (err) {
+        setChanges([]);
+        setChangeField("");
+        setIsVariantChange(false);
+        setTotalPages(1);
+        setTotalChanges(0);
+        setCurrentPage(page);
+        setChangesError(toSafeErrorMessage(t, err, "common.errors.generic"));
+      } finally {
+        setIsLoadingChanges(false);
+      }
+    },
+    [api, historyId, i18n.language, t]
+  );
+
+  useEffect(() => {
+    fetchHistoryDetail();
+  }, [fetchHistoryDetail]);
+
+  useEffect(() => {
+    if (summaryQuery.data) {
+      setHistoryItem((previous) => ({
+        ...(previous || {}),
+        ...summaryQuery.data,
+      }));
+      setError(null);
+    }
+  }, [summaryQuery.data]);
+
+  useEffect(() => {
+    if (!summaryQuery.error) return;
+    setError(
+      toSafeErrorMessage(t, summaryQuery.error, "common.errors.generic")
+    );
+  }, [summaryQuery.error, t]);
+
+  useEffect(() => {
+    fetchChanges(1);
+  }, [fetchChanges]);
+
+  useEffect(() => {
+    if (!error) return;
+    showError(error);
+  }, [error, showError]);
+
+  useEffect(() => {
+    if (!summaryQuery.data) return;
+    const nextPrimaryStatus = getPrimaryStatus(summaryQuery.data);
+    const nextUndoStatus = getUndoStatus(summaryQuery.data);
+    if (
+      nextPrimaryStatus.key === "completed" ||
+      ["undo_verified", "undo_verification_failed"].includes(
+        nextUndoStatus?.key
+      )
+    ) {
+      fetchChanges(currentPage);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["bootstrap-products"] });
+    }
+  }, [summaryQuery.data, currentPage, fetchChanges, queryClient]);
+
+  const formatAuditValue = useCallback(
+    (value) => {
+      if (value === undefined)
+        return t("historyValue.unavailable", { defaultValue: "Unavailable" });
+      if (value === null)
+        return t("historyValue.none", { defaultValue: "None" });
+      if (value === "")
+        return t("historyValue.empty", { defaultValue: "Empty" });
+      if (value === false) return t("historyValue.no", { defaultValue: "No" });
+      if (value === true) return t("historyValue.yes", { defaultValue: "Yes" });
+      if (Array.isArray(value))
+        return value.length
+          ? value.join(", ")
+          : t("historyValue.none", { defaultValue: "None" });
+      if (typeof value === "object") return JSON.stringify(value);
+      return String(value);
+    },
+    [t]
+  );
+
+  const flattenedRows = useMemo(() => {
+    if (!Array.isArray(changes) || changes.length === 0) return [];
+
+    return changes.flatMap((change) => {
+      const productTitle = change?.title || "Untitled product";
+      const productImage = change?.image || "";
+
+      const productRows = Array.isArray(change?.productFieldChanges)
+        ? change.productFieldChanges.map((fieldChange, fieldIndex) => {
+            const rawField = fieldChange?.field || changeField || "N/A"; // ✅ store raw first
+            const undoEvidence = findUndoFieldEvidence(
+              change,
+              "product",
+              rawField
+            );
+            return {
+              rowKey: buildStableChangeRowKey({
+                changeId: change?.id || "",
+                scope: "product",
+                field: rawField,
+                productId: change?.productId || "",
+                position: fieldIndex,
+              }),
+              image: productImage,
+              title: productTitle,
+              scope: t("scope.product"),
+              status: String(
+                change?.status ||
+                  historyItem?.primaryStatus?.key ||
+                  historyItem?.status ||
+                  "pending"
+              ),
+              field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }), // ✅ translate
+              oldValue: formatAuditValue(fieldChange?.oldValue),
+              newValue: formatAuditValue(fieldChange?.newValue),
+              hasUndoResult: Boolean(change?.undoResult),
+              undoVerified: undoEvidence?.verified === true,
+              restoredValue: formatAuditValue(undoEvidence?.restoredValue),
+              currentShopifyValue: formatAuditValue(
+                undoEvidence?.currentShopifyValue
+              ),
+            };
+          })
+        : [];
+
+      const variantRows = Array.isArray(change?.variantFieldChanges)
+        ? change.variantFieldChanges.flatMap((variantChange, variantIndex) => {
+            if (!Array.isArray(variantChange?.changes)) return [];
+            return variantChange.changes.map((fieldChange, fieldIndex) => {
+              const rawField = fieldChange?.field || changeField || "N/A"; // ✅ store raw first
+              const variantId =
+                variantChange?.variantId ||
+                variantChange?.id ||
+                String(variantIndex);
+              const undoEvidence = findUndoFieldEvidence(
+                change,
+                "variant",
+                rawField,
+                variantId
+              );
+              return {
+                rowKey: buildStableChangeRowKey({
+                  changeId: change?.id || "",
+                  scope: "variant",
+                  field: rawField,
+                  variantId,
+                  productId: change?.productId || "",
+                  position: fieldIndex,
+                }),
+                image: productImage,
+                title: `${productTitle} - ${
+                  variantChange?.variantTitle || "Default Title"
+                }`,
+                scope: t("scope.variant"),
+                status: String(
+                  change?.status ||
+                    historyItem?.primaryStatus?.key ||
+                    historyItem?.status ||
+                    "pending"
+                ),
+                field: t(`fieldLabels.${rawField}`, { defaultValue: rawField }), // ✅ translate
+                oldValue: formatAuditValue(fieldChange?.oldValue),
+                newValue: formatAuditValue(fieldChange?.newValue),
+                hasUndoResult: Boolean(change?.undoResult),
+                undoVerified: undoEvidence?.verified === true,
+                restoredValue: formatAuditValue(undoEvidence?.restoredValue),
+                currentShopifyValue: formatAuditValue(
+                  undoEvidence?.currentShopifyValue
+                ),
+              };
+            });
+          })
+        : [];
+
+      return [...productRows, ...variantRows];
+    });
+  }, [
+    changes,
+    changeField,
+    t,
+    formatAuditValue,
+    historyItem?.primaryStatus?.key,
+    historyItem?.status,
+  ]);
+
+  const handleDownloadLogs = useCallback(() => {
+    if (!historyItem?.id || flattenedRows.length === 0) return;
+
+    const csvData = flattenedRows.map((row) => ({
+      ProductTitle: row.title,
+      Scope: row.scope,
+      Field: row.field,
+      OldValue: row.oldValue,
+      NewValue: row.newValue,
+      EditID: historyItem.id,
+      Shop: historyItem.shop || "",
+      Status: historyItem.primaryStatus?.label || historyItem.status || "",
+    }));
+
+    const csv = Papa.unparse(csvData);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `edit-history-${historyItem.id}-${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+  }, [flattenedRows, historyItem]);
+
+  if (!historyId) {
+    return (
+      <Page
+        fullWidth
+        title={t("errorPageTitle")}
+        backAction={{ content: t("History"), onAction: handleBack }}
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <Box padding="500">
+                <BlockStack gap="300">
+                  <Text as="h2" variant="headingMd">
+                    Missing history ID.
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Open this edit from History or run the edit again.
+                  </Text>
+                  <Button onClick={handleBack}>Back to history</Button>
+                </BlockStack>
+              </Box>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  if (summaryQuery.isLoading && !historyItem) {
+    return (
+      <Page
+        fullWidth
+        title={t("loadingHistoryDetails")}
+        backAction={{ content: t("History"), onAction: handleBack }}
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <Box padding="500">
+                <InlineStack align="center" gap="300">
+                  <Spinner size="large" />
+                  <Text tone="subdued">
+                    {t("loadingHistoryDetailsSpinner")}
+                  </Text>
+                </InlineStack>
+              </Box>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  if (error) {
+    return (
+      <Page
+        fullWidth
+        title={t("errorPageTitle")}
+        backAction={{ content: t("History"), onAction: handleBack }}
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <Box padding="500">
+                <BlockStack gap="300">
+                  <Text as="h2" variant="headingMd">
+                    Unable to load history details
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    {error}
+                  </Text>
+                  <InlineStack gap="200">
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        summaryQuery.refetch();
+                        fetchHistoryDetail();
+                      }}
+                    >
+                      Retry
+                    </Button>
+                    <Button onClick={handleBack}>Back to history</Button>
+                  </InlineStack>
+                </BlockStack>
+              </Box>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  if (!historyItem) return null;
+
+  const title = historyItem?.titleKey
+    ? t(historyItem.titleKey, {
+        ...(historyItem.titleParams || {}),
+        defaultValue: historyItem?.title || "",
+      })
+    : historyItem?.title || "";
+
+  const primaryStatus = getPrimaryStatus(historyItem);
+  const undoStatus = getUndoStatus(historyItem);
+  const primaryStatusLabel = t(`historyStatus.${primaryStatus.key}`, {
+    defaultValue: primaryStatus.key,
+  });
+
+  const primaryStatusDetail = t(`historyStatusDetail.${primaryStatus.key}`, {
+    defaultValue: "",
+  });
+
+  const statusBadge = {
+    tone: primaryStatus.tone,
+    children: primaryStatusLabel,
+  };
+
+  const undoStatusLabel = undoStatus
+    ? t(`historyStatus.${undoStatus.key}`, {
+        defaultValue: undoStatus.label || undoStatus.key,
+      })
+    : null;
+
+  const undoStatusDetail = undoStatus
+    ? t(`historyStatusDetail.${undoStatus.key}`, {
+        defaultValue: undoStatus.detail || "",
+      })
+    : "";
+
+  const undoBadge = undoStatus
+    ? { tone: undoStatus.tone, children: undoStatusLabel }
+    : null;
+  const mainProgress = historyItem?.progressSummary || {
+    current: Number(
+      historyItem?.progressCount || historyItem?.processedCount || 0
+    ),
+    total: Number(
+      historyItem?.targetSnapshotCount || historyItem?.totalItems || 0
+    ),
+    percent:
+      Number(historyItem?.targetSnapshotCount || historyItem?.totalItems || 0) >
+      0
+        ? Math.round(
+            (Number(
+              historyItem?.progressCount || historyItem?.processedCount || 0
+            ) /
+              Number(
+                historyItem?.targetSnapshotCount || historyItem?.totalItems || 1
+              )) *
+              100
+          )
+        : primaryStatus.key === "completed"
+        ? 100
+        : 0,
+    label: "",
+  };
+  const undoProcessed = Number(historyItem?.undo?.processedCount || 0);
+  const undoTotal = Number(
+    historyItem?.targetSnapshotCount || historyItem?.totalItems || 0
+  );
+  const undoErrors = normalizeErrors(
+    historyItem?.supportStatus?.undoErrors || historyItem?.undo?.error
+  );
+  const editErrors = normalizeErrors(
+    historyItem?.supportStatus?.errors || historyItem?.error
+  );
+  const canDownload =
+    primaryStatus.key === "completed" && flattenedRows.length > 0;
+  const transparency = historyItem?.executionTransparency || {};
+  const transparencyPlan = transparency.executionPlan || {};
+  const transparencyFreeze = transparency.targetFreezeProgress || {};
+  const transparencyProcessed = transparency.processed || {};
+  const transparencyIngest = transparency.resultIngestionProgress || {};
+  const transparencyVerify = transparency.verificationStatus || {};
+  const transparencyUndo = transparency.undoAvailability || {};
+  const transparencyShopifySubmission = transparency.shopifySubmission || {};
+  const transparencyShopifyStatus =
+    transparency.shopifyBulkOperationStatus || "UNKNOWN";
+  const lifecycleState =
+    historyItem?.executionState ||
+    historyItem?.supportStatus?.executionState ||
+    historyItem?.status ||
+    "UNKNOWN";
+  const operationTimeline = buildOperationTimeline(lifecycleState);
+
+  return (
+    <Page
+      fullWidth
+      title={title}
+      backAction={{ content: t("History"), onAction: handleBack }}
+      titleMetadata={
+        <InlineStack gap="200">
+          <Badge {...statusBadge} />
+          {undoBadge ? <Badge {...undoBadge} /> : null}
+        </InlineStack>
+      }
+      secondaryActions={[
+        {
+          content: t("history.downloadLogs"),
+          onAction: handleDownloadLogs,
+          disabled: !canDownload,
+        },
+      ]}
+    >
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <Box padding="400">
+              <BlockStack gap="300">
+                <InlineStack align="space-between">
+                  <InlineStack gap="200">
+                    <Icon source={getStatusIcon(primaryStatus.key)} />
+                    <Text variant="headingMd">{t("EditProgress")}</Text>
+                  </InlineStack>
+                  <Badge {...statusBadge} />
+                </InlineStack>
+
+                <ProgressBar
+                  progress={Number(mainProgress.percent || 0)}
+                  animated={isActiveStatus(primaryStatus)}
+                  size="small"
+                  tone={
+                    primaryStatus.key === "completed"
+                      ? "success"
+                      : primaryStatus.key === "failed"
+                      ? "critical"
+                      : primaryStatus.key === "partial"
+                      ? "warning"
+                      : "primary"
+                  }
+                />
+
+                <InlineStack align="space-between">
+                  <Text tone="subdued">
+                    {mainProgress.label ||
+                      `${mainProgress.current} / ${
+                        mainProgress.total || mainProgress.current
+                      }`}
+                  </Text>
+
+                  {Number(historyItem?.durationMs) > 0 ? (
+                    <Text tone="subdued">
+                      {t("Duration")}: {formatDuration(historyItem.durationMs)}
+                    </Text>
+                  ) : null}
+                </InlineStack>
+
+                {primaryStatusDetail ? (
+                  <Text tone="subdued" variant="bodySm">
+                    {primaryStatusDetail}
+                  </Text>
+                ) : null}
+
+                {historyItem?.supportStatus?.failureStage ? (
+                  <Text tone="subdued" variant="bodySm">
+                    {t("failureStage")}:{" "}
+                    {historyItem.supportStatus.failureStage}
+                  </Text>
+                ) : null}
+
+                {editErrors.length > 0 ? (
+                  <Banner
+                    tone={
+                      primaryStatus.key === "partial" ? "warning" : "critical"
+                    }
+                  >
+                    <BlockStack gap="200">
+                      <Text>
+                        {primaryStatus.key === "partial"
+                          ? t("editFinishedWithIssues")
+                          : t("editExecutionErrors")}
+                      </Text>
+                      {editErrors.slice(0, 3).map((entry, index) => (
+                        <Text key={index} tone="subdued" variant="bodySm">
+                          - {entry?.message || entry?.code || "Unknown error"}
+                        </Text>
+                      ))}
+                    </BlockStack>
+                  </Banner>
+                ) : null}
+              </BlockStack>
+            </Box>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <Box padding="400">
+              <BlockStack gap="200">
+                <Text variant="headingMd">
+                  {t("operationLifecycleTitle", {
+                    defaultValue: "Operation lifecycle",
+                  })}
+                </Text>
+                {operationTimeline.stages.map((stage) => {
+                  const tone =
+                    stage.status === "completed"
+                      ? "success"
+                      : stage.status === "active"
+                      ? "info"
+                      : "attention";
+                  return (
+                    <InlineStack
+                      key={stage.key}
+                      align="space-between"
+                      blockAlign="center"
+                    >
+                      <Text
+                        tone={
+                          stage.status === "pending" ? "subdued" : undefined
+                        }
+                      >
+                        {t(stage.labelKey, {
+                          defaultValue: stage.defaultLabel,
+                        })}
+                      </Text>
+                      <Badge tone={tone}>{stage.status}</Badge>
+                    </InlineStack>
+                  );
+                })}
+              </BlockStack>
+            </Box>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <Box padding="400">
+              <BlockStack gap="200">
+                <Text variant="headingMd">Execution Transparency</Text>
+                <Text tone="subdued">
+                  Targets frozen:{" "}
+                  {Number(transparencyFreeze.frozen || 0).toLocaleString()} /{" "}
+                  {Number(transparencyFreeze.total || 0).toLocaleString()}
+                </Text>
+                <Text tone="subdued">
+                  Execution method: {transparencyPlan.apiStrategy || "UNKNOWN"}{" "}
+                  ({transparencyPlan.mutationType || "N/A"})
+                </Text>
+                <Text tone="subdued">
+                  Submitted to Shopify:{" "}
+                  {transparencyShopifySubmission.submitted ? "Yes" : "No"}
+                </Text>
+                <Text tone="subdued">
+                  Shopify status: {transparencyShopifyStatus}
+                </Text>
+                <Text tone="subdued">
+                  Processed:{" "}
+                  {Number(transparencyProcessed.current || 0).toLocaleString()}{" "}
+                  / {Number(transparencyProcessed.total || 0).toLocaleString()}
+                </Text>
+                <Text tone="subdued">
+                  Result ingest: success{" "}
+                  {Number(
+                    transparencyIngest.successCount || 0
+                  ).toLocaleString()}
+                  , failed{" "}
+                  {Number(transparencyIngest.failedCount || 0).toLocaleString()}
+                  , skipped{" "}
+                  {Number(
+                    transparencyIngest.skippedCount || 0
+                  ).toLocaleString()}
+                </Text>
+                <Text tone="subdued">
+                  Verified:{" "}
+                  {Number(
+                    transparencyVerify.verifiedCount || 0
+                  ).toLocaleString()}{" "}
+                  ({transparencyVerify.status || "UNKNOWN"})
+                </Text>
+                <Text tone="subdued">
+                  Failed items:{" "}
+                  {Number(
+                    (transparency.itemLevelFailures || {}).failedCount || 0
+                  ).toLocaleString()}
+                </Text>
+                <Text tone="subdued">
+                  Undo available: {transparencyUndo.available ? "Yes" : "No"}
+                </Text>
+              </BlockStack>
+            </Box>
+          </Card>
+        </Layout.Section>
+
+        {undoStatus ? (
+          <Layout.Section>
+            <Card>
+              <Box padding="400">
+                <BlockStack gap="300">
+                  <InlineStack align="space-between">
+                    <InlineStack gap="200">
+                      <Icon source={getStatusIcon(undoStatus.key)} />
+                      <Text variant="headingMd">{t("UndoProgress")}</Text>
+                    </InlineStack>
+                    {undoBadge ? <Badge {...undoBadge} /> : null}
+                  </InlineStack>
+
+                  <ProgressBar
+                    progress={
+                      undoTotal > 0
+                        ? Math.round((undoProcessed / undoTotal) * 100)
+                        : undoStatus.key === "undo_verified"
+                        ? 100
+                        : 0
+                    }
+                    animated={isActiveStatus(undoStatus)}
+                    size="small"
+                    tone={
+                      ["undo_failed", "undo_verification_failed"].includes(
+                        undoStatus.key
+                      )
+                        ? "critical"
+                        : undoStatus.key === "undo_verified"
+                        ? "success"
+                        : "warning"
+                    }
+                  />
+
+                  <InlineStack align="space-between">
+                    <Text tone="subdued">
+                      {undoTotal > 0
+                        ? `${undoProcessed} / ${undoTotal}`
+                        : `${undoProcessed}`}
+                    </Text>
+
+                    {Number(historyItem?.undo?.durationMs) > 0 ? (
+                      <Text tone="subdued">
+                        {t("Duration")}:{" "}
+                        {formatDuration(historyItem.undo.durationMs)}
+                      </Text>
+                    ) : null}
+                  </InlineStack>
+
+                  {undoStatusDetail ? (
+                    <Text tone="subdued" variant="bodySm">
+                      {undoStatusDetail}
+                    </Text>
+                  ) : null}
+
+                  {undoErrors.length > 0 ? (
+                    <Banner
+                      tone={
+                        undoStatus.key === "undo_partial"
+                          ? "warning"
+                          : "critical"
+                      }
+                    >
+                      <BlockStack gap="200">
+                        <Text>
+                          {undoStatus.key === "undo_partial"
+                            ? t("undoFinishedWithIssues")
+                            : t("undoEncounteredErrors")}
+                        </Text>
+                        {undoErrors.slice(0, 3).map((entry, index) => (
+                          <Text key={index} tone="subdued" variant="bodySm">
+                            - {entry?.message || entry?.code || "Unknown error"}
+                          </Text>
+                        ))}
+                      </BlockStack>
+                    </Banner>
+                  ) : null}
+                </BlockStack>
+              </Box>
+            </Card>
+          </Layout.Section>
+        ) : null}
+
+        <Layout.Section>
+          <Card>
+            <Box padding="400">
+              <BlockStack gap="300">
+                <InlineStack align="space-between">
+                  <Text variant="headingMd">{t("ProductChanges")}</Text>
+                  <Text tone="subdued">
+                    {totalChanges > 0
+                      ? `${t("Showing")} ${
+                          (currentPage - 1) * itemsPerPage + 1
+                        }-${Math.min(
+                          currentPage * itemsPerPage,
+                          totalChanges
+                        )} ${t("of")} ${totalChanges}`
+                      : `${t("Showing")} 0-0 ${t("of")} 0`}
+                  </Text>
+                </InlineStack>
+              </BlockStack>
+            </Box>
+
+            {isLoadingChanges ? (
+              <Box padding="400">
+                <InlineStack gap="200">
+                  <Spinner size="small" />
+                  <Text tone="subdued">{t("Loadingchanges")}</Text>
+                </InlineStack>
+              </Box>
+            ) : changesError ? (
+              <Box padding="400">
+                <Banner tone="critical">{changesError}</Banner>
+              </Box>
+            ) : flattenedRows.length > 0 ? (
+              <>
+                <Box paddingInlineStart="60">
+                  <TableErrorBoundary>
+                    <IndexTable
+                      resourceName={{ singular: "change", plural: "changes" }}
+                      itemCount={flattenedRows.length}
+                      selectable={false}
+                      headings={[
+                        { title: "Product" },
+                        { title: "Scope" },
+                        { title: "Field" },
+                        { title: "Value history" },
+                        { title: "Undo status" },
+                      ]}
+                    >
+                      {flattenedRows.map((item, index) => (
+                        <IndexTable.Row
+                          id={String(item.rowKey)}
+                          key={String(item.rowKey)}
+                          position={index}
+                        >
+                          <IndexTable.Cell>
+                            <CellErrorBoundary fallback="[render error]">
+                              <InlineStack gap="300" wrap={false}>
+                                <Thumbnail
+                                  source={item.image || FALLBACK_IMAGE}
+                                  alt={item.title || "product"}
+                                  size="small"
+                                />
+                                <Text as="span" fontWeight="semibold">
+                                  {item.title}
+                                </Text>
+                              </InlineStack>
+                            </CellErrorBoundary>
+                          </IndexTable.Cell>
+                          <IndexTable.Cell>
+                            <CellErrorBoundary fallback="[render error]">
+                              {item.scope}
+                            </CellErrorBoundary>
+                          </IndexTable.Cell>
+                          <IndexTable.Cell>
+                            <CellErrorBoundary fallback="[render error]">
+                              {item.field}
+                            </CellErrorBoundary>
+                          </IndexTable.Cell>
+                          <IndexTable.Cell>
+                            <CellErrorBoundary fallback="[render error]">
+                              <ChangeValueHistory row={item} />
+                            </CellErrorBoundary>
+                          </IndexTable.Cell>
+                          <IndexTable.Cell>
+                            <CellErrorBoundary fallback="[render error]">
+                              <UndoStatusCell row={item} />
+                            </CellErrorBoundary>
+                          </IndexTable.Cell>
+                        </IndexTable.Row>
+                      ))}
+                    </IndexTable>
+                  </TableErrorBoundary>
+                </Box>
+
+                {totalPages > 1 ? (
+                  <Box padding="400">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text>
+                        {t("Page")} {currentPage} {t("of")} {totalPages}
+                      </Text>
+                      <Pagination
+                        hasPrevious={currentPage > 1}
+                        hasNext={currentPage < totalPages}
+                        onPrevious={() => fetchChanges(currentPage - 1)}
+                        onNext={() => fetchChanges(currentPage + 1)}
+                      />
+                    </InlineStack>
+                  </Box>
+                ) : null}
+              </>
+            ) : (
+              <EmptyState heading={t("Noproductschanged")} />
+            )}
+          </Card>
+        </Layout.Section>
+      </Layout>
+    </Page>
+  );
+}

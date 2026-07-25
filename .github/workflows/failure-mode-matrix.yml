@@ -1,0 +1,32 @@
+name: Failure Mode Matrix
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  failure-mode-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://user:pass@localhost:5432/testdb
+      SHOPIFY_API_KEY: dummy-key
+      SHOPIFY_API_SECRET: dummy-secret
+      HOST: example.com
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run failure mode matrix tests
+        run: npm run test:failure-matrix

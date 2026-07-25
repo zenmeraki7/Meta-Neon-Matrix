@@ -1,0 +1,1156 @@
+// fieldConfig.js - Centralized field configuration
+
+/**
+ * Field Types Enum
+ */
+export const FieldType = {
+  NUMERIC: "numeric",
+  TEXT: "text",
+  ARRAY: "array",
+  ENUM: "enum",
+  LOCATION: "location",
+  DANGER: "danger",
+  API_AUTOCOMPLETE: "api_autocomplete",
+};
+
+/**
+ * Input Types for different edit operations
+ */
+export const InputType = {
+  SINGLE: "single",
+  SEARCH_REPLACE: "searchReplace",
+  CHOICE_LIST: "choiceList",
+  LOCATION_SELECT: "locationSelect",
+  NONE: "none",
+  API_AUTOCOMPLETE: "apiAutocomplete",
+};
+
+export const OperationKind = {
+  SET: "SET",
+  INCREASE: "INCREASE",
+  DECREASE: "DECREASE",
+  CHANGE: "CHANGE",
+  APPEND: "APPEND",
+  PREPEND: "PREPEND",
+  REMOVE: "REMOVE",
+  SEARCH_REPLACE: "SEARCH_REPLACE",
+  DELETE: "DELETE",
+};
+
+export const ValueKind = {
+  FIXED_AMOUNT: "FIXED_AMOUNT",
+  PERCENTAGE: "PERCENTAGE",
+  TEXT: "TEXT",
+  ARRAY: "ARRAY",
+  ENUM: "ENUM",
+  LOCATION: "LOCATION",
+  NONE: "NONE",
+};
+
+export const FieldRiskLevel = {
+  LOW: "LOW",
+  MEDIUM: "MEDIUM",
+  HIGH: "HIGH",
+  DESTRUCTIVE: "DESTRUCTIVE",
+};
+
+const CONFIRMATION_PHRASE = "CONFIRM";
+const HIGH_RISK_FIELD_VALUES = new Set(["handle"]);
+const MEDIUM_RISK_FIELD_TYPES = new Set([
+  FieldType.NUMERIC,
+  FieldType.ARRAY,
+  FieldType.API_AUTOCOMPLETE,
+  FieldType.LOCATION,
+]);
+
+/**
+ * Action factory function
+ */
+const createAction = (
+  label,
+  value,
+  inputHelperLabel,
+  type,
+  inputType = InputType.SINGLE,
+  config = {}
+) => {
+  const defaultLabel = safeString(
+    config.defaultLabel || getActionDefaultLabel(label, value),
+    value,
+  );
+  const labelKey = safeString(
+    config.actionLabelKey,
+    defaultLabel ? toActionLabelKey(value) : "",
+  );
+  const resourceLabelKey = config.resourceLabelKey || config.labelKey;
+
+  return {
+    ...config,
+    label,
+    labelKey,
+    defaultLabel,
+    resourceLabelKey,
+    value,
+    inputHelperLabel,
+    type,
+    inputType,
+  };
+};
+
+/**
+ * Reusable Action Templates
+ */
+const ActionTemplates = {
+  numeric: {
+    decreaseByPercent: () =>
+      createAction(
+        "Decrease by percent",
+        "Decrease by percent",
+        "Enter the percentage",
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.DECREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
+      ),
+
+    increaseByPercent: () =>
+      createAction(
+        "Increase by percent",
+        "Increase by percent",
+        "Enter the percentage",
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.INCREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
+      ),
+
+    changeByAmount: () =>
+      createAction(
+        "Changed by fixed amount",
+        "Changed by fixed amount",
+        "numeric.enterAmount", 
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.CHANGE,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
+      ),
+      
+
+    setToValue: () =>
+      createAction(
+        "Set to fixed value",
+        "Set to fixed value",
+        "Enter the value",
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
+      ),
+
+    percentageOfCompareAtPrice: () =>
+      createAction(
+        "Set to percentage of compare-at-price field",
+        "Set to percentage of compare-at-price",
+        "Enter the percentage",
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.PERCENTAGE,
+        }
+      ),
+  },
+
+  danger: {
+    deleteProducts: () =>
+      createAction(
+        "Delete products",
+        "DELETE_PRODUCTS",
+        "danger.deleteProductsWarning",
+        FieldType.DANGER,
+        InputType.NONE,
+        {
+          requiresConfirmation: true,
+          operationKind: OperationKind.DELETE,
+          valueKind: ValueKind.NONE,
+        }
+      ),
+  },
+
+  text: {
+    setValue: () =>
+      createAction(
+        "setTextToValue",
+        "Set text to value",
+        "textInput.enterText",
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+
+    append: () =>
+      createAction(
+        "addTextToEnd",
+        "Add text to end",
+       "textInput.enterTextToAdd",
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.APPEND,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+
+    prepend: () =>
+      createAction(
+        "addTextToBeginning",
+        "Add text to beginning",
+         "textInput.enterTextToAdd",
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.PREPEND,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+
+    removeFromEnd: () =>
+      createAction(
+        "removeTextFromEnd",
+        "Remove text from end",
+         "textInput.enterTextToRemove",
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+
+    removeFromStart: () =>
+      createAction(
+        "removeTextFromBeginning",
+        "Remove text from beginning",
+         "textInput.enterTextToRemove",
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+
+    limitLength: () =>
+      createAction(
+        "limitTextLength",
+        "Limit length of text",
+         "textInput.enterMaxCharacterLength",
+        FieldType.NUMERIC,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
+      ),
+
+    searchReplace: () =>
+      createAction(
+        "searchReplace",
+        "Search/Replace",
+         "textInput.enterSearchAndReplaceValues",
+        FieldType.TEXT,
+        InputType.SEARCH_REPLACE,
+        {
+          operationKind: OperationKind.SEARCH_REPLACE,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+
+    removeFromWord: () =>
+      createAction(
+        "removeTextToEndFromWord",
+        "Remove text from a word to the end",
+       "textInput.enterWord",
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+
+    removeUpToWord: () =>
+      createAction(
+        "removeTextUpToWord",
+        "Remove text up to and including a word",
+        "textInput.enterWord",
+        FieldType.TEXT,
+        InputType.SINGLE,
+        {
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.TEXT,
+        }
+      ),
+  },
+
+  array: {
+    add: (placeholder = "item1, item2, item3") =>
+      createAction(
+        "tagActions.add",
+        "Add tag(s) to product",
+        "tagInput.commaSeparated",
+        FieldType.ARRAY,
+        InputType.SINGLE,
+        {
+          placeholder,
+          operationKind: OperationKind.APPEND,
+          valueKind: ValueKind.ARRAY,
+        }
+      ),
+
+    remove: (placeholder = "item1, item2, item3") =>
+      createAction(
+        "tagActions.remove",
+        "Remove tag(s) from product",
+        "tagInput.commaSeparated",
+        FieldType.ARRAY,
+        InputType.SINGLE,
+        {
+          placeholder,
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.ARRAY,
+        }
+      ),
+
+    rename: () =>
+      createAction(
+        "tagActions.rename",
+        "Rename tag",
+        "tagInput.rename",
+        FieldType.ARRAY,
+        InputType.SEARCH_REPLACE,
+        {
+          searchLabel: "tagInput.old",
+          replaceLabel: "tagInput.new",
+          operationKind: OperationKind.SEARCH_REPLACE,
+          valueKind: ValueKind.ARRAY,
+        }
+      ),
+
+    searchReplaceInItems: () =>
+      createAction(
+        "tagActions.searchReplace",
+        "Search/replace within tag name",
+        "tagInput.searchReplace",
+        FieldType.ARRAY,
+        InputType.SEARCH_REPLACE,
+        {
+          searchLabel: "tagInput.search",
+          replaceLabel: "tagInput.replace",
+          operationKind: OperationKind.SEARCH_REPLACE,
+          valueKind: ValueKind.ARRAY,
+        }
+      ),
+
+    setAll: (placeholder = "item1, item2, item3") =>
+      createAction(
+        "tagActions.setAll",
+        "Set tags (overwrites existing)",
+        "tagInput.commaSeparated",
+        FieldType.ARRAY,
+        InputType.SINGLE,
+        {
+          placeholder,
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.ARRAY,
+        }
+      ),
+
+    addFromApi: (
+      apiEndpoint,
+      labelKey = "label",
+      valueKey = "value",
+      inputHelperLabel = "collectionSearch.label"
+    ) =>
+      createAction(
+        "collectionActions.addToCollection",
+        "Add to collection",
+        inputHelperLabel,
+        FieldType.ARRAY,
+        InputType.API_AUTOCOMPLETE,
+        {
+          apiEndpoint,
+          labelKey,
+          valueKey,
+          requiresApiData: true,
+          allowMultiple: true,
+          operationKind: OperationKind.APPEND,
+          valueKind: ValueKind.ARRAY,
+        }
+      ),
+
+    removeFromApi: (
+      apiEndpoint,
+      labelKey = "label",
+      valueKey = "value",
+      inputHelperLabel = "collectionSearch.label"
+    ) =>
+      createAction(
+        "collectionActions.removeFromCollection",
+        "Remove from collection",
+        inputHelperLabel,
+        FieldType.ARRAY,
+        InputType.API_AUTOCOMPLETE,
+        {
+          apiEndpoint,
+          labelKey,
+          valueKey,
+          requiresApiData: true,
+          allowMultiple: true,
+          operationKind: OperationKind.REMOVE,
+          valueKind: ValueKind.ARRAY,
+        }
+      ),
+  },
+
+  enum: {
+    setValue: ({
+      actionLabel = "Set value",
+      actionValue = "Set value",
+      helperLabel = "Select a value",
+      choices = [],
+    }) =>
+      createAction(
+        actionLabel,
+        actionValue,
+        helperLabel,
+        FieldType.ENUM,
+        InputType.CHOICE_LIST,
+        {
+          choices,
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.ENUM,
+        }
+      ),
+  },
+
+  location: {
+    decreaseByPercent: () =>
+      createAction(
+        "Decrease by percent",
+        "Decrease by percent",
+        "Enter the percentage",
+        FieldType.NUMERIC,
+        InputType.LOCATION_SELECT,
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.DECREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
+      ),
+
+    increaseByPercent: () =>
+      createAction(
+        "Increase by percent",
+        "Increase by percent",
+        "Enter the percentage",
+        FieldType.NUMERIC,
+        InputType.LOCATION_SELECT,
+        {
+          max: 100,
+          maxPercentage: 100,
+          suffix: "%",
+          operationKind: OperationKind.INCREASE,
+          valueKind: ValueKind.PERCENTAGE,
+        }
+      ),
+
+    changeByAmount: () =>
+      createAction(
+        "Changed by fixed amount",
+        "Changed by fixed amount",
+        "Enter the amount",
+        FieldType.NUMERIC,
+        InputType.LOCATION_SELECT,
+        {
+          operationKind: OperationKind.CHANGE,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
+      ),
+
+    setToValue: () =>
+      createAction(
+        "Set to fixed value",
+        "Set to fixed value",
+        "Enter the value",
+        FieldType.NUMERIC,
+        InputType.LOCATION_SELECT,
+        {
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.FIXED_AMOUNT,
+        }
+      ),
+  },
+
+  apiAutocomplete: {
+    setValue: (apiEndpoint, labelKey = "label", valueKey = "value") =>
+      createAction(
+        "Set value",
+        "Set value",
+        "categorySearch.label",
+        FieldType.API_AUTOCOMPLETE,
+        InputType.API_AUTOCOMPLETE,
+        {
+          apiEndpoint,
+          labelKey,
+          valueKey,
+          requiresApiData: true,
+          operationKind: OperationKind.SET,
+          valueKind: ValueKind.ENUM,
+        }
+      ),
+  },
+};
+
+/**
+ * Field Definitions
+ */
+export const fieldDefinitions = {
+  title: {
+    label: "Title",
+    value: "title",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  description: {
+    label: "Description",
+    value: "description",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  vendor: {
+    label: "Vendor",
+    value: "vendor",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  productType: {
+    label: "Product Type",
+    value: "productType",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  option1Name: {
+    label: "Option 1 Name",
+    value: "option1Name",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  option2Name: {
+    label: "Option 2 Name",
+    value: "option2Name",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  option3Name: {
+    label: "Option 3 Name",
+    value: "option3Name",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  metaTitle: {
+    label: "Seo Meta Title",
+    value: "metaTitle",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  metaDescription: {
+    label: "Seo Meta Description",
+    value: "metaDescription",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  handle: {
+    label: "Handle",
+    value: "handle",
+    type: FieldType.TEXT,
+    category: "product",
+    actions: [
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  status: {
+  label: "Status",
+  value: "status",
+  type: FieldType.ENUM,
+  category: "product",
+  actions: [
+    ActionTemplates.enum.setValue({
+      actionLabel: "statusActions.setStatus",
+      actionValue: "Set status",
+      helperLabel: "statusInput.selectProductStatus",
+      choices: [
+        { label: "statusChoices.active", value: "ACTIVE" },
+        { label: "statusChoices.draft", value: "DRAFT" },
+        { label: "statusChoices.archived", value: "ARCHIVED" },
+      ],
+    }),
+  ],
+},
+
+  tags: {
+    label: "Tags",
+    value: "tags",
+    type: FieldType.ARRAY,
+    category: "product",
+    actions: [
+      ActionTemplates.array.add("tag1, tag2, tag3"),
+      ActionTemplates.array.remove("tag1, tag2, tag3"),
+      ActionTemplates.array.rename(),
+      ActionTemplates.array.searchReplaceInItems(),
+      ActionTemplates.array.setAll("tag1, tag2, tag3"),
+    ],
+  },
+
+  collections: {
+    label: "Collections",
+    value: "collections",
+    type: FieldType.ARRAY,
+    category: "product",
+    actions: [
+      ActionTemplates.array.addFromApi(
+        "/api/collection/get-all",
+        "title",
+        "id",
+        "collectionSearch.label"
+      ),
+      ActionTemplates.array.removeFromApi(
+        "/api/collection/get-all",
+        "title",
+        "id",
+        "collectionSearch.label"
+      ),
+    ],
+  },
+
+  category: {
+    label: "Category",
+    value: "category",
+    type: FieldType.API_AUTOCOMPLETE,
+    category: "product",
+    actions: [
+      ActionTemplates.apiAutocomplete.setValue(
+        "/api/category/get-all",
+        "title",
+        "id"
+      ),
+    ],
+  },
+
+  price: {
+    label: "Price",
+    value: "price",
+    type: FieldType.NUMERIC,
+    category: "variant",
+    actions: [
+      ActionTemplates.numeric.decreaseByPercent(),
+      ActionTemplates.numeric.increaseByPercent(),
+      ActionTemplates.numeric.changeByAmount(),
+      ActionTemplates.numeric.setToValue(),
+      ActionTemplates.numeric.percentageOfCompareAtPrice(),
+    ],
+    validation: {
+      min: 0,
+      allowDecimal: true,
+    },
+  },
+
+  compareAtPrice: {
+    label: "Compare at price",
+    value: "compareAtPrice",
+    type: FieldType.NUMERIC,
+    category: "variant",
+    actions: [
+      ActionTemplates.numeric.decreaseByPercent(),
+      ActionTemplates.numeric.increaseByPercent(),
+      ActionTemplates.numeric.changeByAmount(),
+      ActionTemplates.numeric.setToValue(),
+    ],
+    validation: {
+      min: 0,
+      allowDecimal: true,
+    },
+  },
+
+  sku: {
+    label: "SKU",
+    value: "sku",
+    type: FieldType.TEXT,
+    category: "variant",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  barcode: {
+    label: "barcode",
+    value: "barcode",
+    type: FieldType.TEXT,
+    category: "variant",
+    actions: [
+      ActionTemplates.text.setValue(),
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  taxable: {
+    label: "Charge tax on this product",
+    value: "taxable",
+    type: FieldType.ENUM,
+    category: "variant",
+    actions: [
+      ActionTemplates.enum.setValue({
+        actionLabel: "taxActions.setTaxApplicability",
+        actionValue: "Set taxable",
+       helperLabel: "taxInput.shouldProductBeTaxable",   // ✅ FIX
+        choices: [
+        { label: "commonChoices.yes", value: "true" },
+        { label: "commonChoices.no", value: "false" },
+      ],
+      }),
+    ],
+  },
+
+  inventoryPolicy: {
+    label: "Continue selling inventory when out of stock",
+    value: "inventoryPolicy",
+    type: FieldType.ENUM,
+    category: "variant",
+    actions: [
+      ActionTemplates.enum.setValue({
+        actionLabel: "inventoryPolicyActions.setInventoryPolicy",
+        actionValue: "SET_INVENTORY_POLICY",
+         helperLabel: "inventoryPolicyInput.shouldContinueSellingOutOfStock",
+       choices: [
+        {
+          label: "inventoryPolicyChoices.continueSelling",
+          value: "CONTINUE",
+        },
+        {
+          label: "inventoryPolicyChoices.denySelling",
+          value: "DENY",
+        },
+      ],
+      }),
+    ],
+  },
+
+  option1Values: {
+    label: "Option 1 Values",
+    value: "option1Values",
+    type: FieldType.TEXT,
+    category: "variant",
+    actions: [
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  option2Values: {
+    label: "Option 2 Values",
+    value: "option2Values",
+    type: FieldType.TEXT,
+    category: "variant",
+    actions: [
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  option3Values: {
+    label: "Option 3 Values",
+    value: "option3Values",
+    type: FieldType.TEXT,
+    category: "variant",
+    actions: [
+      ActionTemplates.text.append(),
+      ActionTemplates.text.prepend(),
+      ActionTemplates.text.removeFromEnd(),
+      ActionTemplates.text.removeFromStart(),
+      ActionTemplates.text.limitLength(),
+      ActionTemplates.text.searchReplace(),
+      ActionTemplates.text.removeFromWord(),
+      ActionTemplates.text.removeUpToWord(),
+    ],
+  },
+
+  deleteProducts: {
+    label: "Delete products",
+    value: "deleteProducts",
+    type: FieldType.DANGER,
+    category: "danger",
+    actions: [ActionTemplates.danger.deleteProducts()],
+  },
+};
+
+/**
+ * Helper Functions
+ */
+export const getFieldsByCategory = (category) => {
+  return Object.values(fieldDefinitions).filter(
+    (field) => field.category === category
+  );
+};
+
+export const getAllFields = () => {
+  return Object.values(fieldDefinitions);
+};
+
+function safeString(value, fallback = "") {
+  if (value === undefined || value === null) return fallback;
+
+  const stringValue = String(value).trim();
+
+  return stringValue || fallback;
+}
+
+function toTitleKey(value) {
+  const normalizedValue = safeString(value);
+
+  return normalizedValue
+    ? `products:fieldLabels.${normalizedValue}`
+    : "products:fieldLabels.unknown";
+}
+
+function toActionLabelKey(value) {
+  const words = safeString(value)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const normalizedValue = words
+    .map((word, index) =>
+      index === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join("");
+
+  return normalizedValue
+    ? `products:editActions.${normalizedValue}`
+    : "products:editActions.unknown";
+}
+
+function getActionDefaultLabel(label, value) {
+  const normalizedLabel = safeString(label);
+
+  if (
+    normalizedLabel &&
+    normalizedLabel.includes(" ") &&
+    !normalizedLabel.includes(".")
+  ) {
+    return normalizedLabel;
+  }
+
+  const normalizedValue = safeString(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  return normalizedValue
+    ? normalizedValue.charAt(0).toUpperCase() + normalizedValue.slice(1)
+    : normalizedLabel;
+}
+
+export function getFieldRiskProfile(field) {
+  const value = safeString(field?.value);
+  const category = safeString(field?.category);
+  const type = field?.type;
+  const actions = Array.isArray(field?.actions) ? field.actions : [];
+  const requiresDangerousAction = actions.some(
+    (action) => action?.requiresConfirmation === true,
+  );
+
+  if (category === "danger" || type === FieldType.DANGER) {
+    return {
+      requiresConfirmation: true,
+      riskLevel: FieldRiskLevel.DESTRUCTIVE,
+      confirmationPhrase: CONFIRMATION_PHRASE,
+    };
+  }
+
+  if (requiresDangerousAction || HIGH_RISK_FIELD_VALUES.has(value)) {
+    return {
+      requiresConfirmation: true,
+      riskLevel: FieldRiskLevel.HIGH,
+      confirmationPhrase: CONFIRMATION_PHRASE,
+    };
+  }
+
+  if (MEDIUM_RISK_FIELD_TYPES.has(type)) {
+    return {
+      requiresConfirmation: false,
+      riskLevel: FieldRiskLevel.MEDIUM,
+      confirmationPhrase: CONFIRMATION_PHRASE,
+    };
+  }
+
+  return {
+    requiresConfirmation: false,
+    riskLevel: FieldRiskLevel.LOW,
+    confirmationPhrase: CONFIRMATION_PHRASE,
+  };
+}
+
+export function getNormalizedEditField(field) {
+  const value = safeString(field?.value);
+  const defaultLabel = safeString(field?.defaultLabel || field?.label, value);
+  const labelKey = safeString(field?.labelKey, toTitleKey(value));
+  const aliases = Array.isArray(field?.aliases) ? field.aliases : [];
+  const searchTerms = Array.isArray(field?.searchTerms)
+    ? field.searchTerms
+    : aliases;
+
+  return {
+    ...field,
+    ...getFieldRiskProfile(field),
+    value,
+    labelKey,
+    defaultLabel,
+    category: safeString(field?.category),
+    searchTerms: searchTerms
+      .map((term) => safeString(term).toLowerCase())
+      .filter(Boolean),
+  };
+}
+
+export const NORMALIZED_EDIT_FIELDS = Object.freeze(
+  getAllFields()
+    .map((field) => Object.freeze(getNormalizedEditField(field)))
+    .filter((field) => field.value && field.defaultLabel && field.category),
+);
+
+export const COMMON_EDIT_FIELD_VALUES = Object.freeze([
+  "title",
+  "vendor",
+  "productType",
+  "tags",
+  "status",
+  "price",
+  "compareAtPrice",
+  "sku",
+  "barcode",
+  "inventoryPolicy",
+  "collections",
+]);
+
+export const getFieldActions = (fieldValue) => {
+  return fieldDefinitions[fieldValue]?.actions || [];
+};
+
+export const getFieldDefinition = (fieldValue) => {
+  const field = fieldDefinitions[fieldValue];
+
+  return field ? getNormalizedEditField(field) : undefined;
+};
+
+export const getFieldType = (fieldValue) => {
+  return fieldDefinitions[fieldValue]?.type;
+};
+
+export const getFieldValidation = (fieldValue) => {
+  return fieldDefinitions[fieldValue]?.validation || {};
+};
+
+// Backward compatibility exports
+export const productFieldOptions = getFieldsByCategory("product").map((f) => ({
+  label: f.label,
+  value: f.value,
+}));
+
+export const variantFieldOptions = getFieldsByCategory("variant").map((f) => ({
+  label: f.label,
+  value: f.value,
+}));
+
+export const allFields = getAllFields().map((f) => ({
+  label: f.label,
+  value: f.value,
+}));
+
+// Deprecated - use getFieldActions instead
+export const editTypeOptions = Object.keys(fieldDefinitions).reduce(
+  (acc, key) => {
+    acc[key] = fieldDefinitions[key].actions;
+    return acc;
+  },
+  {}
+);
