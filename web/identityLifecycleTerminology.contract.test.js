@@ -74,9 +74,9 @@ test("persisted lifecycle, type, and scope names are qualified", () => {
   assert.match(schema, /undoMutation\s+Json\? @map\("undoPayload"\)/);
   assert.match(schema, /generatedFilename\s+String.*@map\("filename"\)/);
   assert.match(schema, /downloadUrl\s+String\?.*@map\("fileUrl"\)/);
-  assert.match(schema, /legacyIsDeleted\s+Boolean.*@map\("isDeleted"\)/);
+  assert.doesNotMatch(schema, /legacyIsDeleted/);
   assert.match(schema, /installationStatus\s+StoreInstallationStatus/);
-  assert.match(schema, /legacyIsUninstalled\s+Boolean.*@map\("isUnInstalled"\)/);
+  assert.doesNotMatch(schema, /legacyIsUninstalled/);
 });
 
 test("integrity, mirror, source, and queue fields expose qualified logical names", () => {

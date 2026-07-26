@@ -11,8 +11,8 @@ function read(relPath) {
 
 test("csv import worker freezes explicit targets before execute", () => {
   const source = read("web/Jobs/Workers/bulkImportEditWorker.js");
-  assert.ok(source.includes("freezeExplicitTargetSnapshot("));
-  assert.ok(source.includes("upsertFrozenSnapshotSetFromLegacy("));
+  assert.ok(source.includes("freezeExplicitTargetSet("));
+  assert.ok(source.includes("finalizeFrozenSnapshotSet("));
   assert.ok(source.includes("snapshotSetId: snapshotSet.id"));
   assert.ok(source.includes("targetSnapshotRef"));
   assert.ok(source.includes("addBulkEditExecuteJob("));
@@ -120,4 +120,3 @@ test("execute worker can consume a freshly frozen csv snapshot race-safely", () 
   assert.ok(source.includes("OPERATION_SNAPSHOT_SET_UNBOUND"));
   assert.ok(source.includes("SNAPSHOT_SET_ID_REQUIRED"));
 });
-

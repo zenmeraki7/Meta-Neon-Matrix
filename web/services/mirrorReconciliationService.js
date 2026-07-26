@@ -5,6 +5,7 @@ import {
   MIRROR_STALE_REASONS,
 } from "./mirrorHealthService.js";
 import { addShopSyncJob } from "../Jobs/Queues/shopSyncJob.js";
+import { findSnapshotItems } from "../repositories/targetSnapshotSetRepository.js";
 
 const TARGETED_RECONCILIATION_LIMIT = Number.parseInt(
   process.env.TARGETED_RECONCILIATION_LIMIT || "500",
@@ -19,17 +20,15 @@ export async function schedulePostMutationMirrorReconciliation({
   source = "BULK_EDIT",
   verificationStatus = "UNKNOWN",
 }) {
-  const snapshots = await db.targetSnapshot.findMany({
-    where: {
-      shop,
-      ownerType,
-      ownerId,
-      ...(mirrorBatchId ? { mirrorBatchId } : {}),
-      productId: { not: null },
-    },
-    select: { productId: true },
-    distinct: ["productId"],
+  const snapshots = await findSnapshotItems({
+    shop,
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    mirrorBatchId,
+    productIdNotNull: true,
+    distinctProductIds: true,
     take: TARGETED_RECONCILIATION_LIMIT + 1,
+    db,
   });
 
   const productIds = snapshots.map((row) => row.productId).filter(Boolean);

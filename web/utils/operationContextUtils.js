@@ -1,3 +1,5 @@
+import { normalizeShopDomain } from "./shopDomainUtils.js";
+
 export function buildEntitlementSnapshot(subscription = null) {
   if (!subscription || typeof subscription !== "object") {
     return null;
@@ -25,40 +27,58 @@ function firstNonEmpty(...values) {
   return null;
 }
 
-export function buildActorContext({ req = null, session = null, fallbackType = "SYSTEM" } = {}) {
-  const user = req?.user || req?.authUser || null;
-  const bodyActor = req?.body?.actor || null;
+/**
+ * Builds an actor context derived strictly from verified Shopify session state
+ * or trusted server authentication middleware. Client-supplied body, query, or
+ * header overrides are ignored.
+ */
+export function buildActorContext({
+  req = null,
+  session = null,
+  shop = null,
+  fallbackType = "SYSTEM",
+} = {}) {
+  const canonicalShop = shop || normalizeShopDomain(session?.shop);
+
+  // Authenticated server middleware objects ONLY (e.g. req.user / req.authUser)
+  const authUser = req?.user || req?.authUser || null;
+
+  // Shopify Session associated user (online access token sessions)
+  const sessionUser =
+    session?.onlineAccessInfo?.associated_user ||
+    session?.associated_user ||
+    null;
 
   const actorId = firstNonEmpty(
-    user?.id,
-    user?._id,
-    bodyActor?.id,
-    req?.headers?.["x-actor-id"],
-  );
-  const actorEmail = firstNonEmpty(
-    user?.email,
-    bodyActor?.email,
-    req?.headers?.["x-actor-email"],
-  );
-  const actorDisplayName = firstNonEmpty(
-    user?.name,
-    user?.fullName,
-    bodyActor?.name,
-    req?.headers?.["x-actor-name"],
+    sessionUser?.id ? String(sessionUser.id) : null,
+    authUser?.id ? String(authUser.id) : null,
+    session?.id ? String(session.id) : null,
+    canonicalShop,
   );
 
-  const actorType =
-    firstNonEmpty(
-      user?.type,
-      bodyActor?.type,
-      req?.headers?.["x-actor-type"],
-    ) ||
-    (session?.shop ? "MERCHANT_ADMIN" : fallbackType);
+  const actorEmail = firstNonEmpty(
+    sessionUser?.email,
+    authUser?.email,
+  );
+
+  const actorDisplayName = firstNonEmpty(
+    sessionUser?.first_name && sessionUser?.last_name
+      ? `${sessionUser.first_name} ${sessionUser.last_name}`
+      : null,
+    sessionUser?.first_name || sessionUser?.last_name || null,
+    authUser?.name || authUser?.fullName || null,
+    canonicalShop,
+  );
+
+  const actorType = canonicalShop || session
+    ? "MERCHANT_ADMIN"
+    : fallbackType;
 
   return {
     actorType,
     actorId,
     actorEmail,
     actorDisplayName,
+    shop: canonicalShop,
   };
 }

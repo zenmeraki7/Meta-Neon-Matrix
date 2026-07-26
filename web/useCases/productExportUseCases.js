@@ -234,6 +234,24 @@ export const productExportUseCases = Object.freeze({
     return requireResult(result, "Export command creation failed");
   },
 
+  async listFields(command) {
+    const targetGranularity = String(command?.targetGranularity || "PRODUCT")
+      .trim()
+      .toUpperCase();
+
+    const fields = assertRegisteredExportFields([], { targetGranularity });
+
+    return Object.freeze({
+      fields: fields.map((field) => ({
+        key: field.key,
+        label: field.label,
+        dataType: field.dataType,
+        targetGranularity: field.targetGranularity,
+        available: field.available !== false,
+      })),
+    });
+  },
+
   async download(command) {
     command = assertExportJobCommand(command);
 

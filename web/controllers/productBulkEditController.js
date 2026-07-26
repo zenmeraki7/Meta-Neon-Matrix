@@ -1,7 +1,12 @@
 // web/controllers/productBulkEditController.js
 
-import { logApiError } from "../utils/errorLogUtils.js";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import {
+  buildAuthenticatedActor,
+  getRequiredIdempotencyKey,
+  handleControllerError,
+  requireShopifySession,
+  setPrivateNoStore,
+} from "./controllerUtils.js";
 
 import {
   buildBulkEditPreviewCommand,
@@ -28,390 +33,331 @@ import {
 } from "../dtos/productBulkEditDto.js";
 
 import {
-  productBulkEditUseCases,
-  productBulkUndoUseCases,
-  productOperationLifecycleUseCases,
+  productBulkEditUseCases as defaultProductBulkEditUseCases,
+  productBulkUndoUseCases as defaultProductBulkUndoUseCases,
+  productOperationLifecycleUseCases as defaultProductOperationLifecycleUseCases,
 } from "../useCases/productBulkEditUseCases.js";
 
-function buildControllerError(message, code = "VALIDATION_FAILED") {
-  const error = new Error(message);
-  error.code = code;
-  return error;
-}
-
-function requireShopifySession(res) {
-  const session = res.locals?.shopify?.session;
-
-  if (!session?.shop) {
-    throw buildControllerError("Authentication required", "UNAUTHENTICATED");
-  }
-
-  return session;
-}
-
-function buildSafeRequestLogContext(req) {
+function buildContext(req, session, shop) {
   return Object.freeze({
-    method: req.method,
-    originalUrl: req.originalUrl,
-    path: req.path,
-    requestId: req.id || req.get?.("X-Request-Id") || null,
-  });
-}
-
-function buildActorFromSession(session, fallbackType = "MERCHANT_ADMIN") {
-  const associatedUser = session?.onlineAccessInfo?.associated_user;
-
-  return Object.freeze({
-    type: associatedUser?.id ? "SHOPIFY_USER" : fallbackType,
-    actorId: associatedUser?.id ? String(associatedUser.id) : null,
-    userId: associatedUser?.id ? String(associatedUser.id) : null,
-    email: associatedUser?.email || null,
-  });
-}
-
-function buildBaseCommandContext({ req, session, fallbackActorType }) {
-  return Object.freeze({
-    shop: session.shop,
-    accessToken: session.accessToken || null,
-    oauthScopes: session.scope || null,
-    actor: buildActorFromSession(session, fallbackActorType),
-    subscription: req.subscription || null,
-    entitlement: req.entitlement || null,
-    activePlan: req.activePlan || {},
-  });
-}
-
-function setPrivateNoStore(res) {
-  res.set("Cache-Control", "no-store");
-}
-
-async function logAndSendError({ res, req, error, shop, source }) {
-  await logApiError({
     shop,
-    err: error,
-    req: buildSafeRequestLogContext(req),
-    source,
+    actor: buildAuthenticatedActor(req, session, shop),
   });
-
-  const fallbackCode =
-    error?.code === "UNAUTHENTICATED"
-      ? "UNAUTHENTICATED"
-      : source === "productBulkEditController.trackEditPreview" && !error?.code
-        ? "EDIT_PREVIEW_FAILED"
-      : error?.code || "VALIDATION_FAILED";
-
-  const { statusCode, body } = buildPublicApiErrorResponse(error, fallbackCode);
-  return res.status(statusCode).json(body);
 }
 
-function buildHeaderSnapshot(req) {
+function buildMutationHeaders(req) {
   return Object.freeze({
-    idempotencyKey: req.get?.("Idempotency-Key") || null,
+    idempotencyKey: getRequiredIdempotencyKey(req),
   });
 }
 
-function buildCommand(req, res, normalizer, fallbackActorType = "MERCHANT_ADMIN") {
-  const session = requireShopifySession(res);
+function assertUseCaseGroup(value, methods, name) {
+  if (!value || typeof value !== "object") {
+    throw new TypeError(`${name} is required`);
+  }
+  for (const method of methods) {
+    if (typeof value[method] !== "function") {
+      throw new TypeError(`${name}.${method} must be a function`);
+    }
+  }
+  return value;
+}
 
-  const command = normalizer({
-    params: req.params || {},
-    query: req.query || {},
-    body: req.body || {},
-    headers: buildHeaderSnapshot(req),
-    context: buildBaseCommandContext({
-      req,
-      session,
-      fallbackActorType,
-    }),
-  });
+export function createProductBulkEditController({
+  productBulkEditUseCases = defaultProductBulkEditUseCases,
+  productBulkUndoUseCases = defaultProductBulkUndoUseCases,
+  productOperationLifecycleUseCases = defaultProductOperationLifecycleUseCases,
+} = {}) {
+  const bulkEditUseCases = assertUseCaseGroup(
+    productBulkEditUseCases,
+    ["preview", "previewVariantDetails", "execute", "schedule"],
+    "productBulkEditUseCases",
+  );
+
+  const bulkUndoUseCases = assertUseCaseGroup(
+    productBulkUndoUseCases,
+    ["undo"],
+    "productBulkUndoUseCases",
+  );
+
+  const lifecycleUseCases = assertUseCaseGroup(
+    productOperationLifecycleUseCases,
+    ["cancel", "pause", "resume", "retryFailedOnly"],
+    "productOperationLifecycleUseCases",
+  );
+
+  // Preview
+  async function trackEditPreview(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildBulkEditPreviewCommand({
+        body: req.body ?? {},
+        query: req.query ?? {},
+        context,
+      });
+
+      const result = await bulkEditUseCases.preview(command);
+
+      return res.status(200).json(toBulkEditPreviewResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "EDIT_PREVIEW_FAILED",
+        "productBulkEditController.trackEditPreview",
+      );
+    }
+  }
+
+  async function getEditPreviewVariantDetails(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildPreviewVariantDetailsCommand({
+        params: req.params ?? {},
+        query: req.query ?? {},
+        context,
+      });
+
+      const result = await bulkEditUseCases.previewVariantDetails(command);
+
+      return res.status(200).json(toPreviewVariantDetailsResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "PREVIEW_VARIANT_DETAILS_FAILED",
+        "productBulkEditController.getEditPreviewVariantDetails",
+      );
+    }
+  }
+
+  // Execute
+  async function handleBulkEditProduct(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildBulkEditExecuteCommand({
+        body: req.body ?? {},
+        headers: buildMutationHeaders(req),
+        context,
+      });
+
+      const result = await bulkEditUseCases.execute(command);
+
+      return res.status(202).json(toBulkEditExecuteResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "BULK_EDIT_EXECUTE_FAILED",
+        "productBulkEditController.handleBulkEditProduct",
+      );
+    }
+  }
+
+  // Undo
+  async function undoEdit(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildUndoEditCommand({
+        params: req.params ?? {},
+        headers: buildMutationHeaders(req),
+        context,
+      });
+
+      const result = await bulkUndoUseCases.undo(command);
+
+      return res.status(202).json(toUndoEditResponseDto(result, command));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "UNDO_EDIT_FAILED",
+        "productBulkEditController.undoEdit",
+      );
+    }
+  }
+
+  // Scheduled edit
+  async function createScheduledEdit(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildScheduledEditCommand({
+        body: req.body ?? {},
+        headers: buildMutationHeaders(req),
+        context,
+      });
+
+      const result = await bulkEditUseCases.schedule(command);
+
+      return res.status(202).json(toScheduledEditResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "SCHEDULED_EDIT_FAILED",
+        "productBulkEditController.createScheduledEdit",
+      );
+    }
+  }
+
+  // Lifecycle operations (Async commands return 202 Accepted)
+  async function cancelEditOperation(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildCancelEditCommand({
+        params: req.params ?? {},
+        body: req.body ?? {},
+        headers: buildMutationHeaders(req),
+        context,
+      });
+
+      const result = await lifecycleUseCases.cancel(command);
+
+      return res.status(202).json(toOperationCancellationResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "CANCEL_EDIT_FAILED",
+        "productBulkEditController.cancelEditOperation",
+      );
+    }
+  }
+
+  async function pauseEditOperation(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildPauseEditCommand({
+        params: req.params ?? {},
+        headers: buildMutationHeaders(req),
+        context,
+      });
+
+      const result = await lifecycleUseCases.pause(command);
+
+      return res.status(202).json(toOperationPauseResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "PAUSE_EDIT_FAILED",
+        "productBulkEditController.pauseEditOperation",
+      );
+    }
+  }
+
+  async function resumePausedEditOperation(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildResumeEditCommand({
+        params: req.params ?? {},
+        headers: buildMutationHeaders(req),
+        context,
+      });
+
+      const result = await lifecycleUseCases.resume(command);
+
+      return res.status(202).json(toOperationResumeResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "RESUME_EDIT_FAILED",
+        "productBulkEditController.resumePausedEditOperation",
+      );
+    }
+  }
+
+  async function retryFailedOnlyEditOperation(req, res) {
+    try {
+      setPrivateNoStore(res);
+
+      const { session, shop } = requireShopifySession(res);
+      const context = buildContext(req, session, shop);
+
+      const command = buildRetryFailedOnlyCommand({
+        params: req.params ?? {},
+        headers: buildMutationHeaders(req),
+        context,
+      });
+
+      const result = await lifecycleUseCases.retryFailedOnly(command);
+
+      return res.status(202).json(toOperationRetryResponseDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "RETRY_FAILED_EDIT_FAILED",
+        "productBulkEditController.retryFailedOnlyEditOperation",
+      );
+    }
+  }
 
   return Object.freeze({
-    session,
-    command: Object.freeze(command),
+    trackEditPreview,
+    getEditPreviewVariantDetails,
+    handleBulkEditProduct,
+    undoEdit,
+    createScheduledEdit,
+    cancelEditOperation,
+    pauseEditOperation,
+    resumePausedEditOperation,
+    retryFailedOnlyEditOperation,
   });
 }
 
-function buildPreviewDebugContext({ req, session, command }) {
-  return Object.freeze({
-    requestId: req.id || req.get?.("X-Request-Id") || null,
-    shop: session?.shop || null,
-    field: command?.editedField || command?.field || null,
-    operation: command?.operation || null,
-    editType: command?.editType || null,
-    hasFilterAst: Boolean(command?.filterAst),
-    filterFingerprint: command?.previewFilterHash || command?.filterFingerprint || null,
-    page: command?.page || null,
-    limit: command?.limit || null,
-  });
-}
+const defaultController = createProductBulkEditController();
 
-// Preview
-export const trackEditPreview = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildBulkEditPreviewCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-    console.info("[edit-preview:validated]", buildPreviewDebugContext({
-      req,
-      session,
-      command: built.command,
-    }));
-
-    const result = await productBulkEditUseCases.preview(built.command);
-
-    return res.status(200).json(toBulkEditPreviewResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.trackEditPreview",
-    });
-  }
-};
-
-export const getEditPreviewVariantDetails = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildPreviewVariantDetailsCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-    const result = await productBulkEditUseCases.previewVariantDetails(built.command);
-    return res.status(200).json(toPreviewVariantDetailsResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.getEditPreviewVariantDetails",
-    });
-  }
-};
-
-// Execute
-export const handleBulkEditProduct = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildBulkEditExecuteCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productBulkEditUseCases.execute(built.command);
-
-    return res.status(202).json(toBulkEditExecuteResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.handleBulkEditProduct",
-    });
-  }
-};
-
-// Undo
-export const undoEdit = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildUndoEditCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productBulkUndoUseCases.undo(built.command);
-
-    return res.status(202).json(toUndoEditResponseDto(result, built.command));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.undoEdit",
-    });
-  }
-};
-
-// Scheduled edit
-export const createScheduledEdit = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildScheduledEditCommand,
-      "SCHEDULE",
-    );
-
-    session = built.session;
-
-    const result = await productBulkEditUseCases.schedule(built.command);
-
-    return res.status(202).json(toScheduledEditResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.createScheduledEdit",
-    });
-  }
-};
-
-// Lifecycle operations
-export const cancelEditOperation = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildCancelEditCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.cancel(built.command);
-
-    return res.status(200).json(toOperationCancellationResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.cancelEditOperation",
-    });
-  }
-};
-
-export const pauseEditOperation = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildPauseEditCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.pause(built.command);
-
-    return res.status(200).json(toOperationPauseResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.pauseEditOperation",
-    });
-  }
-};
-
-export const resumePausedEditOperation = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildResumeEditCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.resume(built.command);
-
-    return res.status(200).json(toOperationResumeResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.resumePausedEditOperation",
-    });
-  }
-};
-
-export const retryFailedOnlyEditOperation = async (req, res) => {
-  let session;
-
-  try {
-    setPrivateNoStore(res);
-
-    const built = buildCommand(
-      req,
-      res,
-      buildRetryFailedOnlyCommand,
-      "MERCHANT_ADMIN",
-    );
-
-    session = built.session;
-
-    const result = await productOperationLifecycleUseCases.retryFailedOnly(
-      built.command,
-    );
-
-    return res.status(202).json(toOperationRetryResponseDto(result));
-  } catch (error) {
-    return logAndSendError({
-      res,
-      req,
-      error,
-      shop: session?.shop,
-      source: "productBulkEditController.retryFailedOnlyEditOperation",
-    });
-  }
-};
+export const {
+  trackEditPreview,
+  getEditPreviewVariantDetails,
+  handleBulkEditProduct,
+  undoEdit,
+  createScheduledEdit,
+  cancelEditOperation,
+  pauseEditOperation,
+  resumePausedEditOperation,
+  retryFailedOnlyEditOperation,
+} = defaultController;

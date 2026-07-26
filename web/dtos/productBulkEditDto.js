@@ -1,3 +1,5 @@
+// web/dtos/productBulkEditDto.js
+
 const MAX_VARIANT_SAMPLE = 20;
 const MAX_DISPLAY_TEXT = 180;
 
@@ -95,7 +97,6 @@ function displayTextOf(value) {
 function mapVariantSample(variants) {
   if (!Array.isArray(variants) || variants.length === 0) return [];
   return variants.slice(0, MAX_VARIANT_SAMPLE).map((variant, index) => ({
-    snapshotItemId: safeString(variant?.snapshotItemId, "") || undefined,
     variantId: safeString(variant?.variantId || variant?.id, "") || `variant-${index + 1}`,
     title: safeString(variant?.title, `Variant ${index + 1}`),
     oldValue: toDisplayValue(variant?.oldValue),
@@ -112,7 +113,6 @@ function mapPreviewRows(rawRows) {
     const variants = Array.isArray(row?.variants) ? row.variants : [];
     const variantCount = safeNumber(row?.variantCount, variants.length);
     return {
-      snapshotItemId: safeString(row?.snapshotItemId, "") || undefined,
       productId: safeString(row?.productId || row?.id, "") || `preview-${index + 1}`,
       variantId: safeString(row?.variantId, "") || undefined,
       handle: safeString(row?.handle, "") || undefined,
@@ -154,19 +154,12 @@ export function toBulkEditPreviewResponseDto(result) {
   const isVariant = Boolean(data?.isVariant);
   const responseRows = isVariant ? mapVariantLevelRows(rows) : rows;
   const rawFingerprint = data?.previewFingerprint || {};
-  const previewFingerprint = {
-    previewId: safeString(rawFingerprint.previewId, "") || null,
-    normalizedFilterHash: safeString(rawFingerprint.normalizedFilterHash, "") || null,
-    mirrorBatchId: safeString(rawFingerprint.mirrorBatchId, "") || null,
-    targetCount: safeNumber(rawFingerprint.targetCount, 0),
-    compilerVersion: safeString(rawFingerprint.compilerVersion, "") || null,
-    fieldRegistryVersion:
-      safeString(rawFingerprint?.registryVersion?.fieldRegistryVersion, "") ||
-      null,
-    operatorRegistryVersion:
-      safeString(rawFingerprint?.registryVersion?.operatorRegistryVersion, "") ||
-      null,
-  };
+
+  const previewContractId = safeString(
+    data?.previewContractId || rawFingerprint.previewId,
+    "",
+  ) || null;
+
   const page = safeNumber(pagination.page, 1);
   const limit = safeNumber(pagination.limit, 20);
   const total = safeNumber(pagination.total, rows.length);
@@ -174,11 +167,7 @@ export function toBulkEditPreviewResponseDto(result) {
     pagination.totalPages,
     Math.max(1, Math.ceil(total / Math.max(limit, 1))),
   );
-  const compilerVersion = safeString(rawFingerprint.compilerVersion, "") || null;
-  const projectionVersion = safeString(rawFingerprint.projectionVersion, "") || null;
-  const mirrorBatchId = previewFingerprint.mirrorBatchId;
-  const targetDefinitionHash = previewFingerprint.normalizedFilterHash;
-  const previewContractId = previewFingerprint.previewId;
+
   const matchingProductCount = safeNumber(
     data?.matchingProductCount ?? data?.productCount ?? data?.targetCount,
     total,
@@ -190,53 +179,39 @@ export function toBulkEditPreviewResponseDto(result) {
     data: {
       previewContractId,
       shop: safeString(result?.shop || data?.shop, "") || null,
-      mirrorBatchId,
-      targetDefinitionHash,
       previewCounts: {
         targetCount: total,
         productCount: matchingProductCount,
         variantCount: affectedVariantCount,
       },
       sampleRows: rows,
-      compilerVersion,
-      projectionVersion,
-      previewId: safeString(data?.previewFingerprint?.previewId, "") || null,
-      targetSnapshotId: safeString(data?.previewFingerprint?.normalizedFilterHash, "") || null,
       page,
       limit,
       total,
       totalPages,
       field: safeString(data?.canonicalField || data?.field, "") || null,
       operation: safeString(data?.operation, "") || null,
-      value: data?.value ?? null,
       matchingProductCount,
       affectedVariantCount,
-      rows,
+      rows: responseRows,
       isVariant,
-      previewSignature: safeString(data?.previewSignature, "") || null,
-      previewFingerprint,
       requiresConfirmation: data?.requiresConfirmation === true,
       pagination: {
         page,
         limit,
         total,
         totalPages,
-        previewId: previewFingerprint.previewId,
-        targetSnapshotId: previewFingerprint.normalizedFilterHash,
+        previewContractId,
       },
     },
     field: safeString(data?.canonicalField || data?.field, "") || null,
     operation: safeString(data?.operation, "") || null,
-    value: data?.value ?? null,
     matchingProductCount,
     affectedVariantCount,
     page,
     limit,
     total,
     totalPages,
-    rounding: safeString(data?.rounding, "NONE"),
-    fingerprint: previewFingerprint.normalizedFilterHash,
-    previewFingerprint,
     rows: responseRows,
   };
 }
@@ -246,51 +221,84 @@ export function toBulkEditExecuteResponseDto(result) {
     result?.historyId || result?.jobId || result?.id || result?.operationId,
     "",
   ) || null;
+  const status = safeString(result?.status || result?.executionState, "QUEUED");
+
   return {
     success: true,
-    ...(historyId ? {
-      id: historyId,
+    data: {
       operationId: historyId,
-      historyId,
-      jobId: historyId,
-      historyUrl: `/editDetails/${encodeURIComponent(historyId)}`,
-    } : {}),
-    status: safeString(result?.status, "") || null,
-    data: result || {},
+      status,
+      historyUrl: historyId ? `/editDetails/${encodeURIComponent(historyId)}` : null,
+    },
   };
 }
 
 export function toScheduledEditResponseDto(result) {
   return {
     success: true,
-    data: result || {},
+    data: {
+      scheduleId: safeString(result?.scheduleId || result?.id, "") || null,
+      previewContractId: safeString(result?.previewContractId || result?.previewId, "") || null,
+      status: safeString(result?.status, "SCHEDULED"),
+      scheduledAt: result?.scheduledAt ? new Date(result.scheduledAt).toISOString() : null,
+      timezone: safeString(result?.timezone, "UTC"),
+    },
   };
 }
 
 export function toUndoEditResponseDto(result, command) {
+  const undoOperationId = safeString(result?.undoOperationId || result?.id, "") || null;
+  const originalOperationId = safeString(command?.operationId || result?.originalOperationId, "") || null;
   return {
     success: true,
-    data: result || {},
-    meta: {
-      operationId: command?.operationId || null,
+    data: {
+      undoOperationId,
+      originalOperationId,
+      status: safeString(result?.status, "QUEUED"),
     },
   };
 }
 
 export function toOperationCancellationResponseDto(result) {
-  return { success: true, data: result || {} };
+  return {
+    success: true,
+    data: {
+      operationId: safeString(result?.id || result?.operationId, "") || null,
+      cancellationStatus: safeString(result?.cancellation || result?.status, "CANCELLED"),
+      stage: safeString(result?.stage, "COMPLETED"),
+    },
+  };
 }
 
 export function toOperationPauseResponseDto(result) {
-  return { success: true, data: result || {} };
+  return {
+    success: true,
+    data: {
+      operationId: safeString(result?.id || result?.operationId, "") || null,
+      paused: result?.paused === true,
+      mode: safeString(result?.mode, "PAUSED"),
+    },
+  };
 }
 
 export function toOperationResumeResponseDto(result) {
-  return { success: true, data: result || {} };
+  return {
+    success: true,
+    data: {
+      operationId: safeString(result?.id || result?.operationId, "") || null,
+      resumed: result?.resumed === true,
+    },
+  };
 }
 
 export function toOperationRetryResponseDto(result) {
-  return { success: true, data: result || {} };
+  return {
+    success: true,
+    data: {
+      retryOperationId: safeString(result?.retryOperationId || result?.id, "") || null,
+      status: safeString(result?.status, "QUEUED"),
+    },
+  };
 }
 
 export function toPreviewVariantDetailsResponseDto(result) {
@@ -306,7 +314,7 @@ export function toPreviewVariantDetailsResponseDto(result) {
   return {
     success: true,
     data: {
-      previewId: safeString(result?.previewId, "") || null,
+      previewContractId: safeString(result?.previewContractId || result?.previewId, "") || null,
       productId: safeString(result?.productId, "") || null,
       page,
       limit,

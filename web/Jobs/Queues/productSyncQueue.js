@@ -1,3 +1,5 @@
+// web/Jobs/Queues/productSyncQueue.js
+
 import {
   productSyncExecuteQueue,
   productSyncSchedulerQueue,
@@ -7,6 +9,7 @@ import {
   PRODUCT_SYNC_JOB_OPTIONS,
 } from "../../queues/productSyncQueue.constants.js";
 import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
+import { SYNC_OPERATION_TYPE, SYNC_STATUS_NORMALIZED } from "../../constants/syncConstants.js";
 
 function toIsoHourWindowStart(date = new Date()) {
   const d = new Date(date);
@@ -83,30 +86,76 @@ export async function setupProductSyncCron() {
 export async function seedProductSyncOperation({ shopUrl, reason, operationId }) {
   const id = operationId || joinSafeJobId("product-sync-op", shopUrl, reason, Date.now());
   const fingerprint = `${reason}:${id}`;
-  await db.operationFingerprint.upsert({
-    where: {
-      shop_operationType_fingerprint: {
+
+  // Execute single Prisma transaction for idempotency claim, sync operation, and outbox intent
+  await db.$transaction(async (tx) => {
+    // 1. Idempotency record
+    await tx.operationFingerprint.upsert({
+      where: {
+        shop_operationType_fingerprint: {
+          shop: shopUrl,
+          operationType: "PRODUCT_SYNC",
+          fingerprint,
+        },
+      },
+      create: {
+        id,
         shop: shopUrl,
         operationType: "PRODUCT_SYNC",
         fingerprint,
+        fingerprintResourceType: "product_sync",
+        resourceId: null,
+        status: SYNC_STATUS_NORMALIZED.QUEUED,
+        lastError: null,
       },
-    },
-    create: {
-      id,
-      shop: shopUrl,
-      operationType: "PRODUCT_SYNC",
-      fingerprint,
-      fingerprintResourceType: "product_sync",
-      resourceId: null,
-      status: "QUEUED",
-      lastError: null,
-    },
-    update: {
-      status: "QUEUED",
-      resourceId: null,
-      lastError: null,
-      updatedAt: new Date(),
-    },
+      update: {
+        status: SYNC_STATUS_NORMALIZED.QUEUED,
+        resourceId: null,
+        lastError: null,
+        updatedAt: new Date(),
+      },
+    });
+
+    // 2. Operation row (SyncHistory)
+    await tx.syncHistory.upsert({
+      where: {
+        shop_id: {
+          shop: shopUrl,
+          id,
+        },
+      },
+      create: {
+        id,
+        shop: shopUrl,
+        operationType: SYNC_OPERATION_TYPE.PRODUCT,
+        status: "queued",
+        stage: "QUEUED",
+        duration: 0,
+        recordCount: 0,
+      },
+      update: {
+        status: "queued",
+        stage: "QUEUED",
+        updatedAt: new Date(),
+      },
+    });
+
+    // 3. Outbox event (OperationEnqueueIntent)
+    await tx.operationEnqueueIntent.create({
+      data: {
+        shop: shopUrl,
+        queueRoutingKey: "product_sync",
+        queueJobName: reason === "manual" ? "manual-product-sync" : "store-product-sync",
+        dispatchDedupeKey: `product_sync_${shopUrl}_${id}`,
+        payload: {
+          shopUrl,
+          syncReason: reason,
+          operationId: id,
+        },
+        status: "PENDING",
+      },
+    });
   });
+
   return id;
 }

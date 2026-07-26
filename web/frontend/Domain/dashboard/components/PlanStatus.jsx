@@ -1,11 +1,12 @@
 // web/frontend/domains/dashboard/components/PlanStatus.jsx
 import React from "react";
-import { Banner, Spinner, Button } from "@shopify/polaris";
+import { Spinner, Box, InlineStack } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 import { usePlanStatus } from "../hooks/usePlanStatus";
+import { SBanner, SText } from "../../../components/PolarisAppHome";
 
 /**
- * Component to display plan status and warnings
+ * Component to display plan status and warnings using Polaris App Home Web Components
  */
 const PlanStatus = () => {
   const { t } = useTranslation();
@@ -13,23 +14,24 @@ const PlanStatus = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-[140px]">
-        <Spinner size="large" />
-      </div>
+      <Box padding="800">
+        <InlineStack align="center" blockAlign="center">
+          <Spinner size="large" />
+        </InlineStack>
+      </Box>
     );
   }
 
   if (!showAlert) return null;
 
   return (
-    <Banner
+    <SBanner
       title={t("plan.warningTitle", "Plan Required")}
       tone="warning"
       onDismiss={dismissAlert}
-      action={{ content: t("plan.upgrade", "Upgrade Plan"), url: "/plans" }}
     >
-      <p>{t("plan.warningMessage", "Purchase a plan for seamless and efficient app performance.")}</p>
-    </Banner>
+      <SText as="p">{t("plan.warningMessage", "Purchase a plan for seamless and efficient app performance.")}</SText>
+    </SBanner>
   );
 };
 

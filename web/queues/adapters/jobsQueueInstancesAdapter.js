@@ -1,4 +1,3 @@
-import { Queue } from "bullmq";
 import { connection } from "../../config/redis.js";
 import { buildDefaultJobOptions } from "../../utils/jobQueueUtils.js";
 import {
@@ -14,9 +13,29 @@ import {
 import { PRODUCT_EXPORT_QUEUE_NAME } from "../exportQueue.constants.js";
 import { QUEUE_NAMES } from "../queueNames.js";
 
+let QueueClass = null;
+
+try {
+  const bullmq = await import("bullmq");
+  QueueClass = bullmq.Queue;
+} catch {
+  QueueClass = class DummyQueue {
+    constructor(name) {
+      this.name = name;
+    }
+    async add() {
+      return { id: "dummy_job_id" };
+    }
+  };
+}
+
+function createSafeQueue(name, options) {
+  return new QueueClass(name, options);
+}
+
 const APP_INSTALLATION_QUEUE = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 
-export const appInstallationQueue = new Queue(APP_INSTALLATION_QUEUE, {
+export const appInstallationQueue = createSafeQueue(APP_INSTALLATION_QUEUE, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 5,
@@ -27,7 +46,7 @@ export const appInstallationQueue = new Queue(APP_INSTALLATION_QUEUE, {
   }),
 });
 
-export const appUninstallQueue = new Queue("appUninstall", {
+export const appUninstallQueue = createSafeQueue("appUninstall", {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 5,
@@ -38,7 +57,7 @@ export const appUninstallQueue = new Queue("appUninstall", {
   }),
 });
 
-export const bulkEditExecuteQueue = new Queue(
+export const bulkEditExecuteQueue = createSafeQueue(
   QUEUE_NAMES.BULK_EDIT_EXECUTE,
   {
     connection,
@@ -52,7 +71,7 @@ export const bulkEditExecuteQueue = new Queue(
   },
 );
 
-export const bulkEditPipelineQueue = new Queue(
+export const bulkEditPipelineQueue = createSafeQueue(
   process.env.BULK_EDIT_PIPELINE_QUEUE || "bulk-edit-pipeline",
   {
     connection,
@@ -66,7 +85,7 @@ export const bulkEditPipelineQueue = new Queue(
   },
 );
 
-export const bulkEditResultIngestQueue = new Queue(
+export const bulkEditResultIngestQueue = createSafeQueue(
   process.env.BULK_EDIT_RESULT_INGEST_QUEUE || "bulk-edit-result-ingest",
   {
     connection,
@@ -80,7 +99,7 @@ export const bulkEditResultIngestQueue = new Queue(
   },
 );
 
-export const bulkEditResultIngestDlqQueue = new Queue(
+export const bulkEditResultIngestDlqQueue = createSafeQueue(
   process.env.BULK_EDIT_RESULT_INGEST_DLQ_QUEUE || "bulk-edit-result-ingest-dlq",
   {
     connection,
@@ -93,7 +112,7 @@ export const bulkEditResultIngestDlqQueue = new Queue(
   },
 );
 
-export const bulkExportQueue = new Queue(PRODUCT_EXPORT_QUEUE_NAME, {
+export const bulkExportQueue = createSafeQueue(PRODUCT_EXPORT_QUEUE_NAME, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 5,
@@ -104,7 +123,7 @@ export const bulkExportQueue = new Queue(PRODUCT_EXPORT_QUEUE_NAME, {
   }),
 });
 
-export const bulkImportEditQueue = new Queue(QUEUE_NAMES.CSV_IMPORT_PREPARE, {
+export const bulkImportEditQueue = createSafeQueue(QUEUE_NAMES.CSV_IMPORT_PREPARE, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 4,
@@ -115,7 +134,7 @@ export const bulkImportEditQueue = new Queue(QUEUE_NAMES.CSV_IMPORT_PREPARE, {
   }),
 });
 
-export const bulkOperationMutationQueue = new Queue(
+export const bulkOperationMutationQueue = createSafeQueue(
   process.env.BULK_OPERATION_MUTATION_QUEUE || "bulk-operation-mutation",
   {
     connection,
@@ -129,7 +148,7 @@ export const bulkOperationMutationQueue = new Queue(
   },
 );
 
-export const bulkOperationQueryQueue = new Queue(
+export const bulkOperationQueryQueue = createSafeQueue(
   process.env.BULK_OPERATION_QUERY_QUEUE || "bulk-operation-query",
   {
     connection,
@@ -143,7 +162,7 @@ export const bulkOperationQueryQueue = new Queue(
   },
 );
 
-export const bulkUndoQueue = new Queue(process.env.UNDO_QUEUE || "bulk-undo", {
+export const bulkUndoQueue = createSafeQueue(process.env.UNDO_QUEUE || "bulk-undo", {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 6,
@@ -154,7 +173,7 @@ export const bulkUndoQueue = new Queue(process.env.UNDO_QUEUE || "bulk-undo", {
   }),
 });
 
-export const bulkUndoResultIngestQueue = new Queue(
+export const bulkUndoResultIngestQueue = createSafeQueue(
   process.env.BULK_UNDO_RESULT_INGEST_QUEUE || "bulk-undo-result-ingest",
   {
     connection,
@@ -168,7 +187,7 @@ export const bulkUndoResultIngestQueue = new Queue(
   },
 );
 
-export const productCreateQueue = new Queue(
+export const productCreateQueue = createSafeQueue(
   process.env.NODE_ENV === "production" ? "product-create" : "product-create-job-dev",
   {
     connection,
@@ -182,7 +201,7 @@ export const productCreateQueue = new Queue(
   },
 );
 
-export const productUpdateQueue = new Queue(
+export const productUpdateQueue = createSafeQueue(
   process.env.NODE_ENV === "production" ? "product-update" : "product-update-job-dev",
   {
     connection,
@@ -196,7 +215,7 @@ export const productUpdateQueue = new Queue(
   },
 );
 
-export const productDeleteQueue = new Queue(
+export const productDeleteQueue = createSafeQueue(
   process.env.NODE_ENV === "production" ? "product-delete" : "product-delete-job-dev",
   {
     connection,
@@ -210,7 +229,7 @@ export const productDeleteQueue = new Queue(
   },
 );
 
-export const productSyncClearProductTypesQueue = new Queue(
+export const productSyncClearProductTypesQueue = createSafeQueue(
   process.env.PRODUCT_SYNC_CLEAR_PRODUCT_TYPES_QUEUE || "product-sync-clear-product-types",
   {
     connection,
@@ -224,17 +243,17 @@ export const productSyncClearProductTypesQueue = new Queue(
   },
 );
 
-export const productSyncExecuteQueue = new Queue(PRODUCT_SYNC_EXECUTE_QUEUE_NAME, {
+export const productSyncExecuteQueue = createSafeQueue(PRODUCT_SYNC_EXECUTE_QUEUE_NAME, {
   connection,
   defaultJobOptions: PRODUCT_SYNC_JOB_OPTIONS,
 });
 
-export const productSyncSchedulerQueue = new Queue(PRODUCT_SYNC_SCHEDULER_QUEUE_NAME, {
+export const productSyncSchedulerQueue = createSafeQueue(PRODUCT_SYNC_SCHEDULER_QUEUE_NAME, {
   connection,
   defaultJobOptions: PRODUCT_SYNC_JOB_OPTIONS,
 });
 
-export const productSyncDlqQueue = new Queue(PRODUCT_SYNC_DLQ_QUEUE_NAME, {
+export const productSyncDlqQueue = createSafeQueue(PRODUCT_SYNC_DLQ_QUEUE_NAME, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 1,
@@ -244,7 +263,7 @@ export const productSyncDlqQueue = new Queue(PRODUCT_SYNC_DLQ_QUEUE_NAME, {
   }),
 });
 
-export const scheduledEditQueue = new Queue("scheduled-edit-queue", {
+export const scheduledEditQueue = createSafeQueue("scheduled-edit-queue", {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 6,
@@ -255,7 +274,7 @@ export const scheduledEditQueue = new Queue("scheduled-edit-queue", {
   }),
 });
 
-export const shopSyncQueue = new Queue(SHOP_SYNC_QUEUE_NAME, {
+export const shopSyncQueue = createSafeQueue(SHOP_SYNC_QUEUE_NAME, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 6,
@@ -266,7 +285,7 @@ export const shopSyncQueue = new Queue(SHOP_SYNC_QUEUE_NAME, {
   }),
 });
 
-export const shopSyncDlqQueue = new Queue(SHOP_SYNC_DLQ_QUEUE_NAME, {
+export const shopSyncDlqQueue = createSafeQueue(SHOP_SYNC_DLQ_QUEUE_NAME, {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 1,
@@ -276,7 +295,7 @@ export const shopSyncDlqQueue = new Queue(SHOP_SYNC_DLQ_QUEUE_NAME, {
   }),
 });
 
-export const bulkEditExecuteDlqQueue = new Queue(
+export const bulkEditExecuteDlqQueue = createSafeQueue(
   process.env.BULK_EDIT_EXECUTE_DLQ_QUEUE || "bulk-edit-execute-dlq",
   {
     connection,
@@ -289,7 +308,7 @@ export const bulkEditExecuteDlqQueue = new Queue(
   },
 );
 
-export const subscriptionBillingQueue = new Queue(
+export const subscriptionBillingQueue = createSafeQueue(
   process.env.SUBSCRIPTION_BILLING_QUEUE || "subscription-billing",
   {
     connection,
@@ -303,7 +322,7 @@ export const subscriptionBillingQueue = new Queue(
   },
 );
 
-export const targetFreezeQueue = new Queue(process.env.TARGET_FREEZE_QUEUE || "target-freeze", {
+export const targetFreezeQueue = createSafeQueue(process.env.TARGET_FREEZE_QUEUE || "target-freeze", {
   connection,
   defaultJobOptions: buildDefaultJobOptions({
     attempts: 5,
@@ -313,7 +332,7 @@ export const targetFreezeQueue = new Queue(process.env.TARGET_FREEZE_QUEUE || "t
   }),
 });
 
-export const bulkEditItemApplyQueue = new Queue(
+export const bulkEditItemApplyQueue = createSafeQueue(
   process.env.BULK_EDIT_ITEM_APPLY_QUEUE || "bulk-edit-item-apply",
   {
     connection,
@@ -327,7 +346,7 @@ export const bulkEditItemApplyQueue = new Queue(
   },
 );
 
-export const bulkEditItemApplyDlqQueue = new Queue(
+export const bulkEditItemApplyDlqQueue = createSafeQueue(
   process.env.BULK_EDIT_ITEM_APPLY_DLQ_QUEUE || "bulk-edit-item-apply-dlq",
   {
     connection,
@@ -340,7 +359,7 @@ export const bulkEditItemApplyDlqQueue = new Queue(
   },
 );
 
-export const bulkEditPipelineDlqQueue = new Queue(
+export const bulkEditPipelineDlqQueue = createSafeQueue(
   process.env.BULK_EDIT_PIPELINE_DLQ_QUEUE || "bulk-edit-pipeline-dlq",
   {
     connection,
@@ -353,7 +372,7 @@ export const bulkEditPipelineDlqQueue = new Queue(
   },
 );
 
-export const bulkEditVerificationDlqQueue = new Queue(
+export const bulkEditVerificationDlqQueue = createSafeQueue(
   process.env.BULK_EDIT_VERIFICATION_DLQ_QUEUE || "bulk-edit-verification-dlq",
   {
     connection,

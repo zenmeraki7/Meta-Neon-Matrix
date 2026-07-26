@@ -27,7 +27,6 @@ test("scheduled export finalize replay is duplicate-safe after crash window", as
   const restore = [];
   const state = {
     runStatus: "PROCESSING",
-    historyCreated: 0,
     scheduledUpdated: 0,
     transitionCalls: 0,
   };
@@ -55,12 +54,6 @@ test("scheduled export finalize replay is duplicate-safe after crash window", as
     state.runStatus = "SUCCESS";
     return { count: 1 };
   }));
-  restore.push(withPatched(prisma.exportHistory, "findFirst", async () =>
-    (state.historyCreated > 0 ? { id: "eh1" } : null)));
-  restore.push(withPatched(prisma.exportHistory, "create", async () => {
-    state.historyCreated += 1;
-    return { id: `eh${state.historyCreated}` };
-  }));
   restore.push(withPatched(scheduledExportRepository, "updateByIdForShop", async () => {
     state.scheduledUpdated += 1;
     return { count: 1 };
@@ -73,7 +66,6 @@ test("scheduled export finalize replay is duplicate-safe after crash window", as
       status: "SUCCESS",
     });
     assert.equal(first, "SUCCESS");
-    assert.equal(state.historyCreated, 1);
     assert.equal(state.scheduledUpdated, 1);
 
     const replay = await finalizeScheduledExportRunFromExportJob({
@@ -82,7 +74,6 @@ test("scheduled export finalize replay is duplicate-safe after crash window", as
       status: "SUCCESS",
     });
     assert.equal(replay, "SUCCESS");
-    assert.equal(state.historyCreated, 1, "replay must not create duplicate export history");
     assert.equal(state.scheduledUpdated, 1, "replay must not increment run counters again");
     assert.ok(state.transitionCalls >= 1);
   } finally {
@@ -159,4 +150,3 @@ test("automatic rule finalize rejects stale processing token replay", async (t) 
     for (const undo of restore.reverse()) undo();
   }
 });
-

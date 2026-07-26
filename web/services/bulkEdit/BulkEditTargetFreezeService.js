@@ -2,10 +2,10 @@ import crypto from "crypto";
 import { db } from "../../repositories/repositoryDb.js";
 import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
 import {
-  freezeExplicitTargetSnapshot,
+  freezeExplicitTargetSet,
   markPreviewExecutionMismatch,
 } from "../productService/productTargetingService.js";
-import { upsertFrozenSnapshotSetFromLegacy } from "../../repositories/targetSnapshotSetRepository.js";
+import { finalizeFrozenSnapshotSet } from "../../repositories/targetSnapshotSetRepository.js";
 import { guardedEditHistoryUpdate } from "../operationTransitionGuards.js";
 
 async function attachFrozenSnapshotRefToFreezingHistory({
@@ -99,7 +99,7 @@ export class BulkEditTargetFreezeService {
       const targetGranularity = String(
         history.batch?.targetGranularity || "VARIANT",
       ).toUpperCase();
-      const stats = await freezeExplicitTargetSnapshot({
+      const stats = await freezeExplicitTargetSet({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,
@@ -131,7 +131,7 @@ export class BulkEditTargetFreezeService {
       });
 
       const frozenCount = Number(stats?.finalSnapshotCount || 0);
-      const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
+      const snapshotSet = await finalizeFrozenSnapshotSet({
         shop: history.shop,
         historyId,
         operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,
@@ -154,7 +154,7 @@ export class BulkEditTargetFreezeService {
     }
 
     if (explicitProductIds.length > 0) {
-      const stats = await freezeExplicitTargetSnapshot({
+      const stats = await freezeExplicitTargetSet({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,
@@ -174,7 +174,7 @@ export class BulkEditTargetFreezeService {
       });
 
       const frozenCount = Number(stats?.finalSnapshotCount || 0);
-      const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
+      const snapshotSet = await finalizeFrozenSnapshotSet({
         shop: history.shop,
         historyId,
         operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,
@@ -262,7 +262,7 @@ export class BulkEditTargetFreezeService {
         : TargetingEngineService.resolveAndFreezeExecutionTargets;
 
     const freezeStats = explicitTargets.length
-      ? await freezeExplicitTargetSnapshot({
+      ? await freezeExplicitTargetSet({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,
@@ -317,7 +317,7 @@ export class BulkEditTargetFreezeService {
       });
     }
 
-    const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
+    const snapshotSet = await finalizeFrozenSnapshotSet({
       shop: history.shop,
       historyId,
       operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,

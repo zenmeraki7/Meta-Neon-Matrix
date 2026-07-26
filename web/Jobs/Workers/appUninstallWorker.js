@@ -257,7 +257,6 @@ const appUninstallWorker = new Worker(
         await tx.productMediaMirror.deleteMany({ where: { shop } });
         await tx.location.deleteMany({ where: { shop } });
         await tx.productTombstone.deleteMany({ where: { shop } });
-        await tx.exportHistory.deleteMany({ where: { shop } });
         await tx.collection.deleteMany({ where: { shop } });
         await tx.mirrorBatch.deleteMany({ where: { shop } });
         await tx.mirrorAnomaly.deleteMany({ where: { shop } });
@@ -271,7 +270,7 @@ const appUninstallWorker = new Worker(
         await tx.syncHistory.deleteMany({ where: { shop } });
         await tx.editHistory.deleteMany({ where: { shop } });
         await tx.exportJob.deleteMany({ where: { shop } });
-        await tx.targetSnapshot.deleteMany({ where: { shop } });
+        await tx.targetSnapshotSet.deleteMany({ where: { shop } });
         await tx.automaticProductRuleProductState.deleteMany({ where: { shop } });
         await tx.automaticProductRuleRun.deleteMany({ where: { shop } });
         await tx.automaticProductRule.deleteMany({ where: { shop } });
@@ -287,7 +286,6 @@ const appUninstallWorker = new Worker(
           where: { shopUrl: shop },
           data: {
             installationStatus: "UNINSTALLED",
-            legacyIsUninstalled: true,
             uninstalledAt: new Date(),
             isProductSyncing: false,
             isCollectionSyncing: false,

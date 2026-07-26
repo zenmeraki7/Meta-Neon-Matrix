@@ -2,14 +2,9 @@ import { BrowserRouter } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { NavMenu } from "@shopify/app-bridge-react";
 import {
-  Banner,
   BlockStack,
   Box,
-  Button,
-  Card,
   Frame,
-  Page,
-  Text,
 } from "@shopify/polaris";
 import { useMemo, useState } from "react";
 
@@ -21,6 +16,7 @@ import {
   ToastProvider,
 } from "./components/providers";
 import ErrorBoundary from "./components/Error/ErrorBoundary";
+import { SPage, SCard, SBanner, SButton, SText } from "./components/PolarisAppHome";
 
 import { getShopifyContext } from "./utils/shopifyContext";
 
@@ -81,34 +77,34 @@ export default function App() {
 
 function MissingEmbeddedContext({ missingApiKey = false }) {
   return (
-    <Page title="Open MetaMatrix from Shopify Admin">
-      <Card roundedAbove="sm">
+    <SPage title="Open MetaMatrix from Shopify Admin">
+      <SCard>
         <Box padding="500">
           <BlockStack gap="300">
-            <Banner tone="warning">
-              <p>
+            <SBanner tone="warning">
+              <SText as="p">
                 {missingApiKey
                   ? "Shopify API key is not configured for this frontend build."
                   : "Shopify embedded context was not available for this page."}
-              </p>
-            </Banner>
-            <Text as="p" tone="subdued">
+              </SText>
+            </SBanner>
+            <SText as="p" tone="subdued">
               {missingApiKey
                 ? "Configure the frontend environment and reload from Shopify Admin."
                 : "Open this app from Shopify Admin Apps, then retry from the app navigation."}
-            </Text>
+            </SText>
             <Box>
-              <Button
+              <SButton
                 onClick={() => window.location.reload()}
                 variant="primary"
               >
                 Retry
-              </Button>
+              </SButton>
             </Box>
           </BlockStack>
         </Box>
-      </Card>
-    </Page>
+      </SCard>
+    </SPage>
   );
 }
 

@@ -28,7 +28,7 @@ test("Shopify session adapter has shop indexes and one expiry representation", (
   assert.doesNotMatch(sessionModel, /expiresAt/);
 });
 
-test("Store exposes corrected mapped names and encrypted writes clear plaintext", () => {
+test("Store exposes corrected names and encrypted-only token storage", () => {
   const schema = read("web/prisma/schema.prisma");
   const crypto = read("web/utils/tokenCrypto.js");
 
@@ -36,8 +36,11 @@ test("Store exposes corrected mapped names and encrypted writes clear plaintext"
   assert.match(schema, /isProductInitiallySyncing[\s\S]*@map\("isProductInitialySyning"\)/);
   assert.match(schema, /uninstalledAt[\s\S]*@map\("unInstalledAt"\)/);
   assert.match(schema, /installationStatus\s+StoreInstallationStatus/);
-  assert.match(schema, /legacyIsUninstalled[\s\S]*@map\("isUnInstalled"\)/);
-  assert.match(crypto, /accessToken: null,[\s\S]*accessTokenEncrypted: encrypted/);
+  const storeModel = schema.match(/model Store \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.doesNotMatch(storeModel, /\n\s+accessToken\s+String/);
+  assert.doesNotMatch(storeModel, /legacyIsUninstalled/);
+  assert.match(crypto, /ACCESS_TOKEN_ENCRYPTION_REQUIRED/);
+  assert.match(crypto, /accessTokenEncrypted: encrypted/);
 });
 
 test("migration swaps natural identity indexes and removes duplicate expiry", () => {

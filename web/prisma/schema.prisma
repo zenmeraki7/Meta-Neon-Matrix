@@ -168,21 +168,9 @@ model Variant {
   @@index([shop, mirrorBatchId, productId, position])
 }
 
-/// Legacy compatibility table. Store.shopUrl is the authoritative tenant key.
-/// No operational model may reference this table.
-model LegacyShop {
-  id            String    @id
-  shopifyDomain String    @unique @map("shopify_domain")
-  oauthScopes   String @map("scope")
-  plan          String    @default("free")
-  legacyActive  Boolean   @default(true) @map("active")
-  installedAt   DateTime  @default(now()) @map("installed_at")
-  uninstalledAt DateTime? @map("uninstalled_at")
-  legacyLastSyncedAt DateTime? @map("last_synced_at")
-
-  @@map("shops")
-}
-
+/// Legacy variant-metafield working projection. Store.shopUrl is the tenant key.
+/// Retain until the metafield-bulk-write queue is drained and its loaded worker,
+/// raw-SQL repositories, session ledger, and dead-letter path are retired together.
 model VariantMetafield {
   id                 BigInt     @id @default(autoincrement())
   shopDomain             String     @map("shop_id")
@@ -293,7 +281,7 @@ model SpreadsheetFile {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  @@index([shop])
+  @@index([shop, createdAt, id])
   @@index([shop, editHistoryId])
   @@index([shop, operationType, operationId])
   @@index([expiresAt, id])
@@ -303,8 +291,6 @@ model Store {
   id                              String            @id @default(cuid())
   shopUrl                         String            @unique
   shopEmail                       String?
-  /// Transitional fallback only; cleared after successful encryption/backfill.
-  accessToken                     String?
   /// Authoritative application credential store.
   accessTokenEncrypted            String?
   accessTokenKeyVersion           String?
@@ -342,8 +328,6 @@ model Store {
   installedAt                     DateTime?
   uninstalledAt                   DateTime?          @map("unInstalledAt")
   installationStatus              StoreInstallationStatus @default(INSTALLED)
-  /// Compatibility projection only; installationStatus is authoritative.
-  legacyIsUninstalled             Boolean            @default(false) @map("isUnInstalled")
   referralCode                    String?           @unique
   referralLink                    String?           @unique
   referredBy                      String?
@@ -437,6 +421,8 @@ model SyncHistory {
   @@index([shop, status, updatedAt, id])
   @@index([shop, operationType])
   @@index([shop, executionState])
+  @@index([shop, operationType, status, completedAt])
+  @@index([shop, operationType, createdAt])
 }
 
 model MirrorBatch {
@@ -471,7 +457,6 @@ model MirrorBatch {
   products              Product[]
   collections           Collection[]
   metafields            MetafieldMirror[]
-  targetSnapshots       TargetSnapshot[]
   targetSnapshotSets    TargetSnapshotSet[]
   activeForStores       Store[]             @relation("ActiveMirrorBatch")
   activeForCollectionStores Store[]          @relation("ActiveCollectionBatch")
@@ -562,10 +547,10 @@ model EditHistory {
   recoveryAudits            BulkEditRecoveryAudit[]
   snapshotSet               TargetSnapshotSet?               @relation(fields: [snapshotSetId], references: [id], onDelete: SetNull)
 
-  @@index([shop])
   @@index([shop, executionStateNormalized])
   @@unique([shop, id])
   @@unique([shop, executionIdentity])
+  @@index([shop, statusNormalized])
   @@index([shop, statusNormalized, editType, updatedAt], map: "shop_status_norm_type_recent")
   @@index([shop, createdAt, id])
   @@index([shop, statusNormalized, updatedAt, id])
@@ -642,7 +627,6 @@ model UndoOperationConflictChunk {
   undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Cascade)
 
   @@unique([shop, undoOperationId, chunkType, chunkIndex])
-  @@index([shop, undoOperationId, chunkType, chunkIndex])
 }
 
 model BulkEditRecoveryAudit {
@@ -809,8 +793,6 @@ model AutomaticProductRule {
   lastFailureReason          String?
   createdByActorId           String?                             @map("createdBy")
   updatedByActorId           String?                             @map("updatedBy")
-  /// Compatibility projection only; deletedAt is authoritative.
-  legacyIsDeleted            Boolean                            @default(false) @map("isDeleted")
   deletedAt                  DateTime?
   deletedByActorId           String?                             @map("deletedBy")
   pausedAt                   DateTime?
@@ -848,7 +830,6 @@ model AutomaticProductRule {
   @@index([shop, priority, status])
   @@index([shop, createdAt])
   @@index([shop, canonicalFilterKey])
-  @@index([shop, id])
   @@index([shop, status, nextRunAt])
   @@index([shop, deletedAt])
   @@index([shop, status, deletedAt])
@@ -1098,52 +1079,24 @@ model ProductCodeSnippet {
 }
 
 model Collection {
-  shop          String
-  shopifyId     String
-  mirrorBatchId String
-  title         String?
-  handle        String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  mirrorBatch   MirrorBatch       @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
-  products      ProductCollection[]
+  shop            String
+  shopifyId       String
+  mirrorBatchId   String
+  title           String?
+  titleNormalized String?
+  handle          String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  mirrorBatch     MirrorBatch       @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
+  products        ProductCollection[]
 
   @@id([shop, shopifyId, mirrorBatchId])
+  @@unique([shop, mirrorBatchId, shopifyId])
   @@index([updatedAt])
   @@index([shop, mirrorBatchId])
   @@index([shop, title])
-  @@index([shop, mirrorBatchId, title])
-}
-
-model ExportHistory {
-  id            String    @id @default(cuid())
-  shop          String
-  generatedFilename String @map("filename")
-  rawFilterInput Json   @map("filters")
-  downloadUrl   String? @map("fileUrl")
-  storageKey    String?
-  fileChecksum  String? @map("checksum")
-  sizeBytes     BigInt?
-  status        String
-  duration      String
-  totalItems    Int?
-  errorMessage  String?
-  exportTime    DateTime?
-  exportType    String    @default("Manual export") @map("type")
-  isFavourite   Boolean   @default(false)
-  scheduledTask String?
-  expiresAt     DateTime?
-  storageDeletedAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  /// NULL means no idempotency identity; multiple manual exports are intentional.
-  @@index([shop, createdAt, id])
-  @@index([shop, status])
-  @@index([shop, isFavourite])
-  @@index([shop, exportType], map: "ExportHistory_shop_type_idx")
-  @@index([shop, exportTime])
-  @@index([expiresAt, id])
+  @@index([shop, mirrorBatchId, titleNormalized, shopifyId])
+  @@index([shop, mirrorBatchId, shopifyId])
 }
 
 model ScheduledExport {
@@ -1351,67 +1304,6 @@ model ChangeRecord {
   @@index([shop, shopifySubmissionBatchId])
 }
 
-model BulkApplyRequest {
-  id             String @id @default(cuid())
-  shop           String
-  bulkApplyJobId      String @map("bulkJobId")
-  requestIdempotencyKey String @map("idempotencyKey")
-  status         BulkApplyRequestStatus @default(QUEUED)
-
-  eligibleItemCount  Int @default(0) @map("totalCount")
-  pendingItemCount   Int @default(0)
-  applyingItemCount  Int @default(0)
-  appliedItemCount   Int @default(0) @map("appliedCount")
-  failedItemCount    Int @default(0) @map("failedCount")
-  cancelledItemCount Int @default(0) @map("cancelledCount")
-  skippedItemCount   Int @default(0) @map("skippedCount")
-
-  lastError  String?
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  items      BulkApplyItem[]
-
-  @@unique([shop, bulkApplyJobId, requestIdempotencyKey], map: "BulkApplyRequest_shop_bulkJobId_idempotencyKey_key")
-  @@unique([shop, id])
-  @@index([shop, bulkApplyJobId], map: "BulkApplyRequest_shop_bulkJobId_idx")
-  @@index([shop, status, createdAt, id])
-}
-
-model BulkApplyItem {
-  id         String    @id @default(cuid())
-  shop       String
-  requestId  String
-  bulkApplyJobId  String @map("bulkJobId")
-  productId  String
-  status     BulkApplyItemStatus @default(PENDING)
-  error      String?
-  attempt    Int       @default(0)
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  request    BulkApplyRequest @relation(fields: [shop, requestId], references: [shop, id], onDelete: Cascade)
-
-  @@unique([shop, bulkApplyJobId, productId], map: "BulkApplyItem_shop_bulkJobId_productId_key")
-  @@index([shop, bulkApplyJobId], map: "BulkApplyItem_shop_bulkJobId_idx")
-  @@index([shop, requestId, status, createdAt, id])
-  @@index([shop, status, createdAt, id])
-}
-
-model ProductApplySnapshot {
-  id        String   @id @default(cuid())
-  shop      String
-  bulkApplyJobId String   @map("bulkJobId")
-  productId String
-  beforeValues Json @map("before")
-  createdAt DateTime @default(now())
-
-  @@unique([shop, bulkApplyJobId, productId], map: "ProductApplySnapshot_shop_bulkJobId_productId_key")
-  @@index([shop, bulkApplyJobId], map: "ProductApplySnapshot_shop_bulkJobId_idx")
-}
-
 model BulkSubmission {
   id                     String   @id @default(cuid())
   shop                   String
@@ -1449,7 +1341,6 @@ model OperationStageProgress {
   detail        Json?
 
   @@unique([shop, operationType, operationId, workflowStageKey], map: "uniq_operation_stage_progress")
-  @@index([shop, operationType, operationId])
   @@index([shop, stageStatus, updatedAt])
 }
 
@@ -1514,7 +1405,6 @@ model Location {
   updatedAt    DateTime  @updatedAt
 
   @@id([shop, id])
-  @@index([shop])
 }
 
 model ProductMediaMirror {
@@ -1601,44 +1491,6 @@ model ErrorLog {
   @@index([createdAt])
 }
 
-model TargetSnapshot {
-  id                String   @id @default(cuid())
-  /// Snapshot owner identity; not a reconciliation entity or leased resource.
-  ownerType         String
-  ownerId           String
-  shop              String
-  mirrorBatchId     String
-  targetResourceType String @map("targetType")
-  changeSource      String? @map("source")
-  targetGranularity String?
-  productId         String?
-  variantId         String?
-  collectionId      String?
-  inventoryItemId   String?
-  locationId        String?
-  targetIdentity    String
-  ordinal           Int?
-  shard             Int?
-  beforeValues      Json?
-  normalizedFilterHash String? @map("filterHash")
-  targetRowHash        String? @map("targetHash")
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  mirrorBatch       MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
-
-  @@unique([shop, ownerType, ownerId, targetIdentity])
-  @@index([shop, ownerType, ownerId], map: "idx_targetsnapshot_owner")
-  @@index([shop, ownerType, ownerId, mirrorBatchId], map: "idx_targetsnapshot_owner_batch")
-  @@index([shop, ownerType, ownerId, mirrorBatchId, targetResourceType, ordinal], map: "idx_targetsnapshot_owner_batch_type_ord")
-  @@index([shop, ownerType, ownerId, mirrorBatchId, ordinal], map: "idx_targetsnapshot_owner_batch_ord")
-  @@index([shop, ownerType, ownerId, mirrorBatchId, targetResourceType, ordinal, id], map: "idx_targetsnapshot_owner_batch_type_ord_id")
-  @@index([shop, ownerType, ownerId, mirrorBatchId, normalizedFilterHash, targetResourceType, ordinal], map: "idx_targetsnapshot_owner_batch_hash_type_ord")
-  @@index([shop, mirrorBatchId, targetResourceType], map: "idx_targetsnapshot_batch_type")
-  @@index([shop, productId], map: "idx_targetsnapshot_shop_product")
-  @@index([shop, variantId], map: "idx_targetsnapshot_shop_variant")
-  @@index([shop, ownerType, createdAt], map: "idx_targetsnapshot_owner_created")
-}
-
 model TargetSnapshotSet {
   id                   String @id @default(cuid())
   shop                 String
@@ -1708,10 +1560,15 @@ model TargetSnapshotItem {
   operationId   String
   mirrorBatchId String
 
-  productId  String
+  productId  String?
   variantId  String?
+  collectionId    String?
+  inventoryItemId String?
+  locationId      String?
   targetKey  String
   targetResourceType TargetSnapshotTargetType @map("targetType")
+  targetGranularity String?
+  ordinal          Int
 
   mutationGroupKey String?
 
@@ -1747,7 +1604,7 @@ model TargetSnapshotItem {
 
   snapshotSet TargetSnapshotSet @relation(fields: [shop, snapshotSetId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
 
-  @@unique([snapshotSetId, targetKey])
+  @@unique([shop, snapshotSetId, targetKey])
   @@index([shop, snapshotSetId])
   @@index([shop, operationId])
   @@index([shop, operationId, executionStatus])
@@ -1756,6 +1613,7 @@ model TargetSnapshotItem {
   @@index([shop, snapshotSetId, verificationStatus])
   @@index([shop, snapshotSetId, undoStatus])
   @@index([shop, snapshotSetId, mutationGroupKey])
+  @@index([shop, snapshotSetId, targetResourceType, ordinal, id])
   @@index([shop, mirrorBatchId])
   @@index([shop, productId])
   @@index([shop, variantId])
@@ -1945,7 +1803,6 @@ model OperationLease {
 
   @@id([shop, namespace, resourceId])
   @@index([expiresAt])
-  @@index([shop, namespace])
 }
 
 /// Durable command for dispatching one concrete queue job. Domain events are
@@ -2120,25 +1977,6 @@ enum TargetFreezeCommandStatus {
   PENDING
   DISPATCHING
   DISPATCHED
-}
-
-enum BulkApplyRequestStatus {
-  QUEUED
-  RUNNING
-  COMPLETED
-  PARTIAL_FAILED
-  FAILED
-  CANCELLED
-}
-
-enum BulkApplyItemStatus {
-  PENDING
-  APPLYING
-  APPLIED
-  FAILED
-  FAILED_PERMANENT
-  CANCELLED
-  SKIPPED
 }
 
 enum OperationStageStatus {
@@ -2450,3 +2288,41 @@ enum TargetSnapshotItemUndoStatus {
   FAILED
   SKIPPED
 }
+
+model ProductSyncCommand {
+  id             String   @id @default(cuid())
+  shop           String
+  type           String
+  status         String
+  idempotencyKey String
+  payloadHash    String
+  actorJson      Json
+  attemptCount   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([shop, id])
+  @@unique([shop, type, idempotencyKey])
+  @@index([shop, status, createdAt])
+}
+
+model OutboxEvent {
+  id            String   @id @default(cuid())
+  shop          String
+  aggregateType String
+  aggregateId   String
+  eventType     String
+  payload       Json
+  status        OutboxEventStatus @default(PENDING)
+  availableAt   DateTime @default(now())
+  attemptCount  Int      @default(0)
+  lockedAt      DateTime?
+  lockedBy      String?
+  createdAt     DateTime @default(now())
+
+  @@unique([shop, id])
+  @@unique([shop, aggregateType, aggregateId, eventType])
+  @@index([status, availableAt])
+  @@index([shop, aggregateId])
+}
+

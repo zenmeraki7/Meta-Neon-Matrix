@@ -13,6 +13,13 @@ import {
   TARGET_GRANULARITIES,
   TARGET_TYPES,
 } from "../targeting/constants.js";
+import {
+  appendSnapshotItems,
+  countSnapshotItems,
+  deleteSnapshotItemsForOperation,
+  finalizeSnapshotItemsForOperation,
+  findSnapshotItems,
+} from "../../repositories/targetSnapshotSetRepository.js";
 
 const MAX_ID_SET_SIZE = 50_000;
 const MIRROR_ANOMALY_SEVERITY = Object.freeze({
@@ -163,21 +170,14 @@ export async function computeTargetSetHash({
   let cursorOrdinal = null;
 
   while (true) {
-    const rows = await db.targetSnapshot.findMany({
-      where: {
-        ownerType,
-        ownerId,
-        shop,
-        mirrorBatchId,
-        ...(cursorOrdinal !== null ? { ordinal: { gt: cursorOrdinal } } : {}),
-      },
-      select: {
-        ordinal: true,
-        targetIdentity: true,
-        id: true,
-      },
-      orderBy: [{ ordinal: "asc" }, { id: "asc" }],
+    const rows = await findSnapshotItems({
+      operationType: ownerType,
+      operationRecordId: ownerId,
+      shop,
+      mirrorBatchId,
+      afterOrdinal: cursorOrdinal,
       take: PAGE_SIZE,
+      db,
     });
 
     if (!rows.length) break;
@@ -1039,7 +1039,7 @@ export async function resolveCanonicalProductTarget({
 
   let frozenCount = null;
   if (freeze && ownerType && ownerId) {
-    frozenCount = await freezeTargetSnapshot({
+    frozenCount = await freezeTargetSet({
       ownerType,
       ownerId,
       shop,
@@ -1237,7 +1237,7 @@ export async function resolveCanonicalVariantTarget({
 
   let frozenCount = null;
   if (freeze && ownerType && ownerId) {
-    frozenCount = await freezeTargetSnapshot({
+    frozenCount = await freezeTargetSet({
       ownerType,
       ownerId,
       shop,
@@ -1324,7 +1324,7 @@ export async function resolveCanonicalTarget({
   throw new Error(`Unsupported targetResourceType: ${targetResourceType}`);
 }
 
-export async function freezeProductTargetSnapshot({
+export async function freezeProductTargetSet({
   ownerType,
   ownerId,
   shop,
@@ -1369,10 +1369,13 @@ export async function freezeProductTargetSnapshot({
       break;
     }
 
-    await db.targetSnapshot.createMany({
-      data: products.map((product, index) => ({
-        ownerType,
-        ownerId,
+    await appendSnapshotItems({
+      operationType: ownerType,
+      operationRecordId: ownerId,
+      shop,
+      mirrorBatchId,
+      targetDefinitionHash: normalizedFilterHash,
+      rows: products.map((product, index) => ({
         shop,
         mirrorBatchId,
         targetResourceType: TARGET_TYPES.PRODUCT,
@@ -1392,6 +1395,7 @@ export async function freezeProductTargetSnapshot({
         },
       })),
       skipDuplicates: true,
+      db,
     });
 
     totalInserted += products.length;
@@ -1402,7 +1406,7 @@ export async function freezeProductTargetSnapshot({
   return totalInserted;
 }
 
-export async function freezeVariantTargetSnapshot({
+export async function freezeVariantTargetSet({
   ownerType,
   ownerId,
   shop,
@@ -1471,10 +1475,13 @@ export async function freezeVariantTargetSnapshot({
       break;
     }
 
-    await db.targetSnapshot.createMany({
-      data: variants.map((variant, index) => ({
-        ownerType,
-        ownerId,
+    await appendSnapshotItems({
+      operationType: ownerType,
+      operationRecordId: ownerId,
+      shop,
+      mirrorBatchId,
+      targetDefinitionHash: normalizedFilterHash,
+      rows: variants.map((variant, index) => ({
         shop,
         mirrorBatchId,
         targetResourceType: TARGET_TYPES.VARIANT,
@@ -1507,6 +1514,7 @@ export async function freezeVariantTargetSnapshot({
         },
       })),
       skipDuplicates: true,
+      db,
     });
 
     totalInserted += variants.length;
@@ -1517,7 +1525,7 @@ export async function freezeVariantTargetSnapshot({
   return totalInserted;
 }
 
-export async function freezeTargetSnapshot({
+export async function freezeTargetSet({
   ownerType,
   ownerId,
   shop,
@@ -1545,14 +1553,17 @@ export async function freezeTargetSnapshot({
       : TARGET_GRANULARITIES.PRODUCT,
   );
 
-  await db.targetSnapshot.deleteMany({
-    where: { shop, ownerType, ownerId },
+  await deleteSnapshotItemsForOperation({
+    shop,
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    db,
   });
 
   let insertedCount = 0;
   let attemptedInsertCount = 0;
   if (targetResourceType === TARGET_TYPES.PRODUCT) {
-    insertedCount = await freezeProductTargetSnapshot({
+    insertedCount = await freezeProductTargetSet({
       ownerType,
       ownerId,
       shop,
@@ -1565,7 +1576,7 @@ export async function freezeTargetSnapshot({
     });
     attemptedInsertCount = Number(insertedCount);
   } else if (targetResourceType === TARGET_TYPES.VARIANT) {
-    insertedCount = await freezeVariantTargetSnapshot({
+    insertedCount = await freezeVariantTargetSet({
       ownerType,
       ownerId,
       shop,
@@ -1582,12 +1593,25 @@ export async function freezeTargetSnapshot({
     throw new Error(`Unsupported targetResourceType for freeze: ${targetResourceType}`);
   }
 
+  await finalizeSnapshotItemsForOperation({
+    shop,
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    mirrorBatchId,
+    targetDefinitionHash: normalizedFilterHash,
+    db,
+  });
+
   if (!returnStats) {
     return insertedCount;
   }
 
-  const finalSnapshotCount = await db.targetSnapshot.count({
-    where: { shop, ownerType, ownerId, mirrorBatchId },
+  const finalSnapshotCount = await countSnapshotItems({
+    shop,
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    mirrorBatchId,
+    db,
   });
   return {
     resolvedCount: null,
@@ -1618,7 +1642,7 @@ function buildCanonicalTargetIdentity(target = {}) {
   throw new Error("UNSUPPORTED_TARGET_TYPE");
 }
 
-export async function freezeExplicitTargetSnapshot({
+export async function freezeExplicitTargetSet({
   ownerType,
   ownerId,
   shop,
@@ -1637,11 +1661,22 @@ export async function freezeExplicitTargetSnapshot({
     throw new Error("FILTER_HASH_REQUIRED");
   }
 
-  await db.targetSnapshot.deleteMany({
-    where: { shop, ownerType, ownerId },
+  await deleteSnapshotItemsForOperation({
+    shop,
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    db,
   });
 
   if (!Array.isArray(targets) || !targets.length) {
+    await finalizeSnapshotItemsForOperation({
+      shop,
+      operationType: ownerType,
+      operationRecordId: ownerId,
+      mirrorBatchId,
+      targetDefinitionHash: normalizedFilterHash,
+      db,
+    });
     if (!returnStats) return 0;
     return {
       resolvedCount: 0,
@@ -1693,18 +1728,37 @@ export async function freezeExplicitTargetSnapshot({
   const attemptedInsertCount = rows.length;
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const result = await db.targetSnapshot.createMany({
-      data: rows.slice(i, i + BATCH_SIZE),
+    const result = await appendSnapshotItems({
+      shop,
+      operationType: ownerType,
+      operationRecordId: ownerId,
+      mirrorBatchId,
+      targetDefinitionHash: normalizedFilterHash,
+      rows: rows.slice(i, i + BATCH_SIZE),
       skipDuplicates: true,
+      db,
     });
     inserted += result.count;
   }
 
+  await finalizeSnapshotItemsForOperation({
+    shop,
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    mirrorBatchId,
+    targetDefinitionHash: normalizedFilterHash,
+    db,
+  });
+
   if (!returnStats) {
     return inserted;
   }
-  const finalSnapshotCount = await db.targetSnapshot.count({
-    where: { shop, ownerType, ownerId, mirrorBatchId },
+  const finalSnapshotCount = await countSnapshotItems({
+    shop,
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    mirrorBatchId,
+    db,
   });
   return {
     resolvedCount: rows.length,
@@ -1727,18 +1781,15 @@ export async function getFrozenTargetProductIds({
   if (!mirrorBatchId) {
     throw new Error("mirrorBatchId is required to read frozen product targets");
   }
-  const rows = await db.targetSnapshot.findMany({
-    where: {
-      ownerType,
-      ownerId,
-      shop,
-      mirrorBatchId,
-      ...(normalizedFilterHash ? { normalizedFilterHash } : {}),
-      targetResourceType: "PRODUCT",
-      ...(cursorOrdinal !== null ? { ordinal: { gt: cursorOrdinal } } : {}),
-    },
-    orderBy: { ordinal: "asc" },
+  const rows = await findSnapshotItems({
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    shop,
+    mirrorBatchId,
+    targetResourceType: "PRODUCT",
+    afterOrdinal: cursorOrdinal,
     take: limit + 1,
+    db,
   });
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
@@ -1762,18 +1813,15 @@ export async function getFrozenTargetVariantIds({
   if (!mirrorBatchId) {
     throw new Error("mirrorBatchId is required to read frozen variant targets");
   }
-  const rows = await db.targetSnapshot.findMany({
-    where: {
-      ownerType,
-      ownerId,
-      shop,
-      mirrorBatchId,
-      ...(normalizedFilterHash ? { normalizedFilterHash } : {}),
-      targetResourceType: "VARIANT",
-      ...(cursorOrdinal !== null ? { ordinal: { gt: cursorOrdinal } } : {}),
-    },
-    orderBy: { ordinal: "asc" },
+  const rows = await findSnapshotItems({
+    operationType: ownerType,
+    operationRecordId: ownerId,
+    shop,
+    mirrorBatchId,
+    targetResourceType: "VARIANT",
+    afterOrdinal: cursorOrdinal,
     take: limit + 1,
+    db,
   });
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;

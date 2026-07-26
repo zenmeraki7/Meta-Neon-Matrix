@@ -17,6 +17,8 @@ import {
   EmptyState,
   IndexTable,
   Button,
+  Thumbnail,
+  Collapsible,
 } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 import { usePreviewVariantDetailsQuery } from "../hooks/usePreviewVariantDetailsQuery";
@@ -101,22 +103,33 @@ function getFieldRendererType(field) {
 }
 
 const StructuredValuePreview = memo(function StructuredValuePreview({ value }) {
+  const [open, setOpen] = useState(false);
   const structured = formatStructuredValue(value);
   const isLong = structured.length > MAX_STRUCTURED_VALUE_LENGTH;
   const preview = isLong
     ? `${structured.slice(0, MAX_STRUCTURED_VALUE_LENGTH)}...`
     : structured;
 
+  const handleToggle = useCallback(() => setOpen((prev) => !prev), []);
+
   return (
     <BlockStack gap="100">
       <Text as="span" variant="bodySm">
-        <code>{preview}</code>
+        {preview}
       </Text>
       {isLong ? (
-        <details>
-          <summary>View full diff</summary>
-          <pre>{structured}</pre>
-        </details>
+        <BlockStack gap="100">
+          <Button onClick={handleToggle} variant="plain" size="micro">
+            {open ? "Hide full diff" : "View full diff"}
+          </Button>
+          <Collapsible open={open} id="structured-diff-collapsible">
+            <Box background="bg-surface-secondary" padding="200" borderRadius="100">
+              <Text as="pre" variant="bodySm">
+                {structured}
+              </Text>
+            </Box>
+          </Collapsible>
+        </BlockStack>
       ) : null}
     </BlockStack>
   );
@@ -239,20 +252,11 @@ const ResilientProductThumbnail = memo(function ResilientProductThumbnail({
   }, []);
 
   return (
-    <img
-      src={thumbnailSource}
+    <Thumbnail
+      source={thumbnailSource}
       alt={alt}
-      width="40"
-      height="40"
-      loading="lazy"
+      size="small"
       onError={handleImageError}
-      style={{
-        borderRadius: 4,
-        objectFit: "cover",
-        border: "1px solid var(--p-color-border)",
-        background: "var(--p-color-bg-surface-secondary)",
-        flexShrink: 0,
-      }}
     />
   );
 });

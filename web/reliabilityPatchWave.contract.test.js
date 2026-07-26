@@ -130,13 +130,14 @@ test("automatic rule manual execution key no longer uses random uuid", () => {
   assert.ok(src.includes("manual:"));
 });
 
-test("scheduled export finalization writes history only after run transition CAS succeeds", () => {
+test("scheduled export finalization updates the schedule only after run transition CAS succeeds", () => {
   const src = read("web/services/scheduledExportExecutionService.js");
   assert.ok(src.includes("if (!transition.count) {"));
   const transitionPos = src.indexOf("if (!transition.count) {");
-  const createHistoryPos = src.indexOf("await prisma.exportHistory.create");
+  const scheduleUpdatePos = src.indexOf("await scheduledExportRepository.updateByIdForShop");
   assert.ok(transitionPos > -1);
-  assert.ok(createHistoryPos > transitionPos);
+  assert.ok(scheduleUpdatePos > transitionPos);
+  assert.equal(src.includes("exportHistory"), false);
 });
 
 test("unresolved bulk recovery claims rows via QUEUED -> DISPATCHING CAS", () => {

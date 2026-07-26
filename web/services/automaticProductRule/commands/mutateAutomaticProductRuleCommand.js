@@ -523,7 +523,6 @@ export async function softDeleteAutomaticProductRule({
       },
       data: {
         deletedAt: now,
-        legacyIsDeleted: true,
         deletedByActorId: actorRef(safeActor),
         schedulerDisabledAt: now,
         updatedAt: now,

@@ -9,6 +9,7 @@ import {
   buildProductInclude,
   hydrateMissingVariantsForProducts,
 } from "./helpers/bulkEditPreviewHelpers.js";
+import { findSnapshotItems } from "../../repositories/targetSnapshotSetRepository.js";
 
 function mergeRuleLevelChangesForTarget(ruleChanges = []) {
   const list = Array.isArray(ruleChanges) ? ruleChanges.filter(Boolean) : [];
@@ -113,21 +114,13 @@ export class BulkEditExecutionPreparationService {
       hasMore = retryCursorIndex + pageIdentities.length < retryTargetIdentities.length;
       nextRetryCursorIndex = retryCursorIndex + pageIdentities.length;
       if (pageIdentities.length > 0) {
-        rows = await db.targetSnapshot.findMany({
-          where: {
-            ownerType: "EDIT_HISTORY",
-            ownerId: historyId,
-            shop: history.shop,
-            ...(history.targetProductMirrorBatchId ? { mirrorBatchId: history.targetProductMirrorBatchId } : {}),
-            targetIdentity: { in: pageIdentities },
-          },
-          orderBy: [{ ordinal: "asc" }, { id: "asc" }],
-          select: {
-            productId: true,
-            variantId: true,
-            targetResourceType: true,
-            ordinal: true,
-          },
+        rows = await findSnapshotItems({
+          operationType: "EDIT_HISTORY",
+          operationRecordId: historyId,
+          shop: history.shop,
+          mirrorBatchId: history.targetProductMirrorBatchId,
+          targetKeys: pageIdentities,
+          db,
         });
         lastProductId = rows.length > 0 ? rows[rows.length - 1].ordinal : null;
       }
@@ -299,4 +292,3 @@ export class BulkEditExecutionPreparationService {
     };
   }
 }
-

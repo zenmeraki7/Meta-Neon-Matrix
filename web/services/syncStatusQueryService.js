@@ -73,7 +73,11 @@ function isActiveStoreSyncState(store) {
 async function resolveActiveProductCount(shop, store) {
   const storedCount = Number(store?.storeTotalProducts || 0);
   if (storedCount > 0) return storedCount;
-  return getActiveProductCountByShop(shop, store?.currentProductMirrorBatchId);
+  const result = await getActiveProductCountByShop(shop);
+  if (typeof result === "object" && result !== null) {
+    return result.ready ? Number(result.count || 0) : 0;
+  }
+  return Number(result || 0);
 }
 
 function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount, mirrorReady }) {
@@ -88,19 +92,40 @@ function buildProductSyncTruth({ store, latestSync, latestCompletedSync, product
       Boolean(store?.lastProductSyncAt)
     );
 
+function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount, mirrorReady }) {
+  const safeProductCount = Number(productCount || 0);
+  const hasActiveMirror = Boolean(store?.currentProductMirrorBatchId);
+  const hasCompletedSync = latestCompletedSync?.status === "completed" || latestCompletedSync?.status === "COMPLETED";
+  const productsSynced =
+    hasActiveMirror &&
+    (
+      hasCompletedSync ||
+      store?.hasCompletedShopifyBulkJob === true ||
+      Boolean(store?.lastProductSyncAt)
+    );
+
+  const mirrorState = !store
+    ? "STORE_NOT_FOUND"
+    : !hasActiveMirror
+      ? "NO_ACTIVE_MIRROR"
+      : safeProductCount === 0
+        ? "ZERO_PRODUCTS"
+        : "READY";
+
   return {
     productCount: safeProductCount,
     productsSynced,
     syncNeeded: !hasActiveMirror,
     mirrorReady: Boolean(mirrorReady) && hasActiveMirror,
     emptyMirror: safeProductCount === 0,
+    mirrorState,
     latestCompletedSync: latestCompletedSync
       ? {
           id: latestCompletedSync.id,
           status: latestCompletedSync.status,
           updatedAt: latestCompletedSync.updatedAt,
+          completedAt: latestCompletedSync.completedAt || latestCompletedSync.updatedAt,
           recordCount: latestCompletedSync.recordCount,
-          mirrorBatchId: latestCompletedSync.mirrorBatchId,
         }
       : null,
     latestSyncStatus: latestSync?.status || null,
@@ -114,16 +139,11 @@ function toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCo
     isCollectionSyncing: storeState.isCollectionSyncing,
     lastCollectionSyncAt: storeState.lastCollectionSyncAt,
     mirrorHealthState: storeState.mirrorHealthState,
-    staleReason: storeState.staleReason,
     requiresMirrorRepair: storeState.requiresMirrorRepair,
-    mirrorUnsafeSince: storeState.mirrorUnsafeSince,
     lastFullSyncAt: storeState.lastFullSyncAt,
     lastIncrementalSyncAt: storeState.lastIncrementalSyncAt,
     lastWebhookProcessedAt: storeState.lastWebhookProcessedAt,
     lastReconcileAt: storeState.lastReconcileAt,
-    lastInventoryReconcileAt: storeState.lastInventoryReconcileAt,
-    lastCollectionReconcileAt: storeState.lastCollectionReconcileAt,
-    lastSyncErrorSummary: storeState.lastSyncErrorSummary,
     syncProgressStage: storeState.syncProgressStage,
     isProductTypeSyncing: storeState.isProductTypeSyncing,
     lastProductTypeSyncAt: storeState.lastProductTypeSyncAt,
@@ -134,8 +154,15 @@ function toSyncStatusDetailDto(store, latestSync, latestCompletedSync, productCo
     isProductSyncing: storeState.isProductSyncing,
     lastProductSyncAt: storeState.lastProductSyncAt,
     productSyncStartedAt: storeState.productSyncStartedAt,
-    currentProductMirrorBatchId: storeState.currentProductMirrorBatchId,
-    latestSync,
+    latestSync: latestSync
+      ? {
+          id: latestSync.id,
+          status: latestSync.status,
+          stage: latestSync.stage,
+          updatedAt: latestSync.updatedAt,
+          isInitialProductSync: latestSync.isInitialProductSync,
+        }
+      : null,
     ...buildProductSyncTruth({
       store: storeState,
       latestSync,
@@ -157,14 +184,12 @@ function toSyncStatusSummaryDto(store, latestSync, latestCompletedSync, productC
     isProductSyncing: storeState.isProductSyncing,
     lastProductSyncAt: storeState.lastProductSyncAt,
     productSyncStartedAt: storeState.productSyncStartedAt,
-    currentProductMirrorBatchId: storeState.currentProductMirrorBatchId,
     latestSync: latestSync
       ? {
           id: latestSync.id,
           status: latestSync.status,
           stage: latestSync.stage,
           updatedAt: latestSync.updatedAt,
-          errorMessage: latestSync.errorMessage,
           isInitialProductSync: latestSync.isInitialProductSync,
         }
       : null,

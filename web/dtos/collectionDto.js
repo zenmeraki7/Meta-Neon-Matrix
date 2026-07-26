@@ -1,5 +1,7 @@
+// web/dtos/collectionDto.js
+
 function getCanonicalCollectionId(collection) {
-  return collection?.shopifyId || null;
+  return collection?.shopifyId || collection?.id || null;
 }
 
 export function toCollectionOptionDto(collection) {
@@ -7,13 +9,13 @@ export function toCollectionOptionDto(collection) {
 
   if (!id || !collection?.title) return null;
 
-  return {
+  return Object.freeze({
     id,
     value: id,
     label: collection.title,
     title: collection.title,
     handle: collection.handle || null,
-  };
+  });
 }
 
 export function toCollectionOptionListDto(collections) {
@@ -27,12 +29,12 @@ export function toCollectionDto(collection) {
 
   if (!id || !collection?.title) return null;
 
-  return {
+  return Object.freeze({
     id,
     shopifyId: collection.shopifyId || id,
     title: collection.title,
     handle: collection.handle || null,
-  };
+  });
 }
 
 export function toCollectionListDto(collections) {
@@ -42,10 +44,10 @@ export function toCollectionListDto(collections) {
 }
 
 export function toCollectionRefreshAcceptedDto(result) {
-  return {
+  return Object.freeze({
     operationId: result?.operationId || null,
     status: result?.status || "ACCEPTED",
-  };
+  });
 }
 
 export function toCollectionResponseDto(result, options = {}) {
@@ -57,15 +59,24 @@ export function toCollectionResponseDto(result, options = {}) {
       ? toCollectionOptionListDto(collections)
       : toCollectionListDto(collections);
 
-  return {
+  const nextCursor =
+    typeof result?.nextCursor === "string" ? result.nextCursor : null;
+
+  return Object.freeze({
     success: true,
     data,
-    meta: {
-      contract: mode === "OPTION" ? "collectionOptionListResponseDto" : "collectionListResponseDto",
+    meta: Object.freeze({
+      contract:
+        mode === "OPTION"
+          ? "collectionOptionListResponseDto"
+          : "collectionListResponseDto",
       source: result?.source || "MIRROR",
       returnedCount: data.length,
-      pageInfo: result?.pageInfo || null,
+      nextCursor,
+      hasNextPage: Boolean(result?.hasNextPage),
+      totalCount:
+        typeof result?.totalCount === "number" ? result.totalCount : null,
       stale: Boolean(result?.stale),
-    },
-  };
+    }),
+  });
 }

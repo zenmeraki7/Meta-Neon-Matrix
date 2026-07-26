@@ -63,3 +63,80 @@ export function toExportDownloadRedirectDto(result) {
     downloadUrl: toSafeText(result?.downloadUrl || result?.downloadUrl, 2000),
   };
 }
+
+const DOWNLOAD_ERROR_CONFIG = Object.freeze({
+  VALIDATION_FAILED: {
+    statusCode: 400,
+    message: "Invalid export id.",
+  },
+  UNAUTHENTICATED: {
+    statusCode: 401,
+    message: "Authentication required.",
+  },
+  EXPORT_NOT_FOUND: {
+    statusCode: 404,
+    message: "This export is no longer available.",
+  },
+  EXPORT_NOT_READY: {
+    statusCode: 409,
+    message: "The export file is not available yet.",
+  },
+  EXPORT_FILE_REFERENCE_MISSING: {
+    statusCode: 409,
+    message: "The export file is not available yet.",
+  },
+  EXPORT_FILE_REFERENCE_INVALID: {
+    statusCode: 500,
+    message: "The export file could not be retrieved. Please try again.",
+  },
+  EXPORT_FILE_REFERENCE_UNSAFE: {
+    statusCode: 500,
+    message: "The export file could not be retrieved. Please try again.",
+  },
+  EXPORT_FILE_BODY_MISSING: {
+    statusCode: 502,
+    message: "The export file could not be retrieved. Please try again.",
+  },
+  EXPORT_FILE_UPSTREAM_UNAVAILABLE: {
+    statusCode: 503,
+    message: "The export file could not be retrieved. Please try again.",
+  },
+  EXPORT_FILE_TIMEOUT: {
+    statusCode: 504,
+    message: "The export file retrieval timed out. Please try again.",
+  },
+});
+
+export function toExportDownloadErrorDto(error) {
+  const configured = DOWNLOAD_ERROR_CONFIG[error?.code];
+
+  const code = configured ? error.code : "EXPORT_DOWNLOAD_FAILED";
+
+  return Object.freeze({
+    statusCode: configured?.statusCode ?? 500,
+    body: Object.freeze({
+      success: false,
+      code,
+      message:
+        configured?.message ??
+        "The export file could not be retrieved. Please try again.",
+    }),
+  });
+}
+
+export function toProductExportFieldListDto(result) {
+  const fields = Array.isArray(result?.fields)
+    ? result.fields.map((field) => ({
+        key: field.key,
+        label: field.label,
+        dataType: field.dataType,
+        targetGranularity: field.targetGranularity,
+        available: field.available !== false,
+      }))
+    : [];
+
+  return Object.freeze({
+    success: true,
+    fields,
+  });
+}

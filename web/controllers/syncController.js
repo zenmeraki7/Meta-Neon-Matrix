@@ -1,5 +1,7 @@
-import { logApiError } from "../utils/errorLogUtils.js";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
+import {
+  handleControllerError,
+  requireShopifySession,
+} from "./controllerUtils.js";
 import {
   getSyncStatusDetailForShop,
   getSyncStatusSummaryForShop,
@@ -11,137 +13,77 @@ import { toSyncCommandResponseDto } from "../dtos/syncCommandResponseDto.js";
 import { setPrivateNoStore } from "../http/cacheHeaders.js";
 
 export const syncProductData = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-
   try {
-    if (!session?.shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
-
-        console.log(`[api:sync_request] shop=${session.shop} force=${req.query.force || req.body?.force}`);
+    const { session, shop } = requireShopifySession(req, res);
 
     const command = normalizeSyncStartCommand(req, session);
     const result = await startProductSync(command);
     const responseDto = toSyncCommandResponseDto(result);
-    console.log(`[api:sync_triggered] shop=${session.shop} shopifyBulkOperationId=${result.shopifyBulkOperationId} syncHistoryId=${result.syncHistoryId}`);
 
     return res.status(200).json(responseDto);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleControllerError(
       req,
-      source: "syncController.syncProductData",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      res,
       error,
-      "INTERNAL_ERROR",
+      "SYNC_PRODUCT_DATA_FAILED",
+      "syncController.syncProductData",
     );
-    return res.status(statusCode).json(body);
   }
 };
 
 export const getSyncStatus = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-
   try {
-    const shop = session?.shop;
-
-    if (!shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    const { shop } = requireShopifySession(req, res);
 
     setPrivateNoStore(res);
     const response = await getSyncStatusDetailForShop(shop);
     return res.status(200).json(response);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleControllerError(
       req,
-      source: "syncController.getSyncStatus",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      res,
       error,
-      "INTERNAL_ERROR",
+      "GET_SYNC_STATUS_FAILED",
+      "syncController.getSyncStatus",
     );
-    return res.status(statusCode).json(body);
   }
 };
 
 export const getSyncStatusDetail = getSyncStatus;
 
 export const getSyncStatusSummary = async (req, res) => {
-  const session = res.locals?.shopify?.session;
-
   try {
-    const shop = session?.shop;
-    if (!shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    const { shop } = requireShopifySession(req, res);
 
     setPrivateNoStore(res);
     const response = await getSyncStatusSummaryForShop(shop);
     return res.status(200).json(response);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleControllerError(
       req,
-      source: "syncController.getSyncStatusSummary",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      res,
       error,
-      "INTERNAL_ERROR",
+      "GET_SYNC_STATUS_SUMMARY_FAILED",
+      "syncController.getSyncStatusSummary",
     );
-    return res.status(statusCode).json(body);
   }
 };
 
 export const trackProductSync = async (req, res) => {
-  let session = null;
   try {
-    session = res.locals?.shopify?.session || null;
-    const shop = session?.shop;
-
-    if (!shop) {
-      const { statusCode, body } = buildPublicApiErrorResponse(
-        { code: "UNAUTHENTICATED" },
-        "UNAUTHENTICATED",
-      );
-      return res.status(statusCode).json(body);
-    }
+    const { session, shop } = requireShopifySession(req, res);
 
     setPrivateNoStore(res);
     const response = await getTrackedProductSyncStatus({ session, shop });
     return res.status(200).json(response);
   } catch (error) {
-    await logApiError({
-      shop: session?.shop,
-      err: error,
+    return handleControllerError(
       req,
-      source: "syncController.trackProductSync",
-    });
-
-    const { statusCode, body } = buildPublicApiErrorResponse(
+      res,
       error,
-      "INTERNAL_ERROR",
+      "TRACK_PRODUCT_SYNC_FAILED",
+      "syncController.trackProductSync",
     );
-    return res.status(statusCode).json(body);
   }
 };

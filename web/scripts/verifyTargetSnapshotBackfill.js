@@ -24,15 +24,16 @@ async function findDuplicateSnapshotSetTargetKeys(limit = 100) {
   const rows = await db.$queryRawUnsafe(
     `
       SELECT
+        "shop",
         "snapshotSetId",
         "targetKey",
         COUNT(*)::int AS "rowCount"
       FROM "TargetSnapshotItem"
       WHERE "snapshotSetId" IS NOT NULL
         AND "targetKey" IS NOT NULL
-      GROUP BY "snapshotSetId", "targetKey"
+      GROUP BY "shop", "snapshotSetId", "targetKey"
       HAVING COUNT(*) > 1
-      ORDER BY COUNT(*) DESC, "snapshotSetId" ASC, "targetKey" ASC
+      ORDER BY COUNT(*) DESC, "shop" ASC, "snapshotSetId" ASC, "targetKey" ASC
       LIMIT $1
     `,
     Number(limit),
@@ -113,4 +114,3 @@ run()
   .finally(async () => {
     await db.$disconnect();
   });
-

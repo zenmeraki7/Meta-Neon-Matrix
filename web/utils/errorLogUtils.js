@@ -1,11 +1,17 @@
-// FILE: web/utils/errorLogUtils.js
-
-import { db } from "../repositories/repositoryDb.js";
 import { redactSensitive } from "./redactionUtils.js";
 
 const MAX_SAFE_CONTEXT_BYTES = 8 * 1024;
 const REPEAT_SAMPLE_WINDOW_MS = 30_000;
 const recentErrorFingerprints = new Map();
+
+async function getDbClient() {
+  try {
+    const { db } = await import("../repositories/repositoryDb.js");
+    return db;
+  } catch {
+    return null;
+  }
+}
 
 function boundedText(value, maxLength) {
   if (value == null) return null;
@@ -24,25 +30,6 @@ function shouldPersistError({ shop, type, source, message }) {
     }
   }
   return now - last >= REPEAT_SAMPLE_WINDOW_MS;
-}
-
-function summarizeRequestBody(body) {
-  if (!body || typeof body !== "object") {
-    return {
-      present: Boolean(body),
-      type: body === null ? "null" : typeof body,
-    };
-  }
-
-  return {
-    present: true,
-    keys: Object.keys(body).sort(),
-    filterType: body.filter == null ? null : typeof body.filter,
-    filtersCount: Array.isArray(body.filters) ? body.filters.length : null,
-    rawFilterInputCount: Array.isArray(body.rawFilterInput) ? body.rawFilterInput.length : null,
-    hasCursor: Object.prototype.hasOwnProperty.call(body, "cursor"),
-    hasLimit: Object.prototype.hasOwnProperty.call(body, "limit"),
-  };
 }
 
 function safeJson(value) {
@@ -70,14 +57,21 @@ export const logApiError = async ({
   metadata = null,
 }) => {
   try {
-    if (!shouldPersistError({ shop, type: "api", source, message: err?.message })) return;
+    const message = process.env.NODE_ENV === "production" ? null : err?.message;
+    if (!shouldPersistError({ shop, type: "api", source, message })) return;
+
+    const db = await getDbClient();
+    if (!db || !db.errorLog || typeof db.errorLog.create !== "function") {
+      return;
+    }
+
     await db.errorLog.create({
       data: {
         shop: shop || "unknown",
         errorType: "api",
         level,
-        message: boundedText(err?.message || "Unknown error", 8000),
-        stack: boundedText(err?.stack, 32000),
+        message: boundedText(message || "API Error", 8000),
+        stack: process.env.NODE_ENV === "production" ? null : boundedText(err?.stack, 32000),
         errorSource: source || null,
         requestId: req?.headers?.["x-request-id"] || req?.headers?.["x-correlation-id"] || null,
         method: req?.method || null,
@@ -86,17 +80,13 @@ export const logApiError = async ({
         safeContext: safeJson({
           ...(metadata && typeof metadata === "object" ? metadata : {}),
           errorId,
-          params: req?.params,
-          query: req?.query,
-          bodySummary: summarizeRequestBody(req?.body),
-          hasSession: Boolean(req?.session),
-          dbError: err?.meta || err?.clientVersion || err?.code || null,
-          stack: err?.stack || null,
+          errorCode: err?.code || null,
+          errorName: err?.name || null,
         }),
       },
     });
-  } catch (e) {
-    console.error("❌ API error log failed:", e?.message || e);
+  } catch {
+    // Logging failure must be caught silently
   }
 };
 
@@ -108,20 +98,25 @@ export const logWorkerError = async ({
   metadata = null,
 }) => {
   try {
-    if (!shouldPersistError({ shop, type: "worker", source, message: err?.message })) return;
+    const message = process.env.NODE_ENV === "production" ? null : err?.message;
+    if (!shouldPersistError({ shop, type: "worker", source, message })) return;
+
+    const db = await getDbClient();
+    if (!db || !db.errorLog || typeof db.errorLog.create !== "function") return;
+
     await db.errorLog.create({
       data: {
         shop: shop || "unknown",
         errorType: "worker",
         level,
-        message: boundedText(err?.message || "Unknown worker error", 8000),
-        stack: boundedText(err?.stack, 32000),
+        message: boundedText(message || "Worker error", 8000),
+        stack: process.env.NODE_ENV === "production" ? null : boundedText(err?.stack, 32000),
         errorSource: source || null,
         safeContext: safeJson(metadata),
       },
     });
-  } catch (e) {
-    console.error("❌ Worker error log failed:", e?.message || e);
+  } catch {
+    // Silent catch
   }
 };
 
@@ -133,14 +128,19 @@ export const logWebhookError = async ({
   level = "error",
 }) => {
   try {
-    if (!shouldPersistError({ shop, type: "webhook", source, message: err?.message })) return;
+    const message = process.env.NODE_ENV === "production" ? null : err?.message;
+    if (!shouldPersistError({ shop, type: "webhook", source, message })) return;
+
+    const db = await getDbClient();
+    if (!db || !db.errorLog || typeof db.errorLog.create !== "function") return;
+
     await db.errorLog.create({
       data: {
         shop: shop || "unknown",
         errorType: "webhook",
         level,
-        message: boundedText(err?.message || "Unknown webhook error", 8000),
-        stack: boundedText(err?.stack, 32000),
+        message: boundedText(message || "Webhook error", 8000),
+        stack: process.env.NODE_ENV === "production" ? null : boundedText(err?.stack, 32000),
         errorSource: source || null,
         requestId: req?.headers?.["x-request-id"] || req?.headers?.["x-shopify-webhook-id"] || null,
         method: req?.method || null,
@@ -152,7 +152,7 @@ export const logWebhookError = async ({
         }),
       },
     });
-  } catch (e) {
-    console.error("❌ Webhook error log failed:", e?.message || e);
+  } catch {
+    // Silent catch
   }
 };

@@ -18,7 +18,6 @@
  *   ✅  SyncHistory
  *   ✅  EditHistory         (remaps ObjectIds → cuid strings)
  *   ✅  ChangeRecord        (uses editHistory ID map built above)
- *   ✅  ExportHistory
  *   ✅  ExportJob
  *   ✅  SpreadsheetFiles    → SpreadsheetFile
  *   ✅  Collection
@@ -86,7 +85,6 @@ const mSub           = mongoose.model("Subscription", new mongoose.Schema({}, { 
 const mSyncHist      = mongoose.model("SyncHistory",  new mongoose.Schema({}, { strict: false, collection: "synchistories"}));
 const mEditHist      = mongoose.model("EditHistory",  new mongoose.Schema({}, { strict: false, collection: "edithistories"}));
 const mChangeRecord  = mongoose.model("ChangeRecord", new mongoose.Schema({}, { strict: false, collection: "changerecords"}));
-const mExportHist    = mongoose.model("ExportHistory",new mongoose.Schema({}, { strict: false, collection: "exporthistories"}));
 const mExportJob     = mongoose.model("ExportJob",    new mongoose.Schema({}, { strict: false, collection: "exportjobs"   }));
 const mSpreadsheet   = mongoose.model("SpreadsheetFiles", new mongoose.Schema({}, { strict: false, collection: "spreadsheetfiles"}));
 const mCollection    = mongoose.model("Collection",   new mongoose.Schema({}, { strict: false, collection: "collections"  }));
@@ -135,7 +133,6 @@ console.log("── Store ──");
           installedAt:                     toDate(d.installedAt),
           uninstalledAt:                   toDate(d.unInstalledAt),
           installationStatus:              toBool(d.isUnInstalled) ? "UNINSTALLED" : "INSTALLED",
-          legacyIsUninstalled:             toBool(d.isUnInstalled) ?? false,
 
           // referral
           referralCode:                    d.referralCode ?? null,
@@ -328,47 +325,7 @@ console.log("── ChangeRecord ──");
 }
 
 // ════════════════════════════════════════════════════════════════
-//  6. EXPORT HISTORY
 // ════════════════════════════════════════════════════════════════
-console.log("── ExportHistory ──");
-{
-  const docs = await mExportHist.find({}).lean();
-  let n = 0;
-  for (const d of docs) {
-    // Normalize status to what Prisma expects
-    const statusMap = {
-      completed: "completed", processing: "processing", failed: "failed",
-      Scheduled: "completed", pending: "completed",
-    };
-    const typeMap = {
-      "Manual export": "Manual export",
-      "Scheduled export": "Manual export",
-      "Reccuring export": "Manual export", // typo in mongo schema
-    };
-    try {
-      await prisma.exportHistory.create({
-        data: {
-          shop:          d.shop,
-          generatedFilename: d.filename,
-          filters:       toJson(d.filters) ?? {},
-          status:        statusMap[d.status] ?? "completed",
-          duration:      toStr(d.duration) ?? "0",
-          totalItems:    toInt(d.totalItems),
-          errorMessage:  d.errorMessage ?? null,
-          exportTime:    toDate(d.exportTime),
-          exportType:    typeMap[d.type] ?? "Manual export",
-          isFavourite:   toBool(d.isFavourite) ?? false,
-          scheduledTask: d.scheduledTask ?? null,
-          createdAt:     toDate(d.createdAt) ?? new Date(),
-          updatedAt:     toDate(d.updatedAt) ?? new Date(),
-        },
-      });
-      n++;
-    } catch (e) { warn(`ExportHistory[${toStr(d._id)}]`, e); }
-  }
-  log("ExportHistory", n);
-}
-
 // ════════════════════════════════════════════════════════════════
 //  7. EXPORT JOB
 // ════════════════════════════════════════════════════════════════

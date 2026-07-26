@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { isAllowedImportFieldKey } from "../services/productImport/importFieldRegistry.js";
 
 const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
@@ -158,13 +160,42 @@ function assertUploadFile(file) {
   if (!file?.path) {
     throw buildRequestError("CSV_FILE_REQUIRED", "CSV_FILE_REQUIRED");
   }
+
+  const filePath = String(file.path);
+  if (filePath.includes("..") || path.isAbsolute(filePath) === false) {
+    throw buildRequestError("INVALID_FILE_PATH", "INVALID_FILE_PATH");
+  }
+
+  const originalName = String(file.originalname || file.name || "").toLowerCase();
+  if (originalName && !originalName.endsWith(".csv")) {
+    throw buildRequestError("INVALID_FILE_EXTENSION", "INVALID_FILE_EXTENSION");
+  }
+
   if (Number(file.size || 0) > MAX_UPLOAD_SIZE_BYTES) {
     throw buildRequestError("CSV_FILE_TOO_LARGE", "CSV_FILE_TOO_LARGE");
   }
+
   const mimeType = String(file.mimetype || "").toLowerCase();
   if (mimeType && !ALLOWED_MIME_TYPES.has(mimeType)) {
     throw buildRequestError("INVALID_CSV_MIME_TYPE", "INVALID_CSV_MIME_TYPE");
   }
+
+  try {
+    if (fs.existsSync(filePath)) {
+      const lstat = fs.lstatSync(filePath);
+      if (lstat.isSymbolicLink()) {
+        throw buildRequestError("SYMBOLIC_LINK_NOT_ALLOWED", "SYMBOLIC_LINK_NOT_ALLOWED");
+      }
+      if (!lstat.isFile()) {
+        throw buildRequestError("INVALID_REGULAR_FILE", "INVALID_REGULAR_FILE");
+      }
+    }
+  } catch (err) {
+    if (err?.code === "SYMBOLIC_LINK_NOT_ALLOWED" || err?.code === "INVALID_REGULAR_FILE") {
+      throw err;
+    }
+  }
+
   return file;
 }
 

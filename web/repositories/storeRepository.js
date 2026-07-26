@@ -43,7 +43,6 @@ export async function ensureStoreForShop(input, tx = prisma) {
       ...tokenColumns,
       oauthScopes: command.oauthScopes,
       installationStatus: markInstalled ? "INSTALLED" : "UNINSTALLED",
-      legacyIsUninstalled: !markInstalled,
       uninstalledAt: markInstalled ? null : now,
       installedAt: markInstalled ? command.installedAt || now : null,
       lastActivityAt: now,
@@ -57,7 +56,6 @@ export async function ensureStoreForShop(input, tx = prisma) {
       ...(markInstalled
         ? {
             installationStatus: "INSTALLED",
-            legacyIsUninstalled: false,
             uninstalledAt: null,
           }
         : {}),

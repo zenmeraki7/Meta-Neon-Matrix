@@ -35,7 +35,6 @@ async function claimInstallation(shop) {
     },
     data: {
       installationStatus: "INSTALLED",
-      legacyIsUninstalled: false,
       installedAt: new Date(),
       uninstalledAt: null,
     },

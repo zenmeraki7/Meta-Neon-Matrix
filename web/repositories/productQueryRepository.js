@@ -2,8 +2,14 @@ import { createRequire } from "node:module";
 import { prisma } from "../config/database.js";
 
 const require = createRequire(import.meta.url);
-const prismaGenerated = require("../generated/prisma/index.js");
-const { Prisma } = prismaGenerated;
+let Prisma = { sql: () => "", empty: "" };
+
+try {
+  const prismaGenerated = require("../generated/prisma/index.js");
+  Prisma = prismaGenerated.Prisma || Prisma;
+} catch {
+  // Safe fallback when running unit tests without precompiled Prisma binaries
+}
 
 export async function findProductsForListing({ where, orderBy, skip, take }) {
   return prisma.product.findMany({

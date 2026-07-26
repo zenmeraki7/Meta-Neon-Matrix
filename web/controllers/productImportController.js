@@ -1,130 +1,170 @@
 import fs from "fs";
-import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
-import { buildActorContext } from "../utils/operationContextUtils.js";
-import { ProductImportCommandService } from "../services/productImport/ProductImportCommandService.js";
 import {
-  createCsvPreview,
-  previewCsvPage,
-} from "../services/productImport/productImportPreviewService.js";
+  buildAuthenticatedActor,
+  getRequiredIdempotencyKey,
+  handleControllerError,
+  requireShopifySession,
+} from "./controllerUtils.js";
+import { logWorkerError } from "../utils/errorLogUtils.js";
+import { ProductImportCommandService } from "../services/productImport/ProductImportCommandService.js";
+import { productImportPreviewService as defaultProductImportPreviewService } from "../services/productImport/productImportPreviewService.js";
 import {
   buildCreateCsvPreviewCommand,
   buildCreateProductImportCommand,
   buildPreviewCsvPageCommand,
 } from "../normalizers/productImportCommandNormalizer.js";
+import {
+  toCsvPreviewAcceptedDto as defaultToCsvPreviewAcceptedDto,
+  toCsvPreviewPageDto as defaultToCsvPreviewPageDto,
+  toProductImportAcceptedDto as defaultToProductImportCommandAcceptedDto,
+} from "../dtos/productImportDto.js";
 
-const productImportCommandService = new ProductImportCommandService();
+const defaultProductImportCommandService = new ProductImportCommandService();
 
-function removeUploadedFile(filePath) {
+export async function removeUploadedFile(filePath) {
   if (!filePath) return;
+
   try {
-    fs.unlinkSync(filePath);
-  } catch {
-    // no-op
+    await fs.promises.unlink(filePath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      logWorkerError({
+        err: error,
+        source: "productImportController.removeUploadedFile",
+        metadata: {
+          errorCode: error?.code,
+          errorName: error?.name,
+        },
+      });
+    }
   }
 }
 
-function requireShopifySession(res) {
-  const session = res.locals?.shopify?.session;
-  if (!session?.shop) {
-    const error = new Error("Authentication required");
-    error.code = "UNAUTHENTICATED";
-    throw error;
-  }
-  return session;
-}
-
-function buildActor(req, session) {
-  return buildActorContext({
-    req,
-    session,
-    fallbackType: "MERCHANT_ADMIN",
-  });
-}
-
-function getIdempotencyKey(req) {
-  return req.get("Idempotency-Key") || null;
-}
-
-function buildContext(req, session) {
+function buildContext(req, session, shop) {
   return Object.freeze({
-    shop: session.shop,
-    actor: buildActor(req, session),
-    subscription: req.subscription || null,
+    shop,
+    actor: buildAuthenticatedActor(req, session, shop),
   });
 }
 
-function handleControllerError(res, error, fallbackCode) {
-  const { statusCode, body } = buildPublicApiErrorResponse(error, fallbackCode);
-  return res.status(statusCode).json(body);
+export function createProductImportController({
+  productImportCommandService = defaultProductImportCommandService,
+  productImportPreviewService = defaultProductImportPreviewService,
+  removeUploadedFile: removeFile = removeUploadedFile,
+  toProductImportCommandAcceptedDto = defaultToProductImportCommandAcceptedDto,
+  toCsvPreviewAcceptedDto = defaultToCsvPreviewAcceptedDto,
+  toCsvPreviewPageDto = defaultToCsvPreviewPageDto,
+} = {}) {
+  async function importCsvController(req, res) {
+    let uploadTransferred = false;
+
+    try {
+      const { session, shop } = requireShopifySession(req, res);
+
+      const command = buildCreateProductImportCommand({
+        file: req.file,
+        body: req.body ?? {},
+        idempotencyKey: getRequiredIdempotencyKey(req),
+        context: buildContext(req, session, shop),
+      });
+
+      const result = await productImportCommandService.createImportCommand(command);
+
+      uploadTransferred =
+        result?.uploadOwnershipTransferred === true ||
+        result?.fileOwnershipTransferred === true ||
+        Boolean(result?.operationId);
+
+      return res
+        .status(202)
+        .json(toProductImportCommandAcceptedDto(result));
+    } catch (error) {
+      if (!uploadTransferred) {
+        await removeFile(req.file?.path);
+      }
+
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "PRODUCT_IMPORT_FAILED",
+        "productImportController.importCsvController",
+      );
+    }
+  }
+
+  async function previewCsvController(req, res) {
+    try {
+      const { session, shop } = requireShopifySession(req, res);
+
+      const command = buildPreviewCsvPageCommand({
+        query: req.query ?? {},
+        context: buildContext(req, session, shop),
+      });
+
+      const result = await productImportPreviewService.previewCsvPage(command);
+
+      return res.status(200).json(toCsvPreviewPageDto(result));
+    } catch (error) {
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "CSV_PREVIEW_FAILED",
+        "productImportController.previewCsvController",
+      );
+    }
+  }
+
+  async function createCsvPreviewController(req, res) {
+    let uploadTransferred = false;
+
+    try {
+      const { session, shop } = requireShopifySession(req, res);
+
+      const command = buildCreateCsvPreviewCommand({
+        file: req.file,
+        query: req.query ?? {},
+        idempotencyKey: getRequiredIdempotencyKey(req),
+        context: buildContext(req, session, shop),
+      });
+
+      const result = await productImportPreviewService.createCsvPreview(command);
+
+      uploadTransferred =
+        result?.uploadOwnershipTransferred === true ||
+        result?.durable === true ||
+        Boolean(result?.uploadToken);
+
+      return res
+        .status(202)
+        .json(toCsvPreviewAcceptedDto(result));
+    } catch (error) {
+      if (!uploadTransferred) {
+        await removeFile(req.file?.path);
+      }
+
+      return handleControllerError(
+        req,
+        res,
+        error,
+        "CSV_PREVIEW_FAILED",
+        "productImportController.createCsvPreviewController",
+      );
+    }
+  }
+
+  return Object.freeze({
+    importCsvController,
+    previewCsvController,
+    createCsvPreviewController,
+  });
 }
 
-export const importCsvController = async (req, res) => {
-  try {
-    const session = requireShopifySession(res);
-    const command = buildCreateProductImportCommand({
-      file: req.file,
-      body: req.body || {},
-      idempotencyKey: getIdempotencyKey(req),
-      context: buildContext(req, session),
-    });
+const defaultController = createProductImportController();
 
-    const result = await productImportCommandService.createImportCommand(command);
-
-    return res.status(202).json({
-      success: true,
-      operationId: result.operationId,
-      importId: result.importId,
-      status: result.status,
-    });
-  } catch (error) {
-    removeUploadedFile(req.file?.path);
-    return handleControllerError(res, error, "PRODUCT_IMPORT_FAILED");
-  }
-};
-
-export const previewCsvController = async (req, res) => {
-  try {
-    const session = requireShopifySession(res);
-
-    const command = buildPreviewCsvPageCommand({
-      query: req.query || {},
-      context: buildContext(req, session),
-    });
-
-    const payload = await previewCsvPage({
-      shop: command.shop,
-      uploadToken: command.uploadToken,
-      cursor: command.cursor,
-      limit: command.limit,
-    });
-    return res.status(200).json(payload);
-  } catch (error) {
-    return handleControllerError(res, error, "CSV_PREVIEW_FAILED");
-  }
-};
-
-export const createCsvPreviewController = async (req, res) => {
-  try {
-    const session = requireShopifySession(res);
-
-    const command = buildCreateCsvPreviewCommand({
-      file: req.file,
-      query: req.query || {},
-      idempotencyKey: getIdempotencyKey(req),
-      context: buildContext(req, session),
-    });
-
-    const payload = await createCsvPreview({
-      shop: command.shop,
-      file: command.file,
-      limit: command.limit,
-      idempotencyKey: command.idempotencyKey,
-    });
-
-    const statusCode = payload?.durable ? 202 : 200;
-    return res.status(statusCode).json(payload);
-  } catch (error) {
-    removeUploadedFile(req.file?.path);
-    return handleControllerError(res, error, "CSV_PREVIEW_FAILED");
-  }
-};
+export const {
+  importCsvController,
+  previewCsvController,
+  createCsvPreviewController,
+} = defaultController;

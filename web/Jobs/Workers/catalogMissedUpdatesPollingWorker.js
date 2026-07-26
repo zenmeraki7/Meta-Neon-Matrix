@@ -176,12 +176,12 @@ async function pollShop(shop) {
 async function pollAll() {
   const stores = await db.store.findMany({
     where: { installationStatus: "INSTALLED" },
-    select: { shopUrl: true, accessToken: true, accessTokenEncrypted: true },
+    select: { shopUrl: true, accessTokenEncrypted: true },
     take: 200,
   });
   const results = [];
   for (const store of stores) {
-    if (!store.shopUrl || (!store.accessToken && !store.accessTokenEncrypted)) continue;
+    if (!store.shopUrl || !store.accessTokenEncrypted) continue;
     try { results.push(await pollShop(store.shopUrl)); }
     catch (error) { logger.error("Catalog missed-updates polling failed for shop", { shop: store.shopUrl, message: error.message }); }
   }

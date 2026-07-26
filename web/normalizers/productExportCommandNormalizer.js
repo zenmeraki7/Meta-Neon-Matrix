@@ -532,3 +532,24 @@ export function buildResumeExportCommand({
     idempotencyKey: normalizeIdempotencyKey(headers),
   });
 }
+
+const ALLOWED_TARGET_GRANULARITIES = new Set(["PRODUCT", "VARIANT"]);
+
+export function buildListProductExportFieldsCommand({ query, context }) {
+  const targetGranularity = String(query?.targetGranularity ?? "PRODUCT")
+    .trim()
+    .toUpperCase();
+
+  if (!ALLOWED_TARGET_GRANULARITIES.has(targetGranularity)) {
+    const error = new Error("Invalid target granularity");
+    error.code = "VALIDATION_FAILED";
+    throw error;
+  }
+
+  return Object.freeze({
+    type: "LIST_PRODUCT_EXPORT_FIELDS",
+    shop: context.shop,
+    actor: context.actor,
+    targetGranularity,
+  });
+}

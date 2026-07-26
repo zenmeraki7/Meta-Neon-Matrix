@@ -14,6 +14,12 @@ test("transition service enforces fence-token compare-and-set", () => {
   assert.ok(src.includes('path: ["executeLeaseFencingToken"]'));
 });
 
+test("guarded edit history update enforces atomic compare-and-set with updateMany", () => {
+  const guardsSrc = read("web/services/operationTransitionGuards.js");
+  assert.ok(guardsSrc.includes("updateMany("));
+  assert.ok(guardsSrc.includes("result.count === 1"));
+});
+
 test("transition service blocks terminal-state mutation by default", () => {
   const src = read("web/services/operationTransitionService.js");
   assert.ok(src.includes("TERMINAL_STATES"));
@@ -47,4 +53,3 @@ test("admin recovery enforces actor scope and reason", () => {
   assert.ok(src.includes("RECOVERY_ACTOR_SCOPE_REQUIRED"));
   assert.ok(src.includes("RECOVERY_ACTOR_ID_REQUIRED"));
 });
-

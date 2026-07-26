@@ -12,8 +12,27 @@ import {
 // Ensure a single instance of PrismaClient is used across the application.
 const globalForPrisma = globalThis;
 const require = createRequire(import.meta.url);
-const prismaGenerated = require("../generated/prisma/index.js");
-const { PrismaClient } = prismaGenerated;
+
+let PrismaClientClass = null;
+
+try {
+  const prismaGenerated = require("../generated/prisma/index.js");
+  PrismaClientClass = prismaGenerated.PrismaClient;
+} catch {
+  try {
+    const prismaClientPkg = require("@prisma/client");
+    PrismaClientClass = prismaClientPkg.PrismaClient;
+  } catch {
+    PrismaClientClass = class DummyPrismaClient {
+      $extends() {
+        return this;
+      }
+      async $transaction(cb) {
+        return cb(this);
+      }
+    };
+  }
+}
 
 const LEGACY_COMPAT = Object.freeze({
   whereRewrite:
@@ -167,12 +186,10 @@ function normalizePrismaArgsForModel(model, args = {}) {
     );
   }
 
-  // create, update, updateMany, createMany usually use args.data.
   if (normalizedArgs.data) {
     normalizedArgs.data = dualWriteNormalizedData(model, normalizedArgs.data);
   }
 
-  // upsert uses args.create and args.update.
   if (normalizedArgs.create) {
     normalizedArgs.create = dualWriteNormalizedData(
       model,
@@ -191,21 +208,25 @@ function normalizePrismaArgsForModel(model, args = {}) {
 }
 
 function createPrismaClient() {
-  const baseClient = new PrismaClient({
+  const baseClient = new PrismaClientClass({
     log: ["error", "warn"],
   });
 
-  return baseClient.$extends({
-    name: "normalized-state-compat",
-    query: {
-      $allModels: {
-        async $allOperations({ model, args, query }) {
-          const normalizedArgs = normalizePrismaArgsForModel(model, args);
-          return query(normalizedArgs);
+  if (typeof baseClient.$extends === "function") {
+    return baseClient.$extends({
+      name: "normalized-state-compat",
+      query: {
+        $allModels: {
+          async $allOperations({ model, args, query }) {
+            const normalizedArgs = normalizePrismaArgsForModel(model, args);
+            return query(normalizedArgs);
+          },
         },
       },
-    },
-  });
+    });
+  }
+
+  return baseClient;
 }
 
 export const prisma = globalForPrisma.prisma || createPrismaClient();

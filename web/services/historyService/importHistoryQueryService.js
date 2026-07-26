@@ -32,7 +32,7 @@ export async function listImportHistories({ shop, cursor = null, limit = 10 }) {
           ...(Object.keys(cursorFilter).length ? [cursorFilter] : []),
         ],
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: normalizedLimit + 1,
     }),
     db.spreadsheetFile.count({
@@ -62,5 +62,4 @@ export async function getImportHistoryDetail({ shop, id }) {
     },
   });
 }
-
 

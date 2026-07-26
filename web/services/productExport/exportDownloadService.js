@@ -153,6 +153,7 @@ function buildTimeoutError() {
 }
 
 export async function streamExportCsvDownload({
+  command,
   exportJobId,
   shop,
   res,
@@ -161,6 +162,9 @@ export async function streamExportCsvDownload({
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
+  const targetJobId = command?.exportJobId || exportJobId;
+  const targetShop = command?.shop || shop;
+
   if (!res || typeof res.setHeader !== "function") {
     throw new ExportDownloadError("INTERNAL_ERROR", "Response object required.", 500);
   }
@@ -168,7 +172,7 @@ export async function streamExportCsvDownload({
     throw new ExportDownloadError("INTERNAL_ERROR", "Fetch implementation required.", 500);
   }
 
-  const exportJob = await findDownloadableExport({ exportJobId, shop, db });
+  const exportJob = await findDownloadableExport({ exportJobId: targetJobId, shop: targetShop, db });
   const abortController = new AbortController();
   let timedOut = false;
   const timeout = setTimeout(() => {
@@ -177,8 +181,8 @@ export async function streamExportCsvDownload({
   }, timeoutMs);
 
   const abortUpstream = () => abortController.abort();
-  req?.on?.("aborted", abortUpstream);
-  req?.on?.("close", abortUpstream);
+  req?.once?.("aborted", abortUpstream);
+  req?.once?.("close", abortUpstream);
 
   try {
     const upstream = await fetchImpl(exportJob.downloadUrl, {
@@ -197,16 +201,30 @@ export async function streamExportCsvDownload({
     }
 
     const upstreamBody = responseBodyToNodeStream(upstream.body);
+    const safeFilename = sanitizeAttachmentFilename(exportJob.filename);
 
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", buildContentDisposition(exportJob.filename));
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Cache-Control", "private, no-store");
+    if (typeof res.set === "function") {
+      res.set({
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${safeFilename}"`,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store, max-age=0",
+        Pragma: "no-cache",
+        Expires: "0",
+      });
+    } else {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", "private, no-store, max-age=0");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
 
     await pipeline(upstreamBody, res);
   } catch (error) {
-    if (timedOut || error?.name === "AbortError") {
+    if (timedOut || error?.name === "AbortError" || abortController.signal.aborted || req?.aborted || res?.destroyed) {
       if (timedOut) throw buildTimeoutError();
       throw new ExportDownloadError(
         "EXPORT_DOWNLOAD_ABORTED",

@@ -22,10 +22,10 @@ import {
 } from "../../services/bulkEditExecutionStateService.js";
 import {
   computeTargetSetHash,
-  freezeExplicitTargetSnapshot,
+  freezeExplicitTargetSet,
   getActiveMirrorBatchId,
 } from "../../services/productService/productTargetingService.js";
-import { upsertFrozenSnapshotSetFromLegacy } from "../../repositories/targetSnapshotSetRepository.js";
+import { finalizeFrozenSnapshotSet } from "../../repositories/targetSnapshotSetRepository.js";
 import { addBulkEditExecuteJob } from "../Queues/bulkEditExecuteJob.js";
 import { OPERATION_LIFECYCLE_STATES } from "../../services/operationLifecycleStateMachine.js";
 import { buildExecutionPlanForEdit } from "../../services/bulkEdit/bulkEditPlanUtils.js";
@@ -623,7 +623,7 @@ const bulkImportEditWorker = new Worker(
         )
         .digest("hex");
 
-      const freezeStats = await freezeExplicitTargetSnapshot({
+      const freezeStats = await freezeExplicitTargetSet({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,
@@ -643,7 +643,7 @@ const bulkImportEditWorker = new Worker(
         mirrorBatchId,
       });
 
-      const snapshotSet = await upsertFrozenSnapshotSetFromLegacy({
+      const snapshotSet = await finalizeFrozenSnapshotSet({
         shop: history.shop,
         historyId,
         operationId: String(history.executionIdentity || "").trim() || `EDIT_HISTORY:${historyId}`,

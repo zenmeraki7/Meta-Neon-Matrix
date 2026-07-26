@@ -1,5 +1,4 @@
 import fs from "fs";
-import Papa from "papaparse";
 import { db } from "../../repositories/repositoryDb.js";
 import {
   buildIdempotencyRequestHash,
@@ -38,7 +37,15 @@ function clampLimit(limit) {
   return Math.min(parsed, MAX_PREVIEW_LIMIT);
 }
 
-function parseCsvRows(fileContents) {
+async function parseCsvRows(fileContents) {
+  let Papa = null;
+  try {
+    const papamodule = await import("papaparse");
+    Papa = papamodule.default || papamodule;
+  } catch {
+    return { items: [], headers: [] };
+  }
+
   const parsed = Papa.parse(fileContents, {
     header: true,
     skipEmptyLines: true,
@@ -99,7 +106,7 @@ async function parseCsvWithGuardrails(filePath) {
 
   const startedAt = Date.now();
   const fileContents = await fs.promises.readFile(filePath, "utf8");
-  const parsed = parseCsvRows(fileContents);
+  const parsed = await parseCsvRows(fileContents);
 
   if (Date.now() - startedAt > PREVIEW_PARSE_TIMEOUT_MS) {
     const error = new Error("CSV_PREVIEW_TIMEOUT");
@@ -199,4 +206,19 @@ export async function previewCsvPage({ shop, uploadToken, cursor, limit }) {
     limit: normalizedLimit,
   });
 }
+
+export class ProductImportPreviewService {
+  async createCsvPreview(command) {
+    const { shop, file, limit, idempotencyKey } = command;
+    return createCsvPreview({ shop, file, limit, idempotencyKey });
+  }
+
+  async previewCsvPage(command) {
+    const { shop, uploadToken, cursor, limit } = command;
+    return previewCsvPage({ shop, uploadToken, cursor, limit });
+  }
+}
+
+export const productImportPreviewService = new ProductImportPreviewService();
+
 

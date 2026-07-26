@@ -247,7 +247,7 @@ async function seedBaseMirror(shop, mirrorBatchId) {
 
 async function cleanupShop(shop, mirrorBatchId) {
   const { prisma } = await import("./config/database.js");
-  await prisma.targetSnapshot.deleteMany({ where: { shop } });
+  await prisma.targetSnapshotSet.deleteMany({ where: { shop } });
   await prisma.metafieldMirror.deleteMany({ where: { shop, mirrorBatchId } });
   await prisma.productCollection.deleteMany({ where: { shop, mirrorBatchId } });
   await prisma.collection.deleteMany({ where: { shop, mirrorBatchId } });

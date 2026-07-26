@@ -147,31 +147,54 @@ export async function markFullSyncCompleted({
     storeId: store.id,
     mirrorBatchId: batchId,
   });
-  await tx.store.updateMany({
-    where: { shopUrl: shop },
-    data: {
-      currentProductMirrorBatchId: batchId,
-      mirrorHealthState: "HEALTHY",
-      staleReason: null,
-      requiresMirrorRepair: false,
-      mirrorUnsafeSince: null,
-      lastSyncErrorSummary: null,
-      lastFullSyncAt: reconciliationAt,
-      lastReconcileAt: reconciliationAt,
-      lastIncrementalSyncAt: reconciliationAt,
-      lastWebhookProcessedAt: reconciliationAt,
-      isProductSyncing: false,
-      isProductInitiallySyncing: false,
-      syncProgressStage: "IDLE",
-      hasCompletedShopifyBulkJob: true,
-      storeTotalProducts: productCount,
-      productInitialSyncProgress: productCount,
-      lastProductSyncAt: reconciliationAt,
-      productSyncStartedAt: null,
-      requiresProductSyncRecovery: false,
-    },
-  });
-  return tx.store.findUnique({ where: { shopUrl: shop } });
+
+  const promoteOperation = async (client) => {
+    // 1. Promote MirrorBatch status to ACTIVE atomically
+    await client.mirrorBatch.updateMany({
+      where: {
+        shop,
+        id: batchId,
+      },
+      data: {
+        status: "ACTIVE",
+        activatedAt: reconciliationAt,
+      },
+    });
+
+    // 2. Update store currentProductMirrorBatchId and sync status
+    await client.store.updateMany({
+      where: { shopUrl: shop },
+      data: {
+        currentProductMirrorBatchId: batchId,
+        mirrorHealthState: "HEALTHY",
+        staleReason: null,
+        requiresMirrorRepair: false,
+        mirrorUnsafeSince: null,
+        lastSyncErrorSummary: null,
+        lastFullSyncAt: reconciliationAt,
+        lastReconcileAt: reconciliationAt,
+        lastIncrementalSyncAt: reconciliationAt,
+        lastWebhookProcessedAt: reconciliationAt,
+        isProductSyncing: false,
+        isProductInitiallySyncing: false,
+        syncProgressStage: "IDLE",
+        hasCompletedShopifyBulkJob: true,
+        storeTotalProducts: productCount,
+        productInitialSyncProgress: productCount,
+        lastProductSyncAt: reconciliationAt,
+        productSyncStartedAt: null,
+        requiresProductSyncRecovery: false,
+      },
+    });
+
+    return client.store.findUnique({ where: { shopUrl: shop } });
+  };
+
+  if (tx && typeof tx.$transaction !== "function") {
+    return promoteOperation(tx);
+  }
+
+  return db.$transaction(promoteOperation);
 }
 
 export async function markFullSyncFailed({

@@ -57,7 +57,7 @@ test("runNow idempotency returns same run and persists operation/run/freeze/outb
 
 test("delete is soft-delete only, disables scheduler, and cancel_queued cancels queued runs", () => {
   assert.match(mutateSource, /deletedAt:\s*now/);
-  assert.match(mutateSource, /legacyIsDeleted:\s*true/);
+  assert.doesNotMatch(mutateSource, /legacyIsDeleted/);
   assert.doesNotMatch(mutateSource, /status:\s*RULE_STATUS\.DELETED/);
   assert.match(mutateSource, /schedulerDisabledAt:\s*now/);
   assert.match(mutateSource, /deletePolicy === DELETE_POLICY\.CANCEL_QUEUED/);

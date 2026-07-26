@@ -171,18 +171,20 @@ Target snapshot counter semantics:
   equal `targetCount`. `NOT_REQUIRED` is a real current state, not absence of an
   undo row.
 
-Bulk-apply counter semantics:
+The former `BulkApplyRequest`, `BulkApplyItem`, and `ProductApplySnapshot`
+pipeline has been retired. All bulk-edit execution, progress, before-state, and
+undo evidence comes from `EditHistory`, `TargetSnapshotSet`, and
+`TargetSnapshotItem`.
 
-- `eligibleItemCount` means the authoritative number of persisted
-  `BulkApplyItem` rows after input deduplication.
-- `pendingItemCount`, `applyingItemCount`, `appliedItemCount`,
-  `failedItemCount`, `cancelledItemCount`, and `skippedItemCount` are exclusive
-  current-state buckets. `FAILED` and `FAILED_PERMANENT` both contribute to the
-  failure bucket.
-- `appliedItemCount` means the item reached the `APPLIED` state; it is not a
-  submitted or cumulative-attempt count.
-- A terminal request has no pending or applying items, and the sum of its four
-  terminal buckets equals `eligibleItemCount`.
+### Frozen target architecture
+
+`TargetSnapshotSet` and `TargetSnapshotItem` are the only persisted frozen-target
+architecture. A set is identified by tenant plus its qualified `operationId`; its
+items contain the stable target key, batch identity, ordering ordinal, before
+values, planned mutation, and execution/verification/undo state. The former
+standalone snapshot table is backfilled and retired by migration. Recurring edits,
+scheduled exports, automatic rules, imports, and interactive bulk edits all freeze
+through the same set-and-item repository.
 
 `VERIFIED` is not a mutation execution status. Verification success or failure
 never removes an item from the `SUCCEEDED` mutation bucket.
@@ -191,11 +193,96 @@ Deletion and installation:
 
 - `deletedAt` is the authoritative automatic-rule soft-delete marker. New
   deletes preserve the rule's last domain `status`; `DELETED` is accepted only
-  while historical rows are backfilled. `legacyIsDeleted` is a temporary,
-  explicitly named compatibility projection and is never queried.
-- `installationStatus` is the authoritative Store lifecycle. The legacy Boolean
-  is retained and dual-written only as `legacyIsUninstalled` during migration;
-  reads and worker claims use the enum. `LegacyShop.legacyActive` is inert and
-  no operational model relates to the legacy table.
+  while historical rows are backfilled. The former `isDeleted` projection has
+  been removed.
+- `installationStatus` is the authoritative Store lifecycle. Reads and worker
+  claims use the enum; the former uninstall Boolean has been removed.
+- `Store` is the only tenant root. The former `shops`/`LegacyShop` table has
+  been retired after all child foreign keys moved to `Store.shopUrl`.
+- Store credentials exist only as `accessTokenEncrypted` plus their key
+  version. Missing encryption configuration is a hard installation error.
 - Shopify OAuth permissions use `oauthScopes`. `scope` is allowed only as the
   external Shopify session-library property at the adapter boundary.
+
+## One authoritative model per responsibility
+
+Do not allow multiple tables to represent the same truth.
+
+Authoritative responsibility mappings:
+- **Export history** → `ExportJob` only (`ExportHistory` projection retired).
+- **Frozen targets** → `TargetSnapshotSet` + `TargetSnapshotItem`.
+- **Tenant identity** → `Store.shopUrl` (`Store` is the single tenant root; `LegacyShop` / `shops` retired).
+- **Queue delivery** → `OperationEnqueueIntent`.
+- **Domain events** → `OutboxEvent`.
+- **Worker ownership** → `OperationLease`.
+- **Idempotency** → `OperationFingerprint` or workflow-specific unique identities (e.g. `dispatchDedupeKey`, `ruleConfigHash`).
+
+Compatibility fields may temporarily remain, but every duplicated concept must have one documented authoritative source.
+
+## Shop-scoped keys everywhere
+
+Every merchant-owned row must include `shop` (or `shopDomain` / `shopUrl`).
+
+Every lookup, relation, and uniqueness rule should include it:
+- `@@unique([shop, executionIdentity])`
+- `@@index([shop, status, updatedAt])`
+- `@@unique([shop, snapshotSetId, targetKey])` (avoids weak `@@unique([snapshotSetId, targetKey])` tenant contracts)
+
+Repository methods must never fetch merchant-owned records using only `id`; predicates must always include `shop` (e.g. `where: { id, shop }`).
+
+## Composite foreign keys for tenant isolation
+
+Child rows reference parent models using both tenant (`shop`) and identity (`id`):
+```prisma
+editHistory EditHistory @relation(fields: [shop, editHistoryId], references: [shop, id])
+```
+This composite relation pattern prevents cross-tenant reference leakage across Edit histories, Export jobs, Recurring edits, Automatic rules, Snapshot sets, Queue commands, and Sync batches.
+
+## Index actual query shapes, not every field
+
+Keep indexes only when they support real filters, sorting, joins, or cleanup shapes matching `WHERE` → `ORDER BY` → `tie-breaker` (e.g., `@@index([shop, mirrorBatchId, updatedAt, id])`).
+
+## Remove indexes duplicated by constraints
+
+Primary keys and unique constraints automatically build backing indexes. Do not maintain ordinary indexes that duplicate primary key or unique constraint prefixes (e.g. `@@unique([shop, id])` renders `@@index([shop, id])` redundant).
+
+## Put shop first only for tenant queries
+
+Tenant queries lead with `shop` (`@@index([shop, status, createdAt])`). Global dispatcher worker claim queues lead with status across tenants (`@@index([status, availableAt, id])`). `OperationEnqueueIntent` supports both access patterns.
+
+## Use narrow scheduler and claim tables
+
+`AutomaticProductRuleScheduleState` isolates execution claim fields (`nextRunAt`, `claimedAt`, `claimOwner`, `fencingToken`, `disabledAt`) to prevent row bloat and lock contention on wide rule entities.
+
+## Separate immutable commands from mutable execution state
+
+Decouple immutable intents from mutable runtime state (`TargetFreezeCommand` → `TargetSnapshotSet`, `UndoCommand` → `UndoOperation`, Rule revision → Rule run).
+
+## Use normalized enums for active workflow state
+
+Active workflow logic reads and writes normalized enums (e.g., `statusNormalized ExportJobStatus`). Free-form status strings and boolean flags are deprecated.
+
+## Keep mirror batches immutable after activation
+
+Do not rewrite the active mirror batch in place during full synchronization. Always build a new `MirrorBatch`, validate expected vs actual counts, replay mutation journal entries, atomically switch `Store.currentProductMirrorBatchId`, mark the old batch retired, and clean it up asynchronously.
+
+## Add database-level state-transition protection
+
+Important workflows must use conditional SQL updates (Compare-And-Swap CAS):
+```sql
+UPDATE ... SET status = 'RUNNING' WHERE id = ? AND shop = ? AND status = 'QUEUED';
+```
+Require exactly one row affected before proceeding. Applied across approving previews, claiming commands, starting runs, cancelling work, activating batches, dispatching outbox rows, and reclaiming stale workers.
+
+## Enforce snapshot immutability
+
+After `TargetSnapshotSet` reaches a frozen state, item definitions, `beforeValues`, `plannedMutation`, target hashes, and mirror batch identity are immutable. Only execution, verification, and undo status fields remain mutable during runtime execution.
+
+## Measure before removing overlapping indexes
+
+Before dropping questionable indexes, inspect `pg_stat_user_indexes` and `pg_stat_statements` to measure scan counts, write overhead, dead tuples, and query shapes.
+
+
+
+
+

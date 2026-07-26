@@ -27,6 +27,8 @@ const DEFAULT_MESSAGES = Object.freeze({
     "Unable to start this edit. Run preview again and retry.",
   EDIT_PREVIEW_FAILED: "Unable to generate edit preview.",
   IDEMPOTENCY_KEY_REQUIRED: "Request idempotency key is required.",
+  INVALID_IDEMPOTENCY_KEY: "Request idempotency key is invalid.",
+  IDEMPOTENCY_KEY_CONFLICT: "Idempotency key reused with a different payload.",
   INVALID_BILLING_PLAN: "Invalid billing plan.",
   UNKNOWN_BILLING_PLAN: "Unknown billing plan.",
   UNKNOWN_ACTIVE_SUBSCRIPTION: "Unknown active subscription.",
@@ -93,6 +95,8 @@ function statusFromCode(code = "INTERNAL_ERROR") {
   if (code === "PREVIEW_SNAPSHOT_INCOMPLETE") return 409;
   if (code === "EDIT_EXECUTION_FAILED") return 500;
   if (code === "IDEMPOTENCY_KEY_REQUIRED") return 400;
+  if (code === "INVALID_IDEMPOTENCY_KEY") return 400;
+  if (code === "IDEMPOTENCY_KEY_CONFLICT") return 409;
   if (code === "INVALID_BILLING_PLAN") return 400;
   if (code === "UNKNOWN_BILLING_PLAN") return 409;
   if (code === "UNKNOWN_ACTIVE_SUBSCRIPTION") return 409;
@@ -219,6 +223,18 @@ export function mapErrorToPublicContract(
     return {
       code: "IDEMPOTENCY_KEY_REQUIRED",
       message: DEFAULT_MESSAGES.IDEMPOTENCY_KEY_REQUIRED,
+    };
+  }
+  if (raw === "INVALID_IDEMPOTENCY_KEY") {
+    return {
+      code: "INVALID_IDEMPOTENCY_KEY",
+      message: DEFAULT_MESSAGES.INVALID_IDEMPOTENCY_KEY,
+    };
+  }
+  if (raw === "IDEMPOTENCY_KEY_CONFLICT") {
+    return {
+      code: "IDEMPOTENCY_KEY_CONFLICT",
+      message: DEFAULT_MESSAGES.IDEMPOTENCY_KEY_CONFLICT,
     };
   }
   if (error?.code === "VALIDATION_FAILED" && error?.message) {

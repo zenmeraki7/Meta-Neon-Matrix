@@ -3,9 +3,7 @@ import { connection } from "../config/redis.js";
 import { scheduledExportRepository } from "../repositories/scheduledExportRepository.js";
 import { scheduledExportRunRepository } from "../repositories/scheduledExportRunRepository.js";
 import {
-  createScheduledExportHistory,
   createScheduledExportJob,
-  findExportHistoryByScheduledTask,
   findExportJobById,
   findExportJobByScheduledRun,
   findExportJobForRunFinalize,
@@ -644,34 +642,6 @@ export async function finalizeScheduledExportRunFromExportJob({
   );
   if (!transition.count) {
     return run.status;
-  }
-  const existingHistory = await findExportHistoryByScheduledTask(
-    exportJob.shop,
-    exportJob.scheduledExportRunId,
-  );
-  if (!existingHistory) {
-    await createScheduledExportHistory({
-      data: {
-        shop: exportJob.shop,
-        generatedFilename: exportJob.generatedFilename || "export.csv",
-        filters: {},
-        status: normalizedStatus === "SUCCESS" ? "completed" : "failed",
-        duration: String(exportJob.durationMs ?? 0),
-        totalItems: exportJob.totalItems ?? 0,
-        exportTime: completedAt,
-        exportType: "Scheduled export",
-        scheduledTask: exportJob.scheduledExportRunId ?? null,
-        downloadUrl: normalizedStatus === "SUCCESS" ? (exportJob.downloadUrl ?? null) : null,
-        errorMessage: normalizedStatus === "FAILED"
-          ? (errorMessage || exportJob.error || null)
-          : null,
-      },
-    }).catch((err) => {
-      logger.error("Failed to create ExportHistory for scheduled export", {
-        exportJobId,
-        error: err.message,
-      });
-    });
   }
   await scheduledExportRepository.updateByIdForShop({
     id: exportJob.scheduledExportId,

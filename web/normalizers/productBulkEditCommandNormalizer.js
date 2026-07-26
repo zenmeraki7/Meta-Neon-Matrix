@@ -1,20 +1,35 @@
-const MAX_ID_LENGTH = 200;
-const MAX_TEXT_LENGTH = 500;
-const MAX_LONG_TEXT_LENGTH = 5_000;
-const MAX_CURSOR_LENGTH = 500;
-const MAX_LIMIT = 250;
+import { BULK_EDIT_LIMITS } from "./bulkEditValidationLimits.js";
+import {
+  normalizeFilterAst,
+  normalizeIdempotencyKey,
+  normalizeOperationId,
+  normalizeOptionalString,
+  normalizePreviewContractId,
+  normalizeProductSelection,
+  normalizeRequiredString,
+  normalizeScheduleExpression,
+  normalizeTimezone,
+  normalizeVariantDetailLimit,
+  rejectUnknownKeys,
+} from "./bulkEditValidationUtils.js";
 
-const MAX_FILTER_PARAMS = 500;
+const MAX_ID_LENGTH = BULK_EDIT_LIMITS.MAX_OPERATION_ID_LENGTH;
+const MAX_TEXT_LENGTH = BULK_EDIT_LIMITS.MAX_SHORT_STRING_LENGTH;
+const MAX_LONG_TEXT_LENGTH = BULK_EDIT_LIMITS.MAX_EDIT_VALUE_LENGTH;
+const MAX_CURSOR_LENGTH = 500;
+const MAX_LIMIT = BULK_EDIT_LIMITS.MAX_VARIANT_DETAIL_PAGE_LIMIT;
+
+const MAX_FILTER_PARAMS = BULK_EDIT_LIMITS.MAX_FILTER_COUNT;
 const MAX_FILTER_PARAM_ARRAY_VALUES = 250;
 const MAX_FILTER_PARAM_VALUE_LENGTH = 5_000;
 
-const MAX_PRODUCT_IDS = 5_000;
+const MAX_PRODUCT_IDS = BULK_EDIT_LIMITS.MAX_PRODUCT_SELECTION_COUNT;
 
-const MAX_FILTER_AST_DEPTH = 12;
-const MAX_FILTER_AST_NODES = 1_000;
+const MAX_FILTER_AST_DEPTH = BULK_EDIT_LIMITS.MAX_FILTER_DEPTH;
+const MAX_FILTER_AST_NODES = BULK_EDIT_LIMITS.MAX_FILTER_AST_NODES;
 const MAX_FILTER_AST_JSON_LENGTH = 200_000;
 
-const MAX_EDIT_VALUE_JSON_LENGTH = 50_000;
+const MAX_EDIT_VALUE_JSON_LENGTH = BULK_EDIT_LIMITS.MAX_EDIT_VALUE_LENGTH;
 const MAX_EDIT_VALUE_DEPTH = 8;
 const MAX_EDIT_VALUE_NODES = 500;
 
@@ -601,15 +616,7 @@ function assertCommandContext(context) {
 
   return Object.freeze({
     shop: normalizeRequiredText(safe.shop, "shop", 255),
-    accessToken: normalizeText(safe.accessToken, "accessToken", MAX_LONG_TEXT_LENGTH),
-    oauthScopes: normalizeText(safe.oauthScopes, "oauthScopes", MAX_LONG_TEXT_LENGTH),
     actor: normalizeOptionalPlainObject(safe.actor, "actor"),
-    subscription: normalizeOptionalPlainObject(safe.subscription, "subscription"),
-    entitlement: normalizeOptionalPlainObject(safe.entitlement, "entitlement"),
-    activePlan: normalizeOptionalPlainObjectFallback(
-      safe.activePlan,
-      "activePlan",
-    ),
   });
 }
 
@@ -798,40 +805,105 @@ function assertScheduledUndoAfterScheduledAt(scheduledAt, scheduledUndoAt) {
   }
 }
 
+const PREVIEW_BODY_KEYS = new Set([
+  "previewContractId",
+  "previewId",
+  "filterAst",
+  "filters",
+  "productIds",
+  "variantIds",
+  "metafieldIds",
+  "field",
+  "editedField",
+  "operation",
+  "editType",
+  "value",
+  "editValue",
+  "oldValue",
+  "targets",
+  "rounding",
+  "location",
+  "lang",
+]);
+
+const PREVIEW_QUERY_KEYS = new Set([
+  "lang",
+]);
+
 export function buildBulkEditPreviewCommand({
   body = {},
   query = {},
   context,
 }) {
+  rejectUnknownKeys(body, PREVIEW_BODY_KEYS, "preview request body");
+  rejectUnknownKeys(query, PREVIEW_QUERY_KEYS, "preview request query");
+
   const safeQuery = normalizeQueryObject(query);
   const safeContext = assertCommandContext(context);
   const payload = normalizeEditPayload({ body, query: safeQuery });
 
   return Object.freeze({
+    type: "BULK_EDIT_PREVIEW",
+    shop: safeContext.shop,
+    actor: safeContext.actor,
     ...safeContext,
     ...payload,
     lang: normalizeLang(safeQuery.lang),
   });
 }
 
+const EXECUTE_BODY_KEYS = new Set([
+  "previewContractId",
+  "previewId",
+]);
+
+const EXECUTE_HEADER_KEYS = new Set([
+  "idempotencyKey",
+  "idempotency-key",
+]);
+
 export function buildBulkEditExecuteCommand({
   body = {},
-  query = {},
   headers = {},
   context,
 }) {
   const safeContext = assertCommandContext(context);
-  const payload = normalizeEditPayload({ body, query });
 
-  requirePreviewContract(payload);
+  rejectUnknownKeys(body, EXECUTE_BODY_KEYS, "execute request");
+  rejectUnknownKeys(headers, EXECUTE_HEADER_KEYS, "execute headers");
+
+  const previewContractId = normalizePreviewContractId(
+    body.previewContractId ?? body.previewId,
+  );
+
+  const key = headers.idempotencyKey ?? headers["idempotency-key"];
 
   return Object.freeze({
-    ...safeContext,
-    ...payload,
-    previewContractId: payload.previewId,
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    type: "BULK_EDIT_EXECUTE",
+    shop: safeContext.shop,
+    actor: safeContext.actor,
+
+    previewContractId,
+    previewId: previewContractId,
+
+    idempotencyKey: normalizeIdempotencyKey(key),
   });
 }
+
+const SCHEDULE_BODY_KEYS = new Set([
+  "previewContractId",
+  "previewId",
+  "scheduleExpression",
+  "timezone",
+  "scheduledAt",
+  "scheduledUndoAt",
+  "freezeMode",
+]);
+
+const SCHEDULE_HEADER_KEYS = new Set([
+  "idempotencyKey",
+  "idempotency-key",
+]);
 
 export function buildScheduledEditCommand({
   body = {},
@@ -839,152 +911,130 @@ export function buildScheduledEditCommand({
   context,
 }) {
   const safeContext = assertCommandContext(context);
-  const safeBody = assertPlainObject(body, "body");
-  assertNoLegacySchedulePayload(safeBody);
 
-  const timezone = normalizeScheduleTimezone(safeBody.timezone);
+  rejectUnknownKeys(body, SCHEDULE_BODY_KEYS, "scheduled edit request");
+  rejectUnknownKeys(headers, SCHEDULE_HEADER_KEYS, "scheduled edit headers");
 
-  const scheduledAt = normalizeFutureUtcIsoDateString(
-    safeBody.scheduledAt,
-    "scheduledAt",
-    true,
+  const previewContractId = normalizePreviewContractId(
+    body.previewContractId ?? body.previewId,
   );
 
-  const scheduledUndoAt = normalizeFutureUtcIsoDateString(
-    safeBody.scheduledUndoAt,
-    "scheduledUndoAt",
-    false,
+  const key = headers.idempotencyKey ?? headers["idempotency-key"];
+
+  return Object.freeze({
+    type: "SCHEDULE_BULK_EDIT",
+    shop: safeContext.shop,
+    actor: safeContext.actor,
+
+    previewContractId,
+    previewId: previewContractId,
+
+    scheduleExpression: body.scheduleExpression
+      ? normalizeScheduleExpression(body.scheduleExpression)
+      : null,
+
+    timezone: normalizeTimezone(body.timezone),
+
+    scheduledAt: body.scheduledAt
+      ? normalizeFutureUtcIsoDateString(body.scheduledAt, "scheduledAt", true)
+      : null,
+
+    scheduledUndoAt: body.scheduledUndoAt
+      ? normalizeFutureUtcIsoDateString(body.scheduledUndoAt, "scheduledUndoAt", false)
+      : null,
+
+    freezeMode: normalizeFreezeMode(body.freezeMode),
+
+    idempotencyKey: normalizeIdempotencyKey(key),
+  });
+}
+
+const LIFECYCLE_PARAM_KEYS = new Set([
+  "operationId",
+  "historyId",
+  "id",
+]);
+
+const LIFECYCLE_HEADER_KEYS = new Set([
+  "idempotencyKey",
+  "idempotency-key",
+]);
+
+function buildLifecycleCommand({
+  type,
+  params = {},
+  headers = {},
+  context,
+}) {
+  const safeContext = assertCommandContext(context);
+
+  rejectUnknownKeys(params, LIFECYCLE_PARAM_KEYS, "operation params");
+  rejectUnknownKeys(headers, LIFECYCLE_HEADER_KEYS, "operation headers");
+
+  const operationId = normalizeOperationId(
+    params.operationId ?? params.historyId ?? params.id,
   );
 
-  assertScheduledUndoAfterScheduledAt(scheduledAt, scheduledUndoAt);
+  const key = headers.idempotencyKey ?? headers["idempotency-key"];
 
   return Object.freeze({
-    ...safeContext,
-    previewId: normalizeId(
-      safeBody.previewContractId ?? safeBody.previewId,
-      "previewContractId",
-    ),
-    previewContractId: normalizeId(
-      safeBody.previewContractId ?? safeBody.previewId,
-      "previewContractId",
-    ),
-    previewFilterHash: normalizeRequiredText(
-      safeBody.previewFilterHash,
-      "previewFilterHash",
-      500,
-    ),
-    previewMirrorBatchId: normalizeRequiredText(
-      safeBody.previewMirrorBatchId,
-      "previewMirrorBatchId",
-      200,
-    ),
-    previewFieldRegistryVersion: normalizeRequiredText(
-      safeBody.previewFieldRegistryVersion,
-      "previewFieldRegistryVersion",
-      120,
-    ),
-    previewOperatorRegistryVersion: normalizeRequiredText(
-      safeBody.previewOperatorRegistryVersion,
-      "previewOperatorRegistryVersion",
-      120,
-    ),
-    approvedTargetCount: normalizeCount(
-      safeBody.approvedTargetCount,
-      "approvedTargetCount",
-    ),
-    previewSignature: normalizeText(
-      safeBody.previewSignature,
-      "previewSignature",
-      500,
-    ),
-    timezone,
-    scheduleConfirmationText: normalizeText(
-      safeBody.scheduleConfirmationText,
-      "scheduleConfirmationText",
-      80,
-    ),
-    scheduledAt,
-    scheduledUndoAt,
-    freezeMode: normalizeFreezeMode(safeBody.freezeMode),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+    type,
+    shop: safeContext.shop,
+    actor: safeContext.actor,
+
+    operationId,
+    historyId: operationId,
+
+    idempotencyKey: normalizeIdempotencyKey(key),
   });
 }
 
-export function buildUndoEditCommand({
-  params = {},
-  headers = {},
-  context,
-}) {
-  const safeContext = assertCommandContext(context);
-
-  return Object.freeze({
-    ...safeContext,
-    historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+export function buildUndoEditCommand(input) {
+  return buildLifecycleCommand({
+    ...input,
+    type: "UNDO_BULK_EDIT",
   });
 }
 
-export function buildCancelEditCommand({
-  params = {},
-  body = {},
-  headers = {},
-  context,
-}) {
-  const safeContext = assertCommandContext(context);
-  const safeBody =
-    body === undefined || body === null
-      ? EMPTY_OBJECT
-      : assertPlainObject(body, "body");
-
-  return Object.freeze({
-    ...safeContext,
-    historyId: normalizeId(params.id, "historyId"),
-    reason: normalizeCancelReason(safeBody.cancelReason),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+export function buildCancelEditCommand(input) {
+  return buildLifecycleCommand({
+    ...input,
+    type: "CANCEL_BULK_EDIT",
   });
 }
 
-export function buildPauseEditCommand({
-  params = {},
-  headers = {},
-  context,
-}) {
-  const safeContext = assertCommandContext(context);
-
-  return Object.freeze({
-    ...safeContext,
-    historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+export function buildPauseEditCommand(input) {
+  return buildLifecycleCommand({
+    ...input,
+    type: "PAUSE_BULK_EDIT",
   });
 }
 
-export function buildResumeEditCommand({
-  params = {},
-  headers = {},
-  context,
-}) {
-  const safeContext = assertCommandContext(context);
-
-  return Object.freeze({
-    ...safeContext,
-    historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+export function buildResumeEditCommand(input) {
+  return buildLifecycleCommand({
+    ...input,
+    type: "RESUME_BULK_EDIT",
   });
 }
 
-export function buildRetryFailedOnlyCommand({
-  params = {},
-  headers = {},
-  context,
-}) {
-  const safeContext = assertCommandContext(context);
-
-  return Object.freeze({
-    ...safeContext,
-    historyId: normalizeId(params.id, "historyId"),
-    idempotencyKey: normalizeIdempotencyKey(headers),
+export function buildRetryFailedOnlyCommand(input) {
+  return buildLifecycleCommand({
+    ...input,
+    type: "RETRY_FAILED_BULK_EDIT",
   });
 }
+
+const VARIANT_DETAIL_PARAM_KEYS = new Set([
+  "previewContractId",
+  "previewId",
+  "productId",
+]);
+
+const VARIANT_DETAIL_QUERY_KEYS = new Set([
+  "cursor",
+  "limit",
+  "page",
+]);
 
 export function buildPreviewVariantDetailsCommand({
   params = {},
@@ -992,13 +1042,28 @@ export function buildPreviewVariantDetailsCommand({
   context,
 }) {
   const safeContext = assertCommandContext(context);
-  const safeQuery = normalizeQueryObject(query);
+
+  rejectUnknownKeys(params, VARIANT_DETAIL_PARAM_KEYS, "variant detail params");
+  rejectUnknownKeys(query, VARIANT_DETAIL_QUERY_KEYS, "variant detail query");
+
+  const previewContractId = normalizePreviewContractId(
+    params.previewContractId ?? params.previewId,
+  );
 
   return Object.freeze({
-    ...safeContext,
-    previewId: normalizeId(params.previewId, "previewId"),
-    productId: normalizeId(params.productId, "productId"),
-    page: normalizeLimit(safeQuery.page) || 1,
-    limit: normalizeLimit(safeQuery.limit) || 50,
+    type: "PREVIEW_VARIANT_DETAILS",
+    shop: safeContext.shop,
+    actor: safeContext.actor,
+
+    previewContractId,
+    previewId: previewContractId,
+    productId: params.productId ? String(params.productId) : null,
+
+    cursor: normalizeOptionalString(query.cursor, {
+      fieldName: "cursor",
+      maxLength: 512,
+    }),
+
+    limit: normalizeVariantDetailLimit(query.limit),
   });
 }

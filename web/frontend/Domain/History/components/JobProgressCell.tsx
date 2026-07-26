@@ -1,13 +1,13 @@
 import React, { memo } from "react";
-import { BlockStack, Text } from "@shopify/polaris";
+import { BlockStack, ProgressBar, Text } from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 
 export const STATUS_CONFIG = {
   COMPLETED: { tone: "success", color: "green" },
   FAILED: { tone: "critical", color: "red" },
-  RUNNING: { tone: "info", color: "blue" },
-  QUEUED: { tone: "warning", color: "yellow" },
-  PENDING: { tone: "warning", color: "yellow" },
+  RUNNING: { tone: "primary", color: "blue" },
+  QUEUED: { tone: "subdued", color: "yellow" },
+  PENDING: { tone: "subdued", color: "yellow" },
   CANCELLED: { tone: "subdued", color: "gray" },
 } as const;
 
@@ -45,14 +45,6 @@ const STATUS_LABEL_KEYS: Record<JobStatus, { key: string; defaultValue: string }
   QUEUED: { key: "jobStatus.queued", defaultValue: "Queued" },
   PENDING: { key: "jobStatus.pending", defaultValue: "Waiting to start" },
   CANCELLED: { key: "jobStatus.cancelled", defaultValue: "Cancelled" },
-};
-
-const PROGRESS_COLOR_VALUE: Record<(typeof STATUS_CONFIG)[JobStatus]["color"], string> = {
-  green: "#108043",
-  red: "#d72c0d",
-  blue: "#2c6ecb",
-  yellow: "#f2c94c",
-  gray: "#8c9196",
 };
 
 function toSafeCount(value: number | string | null | undefined) {
@@ -161,7 +153,7 @@ const JobProgressCell = memo(function JobProgressCell({
     getActualProcessedItems(progressJob, progressProcessedCount ?? successCount ?? processedCount),
   );
   const progress = calculateProgress(progressJob);
-  const color = PROGRESS_COLOR_VALUE[STATUS_CONFIG[normalizedStatus].color];
+  const tone = STATUS_CONFIG[normalizedStatus].tone as "success" | "critical" | "primary" | "subdued";
   const statusLabel = STATUS_LABEL_KEYS[normalizedStatus];
   const showQueuedText = normalizedStatus === "QUEUED" || normalizedStatus === "PENDING";
   const showFailureText = normalizedStatus === "FAILED";
@@ -177,32 +169,7 @@ const JobProgressCell = memo(function JobProgressCell({
               totalCount: total.toLocaleString(),
             })}
       </Text>
-      <div
-        aria-label={t("jobProgressCell.progressLabel", {
-          defaultValue: "{{progress}}% complete",
-          progress,
-        })}
-        aria-valuemax={100}
-        aria-valuemin={0}
-        aria-valuenow={progress}
-        role="progressbar"
-        style={{
-          backgroundColor: "#e3e3e3",
-          borderRadius: "4px",
-          height: "10px",
-          overflow: "hidden",
-          width: "100%",
-        }}
-      >
-        <div
-          style={{
-            backgroundColor: color,
-            height: "100%",
-            transition: "width 150ms ease",
-            width: `${progress}%`,
-          }}
-        />
-      </div>
+      <ProgressBar progress={progress} tone={tone} size="small" />
       {showFailureText ? (
         <Text as="span" variant="bodySm" tone="critical">
           {t(statusLabel.key, { defaultValue: statusLabel.defaultValue })}

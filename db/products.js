@@ -1,5 +1,8 @@
 import sql from "./client.js";
-import { BATCH_SIZE } from "../workers/fullSync.js";
+
+// Raw-SQL catalog readers still use this repository. Keep its write chunk size
+// local so loading catalog code does not pull in the retired polling sync stack.
+const BATCH_SIZE = 100;
 
 function chunk(list, size) {
   const items = Array.isArray(list) ? list : [];

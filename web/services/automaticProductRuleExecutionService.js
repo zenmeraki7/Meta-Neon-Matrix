@@ -53,7 +53,7 @@ import { reserveAutomaticRuleApplications as reserveAutomaticRuleApplicationsVia
 import { RUN_STATUS } from "./automaticProductRule/automaticProductRuleConstants.js";
 import {
   computeTargetSetHash,
-  freezeExplicitTargetSnapshot,
+  freezeExplicitTargetSet,
   getActiveMirrorBatchId,
 } from "./productService/productTargetingService.js";
 import { getTargetingVersionBundle } from "./targeting/versioning.js";
@@ -1104,7 +1104,7 @@ export async function executeAutomaticProductRuleRun(automaticRuleRunId, shopFro
           },
         });
 
-        const frozenCount = await freezeExplicitTargetSnapshot({
+        const frozenCount = await freezeExplicitTargetSet({
           shop: rule.shop,
           ownerType: "EDIT_HISTORY",
           ownerId: editHistory.id,

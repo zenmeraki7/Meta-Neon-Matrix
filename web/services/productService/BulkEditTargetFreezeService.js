@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { TargetingEngineService } from "../targeting/TargetingEngineService.js";
 import {
-  freezeExplicitTargetSnapshot,
+  freezeExplicitTargetSet,
   markPreviewExecutionMismatch,
 } from "./productTargetingService.js";
 import { deriveTargetGranularityFromRules } from "./helpers/bulkEditOperationHelpers.js";
@@ -37,7 +37,7 @@ export class BulkEditTargetFreezeService {
       throw new Error("Automatic rule history requires explicit frozen targets");
     }
     if (explicitProductIds.length > 0) {
-      const explicitFreezeStats = await freezeExplicitTargetSnapshot({
+      const explicitFreezeStats = await freezeExplicitTargetSet({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,
@@ -99,7 +99,7 @@ export class BulkEditTargetFreezeService {
       previewCount: Number(history.batch?.previewCount || 0),
     };
     const explicitFreezeStats = explicitTargets.length
-      ? await freezeExplicitTargetSnapshot({
+      ? await freezeExplicitTargetSet({
         ownerType: "EDIT_HISTORY",
         ownerId: historyId,
         shop: history.shop,

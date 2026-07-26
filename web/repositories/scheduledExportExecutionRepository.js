@@ -103,14 +103,3 @@ export async function markExportJobQueued({
     data,
   });
 }
-
-export async function findExportHistoryByScheduledTask(shop, scheduledTaskId, db = prisma) {
-  return db.exportHistory.findFirst({
-    where: { shop, scheduledTask: scheduledTaskId },
-    select: { id: true },
-  });
-}
-
-export async function createScheduledExportHistory(data, db = prisma) {
-  return db.exportHistory.create({ data });
-}

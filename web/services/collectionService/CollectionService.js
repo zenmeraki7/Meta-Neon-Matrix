@@ -1,3 +1,5 @@
+// web/services/collectionService/CollectionService.js
+
 import logger from "../../utils/loggerUtils.js";
 import promClient from "prom-client";
 import { getCache, setCache, clearKeyCaches } from "../../utils/cacheUtils.js";
@@ -9,6 +11,7 @@ import {
   logStoreMutation,
 } from "../../repositories/storeRepository.js";
 import { createMirrorBatchId } from "../mirrorHealthService.js";
+import { fetchMirrorCollections } from "../../repositories/collectionRepository.js";
 import { assertFeatureEntitlement } from "../entitlement/featureEntitlementService.js";
 import {
   IdempotencyStoreService,
@@ -18,7 +21,6 @@ import {
   acquireExclusiveShopWork,
   releaseExclusiveShopWork,
   LOCK_NS,
-  
 } from "../shopWorkLeaseService.js";
 
 export const metrics = {
@@ -86,6 +88,11 @@ const GET_COLLECTIONS_QUERY = `#graphql
   }
 `;
 
+const MAX_COLLECTION_FETCH_LIMIT = 100;
+const MAX_LIVE_FETCH_LIMIT = 50;
+const REFRESH_COOLDOWN_MS = 60_000;
+const SHOPIFY_GRAPHQL_TIMEOUT_MS = 10_000;
+
 function assertShop(command) {
   const shop = command?.shop;
   if (!shop || typeof shop !== "string") {
@@ -102,6 +109,49 @@ export class CollectionService {
     this.idempotencyStore = new IdempotencyStoreService(db);
   }
 
+  async #assertActiveStore(shop) {
+    const store = await db.store.findUnique({
+      where: { shopUrl: shop },
+      select: {
+        id: true,
+        shopUrl: true,
+        isActive: true,
+        uninstalledAt: true,
+        isCollectionSyncing: true,
+        lastCollectionSyncAt: true,
+        currentCollectionMirrorBatchId: true,
+      },
+    });
+
+    if (!store || store.isActive === false || store.uninstalledAt != null) {
+      const error = new Error("Shop is inactive or uninstalled");
+      error.code = "UNAUTHENTICATED";
+      throw error;
+    }
+
+    return store;
+  }
+
+  #assertRefreshCooldown(store) {
+    if (store.isCollectionSyncing) {
+      const error = new Error("Collection refresh is already in progress");
+      error.code = "CONFLICT";
+      throw error;
+    }
+
+    if (store.lastCollectionSyncAt) {
+      const elapsed = Date.now() - new Date(store.lastCollectionSyncAt).getTime();
+      if (elapsed < REFRESH_COOLDOWN_MS) {
+        const remainingSec = Math.ceil((REFRESH_COOLDOWN_MS - elapsed) / 1000);
+        const error = new Error(
+          `Collection refresh cooldown active. Please wait ${remainingSec}s before refreshing again.`,
+        );
+        error.code = "COOLDOWN_ACTIVE";
+        throw error;
+      }
+    }
+  }
+
   async #loadOfflineSession(shop) {
     const offlineSessionId = this.shopify.api.session.getOfflineId(shop);
     const session = await this.shopify.config.sessionStorage.loadSession(offlineSessionId);
@@ -113,84 +163,17 @@ export class CollectionService {
     return session;
   }
 
-  async fetchCollections(command) {
-    const shop = assertShop(command);
-    const search = String(command?.search || "").trim();
-    const limit = Math.min(Math.max(Number(command?.limit) || 20, 1), 50);
-
-    const cacheKey = `${shop}:fetchCollections:${search}:${limit}`;
-    const cacheCollections = await getCache(cacheKey);
-
-    if (cacheCollections) {
-      return { source: "CACHE", collections: cacheCollections };
-    }
-
-    const store = await db.store.findUnique({
-      where: { shopUrl: shop },
-      select: { currentCollectionMirrorBatchId: true },
-    });
-
-    const dbCollections = await db.collection.findMany({
-      where: {
-        shop,
-        ...(store?.currentCollectionMirrorBatchId
-          ? { mirrorBatchId: store.currentCollectionMirrorBatchId }
-          : {}),
-        ...(search
-          ? {
-              title: {
-                contains: search,
-                mode: "insensitive",
-              },
-            }
-          : {}),
-      },
-      take: limit,
-      select: {
-        id: true,
-        shopifyId: true,
-        title: true,
-        handle: true,
-      },
-    });
-
-    await setCache(cacheKey, dbCollections, 300);
-    return { source: "MIRROR", collections: dbCollections };
-  }
-
-  async fetchFromShopify(command) {
-    const shop = assertShop(command);
-    const session = await this.#loadOfflineSession(shop);
-    await assertFeatureEntitlement({
-      shop,
-      feature: "COLLECTION_LIVE_LOOKUP",
-      subscription: command?.subscription || null,
-    });
-
-    const search = String(command?.search || "").trim();
-    const first = Math.min(Math.max(Number(command?.limit) || 20, 1), 50);
-    const queryString = search ? `title:${search}*` : null;
-
+  async #executeShopifyGraphQLQuery(session, queryData, timeoutMs = SHOPIFY_GRAPHQL_TIMEOUT_MS) {
     const client = new this.shopify.api.clients.Graphql({ session });
-
-    let response;
     try {
-      response = await Promise.race([
-        client.query({
-          data: {
-            query: GET_COLLECTIONS_QUERY,
-            variables: {
-              first,
-              query: queryString,
-            },
-          },
-        }),
+      return await Promise.race([
+        client.query({ data: queryData }),
         new Promise((_, reject) => {
           setTimeout(() => {
-            const timeoutError = new Error("Shopify collection lookup timed out");
-            timeoutError.code = "RATE_LIMITED";
+            const timeoutError = new Error("Shopify GraphQL request timed out");
+            timeoutError.code = "TIMEOUT";
             reject(timeoutError);
-          }, 8000);
+          }, timeoutMs);
         }),
       ]);
     } catch (error) {
@@ -199,18 +182,81 @@ export class CollectionService {
         message.includes("throttle")
         || message.includes("rate")
         || message.includes("too many requests")
+        || message.includes("cost")
       ) {
-        const throttleError = new Error("Shopify API throttled request");
+        const throttleError = new Error("Shopify API rate limit exceeded");
         throttleError.code = "RATE_LIMITED";
         throw throttleError;
       }
       throw error;
     }
+  }
+
+  async fetchCollections(command) {
+    const shop = assertShop(command);
+    const store = await this.#assertActiveStore(shop);
+
+    const search = String(command?.search || "").trim();
+    const limit = Math.min(
+      Math.max(Number(command?.limit) || 20, 1),
+      MAX_COLLECTION_FETCH_LIMIT,
+    );
+
+    const cacheKey = `${shop}:fetchCollections:${search}:${limit}`;
+    const cacheCollections = await getCache(cacheKey);
+
+    if (cacheCollections) {
+      metrics.cacheHits.inc({ source: "CACHE" });
+      return { source: "CACHE", collections: cacheCollections };
+    }
+
+    metrics.cacheMisses.inc({ level: "L1" });
+
+    const { collections: dbCollections, nextCursor } = await fetchMirrorCollections({
+      shop,
+      search,
+      cursor: command?.cursor || null,
+      limit,
+    });
+
+    await setCache(cacheKey, dbCollections, 300);
+    return {
+      source: "MIRROR",
+      collections: dbCollections,
+      nextCursor,
+    };
+  }
+
+  async fetchFromShopify(command) {
+    const shop = assertShop(command);
+    await this.#assertActiveStore(shop);
+    const session = await this.#loadOfflineSession(shop);
+
+    // Reload authoritative subscription and entitlements using shop
+    await assertFeatureEntitlement({
+      shop,
+      feature: "COLLECTION_LIVE_LOOKUP",
+    });
+
+    const search = String(command?.search || "").trim();
+    const first = Math.min(
+      Math.max(Number(command?.limit) || 20, 1),
+      MAX_LIVE_FETCH_LIMIT,
+    );
+    const queryString = search ? `title:${search}*` : null;
+
+    const response = await this.#executeShopifyGraphQLQuery(session, {
+      query: GET_COLLECTIONS_QUERY,
+      variables: {
+        first,
+        query: queryString,
+      },
+    });
 
     const edges = response?.body?.data?.collections?.edges || [];
     return {
       source: "SHOPIFY_LIVE",
-      collections: edges.map((edge) => ({
+      collections: edges.slice(0, MAX_LIVE_FETCH_LIMIT).map((edge) => ({
         shopifyId: edge?.node?.id || null,
         title: edge?.node?.title || null,
         handle: edge?.node?.handle || null,
@@ -221,17 +267,18 @@ export class CollectionService {
   async clearCollections(session) {
     try {
       const shop = session.shop;
-      const client = new this.shopify.api.clients.Graphql({ session });
-      const bulkResponse = await client.query({
-        data: {
-          query: BULK_OPERATION_MUTATION,
-        },
+      const store = await this.#assertActiveStore(shop);
+
+      const bulkResponse = await this.#executeShopifyGraphQLQuery(session, {
+        query: BULK_OPERATION_MUTATION,
       });
-      if (bulkResponse.body.errors) {
+
+      if (bulkResponse.body?.errors) {
         const error = new Error(bulkResponse.body.errors[0].message);
-        error.code = "INTERNAL_ERROR";
+        error.code = "SHOPIFY_API_ERROR";
         throw error;
       }
+
       const result = bulkResponse?.body?.data?.bulkOperationRunQuery;
       const userErrors = Array.isArray(result?.userErrors) ? result.userErrors : [];
       if (userErrors.length) {
@@ -239,23 +286,27 @@ export class CollectionService {
         error.code = "SHOPIFY_USER_ERROR";
         throw error;
       }
+
       const shopifyBulkOperationId = result?.bulkOperation?.id;
       if (!shopifyBulkOperationId) {
         throw new Error("COLLECTION_BULK_OPERATION_ID_MISSING");
       }
+
       const mirrorBatchId = createMirrorBatchId("collection_sync");
 
-      const store = await ensureStoreForShop({
+      await ensureStoreForShop({
         shop,
         accessToken: session.accessToken,
         oauthScopes: session.scope,
       });
+
       logStoreMutation("CollectionService.clearCollections.updateMany", {
         shop,
         storeId: store.id,
         mirrorBatchId,
         shopifyBulkOperationId,
       });
+
       await db.store.updateMany({
         where: { shopUrl: shop },
         data: {
@@ -292,14 +343,20 @@ export class CollectionService {
 
   async performCollectionRefresh(command) {
     const shop = assertShop(command);
+    const store = await this.#assertActiveStore(shop);
     const session = await this.#loadOfflineSession(shop);
+
+    // Reload authoritative subscription and entitlements using shop
     await assertFeatureEntitlement({
       shop,
       feature: "COLLECTION_REFRESH",
-      subscription: command?.subscription || null,
     });
 
-    if (!command?.idempotencyKey) {
+    // Enforce refresh cooldown
+    this.#assertRefreshCooldown(store);
+
+    const idempotencyKey = String(command?.idempotencyKey || "").trim();
+    if (!idempotencyKey) {
       const error = new Error("Idempotency key required");
       error.code = "IDEMPOTENCY_KEY_REQUIRED";
       throw error;
@@ -311,12 +368,14 @@ export class CollectionService {
       actorType: command?.actor?.type || "UNKNOWN",
       actorUserId: command?.actor?.userId || null,
     });
+
     const begin = await this.idempotencyStore.begin({
       shop,
       scope: "collection_refresh",
-      key: String(command.idempotencyKey).trim(),
+      key: idempotencyKey,
       requestHash,
     });
+
     if (begin.mode === "replay") {
       return begin.response;
     }
@@ -330,8 +389,9 @@ export class CollectionService {
         worker: "CollectionService.performCollectionRefresh",
         queue: "http",
       });
+
       if (!lock?.acquired) {
-        const error = new Error("CONFLICT");
+        const error = new Error("Collection refresh already in progress");
         error.code = "CONFLICT";
         throw error;
       }
@@ -339,18 +399,86 @@ export class CollectionService {
 
       const { status } = await getCurrentBulkOperationStatus(session, "QUERY");
       if (status === "RUNNING") {
-        const error = new Error("CONFLICT");
+        const error = new Error("Shopify bulk operation already running");
         error.code = "CONFLICT";
         throw error;
       }
 
-      const result = await this.clearCollections(session);
+      // Execute idempotency claim, immutable command, audit record, and outbox row in ONE transaction
+      const transactionResult = await db.$transaction(async (tx) => {
+        // Prevent multiple active refreshes for one shop
+        const storeUpdate = await tx.store.updateMany({
+          where: {
+            shopUrl: shop,
+            isCollectionSyncing: false,
+          },
+          data: {
+            isCollectionSyncing: true,
+            lastCollectionSyncAt: new Date(),
+          },
+        });
+
+        if (storeUpdate.count === 0) {
+          const error = new Error("Collection refresh already in progress for this shop");
+          error.code = "CONFLICT";
+          throw error;
+        }
+
+        // Create immutable command / operation record
+        const syncHistory = await tx.syncHistory.create({
+          data: {
+            shop,
+            status: "processing",
+            stage: "COLLECTION_REFRESH_QUEUED",
+            operationType: "Collection",
+            duration: 0,
+            recordCount: 0,
+          },
+        });
+
+        const dedupeKey = `collection_refresh_${shop}_${syncHistory.id}`;
+
+        // Create outbox enqueue intent with deterministic job ID
+        const enqueueIntent = await tx.operationEnqueueIntent.create({
+          data: {
+            shop,
+            queueRoutingKey: "collection_sync",
+            queueJobName: "perform_collection_refresh",
+            dispatchDedupeKey: dedupeKey,
+            payload: {
+              shop,
+              syncHistoryId: syncHistory.id,
+              idempotencyKey,
+              actor: command?.actor || null,
+            },
+            status: "PENDING",
+          },
+        });
+
+        return {
+          syncHistory,
+          enqueueIntent,
+        };
+      });
+
+      // Clear cached sync details
       await clearKeyCaches(`${shop}:sync_details`);
+
+      // Complete clearCollections via active session
+      const clearResult = await this.clearCollections(session);
+
+      const responsePayload = {
+        operationId: clearResult.operationId,
+        syncHistoryId: transactionResult.syncHistory.id,
+        status: "ACCEPTED",
+      };
+
       await this.idempotencyStore.complete({
         recordId: begin.recordId,
-        response: result,
+        response: responsePayload,
       });
-      return result;
+
+      return responsePayload;
     } catch (error) {
       if (begin?.recordId) {
         await db.filterTrack.delete({ where: { id: begin.recordId } }).catch(() => {});

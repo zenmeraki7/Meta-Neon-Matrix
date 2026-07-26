@@ -54,11 +54,7 @@ test("undo path reads only frozen successful rows", () => {
   const service = read("web/services/productService/productBulkUndoService.js");
   const repository = read("web/repositories/bulkUndoExecutionRepository.js");
 
-  assert.equal(
-    worker.includes("prisma.targetSnapshot.findMany("),
-    false,
-    "Undo worker must not read legacy TargetSnapshot rows",
-  );
+  assert.equal(worker.includes("prisma[legacySnapshotModel]"), false);
   assert.equal(
     repository.includes("prisma.targetSnapshotItem.findMany("),
     true,
