@@ -1,5 +1,7 @@
 import { db } from "../../../repositories/repositoryDb.js";
 import { Prisma } from "../../../repositories/prismaTypes.js";
+import { immutableOutboxEvent } from "../../../helpers/immutableOutboxEvent.js";
+import { immutableTargetFreezeCommand } from "../../../helpers/immutableTargetFreezeCommand.js";
 
 import {
   OPERATION_SOURCE,
@@ -162,7 +164,7 @@ export async function runAutomaticProductRuleNow({
 
     if (tx.targetFreezeCommand) {
       await tx.targetFreezeCommand.create({
-        data: {
+        data: immutableTargetFreezeCommand({
           shop: safeShop,
           operationId: operation?.id || null,
           sourceType: TARGET_FREEZE_SOURCE_TYPE.AUTOMATIC_PRODUCT_RULE,
@@ -177,17 +179,18 @@ export async function runAutomaticProductRuleNow({
           status: TARGET_FREEZE_COMMAND_STATUS.PENDING,
           createdAt: now,
           updatedAt: now,
-        },
+        }),
       });
     }
 
     if (tx.outboxEvent) {
       await tx.outboxEvent.create({
-        data: {
+        data: immutableOutboxEvent({
           shop: safeShop,
           aggregateType: "AUTOMATIC_PRODUCT_RULE_RUN",
           aggregateId: run.id,
           domainEventType: "TARGET_FREEZE_REQUESTED",
+          eventDedupeKey: `target-freeze:${run.id}:${rule.revision}`,
           payloadJson: {
             shop: safeShop,
             operationId: operation?.id || null,
@@ -200,7 +203,7 @@ export async function runAutomaticProductRuleNow({
           status: OUTBOX_STATUS.PENDING,
           createdAt: now,
           updatedAt: now,
-        },
+        }),
       });
     }
 

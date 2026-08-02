@@ -56,7 +56,9 @@ test("undo claim accepts only server-owned successful items with complete snapsh
   const service = read("./services/productService/productBulkUndoService.js");
   assert.match(service, /shop: this\.session\.shop/);
   assert.match(service, /status: \{ in: SUCCESSFUL_CHANGE_STATUSES \}/);
-  assert.match(service, /snapshotCount !== undoableTargetKeys\.length/);
+  assert.match(service, /trustedSnapshotRows\.length !== undoableTargetKeys\.length/);
+  assert.match(service, /buildImmutableUndoItems/);
+  assert.match(service, /tx\.undoItem\.createMany/);
   assert.match(service, /UNDO_SNAPSHOTS_INCOMPLETE/);
   assert.match(service, /CSV_CREATE_UNDO_NOT_SUPPORTED/);
   assert.match(service, /containsCsvCreates/);
@@ -229,7 +231,7 @@ test("undo completion requires item-result ingestion and live restored-state ver
   assert.match(service, /UNDO_SHOPIFY_ITEM_FAILURE/);
   assert.match(service, /verifyUndoRestored/);
   assert.match(service, /applyVerifiedUndoToMirror/);
-  assert.match(worker, /resultUrl: job\.data\?\.url/);
+  assert.match(worker, /ingestUndoBulkOperationWebhook/);
   assert.match(undoService, /trustedProductSet/);
   assert.match(undoService, /selectedOptions/);
 });

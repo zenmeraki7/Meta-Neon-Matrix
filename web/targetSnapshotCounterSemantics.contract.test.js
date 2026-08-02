@@ -29,7 +29,7 @@ test("mutation and verification use independent state machines and counters", ()
   assert.match(schema, /verificationStatus\s+TargetSnapshotItemVerificationStatus\?/);
   assert.doesNotMatch(
     schema.match(/enum TargetSnapshotItemExecutionStatus \{[\s\S]*?\}/)?.[0] || "",
-    /VERIFIED/,
+    /\bVERIFIED\b/,
   );
   assert.match(
     schema.match(/enum TargetSnapshotItemVerificationStatus \{[\s\S]*?\}/)?.[0] || "",

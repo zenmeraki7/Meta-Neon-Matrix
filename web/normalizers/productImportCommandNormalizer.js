@@ -20,7 +20,7 @@ const ALLOWED_MIME_TYPES = new Set([
 ]);
 
 const EMPTY_OBJECT = Object.freeze({});
-const CREATE_IMPORT_BODY_KEYS = new Set(["columnMappings"]);
+const CREATE_IMPORT_BODY_KEYS = new Set(["columnMappings", "uploadToken"]);
 const PREVIEW_PAGE_QUERY_KEYS = new Set(["uploadToken", "cursor", "limit"]);
 const CREATE_PREVIEW_QUERY_KEYS = new Set(["limit"]);
 
@@ -268,9 +268,11 @@ export function buildCreateProductImportCommand({
     body === undefined || body === null
       ? EMPTY_OBJECT
       : assertNoUnknownKeys(body, CREATE_IMPORT_BODY_KEYS, "body");
+  const uploadToken = normalizeRequiredText(safeBody.uploadToken, "uploadToken", MAX_UPLOAD_TOKEN_LENGTH);
+
   return Object.freeze({
     ...safeContext,
-    file: assertUploadFile(file),
+    uploadToken,
     columnMappings: parseColumnMappings(safeBody.columnMappings),
     idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
   });

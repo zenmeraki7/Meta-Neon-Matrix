@@ -1,5 +1,4 @@
 import React, { useEffect, useCallback, useMemo, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Banner,
@@ -30,7 +29,6 @@ const rows = [{ key: "products", api: "/api/sync/products" }];
 export default function DataSyncPage() {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const { showSuccess, showError } = useAppToast();
   const { dateTimeFormatter } = useLocaleFormatters();
   const {
@@ -44,20 +42,22 @@ export default function DataSyncPage() {
 
   const getRowLabel = useCallback(
     (key) => {
-      const map = {
-        products: t("products"),
-      };
-
-      return map[key] || key;
+      switch (key) {
+        case "products":
+          return t("products", { defaultValue: "Products" });
+        default:
+          return key;
+      }
     },
     [t],
   );
 
-  const productsSynced = Boolean(dataSources?.productsSynced);
-  const syncNeeded = Boolean(dataSources?.syncNeeded);
-  const productSyncNeedsAttention =
-    Boolean(dataSources) &&
-    syncNeeded &&
+  const isProductSyncEligible =
+    dataSources?.syncNeeded === true ||
+    isSyncStale ||
+    Boolean(dataSources?.unavailableReason);
+  const showInitialProductSyncBanner =
+    isProductSyncEligible &&
     !isSyncInProgress &&
     !startProductSync.isPending;
   const isAnySyncRunning =
@@ -91,13 +91,6 @@ export default function DataSyncPage() {
 
     try {
       await startProductSync.mutateAsync({ force: true });
-
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["sync-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["product-sync-status"] }),
-        queryClient.invalidateQueries({ queryKey: ["bootstrap-products"] }),
-        queryClient.invalidateQueries({ queryKey: ["products"] }),
-      ]);
 
       showSuccess(t("syncStarted", { item: getRowLabel(row.key) }));
     } catch (error) {

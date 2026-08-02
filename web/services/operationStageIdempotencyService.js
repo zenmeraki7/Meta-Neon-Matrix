@@ -45,6 +45,7 @@ async function writeStageWithCas({
   historyId,
   shop,
   expectedExecutionStates = [],
+  expectedStateVersion = 0,
   stage,
   expectedStageStatuses = [],
   expectedStageExecutionId = undefined,
@@ -80,6 +81,7 @@ async function writeStageWithCas({
     id: historyId,
     shop,
     expectedExecutionStates,
+    expectedStateVersion,
     extraWhere,
     data: {
       batch: nextStageState,
@@ -100,7 +102,7 @@ export async function beginEditHistoryStage({
   const normalizedExecutionId = normalizeExecutionId(executionId);
   const history = await db.editHistory.findFirst({
     where: { id: historyId, shop },
-    select: { id: true, executionIdentity: true, batch: true, executionState: true },
+    select: { id: true, executionIdentity: true, batch: true, executionStateNormalized: true, stateVersion: true },
   });
   if (!history) {
     throw new Error("EDIT_HISTORY_NOT_FOUND");
@@ -159,7 +161,8 @@ export async function beginEditHistoryStage({
     db,
     historyId,
     shop,
-    expectedExecutionStates: history.executionState ? [history.executionState] : [],
+    expectedExecutionStates: history.executionStateNormalized ? [history.executionStateNormalized] : [],
+    expectedStateVersion: history.stateVersion ?? 0,
     stage,
     expectedStageStatuses:
       expectedStageStatus === undefined ? [] : [expectedStageStatus],
@@ -167,7 +170,7 @@ export async function beginEditHistoryStage({
     expectedExecutionIdentity: history.executionIdentity ?? null,
     nextStageState: buildNextBatchWithStage(batch, stage, nextStageState),
   });
-  if (!updated) {
+  if (!updated || !updated.success) {
     return { state: "running", workflowStageKey, operationId, stageState: existing };
   }
 
@@ -185,7 +188,7 @@ export async function completeEditHistoryStage({
   const normalizedExecutionId = normalizeExecutionId(executionId);
   const history = await db.editHistory.findFirst({
     where: { id: historyId, shop },
-    select: { batch: true, executionState: true, executionIdentity: true },
+    select: { batch: true, executionStateNormalized: true, executionIdentity: true, stateVersion: true },
   });
   if (!history) return;
   const batch = asObject(history.batch);
@@ -203,7 +206,8 @@ export async function completeEditHistoryStage({
     db,
     historyId,
     shop,
-    expectedExecutionStates: history.executionState ? [history.executionState] : [],
+    expectedExecutionStates: history.executionStateNormalized ? [history.executionStateNormalized] : [],
+    expectedStateVersion: history.stateVersion ?? 0,
     stage,
     expectedStageStatuses: ["running"],
     expectedStageExecutionId: normalizedExecutionId ?? undefined,
@@ -225,7 +229,7 @@ export async function failEditHistoryStage({
   const normalizedExecutionId = normalizeExecutionId(executionId);
   const history = await db.editHistory.findFirst({
     where: { id: historyId, shop },
-    select: { batch: true, executionState: true, executionIdentity: true },
+    select: { batch: true, executionStateNormalized: true, executionIdentity: true, stateVersion: true },
   });
   if (!history) return;
   const batch = asObject(history.batch);
@@ -243,7 +247,8 @@ export async function failEditHistoryStage({
     db,
     historyId,
     shop,
-    expectedExecutionStates: history.executionState ? [history.executionState] : [],
+    expectedExecutionStates: history.executionStateNormalized ? [history.executionStateNormalized] : [],
+    expectedStateVersion: history.stateVersion ?? 0,
     stage,
     expectedStageStatuses: ["running", "retryable_failed"],
     expectedStageExecutionId: normalizedExecutionId ?? undefined,
@@ -251,4 +256,3 @@ export async function failEditHistoryStage({
     nextStageState: buildNextBatchWithStage(batch, stage, nextStageState),
   });
 }
-

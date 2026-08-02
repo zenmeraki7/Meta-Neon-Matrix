@@ -1,6 +1,7 @@
 // web/services/collectionService/CollectionService.js
 
 import logger from "../../utils/loggerUtils.js";
+import crypto from "node:crypto";
 import promClient from "prom-client";
 import { getCache, setCache, clearKeyCaches } from "../../utils/cacheUtils.js";
 import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
@@ -22,6 +23,7 @@ import {
   releaseExclusiveShopWork,
   LOCK_NS,
 } from "../shopWorkLeaseService.js";
+import { buildImmutablePayloadMetadata } from "../../utils/immutablePayloadUtils.js";
 
 export const metrics = {
   collectionFetchLatency: new promClient.Histogram({
@@ -437,22 +439,28 @@ export class CollectionService {
         });
 
         const dedupeKey = `collection_refresh_${shop}_${syncHistory.id}`;
+        const intentPayload = {
+          shop,
+          syncHistoryId: syncHistory.id,
+          idempotencyKey,
+          actor: command?.actor || null,
+        };
 
         // Create outbox enqueue intent with deterministic job ID
-        const enqueueIntent = await tx.operationEnqueueIntent.create({
-          data: {
+        const enqueueIntent = { id: crypto.randomUUID() };
+        await tx.operationEnqueueIntent.createMany({
+          data: [{
+            id: enqueueIntent.id,
             shop,
             queueRoutingKey: "collection_sync",
             queueJobName: "perform_collection_refresh",
+            dispatchScope: "collection_sync",
             dispatchDedupeKey: dedupeKey,
-            payload: {
-              shop,
-              syncHistoryId: syncHistory.id,
-              idempotencyKey,
-              actor: command?.actor || null,
-            },
+            payload: intentPayload,
+            ...buildImmutablePayloadMetadata({ payload: intentPayload, operationType: "OPERATION_ENQUEUE_INTENT" }),
             status: "PENDING",
-          },
+          }],
+          skipDuplicates: true,
         });
 
         return {

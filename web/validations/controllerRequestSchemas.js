@@ -110,8 +110,10 @@ export const bulkEditPreviewSchema = baseBulkEditPreviewSchema.when(
 );
 
 export const importRequestSchema = Joi.object({
-  columnMappings: Joi.string().required(),
-}).unknown(false);
+  uploadToken: Joi.string().trim().min(1).required(),
+  columnMappings: Joi.alternatives().try(Joi.object(), Joi.string()).required(),
+  idempotencyKey: Joi.string().trim().allow("", null),
+}).unknown(true);
 
 export const exportRequestSchema = Joi.object({
   fields: Joi.array().items(Joi.string().trim()).min(1).required(),

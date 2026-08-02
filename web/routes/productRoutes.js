@@ -40,6 +40,7 @@ import {
   listRecurringEditsController,
   toggleRecurringEditStatusController,
   updateRecurringEditController,
+  getScheduleTimezonesController,
 } from "../controllers/recurringEditController.js";
 import {
   createScheduledExportController,
@@ -163,6 +164,7 @@ router.post(
   subscriptionMiddleware,
   createRecurringEditController
 );
+router.get("/recurring/timezones", getScheduleTimezonesController);
 router.get("/get-recurring-edits", listRecurringEditsController);
 router.get("/recurring/list-summary", listRecurringEditsSummaryController);
 router.get("/get-recurring-edit/:id", getRecurringEditByIdController);
@@ -192,7 +194,6 @@ router.post(
 router.post(
   "/csv/import",
   subscriptionMiddleware,
-  uploadCsv.single("file"),
   validateBody(importRequestSchema),
   importCsvController
 );

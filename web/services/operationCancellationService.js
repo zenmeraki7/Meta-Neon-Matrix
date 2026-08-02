@@ -96,59 +96,83 @@ export async function requestEditHistoryCancellation({
     throw error;
   }
   try {
-  const history = await db.editHistory.findFirst({
-    where: { id: historyId, shop },
-    select: {
-      id: true,
-      executionState: true,
-      executionStateNormalized: true,
-      statusNormalized: true,
-      cancelRequestedAt: true,
-    },
-  });
-  if (!history) throw new Error("Edit history not found");
-
-  const stage = buildStage(history.executionState);
-  const now = new Date();
-  const cancelReason = normalizeCancelReason(reason);
-  const update = {
-    cancelRequestedAt: history.cancelRequestedAt || now,
-    cancelReason,
-  };
-
-  if (stage === "BEFORE_FREEZE" || stage === "AFTER_FREEZE_BEFORE_EXECUTION") {
-    Object.assign(update, {
-      status: "cancelled",
-      statusNormalized: normalizeEditHistoryStatus("CANCELLED"),
-      executionState: OPERATION_LIFECYCLE_STATES.CANCELLED,
-      executionStateNormalized: normalizeEditHistoryExecutionState("CANCELLED"),
-      cancelledAt: now,
-      completedAt: now,
+    const history = await db.editHistory.findFirst({
+      where: { id: historyId, shop },
+      select: {
+        id: true,
+        executionState: true,
+        executionStateNormalized: true,
+        statusNormalized: true,
+        cancelRequestedAt: true,
+        stateVersion: true,
+      },
     });
-  } else if (stage === "AFTER_EXECUTION") {
-    const error = new Error("Execution already completed. Cancellation is not allowed; use undo.");
-    error.code = "CANCEL_NOT_ALLOWED_AFTER_EXECUTION";
-    throw error;
-  }
+    if (!history) throw new Error("Edit history not found");
 
-  await db.editHistory.updateMany({
-    where: { id: history.id, shop },
-    data: update,
-  });
-  const response = {
-    id: history.id,
-    stage,
-    cancellation: stage === "DURING_VERIFICATION"
-      ? "VERIFICATION_STOP_REQUESTED"
-      : stage === "DURING_EXECUTION"
-        ? "STOP_AFTER_CURRENT_BATCH"
-        : "CANCELLED",
-  };
-  await idempotencyStore.complete({
-    recordId: begin.recordId,
-    response,
-  });
-  return response;
+    const stage = buildStage(history.executionStateNormalized);
+    const now = new Date();
+    const cancelReason = normalizeCancelReason(reason);
+    const update = {
+      cancelRequestedAt: history.cancelRequestedAt || now,
+      cancelReason,
+      stateVersion: { increment: 1 },
+    };
+
+    if (stage === "BEFORE_FREEZE" || stage === "AFTER_FREEZE_BEFORE_EXECUTION") {
+      Object.assign(update, {
+        status: "cancelled",
+        statusNormalized: normalizeEditHistoryStatus("CANCELLED"),
+        executionState: OPERATION_LIFECYCLE_STATES.CANCELLED,
+        executionStateNormalized: normalizeEditHistoryExecutionState("CANCELLED"),
+        cancelledAt: now,
+        completedAt: now,
+      });
+    } else if (stage === "AFTER_EXECUTION") {
+      const error = new Error("Execution already completed. Cancellation is not allowed; use undo.");
+      error.code = "CANCEL_NOT_ALLOWED_AFTER_EXECUTION";
+      throw error;
+    }
+
+    const response = {
+      id: history.id,
+      stage,
+      cancellation: stage === "DURING_VERIFICATION"
+        ? "VERIFICATION_STOP_REQUESTED"
+        : stage === "DURING_EXECUTION"
+          ? "STOP_AFTER_CURRENT_BATCH"
+          : "CANCELLED",
+    };
+
+    await db.$transaction(async (tx) => {
+      const cancelled = await tx.editHistory.updateMany({
+        where: {
+          id: history.id,
+          shop,
+          stateVersion: history.stateVersion ?? 0,
+          executionStateNormalized: history.executionStateNormalized,
+          statusNormalized: history.statusNormalized,
+        },
+        data: update,
+      });
+
+      if (cancelled.count !== 1) {
+        const error = new Error("STATE_TRANSITION_CONFLICT");
+        error.code = "STATE_TRANSITION_CONFLICT";
+        throw error;
+      }
+
+      await idempotencyStore.complete({
+        recordId: begin.recordId,
+        shop,
+        ownerToken: begin.ownerToken,
+        response,
+        resourceType: "EDIT_HISTORY",
+        resourceId: history.id,
+        dbClient: tx,
+      });
+    });
+
+    return response;
   } finally {
     await releaseOperationLease({
       shop,
@@ -198,59 +222,82 @@ export async function requestExportJobCancellation({
     throw error;
   }
   try {
-  const job = await db.exportJob.findFirst({
-    where: { id: exportJobId, shop },
-    select: {
-      id: true,
-      executionState: true,
-      executionStateNormalized: true,
-      statusNormalized: true,
-      cancelRequestedAt: true,
-    },
-  });
-  if (!job) throw new Error("Export job not found");
-  const stage = buildStage(job.executionState);
-  const now = new Date();
-  const cancelReason = normalizeCancelReason(reason);
-  const update = {
-    cancelRequestedAt: job.cancelRequestedAt || now,
-    cancelReason,
-  };
-
-  if (stage === "BEFORE_FREEZE" || stage === "AFTER_FREEZE_BEFORE_EXECUTION") {
-    Object.assign(update, {
-      status: "CANCELLED",
-      statusNormalized: normalizeExportJobStatus("CANCELLED"),
-      executionState: EXPORT_EXECUTION_STATES.CANCELLED,
-      executionStateNormalized: normalizeExportJobExecutionState("CANCELLED"),
-      cancelledAt: now,
-      completedAt: now,
+    const job = await db.exportJob.findFirst({
+      where: { id: exportJobId, shop },
+      select: {
+        id: true,
+        executionState: true,
+        executionStateNormalized: true,
+        statusNormalized: true,
+        cancelRequestedAt: true,
+        stateVersion: true,
+      },
     });
-  } else if (stage === "AFTER_EXECUTION") {
-    const error = new Error("Execution already completed. Cancellation is not allowed.");
-    error.code = "CANCEL_NOT_ALLOWED_AFTER_EXECUTION";
-    throw error;
-  }
+    if (!job) throw new Error("Export job not found");
+    const stage = buildStage(job.executionStateNormalized);
+    const now = new Date();
+    const cancelReason = normalizeCancelReason(reason);
+    const update = {
+      cancelRequestedAt: job.cancelRequestedAt || now,
+      cancelReason,
+      stateVersion: { increment: 1 },
+    };
 
-  await db.exportJob.updateMany({
-    where: { id: job.id, shop },
-    data: update,
-  });
+    if (stage === "BEFORE_FREEZE" || stage === "AFTER_FREEZE_BEFORE_EXECUTION") {
+      Object.assign(update, {
+        status: "CANCELLED",
+        statusNormalized: normalizeExportJobStatus("CANCELLED"),
+        executionState: EXPORT_EXECUTION_STATES.CANCELLED,
+        executionStateNormalized: normalizeExportJobExecutionState("CANCELLED"),
+        cancelledAt: now,
+        completedAt: now,
+      });
+    } else if (stage === "AFTER_EXECUTION") {
+      const error = new Error("Execution already completed. Cancellation is not allowed.");
+      error.code = "CANCEL_NOT_ALLOWED_AFTER_EXECUTION";
+      throw error;
+    }
 
-  const response = {
-    id: job.id,
-    stage,
-    cancellation: stage === "DURING_VERIFICATION"
-      ? "VERIFICATION_STOP_REQUESTED"
-      : stage === "DURING_EXECUTION"
-        ? "STOP_AFTER_CURRENT_BATCH"
-        : "CANCELLED",
-  };
-  await idempotencyStore.complete({
-    recordId: begin.recordId,
-    response,
-  });
-  return response;
+    const response = {
+      id: job.id,
+      stage,
+      cancellation: stage === "DURING_VERIFICATION"
+        ? "VERIFICATION_STOP_REQUESTED"
+        : stage === "DURING_EXECUTION"
+          ? "STOP_AFTER_CURRENT_BATCH"
+          : "CANCELLED",
+    };
+
+    await db.$transaction(async (tx) => {
+      const cancelled = await tx.exportJob.updateMany({
+        where: {
+          id: job.id,
+          shop,
+          stateVersion: job.stateVersion ?? 0,
+          executionStateNormalized: job.executionStateNormalized,
+          statusNormalized: job.statusNormalized,
+        },
+        data: update,
+      });
+
+      if (cancelled.count !== 1) {
+        const error = new Error("STATE_TRANSITION_CONFLICT");
+        error.code = "STATE_TRANSITION_CONFLICT";
+        throw error;
+      }
+
+      await idempotencyStore.complete({
+        recordId: begin.recordId,
+        shop,
+        ownerToken: begin.ownerToken,
+        response,
+        resourceType: "EXPORT_JOB",
+        resourceId: job.id,
+        dbClient: tx,
+      });
+    });
+
+    return response;
   } finally {
     await releaseOperationLease({
       shop,

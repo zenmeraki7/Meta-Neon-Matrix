@@ -7,16 +7,40 @@ const AppBridgeAuthContext = createContext({
   getSessionToken: null,
 });
 
+const PERF_BUFFER_LIMIT = 200;
+
 function markPerf(event, detail = {}) {
-  if (typeof window === "undefined" || typeof performance === "undefined") {
+  if (
+    typeof window === "undefined" ||
+    typeof performance === "undefined"
+  ) {
     return;
   }
-  performance.mark(`metamatrix:${event}`);
-  if (window.__MM_PERF__) {
-    window.__MM_PERF__.push({ event, at: Date.now(), detail });
-  } else {
-    window.__MM_PERF__ = [{ event, at: Date.now(), detail }];
+
+  const key = `metamatrix:${event}`;
+
+  try {
+    performance.clearMarks(key);
+    performance.mark(key);
+  } catch {
+    // Diagnostics must never affect authentication.
   }
+
+  const buffer = Array.isArray(window.__MM_PERF__)
+    ? window.__MM_PERF__
+    : [];
+
+  buffer.push({
+    event,
+    at: Date.now(),
+    detail,
+  });
+
+  if (buffer.length > PERF_BUFFER_LIMIT) {
+    buffer.splice(0, buffer.length - PERF_BUFFER_LIMIT);
+  }
+
+  window.__MM_PERF__ = buffer;
 }
 
 export function AppBridgeProvider({ children }) {

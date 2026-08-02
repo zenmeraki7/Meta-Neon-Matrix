@@ -81,7 +81,7 @@ const SubscriptionDetails = memo(({ activePlan, isLoading, error }) => {
           </Text>
           <BlockStack gap="200">
             <InlineStack gap="200" align="center">
-              <Text variant="headingMd">{t("plan", { defaultValue: "Plan" })}:</Text>
+              <Text variant="headingMd">{t("planLabel", { defaultValue: "Plan" })}:</Text>
               <Badge tone={name === "Free Version" ? "attention" : "success"}>
                 {name}
               </Badge>

@@ -31,6 +31,7 @@ import {
   casMarkFailedNonTerminal,
   casTransitionExecutionState,
   countRemainingSnapshotItems,
+  findExecutionContext,
   findExecutionHistory,
   findHistoryBatch,
   findMaxSnapshotTargetKey,
@@ -38,6 +39,7 @@ import {
 import { toWorkerOperationStatusDto } from "../../dtos/workerOperationStatusDto.js";
 import { bulkEditExecuteDlqQueue } from "../../queues/adapters/jobsQueueInstancesAdapter.js";
 import { QUEUE_NAMES } from "../../queues/queueNames.js";
+import { upsertAuthoritativeChangeRecords } from "../../services/changeRecordIdentityService.js";
 import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
 import { db } from "../../repositories/repositoryDb.js";
 
@@ -163,7 +165,7 @@ function mergeBatch(existingBatch, patch) {
 }
 
 async function loadExecutionHistory({ historyId, shop }) {
-  return findExecutionHistory(historyId, shop);
+  return findExecutionContext({ historyId, shop });
 }
 
 function assertSnapshotSetBoundToOperation({ history, snapshotSetId }) {
@@ -208,8 +210,8 @@ function assertHistoryRunnable({ history, historyId, shop, executionId }) {
     OPERATION_LIFECYCLE_STATES.CANCELLED,
   ]);
 
-  if (terminalStates.has(history.executionState)) {
-    throw new Error(`OPERATION_ALREADY_TERMINAL:${history.executionState}`);
+  if (terminalStates.has(history.executionStateNormalized)) {
+    throw new Error(`OPERATION_ALREADY_TERMINAL:${history.executionStateNormalized}`);
   }
 
   const alreadySubmitted =
@@ -251,6 +253,7 @@ async function markExecuting({ historyId, shop, batchPatch = {} }) {
       OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
       OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
     ],
+    expectedStateVersion: existing?.stateVersion ?? 0,
     nextExecutionState: OPERATION_LIFECYCLE_STATES.EXECUTING,
     batchPatch: mergeBatch(existing?.batch, {
       executionWorker: WORKER_NAME,
@@ -258,7 +261,7 @@ async function markExecuting({ historyId, shop, batchPatch = {} }) {
       ...batchPatch,
     }),
   });
-  if (!updated) {
+  if (!updated || !updated.success) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_EXECUTING");
   }
   await upsertOperationStageProgress({
@@ -279,9 +282,39 @@ async function assertExecuteLeaseActive({ shop, historyId, leaseOwnerId }) {
   });
 }
 
+export async function assertWorkerOwnership({
+  historyId,
+  shop,
+  executionId = null,
+  claimedStateVersion = null,
+  executionStateNormalized = null,
+}) {
+  const where = {
+    id: historyId,
+    shop,
+    ...(executionId ? { executionIdentity: executionId } : {}),
+    ...(claimedStateVersion !== null && claimedStateVersion !== undefined
+      ? { stateVersion: Number(claimedStateVersion) }
+      : {}),
+    cancelRequestedAt: null,
+    ...(executionStateNormalized ? { executionStateNormalized } : {}),
+  };
+
+  const stillOwned = await db.editHistory.count({ where });
+
+  if (stillOwned !== 1) {
+    const error = new Error("EXECUTION_OWNERSHIP_LOST");
+    error.code = "EXECUTION_OWNERSHIP_LOST";
+    error.retryable = false;
+    throw error;
+  }
+}
+
+
 async function markCompletedEmpty({ historyId, shop, batchId }) {
   const existing = await findHistoryBatch(historyId, shop);
 
+  const now = new Date();
   const updated = await casTransitionExecutionState({
     historyId,
     shop,
@@ -291,19 +324,18 @@ async function markCompletedEmpty({ historyId, shop, batchId }) {
       OPERATION_LIFECYCLE_STATES.PLANNED,
       OPERATION_LIFECYCLE_STATES.QUEUED,
     ],
+    expectedStateVersion: existing?.stateVersion ?? 0,
     nextExecutionState: OPERATION_LIFECYCLE_STATES.COMPLETED,
     nextStatus: "completed",
     batchPatch: mergeBatch(existing?.batch, {
       completedReason: "NO_MORE_FROZEN_TARGETS",
       completedEmptyBatchId: batchId || null,
-      completedAt: new Date().toISOString(),
+      completedAt: now.toISOString(),
       hasMore: false,
     }),
-    extraData: {
-      completedAt: new Date(),
-    },
+    completedAt: now,
   });
-  if (!updated) {
+  if (!updated || !updated.success) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_COMPLETED_EMPTY");
   }
   await upsertOperationStageProgress({
@@ -330,8 +362,7 @@ async function materializePendingChangeRecords({
   const rows = Array.isArray(changes) ? changes : [];
   if (!rows.length) return;
 
-  await db.changeRecord.createMany({
-    data: rows.map((change) => {
+  const records = rows.map((change) => {
       const plannedMutation = change?.plannedMutation || {};
       const productFieldChanges = Array.isArray(plannedMutation.productFieldChanges)
         ? plannedMutation.productFieldChanges
@@ -344,6 +375,7 @@ async function materializePendingChangeRecords({
         editHistoryId: historyId,
         targetResourceType: String(change?.targetResourceType || "PRODUCT").toUpperCase(),
         targetIdentity: String(change?.targetIdentity || ""),
+        fieldPath: String(change?.fieldPath || ""),
         productId: String(change?.productId || ""),
         variantId: change?.variantId ? String(change.variantId) : null,
         shop,
@@ -360,9 +392,11 @@ async function materializePendingChangeRecords({
         status: "pending",
         batchId,
       };
-    }),
-    skipDuplicates: true,
   });
+
+  await db.$transaction((tx) =>
+    upsertAuthoritativeChangeRecords({ tx, records }),
+  );
 }
 
 async function resolveEmptyBatchCursorOrdinal({
@@ -425,6 +459,7 @@ async function markWaitingForShopifySlot({
       OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
       OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
     ],
+    expectedStateVersion: existing?.stateVersion ?? 0,
     nextExecutionState: OPERATION_LIFECYCLE_STATES.WAITING_FOR_SHOPIFY_SLOT,
     batchPatch: mergeBatch(existing?.batch, {
       waitingForShopifySlot: true,
@@ -433,7 +468,7 @@ async function markWaitingForShopifySlot({
       currentShopifyBulkOperation: currentBulkOperation || null,
     }),
   });
-  if (!updated) {
+  if (!updated || !updated.success) {
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_WAITING_SLOT");
   }
   await upsertOperationStageProgress({
@@ -453,6 +488,7 @@ async function markFailed({
   historyId,
   shop,
   error,
+  expectedFenceToken,
   failureStage = "BULK_EDIT_EXECUTE_WORKER",
 }) {
   const existing = await findHistoryBatch(historyId, shop);
@@ -460,19 +496,24 @@ async function markFailed({
   const updated = await casMarkFailedNonTerminal({
     historyId,
     shop,
+    expectedStateVersion: existing?.stateVersion ?? 0,
+    expectedFenceToken,
     failureStage,
     failureMessage: error?.message || String(error),
-    batchPatch: mergeBatch(existing?.batch, {
-      failedAt: new Date().toISOString(),
-      failureStage,
-      failureMessage: error?.message || String(error),
-      failureStack:
-        process.env.NODE_ENV === "production" ? undefined : error?.stack,
-    }),
   });
-  if (!updated) {
+
+  if (!updated || !updated.success) {
+    const reloaded = await findHistoryBatch(historyId, shop);
+    if (reloaded?.cancelRequestedAt) {
+      logger.info("Execute worker failure transition deferred to cancellation request", {
+        historyId,
+        shop,
+      });
+      return;
+    }
     throw new Error("EDIT_HISTORY_UPDATE_FAILED_MARK_FAILED");
   }
+
   await upsertOperationStageProgress({
     shop,
     operationType: "BULK_EDIT",
@@ -761,6 +802,11 @@ async function processBulkEditExecuteJob(job) {
       historyId,
       leaseOwnerId: executeLeaseOwnerId,
     });
+    await assertWorkerOwnership({
+      historyId,
+      shop,
+      executionId,
+    });
 
     await materializePendingChangeRecords({
       historyId,
@@ -793,10 +839,9 @@ async function processBulkEditExecuteJob(job) {
           historyId,
           shop,
           expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.EXECUTING],
+          expectedStateVersion: existing?.stateVersion ?? 0,
           nextExecutionState: OPERATION_LIFECYCLE_STATES.RECONCILE_SUBMITTED,
-          extraData: {
-            shopifyBulkOperationId: error.shopifyBulkOperationId,
-          },
+          shopifyBulkOperationId: error.shopifyBulkOperationId,
           batchPatch: {
             shopifyBulkOperationId: error.shopifyBulkOperationId,
             reconcileReason: "SUBMITTED_BUT_LOCAL_PERSIST_FAILED",

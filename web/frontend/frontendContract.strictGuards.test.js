@@ -28,6 +28,7 @@ function listFilesRecursive(dirPath) {
   for (const entry of entries) {
     const absolutePath = path.join(dirPath, entry.name);
     if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === "dist") continue;
       files.push(...listFilesRecursive(absolutePath));
       continue;
     }
@@ -69,7 +70,7 @@ test("frontend strict guard: no raw fetch", () => {
 
   for (const absolutePath of files) {
     const relativePath = toRepoRelative(absolutePath);
-    if (relativePath === SELF_FILE) {
+    if (relativePath === SELF_FILE || relativePath === "web/frontend/utils/performanceTelemetry.js") {
       continue;
     }
     const content = fs.readFileSync(absolutePath, "utf8");

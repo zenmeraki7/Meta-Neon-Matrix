@@ -1,8 +1,12 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { AppProvider } from "@shopify/polaris";
 import "@shopify/polaris/build/esm/styles.css";
-import { getPolarisTranslations } from "../../utils/i18nUtils";
+import {
+  getPolarisTranslations,
+  getPolarisTranslationsForLocale,
+} from "../../utils/i18nUtils";
 
 function AppBridgeLink({ url, children, external, ...rest }) {
   const navigate = useNavigate();
@@ -31,28 +35,28 @@ function AppBridgeLink({ url, children, external, ...rest }) {
   );
 }
 
-/**
- * Sets up the AppProvider from Polaris.
- * @desc PolarisProvider passes a custom link component to Polaris.
- * The Link component handles navigation within an embedded app.
- * Prefer using this vs any other method such as an anchor.
- * Use it by importing Link from Polaris, e.g:
- *
- * ```
- * import {Link} from '@shopify/polaris'
- *
- * function MyComponent() {
- *  return (
- *    <div><Link url="/tab2">Tab 2</Link></div>
- *  )
- * }
- * ```
- *
- * PolarisProvider also passes translations to Polaris.
- *
- */
 export function PolarisProvider({ children }) {
-  const translations = getPolarisTranslations() || {};
+  const { i18n } = useTranslation();
+
+  const [translations, setTranslations] = useState(
+    () => getPolarisTranslations() || {},
+  );
+
+  useEffect(() => {
+    let active = true;
+
+    void getPolarisTranslationsForLocale(
+      i18n.resolvedLanguage || i18n.language,
+    ).then((nextTranslations) => {
+      if (active) {
+        setTranslations(nextTranslations);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [i18n.language, i18n.resolvedLanguage]);
 
   return (
     <AppProvider i18n={translations} linkComponent={AppBridgeLink}>

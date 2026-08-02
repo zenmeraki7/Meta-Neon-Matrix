@@ -27,16 +27,10 @@ export function useCustomElementProps(props) {
   return { elementRef, children, rest };
 }
 
-export function SPage({ title, subtitle, backAction, children, ...props }) {
+export function SPage({ heading, subtitle, children, ...props }) {
   const { elementRef } = useCustomElementProps(props);
   return (
-    <s-page
-      ref={elementRef}
-      title={title}
-      subtitle={subtitle}
-      back-action={backAction}
-      {...props}
-    >
+    <s-page ref={elementRef} heading={heading} subtitle={subtitle} {...props}>
       {children}
     </s-page>
   );
@@ -48,15 +42,6 @@ export function SSection({ heading, children, ...props }) {
     <s-section ref={elementRef} heading={heading} {...props}>
       {children}
     </s-section>
-  );
-}
-
-export function SCard({ title, children, ...props }) {
-  const { elementRef } = useCustomElementProps(props);
-  return (
-    <s-card ref={elementRef} title={title} {...props}>
-      {children}
-    </s-card>
   );
 }
 
@@ -75,19 +60,19 @@ export function SButton({ variant, tone, disabled, onClick, children, ...props }
   );
 }
 
-export function SText({ variant, tone, as = "span", children, ...props }) {
+export function SText({ tone, color, type, children, ...props }) {
   const { elementRef } = useCustomElementProps(props);
   return (
-    <s-text ref={elementRef} variant={variant} tone={tone} as={as} {...props}>
+    <s-text ref={elementRef} tone={tone} color={color} type={type} {...props}>
       {children}
     </s-text>
   );
 }
 
-export function SBanner({ title, tone, onDismiss, children, ...props }) {
+export function SBanner({ heading, tone, onDismiss, children, ...props }) {
   const { elementRef } = useCustomElementProps({ onDismiss, ...props });
   return (
-    <s-banner ref={elementRef} title={title} tone={tone} {...props}>
+    <s-banner ref={elementRef} heading={heading} tone={tone} {...props}>
       {children}
     </s-banner>
   );

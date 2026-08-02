@@ -15,13 +15,16 @@ import { enforceShopRateLimit } from "../../utils/shopRateLimit.js";
 const QUEUE_NAME = process.env.NODE_ENV === "production" ? "product-create" : "product-create-job-dev";
 
 const productCreateWorker = new Worker(QUEUE_NAME, async (job) => {
-  const { shop, id, ...payload } = job.data || {};
+  const { shop, id, webhookDeliveryId = null, ...payload } = job.data || {};
   if (!shop || !id) throw new Error("product-create requires shop and id");
 
   await enforceShopRateLimit({ connection, shop, scope: "product-create", max: 10, durationMs: 1000 });
 
   try {
-    const store = await db.store.findUnique({ where: { shopUrl: shop }, select: { currentProductMirrorBatchId: true } });
+    const store = await db.store.findUnique({ where: { shopUrl: shop }, select: { currentProductMirrorBatchId: true, installationStatus: true } });
+    if (!store || store.installationStatus !== "INSTALLED") {
+      return { skipped: true, reason: "store_not_installed" };
+    }
     const mirrorBatchId = store?.currentProductMirrorBatchId || null;
     if (!mirrorBatchId) {
       await markRepairRequired({
@@ -54,7 +57,9 @@ const productCreateWorker = new Worker(QUEUE_NAME, async (job) => {
       productData,
       variants,
       sourceEventOccurredAt,
+      webhookDeliveryId,
     });
+    if (journal?.skipped) return { skipped: true, reason: journal.reason };
 
     await markWebhookProcessed(shop, { lastIncrementalSyncAt: new Date() }).catch(() => {});
     await Promise.allSettled([
@@ -71,6 +76,16 @@ const productCreateWorker = new Worker(QUEUE_NAME, async (job) => {
 
     return { success: true, productId: id, mirrorMutationSequence: String(journal.sequence) };
   } catch (error) {
+    if (webhookDeliveryId) {
+      await db.webhookDelivery.updateMany({
+        where: { id: webhookDeliveryId, shop },
+        data: {
+          lastError: String(error?.message || error).slice(0, 1000),
+          attemptCount: { increment: 1 },
+          updatedAt: new Date(),
+        },
+      }).catch(() => {});
+    }
     await recordMirrorAnomaly({ shop, severity: "high", type: "product_create_worker_failure", entityType: "product", entityId: id, message: error.message }).catch(() => {});
     throw error;
   }

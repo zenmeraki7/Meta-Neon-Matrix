@@ -57,8 +57,22 @@ export function createShopifyAuthenticatedFetch({
     };
   }
 
+  let pendingTokenPromise = null;
+
+  const acquireToken = () => {
+    if (!pendingTokenPromise) {
+      pendingTokenPromise = Promise.resolve()
+        .then(() => getSessionToken())
+        .finally(() => {
+          pendingTokenPromise = null;
+        });
+    }
+
+    return pendingTokenPromise;
+  };
+
   const requestOnce = async (uri, options) => {
-    const token = await getSessionToken();
+    const token = await acquireToken();
     const headers = new Headers(options.headers || {});
     headers.set("Authorization", `Bearer ${token}`);
 

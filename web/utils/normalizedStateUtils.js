@@ -1,4 +1,3 @@
-import { normalizeLifecycleToEditExecutionState } from "../services/operationLifecycleStateMachine.js";
 import { OPERATION_LIFECYCLE_STATES } from "../services/operationLifecycleStateMachine.js";
 
 function upper(value) {
@@ -16,8 +15,9 @@ export function normalizeExecutionStateLiteral(value) {
 }
 
 export function normalizeEditHistoryExecutionState(value) {
-  const lifecycleMapped = normalizeLifecycleToEditExecutionState(value);
-  const v = upper(lifecycleMapped === "UNKNOWN" ? value : lifecycleMapped);
+  const v = normalizeExecutionStateLiteral(value);
+  const canonicalLifecycleStates = new Set(Object.values(OPERATION_LIFECYCLE_STATES));
+  if (canonicalLifecycleStates.has(v)) return v;
   switch (v) {
     case "PLANNED":
     case "QUEUED":
@@ -44,6 +44,7 @@ export function normalizeEditHistoryStatus(value) {
     case "FAILED":
     case "PARTIAL":
     case "UNDO_PENDING":
+    case "CANCELLED":
       return v;
     default:
       return "UNKNOWN";
@@ -55,18 +56,16 @@ export function normalizeExportJobExecutionState(value) {
   switch (v) {
     case "PLANNED":
     case "QUEUED":
+    case "PAUSED":
     case "RUNNING":
+    case "FINALIZING":
     case "COMPLETED":
     case "FAILED":
     case "CANCELLED":
     case "UNKNOWN":
       return v;
-    case "FINALIZING":
-      return "RUNNING";
     case "PARTIAL":
       return "FAILED";
-    case "PAUSED":
-      return "QUEUED";
     default:
       return "UNKNOWN";
   }

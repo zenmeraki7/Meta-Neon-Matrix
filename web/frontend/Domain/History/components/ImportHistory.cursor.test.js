@@ -3,7 +3,7 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react-dom/test-utils";
-import ImportHistory from "./ImportHistory.jsx";
+import ImportHistory from "./ImportHistory.tsx";
 
 vi.mock("@shopify/polaris", () => {
   const wrap = (Tag = "div") => ({ children }) => React.createElement(Tag, null, children);

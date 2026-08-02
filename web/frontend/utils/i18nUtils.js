@@ -81,6 +81,8 @@ export function getUserLocale() {
   return _userLocale;
 }
 
+const _polarisPromises = new Map();
+
 export function getPolarisTranslations() {
   return _polarisTranslations;
 }
@@ -89,35 +91,44 @@ export async function getPolarisTranslationsForLocale(locale) {
   const defaultPolarisLocale = match([DEFAULT_APP_LOCALE], SUPPORTED_POLARIS_LOCALES, DEFAULT_POLARIS_LOCALE);
   const polarisLocale = match([locale || DEFAULT_APP_LOCALE], SUPPORTED_POLARIS_LOCALES, defaultPolarisLocale);
 
-  const translations = await loadPolarisTranslations(polarisLocale);
-  const localeBase = (locale || DEFAULT_APP_LOCALE).split("-")[0];
+  if (_polarisPromises.has(polarisLocale)) {
+    return _polarisPromises.get(polarisLocale);
+  }
 
-  const POLARIS_FILTER_ADD_LABELS = {
-    en: "Add filter",
-    de: "Filter hinzufügen",
-    fr: "Ajouter un filtre",
-    es: "Agregar filtro",
-    ar: "إضافة عامل تصفية",
-    hi: "फ़िल्टर जोड़ें",
-    ja: "フィルターを追加",
-    ko: "필터 추가",
-    pt: "Adicionar filtro",
-    ru: "Добавить фильтр",
-    zh: "添加筛选条件",
-  };
+  const promise = (async () => {
+    const translations = await loadPolarisTranslations(polarisLocale);
+    const localeBase = (locale || DEFAULT_APP_LOCALE).split("-")[0];
 
-  const customPolarisOverrides = POLARIS_FILTER_ADD_LABELS[localeBase]
-    ? {
-        Polaris: {
-          Filters: {
-            addFilter: POLARIS_FILTER_ADD_LABELS[localeBase],
+    const POLARIS_FILTER_ADD_LABELS = {
+      en: "Add filter",
+      de: "Filter hinzufügen",
+      fr: "Ajouter un filtre",
+      es: "Agregar filtro",
+      ar: "إضافة عامل تصفية",
+      hi: "फ़िल्टर जोड़ें",
+      ja: "フィルターを追加",
+      ko: "필터 추가",
+      pt: "Adicionar filtro",
+      ru: "Добавить фильтр",
+      zh: "添加筛选条件",
+    };
+
+    const customPolarisOverrides = POLARIS_FILTER_ADD_LABELS[localeBase]
+      ? {
+          Polaris: {
+            Filters: {
+              addFilter: POLARIS_FILTER_ADD_LABELS[localeBase],
+            },
           },
-        },
-      }
-    : {};
+        }
+      : {};
 
-  _polarisTranslations = deepMerge(translations, customPolarisOverrides);
-  return _polarisTranslations;
+    _polarisTranslations = deepMerge(translations, customPolarisOverrides);
+    return _polarisTranslations;
+  })();
+
+  _polarisPromises.set(polarisLocale, promise);
+  return promise;
 }
 
 export function initI18n() {
@@ -129,12 +140,6 @@ export function initI18n() {
     await initI18next();
     void loadIntlPolyfills().catch((error) => {
       console.error("Intl polyfill bootstrap failed", error);
-    });
-    void fetchPolarisTranslations();
-
-    i18next.on("languageChanged", async (lng) => {
-      _userLocale = match([lng], SUPPORTED_APP_LOCALES, DEFAULT_APP_LOCALE);
-      _polarisTranslations = await getPolarisTranslationsForLocale(_userLocale);
     });
 
     return i18next;
@@ -217,14 +222,6 @@ async function initI18next() {
     });
 }
 
-async function fetchPolarisTranslations() {
-  if (_polarisTranslations) {
-    return _polarisTranslations;
-  }
-
-  _polarisTranslations = await getPolarisTranslationsForLocale(getUserLocale());
-  return _polarisTranslations;
-}
 
 const POLARIS_LOCALE_DATA = {
   cs: () => import("@shopify/polaris/locales/cs.json"),

@@ -108,6 +108,13 @@ function buildVariantScopedTargetFromVariantRecord(rule, variant) {
 }
 
 export async function evaluateAutomaticRuleCandidates({ rule, run, where }) {
+  if (!run?.mirrorBatchId) {
+    const error = new Error("Automatic rule execution requires mirrorBatchId");
+    error.code = "MIRROR_BATCH_ID_REQUIRED";
+    error.statusCode = 400;
+    throw error;
+  }
+
   const triggerMetadata = normalizeTriggerReference(run.triggerReference);
   const restrictedProductIds = Array.isArray(triggerMetadata.productIds)
     ? triggerMetadata.productIds.filter(Boolean)
@@ -118,13 +125,15 @@ export async function evaluateAutomaticRuleCandidates({ rule, run, where }) {
 
   const finalWhere = {
     ...where,
+    shop: rule.shop,
+    mirrorBatchId: run.mirrorBatchId,
     ...(restrictedProductIds.length ? { id: { in: restrictedProductIds } } : {}),
   };
 
   const isVariantScope = rule?.targetResourceType === "VARIANT";
   const variantBaseWhere = {
     shop: rule.shop,
-    ...(run?.mirrorBatchId ? { mirrorBatchId: run.mirrorBatchId } : {}),
+    mirrorBatchId: run.mirrorBatchId,
     product: finalWhere,
     ...(restrictedVariantIds.length ? { id: { in: restrictedVariantIds } } : {}),
   };
@@ -136,7 +145,7 @@ export async function evaluateAutomaticRuleCandidates({ rule, run, where }) {
   const candidateTargets = [];
   const matchedStateUpdates = [];
   const appliedStateUpdates = [];
-  const include = buildProductInclude(rule.actions, run?.mirrorBatchId || null);
+  const include = buildProductInclude(rule.actions, run.mirrorBatchId);
   const batchSize = Math.min(rule.maxAffectedPerRun || 250, 250);
   let cursorId = null;
   let hasMore = true;

@@ -143,6 +143,12 @@ function PricingCard({ plan, isSubscribing, onSelectPlan, t, planText }) {
   );
 }
 
+function debugPricing(event, details) {
+  if (import.meta.env.DEV) {
+    console.info(event, details);
+  }
+}
+
 export default function PricingPage() {
   const navigate = useNavigate();
   const { t } = useTranslation(["subscription", "common"]);
@@ -165,7 +171,7 @@ export default function PricingPage() {
 
   useEffect(() => {
     const { host } = getShopifyContext();
-    console.info("Pricing page mounted", {
+    debugPricing("Pricing page mounted", {
       hasHost: Boolean(host),
     });
 
@@ -175,7 +181,7 @@ export default function PricingPage() {
         const syncResponse = await api.post("/api/billing/sync", null, {
           idempotent: true,
         });
-        console.info("Billing sync completed", {
+        debugPricing("Billing sync completed", {
           synced: Boolean(syncResponse?.synced),
           planKey: syncResponse?.planKey || null,
           mock: Boolean(syncResponse?.mock),
@@ -225,7 +231,7 @@ export default function PricingPage() {
         );
       }
 
-      console.info("Billing plan selected", {
+      debugPricing("Billing plan selected", {
         pricingPlanKey: plan.key,
         billingPlan,
       });
@@ -266,7 +272,7 @@ export default function PricingPage() {
         );
       }
 
-      console.info("Redirecting to Shopify billing approval", {
+      debugPricing("Redirecting to Shopify billing approval", {
         plan: billingPlan,
         confirmationUrlPresent: Boolean(data.confirmationUrl),
       });

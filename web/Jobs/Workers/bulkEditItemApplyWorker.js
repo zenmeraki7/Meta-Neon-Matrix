@@ -14,13 +14,13 @@ import {
 /**
  * You need to implement/map these repository methods to your existing DB layer.
  */
+import crypto from "crypto";
 import {
-  findBulkEditItemForApply,
-  markBulkEditItemApplying,
-  markBulkEditItemDone,
+  claimBulkEditItem,
+  completeItemAndParent,
+  parseTrustedMetafieldMutation,
   markBulkEditItemFailed,
   markBulkEditItemDeferred,
-  incrementBulkEditParentCounters,
 } from "../../repositories/bulkEditItemApplyRepository.js";
 
 const WORKER_NAME = "bulkEditItemApplyWorker";
@@ -121,31 +121,18 @@ function isRetryableError(error) {
 function assertPayload(job) {
   const data = job.data || {};
 
-  const bulkApplyJobId = String(data.bulkApplyJobId || "").trim();
+  const bulkApplyJobId = String(data.bulkApplyJobId || data.operationId || "").trim();
   const itemId = String(data.itemId || "").trim();
   const shop = String(data.shop || "").trim();
-  const ownerId = String(data.ownerId || "").trim();
-  const namespace = String(data.namespace || "").trim();
-  const key = String(data.key || "").trim();
-  const type = String(data.type || "").trim();
 
   if (!bulkApplyJobId) throw new Error("bulkApplyJobId is required");
   if (!itemId) throw new Error("itemId is required");
   if (!shop) throw new Error("shop is required");
-  if (!ownerId) throw new Error("ownerId is required");
-  if (!namespace) throw new Error("namespace is required");
-  if (!key) throw new Error("key is required");
-  if (!type) throw new Error("type is required");
 
   return {
     bulkApplyJobId,
     itemId,
     shop,
-    ownerId,
-    namespace,
-    key,
-    type,
-    value: data.value,
   };
 }
 
@@ -205,48 +192,25 @@ async function applyMetafield({ client, ownerId, namespace, key, type, value }) 
 async function processBulkEditItemApplyJob(job) {
   const payload = assertPayload(job);
   const { bulkApplyJobId, itemId, shop } = payload;
+  const executionOwnerId = `job:${job.id}`;
+  const externalAttemptId = crypto.randomUUID();
 
   try {
-    await job.updateProgress({ stage: "loading_item", pct: 10 });
+    await job.updateProgress({ stage: "claiming_item", pct: 10 });
 
-    const item = await findBulkEditItemForApply({
+    const item = await claimBulkEditItem({
       bulkApplyJobId,
       itemId,
       shop,
+      ownerId: executionOwnerId,
+      externalAttemptId,
     });
 
     if (!item) {
-      const error = new Error("BULK_EDIT_ITEM_NOT_FOUND");
-      error.nonRetryable = true;
-      throw error;
+      return { skipped: true, reason: "ITEM_NOT_CLAIMED" };
     }
 
-    if (item.status === "DONE") {
-      return {
-        success: true,
-        skipped: true,
-        reason: "ITEM_ALREADY_DONE",
-        bulkApplyJobId,
-        itemId,
-      };
-    }
-
-    if (item.status === "CANCELLED") {
-      return {
-        success: true,
-        skipped: true,
-        reason: "ITEM_CANCELLED",
-        bulkApplyJobId,
-        itemId,
-      };
-    }
-
-    await markBulkEditItemApplying({
-      bulkApplyJobId,
-      itemId,
-      shop,
-      attempt: Number(job.attemptsMade || 0) + 1,
-    });
+    const mutation = parseTrustedMetafieldMutation(item.plannedMutation, item);
 
     await job.updateProgress({ stage: "building_session", pct: 25 });
 
@@ -257,25 +221,25 @@ async function processBulkEditItemApplyJob(job) {
 
     const appliedMetafield = await applyMetafield({
       client,
-      ownerId: payload.ownerId,
-      namespace: payload.namespace,
-      key: payload.key,
-      type: payload.type,
-      value: payload.value,
+      ownerId: mutation.ownerId,
+      namespace: mutation.namespace,
+      key: mutation.key,
+      type: mutation.type,
+      value: mutation.value,
     });
 
-    await markBulkEditItemDone({
+    const completed = await completeItemAndParent({
       bulkApplyJobId,
       itemId,
       shop,
+      executionOwnerId,
+      externalAttemptId,
       shopifyMetafieldId: appliedMetafield?.id || null,
     });
 
-    await incrementBulkEditParentCounters({
-      bulkApplyJobId,
-      shop,
-      completedDelta: 1,
-    });
+    if (!completed) {
+      throw new Error("ITEM_COMPLETION_OWNERSHIP_LOST");
+    }
 
     await job.updateProgress({ stage: "done", pct: 100 });
 
@@ -290,19 +254,15 @@ async function processBulkEditItemApplyJob(job) {
     const retryAfterMs = parseRetryAfterMs(error);
 
     if (retryAfterMs && retryAfterMs > LONG_RETRY_AFTER_MS) {
+      const nextAttemptNumber = Number(job.attemptsMade || 0) + 1;
       await markBulkEditItemDeferred({
         bulkApplyJobId,
         itemId,
         shop,
-        reason: "LONG_RETRY_AFTER",
+        executionOwnerId,
+        externalAttemptId,
         retryAfterMs,
-        message: safeMessage(error),
-      });
-
-      await incrementBulkEditParentCounters({
-        bulkApplyJobId,
-        shop,
-        deferredDelta: 1,
+        nextAttemptNumber,
       });
 
       return {
@@ -322,15 +282,11 @@ async function processBulkEditItemApplyJob(job) {
         bulkApplyJobId,
         itemId,
         shop,
+        executionOwnerId,
+        externalAttemptId,
         reason: error?.nonRetryable ? "NON_RETRYABLE" : "RETRIES_EXHAUSTED",
         message: safeMessage(error),
         userErrors: error?.userErrors || null,
-      });
-
-      await incrementBulkEditParentCounters({
-        bulkApplyJobId,
-        shop,
-        failedDelta: 1,
       });
     }
 

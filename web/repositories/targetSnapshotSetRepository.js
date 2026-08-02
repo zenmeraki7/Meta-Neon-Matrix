@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { prisma } from "../config/database.js";
+import { normalizeTargetSnapshotRow } from "../helpers/targetSnapshotFieldRegistry.js";
 
 const TERMINAL_SET_STATUSES = new Set(["FROZEN", "FREEZE_FAILED", "EXPIRED", "CANCELLED", "CORRUPTED"]);
 
@@ -78,7 +79,6 @@ async function ensureSnapshotSet({
     data: {
       shop,
       operationId,
-      previewContractId: operationId,
       mirrorBatchId,
       targetDefinitionHash: String(targetDefinitionHash || "").trim() || sha256(operationId),
       compilerVersion: "canonical-target-freeze-v1",
@@ -135,8 +135,6 @@ export async function appendSnapshotItems({
     db,
   });
   const data = rows.map((row) => {
-    const targetResourceType = String(row.targetResourceType || "").toUpperCase();
-    const targetKey = String(row.targetKey || row.targetIdentity || "").trim();
     const beforeValues = row.beforeValues && typeof row.beforeValues === "object"
       ? row.beforeValues
       : {};
@@ -145,30 +143,52 @@ export async function appendSnapshotItems({
       : beforeValues.plannedMutation && typeof beforeValues.plannedMutation === "object"
         ? beforeValues.plannedMutation
         : {};
-    const targetRowHash = String(row.targetRowHash || "").trim() || sha256(targetKey);
+    const normalized = normalizeTargetSnapshotRow({
+      ...row,
+      beforeValues,
+      plannedMutation,
+    });
+    const { targetResourceType, targetKey, fieldPath } = normalized;
+    const targetRowHash =
+      String(row.targetRowHash || "").trim() || sha256(`${targetKey}:${fieldPath}`);
     return {
       snapshotSetId: set.id,
       shop,
       operationId: set.operationId,
       mirrorBatchId,
-      productId: row.productId ? String(row.productId).trim() : null,
-      variantId: row.variantId ? String(row.variantId).trim() : null,
-      collectionId: row.collectionId ? String(row.collectionId).trim() : null,
-      inventoryItemId: row.inventoryItemId ? String(row.inventoryItemId).trim() : null,
-      locationId: row.locationId ? String(row.locationId).trim() : null,
+      productId: normalized.productId,
+      variantId: normalized.variantId,
+      collectionId: normalized.collectionId,
+      inventoryItemId: normalized.inventoryItemId,
+      locationId: normalized.locationId,
+      productOptionPosition: normalized.productOptionPosition,
+      metafieldOwnerId: normalized.metafieldOwnerId,
+      metafieldOwnerType: normalized.metafieldOwnerType,
+      metafieldNamespace: normalized.metafieldNamespace,
+      metafieldKey: normalized.metafieldKey,
       targetKey,
+      fieldPath,
       targetResourceType,
       targetGranularity: row.targetGranularity || null,
       ordinal: Number(row.ordinal || 0),
-      mutationGroupKey: row.changeSource || row.source || null,
-      beforeValues,
+      mutationGroupKey:
+        row.atomicMutationGroup === true
+          ? String(row.mutationGroupKey || row.changeSource || row.source || targetRowHash)
+          : null,
+      beforeValues, // legacyRow.beforeValues.plannedMutation
       plannedMutation,
+      beforeValueHash: normalized.beforeValueHash,
+      plannedValueHash: normalized.plannedValueHash,
+      writtenValueHash: normalized.writtenValueHash,
+      sourceVersion: normalized.sourceVersion,
+      sourceUpdatedAt: normalized.sourceUpdatedAt,
       targetRowHash,
       rowChecksum: String(row.rowChecksum || "").trim() || sha256(stableStringify({
         shop,
         operationId: set.operationId,
         mirrorBatchId,
         targetKey,
+        fieldPath,
         targetResourceType,
         beforeValues,
         plannedMutation,
@@ -177,6 +197,86 @@ export async function appendSnapshotItems({
   });
   const result = await db.targetSnapshotItem.createMany({ data, skipDuplicates });
   return result;
+}
+
+export async function freezeTargetSnapshotSet({
+  shop,
+  snapshotSetId,
+  expectedRevision = 1,
+  db = prisma,
+}) {
+  const freezeFn = async (tx) => {
+    const set = await tx.targetSnapshotSet.findFirst({
+      where: {
+        shop,
+        id: snapshotSetId,
+        revision: expectedRevision,
+        status: { in: ["FREEZING", "TARGET_FREEZING"] },
+      },
+    });
+
+    if (!set) {
+      const existing = await tx.targetSnapshotSet.findFirst({
+        where: { shop, id: snapshotSetId },
+      });
+      if (existing && existing.status === "FROZEN") {
+        return existing;
+      }
+      throw new Error("TARGET_SNAPSHOT_SET_NOT_FREEZING");
+    }
+
+    const itemCount = await tx.targetSnapshotItem.count({
+      where: {
+        shop,
+        snapshotSetId,
+        snapshotRevision: expectedRevision,
+      },
+    });
+
+    const maximum = await tx.targetSnapshotItem.findFirst({
+      where: {
+        shop,
+        snapshotSetId,
+        snapshotRevision: expectedRevision,
+      },
+      orderBy: [
+        { targetKey: "desc" },
+        { fieldPath: "desc" },
+      ],
+      select: {
+        targetKey: true,
+        fieldPath: true,
+      },
+    });
+
+    const terminalCursor = maximum ? encodeSnapshotItemCursor(maximum) : null;
+    const frozenAt = new Date();
+
+    await tx.targetSnapshotSet.updateMany({
+      where: {
+        shop,
+        id: snapshotSetId,
+        revision: expectedRevision,
+        status: { in: ["FREEZING", "TARGET_FREEZING"] },
+      },
+      data: {
+        status: "FROZEN",
+        itemCount,
+        terminalCursor,
+        frozenAt,
+      },
+    });
+
+    return tx.targetSnapshotSet.findFirst({
+      where: { shop, id: snapshotSetId },
+    });
+  };
+
+  if (db && db.$transaction === undefined) {
+    return freezeFn(db);
+  }
+
+  return prisma.$transaction(freezeFn);
 }
 
 export async function finalizeSnapshotItemsForOperation({
@@ -206,22 +306,12 @@ export async function finalizeSnapshotItemsForOperation({
   }
   if (!set) throw new Error("TARGET_SNAPSHOT_SET_NOT_FOUND");
   await refreshTargetSnapshotSetCounters({ shop, snapshotSetId: set.id, db });
-  const keys = await db.targetSnapshotItem.findMany({
-    where: { shop, snapshotSetId: set.id },
-    select: { targetKey: true },
-    orderBy: [{ targetKey: "asc" }],
+  return freezeTargetSnapshotSet({
+    shop,
+    snapshotSetId: set.id,
+    expectedRevision: set.revision ?? 1,
+    db,
   });
-  await db.targetSnapshotSet.updateMany({
-    where: { id: set.id, shop, status: { in: ["FREEZING", "FROZEN"] } },
-    data: {
-      status: "FROZEN",
-      targetSetHash: sha256(keys.map((row) => row.targetKey).join("\n")),
-      frozenAt: new Date(),
-      freezeErrorCode: null,
-      freezeErrorMessage: null,
-    },
-  });
-  return db.targetSnapshotSet.findFirst({ where: { id: set.id, shop } });
 }
 
 export async function countSnapshotItems({
@@ -290,13 +380,6 @@ export async function findSnapshotItems({
   }));
 }
 
-function buildTargetKey(row) {
-  const targetResourceType = String(row?.targetResourceType || "").toUpperCase();
-  if (targetResourceType === "PRODUCT") return `PRODUCT:${String(row?.productId || "").trim()}`;
-  if (targetResourceType === "VARIANT") return `VARIANT:${String(row?.variantId || "").trim()}`;
-  return `${targetResourceType}:${String(row?.targetIdentity || "").trim()}`;
-}
-
 function buildRowChecksum({
   snapshotSetId,
   shop,
@@ -315,11 +398,14 @@ function buildRowChecksum({
       mirrorBatchId,
       targetResourceType: String(row?.targetResourceType || "").toUpperCase(),
       targetKey,
+      fieldPath: row?.fieldPath || null,
       productId: row?.productId || null,
       variantId: row?.variantId || null,
       beforeValues: row?.beforeValues || null,
       plannedMutation: row?.plannedMutation || {},
-      targetRowHash: sha256(targetKey),
+      beforeValueHash: row?.beforeValueHash || null,
+      plannedValueHash: row?.plannedValueHash || null,
+      targetRowHash: sha256(`${targetKey}:${row?.fieldPath || ""}`),
       compilerVersion,
       projectionVersion,
     }),
@@ -340,6 +426,9 @@ function buildTargetSetHash({
   variantCount,
   inventoryItemCount,
   metafieldCount,
+  productOptionCount,
+  collectionMembershipCount,
+  inventoryLevelCount,
   sortedRowChecksums,
 }) {
   return sha256(
@@ -357,6 +446,9 @@ function buildTargetSetHash({
       variantCount,
       inventoryItemCount,
       metafieldCount,
+      productOptionCount,
+      collectionMembershipCount,
+      inventoryLevelCount,
       targetSetHashVersion: "sha256-stable-json-v2",
       rowChecksumAlgorithm: "sha256-stable-json-v1",
       sortedRowChecksums,
@@ -391,9 +483,8 @@ export async function finalizeFrozenSnapshotSet({
 
   const set = existing
     ? await db.targetSnapshotSet.update({
-      where: { id: existing.id },
+      where: { shop_id: { shop, id: existing.id } },
       data: {
-        previewContractId: resolvedPreviewContractId,
         mirrorBatchId: resolvedMirrorBatchId,
         targetDefinitionHash: String(targetDefinitionHash || "").trim() || sha256(`${shop}:${historyId}:${resolvedMirrorBatchId}`),
         compilerVersion,
@@ -408,7 +499,6 @@ export async function finalizeFrozenSnapshotSet({
       data: {
         shop,
         operationId: resolvedOperationId,
-        previewContractId: resolvedPreviewContractId,
         mirrorBatchId: resolvedMirrorBatchId,
         targetDefinitionHash: String(targetDefinitionHash || "").trim() || sha256(`${shop}:${historyId}:${resolvedMirrorBatchId}`),
         compilerVersion,
@@ -444,28 +534,39 @@ export async function finalizeFrozenSnapshotSet({
     let variantCount = 0;
     let inventoryItemCount = 0;
     let metafieldCount = 0;
+    let productOptionCount = 0;
+    let collectionMembershipCount = 0;
+    let inventoryLevelCount = 0;
     let itemOrdinal = 0;
 
     for (const frozenRow of frozenRows) {
-      const targetResourceType = String(frozenRow?.targetResourceType || "").toUpperCase();
-      const targetKey = buildTargetKey(frozenRow);
-      if (!targetKey || targetKey.endsWith(":")) {
-        continue;
-      }
       const plannedMutation =
-        frozenRow.beforeValues &&
-        typeof frozenRow.beforeValues === "object" &&
-        !Array.isArray(frozenRow.beforeValues) &&
-        frozenRow.beforeValues.plannedMutation &&
-        typeof frozenRow.beforeValues.plannedMutation === "object"
+        frozenRow.plannedMutation &&
+        typeof frozenRow.plannedMutation === "object"
+          ? frozenRow.plannedMutation
+          : frozenRow.beforeValues &&
+            typeof frozenRow.beforeValues === "object" &&
+            !Array.isArray(frozenRow.beforeValues) &&
+            frozenRow.beforeValues.plannedMutation &&
+            typeof frozenRow.beforeValues.plannedMutation === "object"
           ? frozenRow.beforeValues.plannedMutation
           : {};
+      const normalized = normalizeTargetSnapshotRow({
+        ...frozenRow,
+        plannedMutation,
+        atomicMutationGroup: Boolean(frozenRow.mutationGroupKey),
+      });
+      const { targetResourceType, targetKey, fieldPath } = normalized;
       const rowChecksum = buildRowChecksum({
         snapshotSetId: set.id,
         shop,
         operationId: resolvedOperationId,
         mirrorBatchId: resolvedMirrorBatchId,
-        row: { ...frozenRow, plannedMutation },
+        row: {
+          ...frozenRow,
+          ...normalized,
+          plannedMutation,
+        },
         targetKey,
         compilerVersion,
         projectionVersion,
@@ -475,21 +576,38 @@ export async function finalizeFrozenSnapshotSet({
       if (targetResourceType === "VARIANT") variantCount += 1;
       if (targetResourceType === "INVENTORY_ITEM") inventoryItemCount += 1;
       if (targetResourceType === "METAFIELD") metafieldCount += 1;
+      if (targetResourceType === "PRODUCT_OPTION") productOptionCount += 1;
+      if (targetResourceType === "COLLECTION_MEMBERSHIP") collectionMembershipCount += 1;
+      if (targetResourceType === "INVENTORY_LEVEL") inventoryLevelCount += 1;
       rows.push({
         snapshotSetId: set.id,
         shop,
         operationId: resolvedOperationId,
         mirrorBatchId: resolvedMirrorBatchId,
-        productId: frozenRow.productId ? String(frozenRow.productId).trim() : null,
-        variantId: frozenRow.variantId ? String(frozenRow.variantId).trim() : null,
+        productId: normalized.productId,
+        variantId: normalized.variantId,
+        collectionId: normalized.collectionId,
+        inventoryItemId: normalized.inventoryItemId,
+        locationId: normalized.locationId,
+        productOptionPosition: normalized.productOptionPosition,
+        metafieldOwnerId: normalized.metafieldOwnerId,
+        metafieldOwnerType: normalized.metafieldOwnerType,
+        metafieldNamespace: normalized.metafieldNamespace,
+        metafieldKey: normalized.metafieldKey,
         targetKey,
+        fieldPath,
         targetResourceType,
         targetGranularity: frozenRow.targetGranularity || null,
         ordinal: Number.isInteger(frozenRow.ordinal) ? frozenRow.ordinal : itemOrdinal,
         mutationGroupKey: source,
         beforeValues: frozenRow.beforeValues || {},
         plannedMutation,
-        targetRowHash: sha256(targetKey),
+        beforeValueHash: normalized.beforeValueHash,
+        plannedValueHash: normalized.plannedValueHash,
+        writtenValueHash: normalized.writtenValueHash,
+        sourceVersion: normalized.sourceVersion,
+        sourceUpdatedAt: normalized.sourceUpdatedAt,
+        targetRowHash: sha256(`${targetKey}:${fieldPath}`),
         rowChecksum,
       });
       itemOrdinal += 1;
@@ -519,6 +637,9 @@ export async function finalizeFrozenSnapshotSet({
       variantCount,
       inventoryItemCount,
       metafieldCount,
+      productOptionCount,
+      collectionMembershipCount,
+      inventoryLevelCount,
       sortedRowChecksums,
     });
 
@@ -536,6 +657,9 @@ export async function finalizeFrozenSnapshotSet({
         variantCount,
         inventoryItemCount,
         metafieldCount,
+        productOptionCount,
+        collectionMembershipCount,
+        inventoryLevelCount,
         mutationPendingCount: targetCount,
         mutationSubmittedCount: 0,
         mutationSucceededCount: 0,
@@ -560,7 +684,7 @@ export async function finalizeFrozenSnapshotSet({
       throw error;
     }
     const frozenSet = await db.targetSnapshotSet.findUnique({
-      where: { id: set.id },
+      where: { shop_id: { shop, id: set.id } },
     });
     if (!frozenSet || frozenSet.status !== "FROZEN") {
       throw new Error("TARGET_SNAPSHOT_SET_FREEZE_FINALIZE_MISSING");
@@ -664,11 +788,14 @@ export async function refreshTargetSnapshotSetCounters({
         COUNT(*) FILTER (WHERE item."targetType" = 'VARIANT')::integer AS "variantCount",
         COUNT(*) FILTER (WHERE item."targetType" = 'INVENTORY_ITEM')::integer AS "inventoryItemCount",
         COUNT(*) FILTER (WHERE item."targetType" = 'METAFIELD')::integer AS "metafieldCount",
-        COUNT(*) FILTER (WHERE item."executionStatus" = 'PENDING')::integer AS "mutationPendingCount",
+        COUNT(*) FILTER (WHERE item."targetType" = 'PRODUCT_OPTION')::integer AS "productOptionCount",
+        COUNT(*) FILTER (WHERE item."targetType" = 'COLLECTION_MEMBERSHIP')::integer AS "collectionMembershipCount",
+        COUNT(*) FILTER (WHERE item."targetType" = 'INVENTORY_LEVEL')::integer AS "inventoryLevelCount",
+        COUNT(*) FILTER (WHERE item."executionStatus" IN ('PENDING', 'DEFERRED'))::integer AS "mutationPendingCount",
         COUNT(*) FILTER (WHERE item."executionStatus" = 'SUBMITTED')::integer AS "mutationSubmittedCount",
         COUNT(*) FILTER (WHERE item."executionStatus" = 'SUCCEEDED')::integer AS "mutationSucceededCount",
         COUNT(*) FILTER (WHERE item."executionStatus" = 'FAILED')::integer AS "mutationFailedCount",
-        COUNT(*) FILTER (WHERE item."executionStatus" = 'SKIPPED')::integer AS "mutationSkippedCount",
+        COUNT(*) FILTER (WHERE item."executionStatus" IN ('SKIPPED', 'CANCELLED'))::integer AS "mutationSkippedCount",
         COUNT(*) FILTER (WHERE item."verificationStatus" = 'PENDING')::integer AS "verificationPendingCount",
         COUNT(*) FILTER (WHERE item."verificationStatus" = 'SUCCEEDED')::integer AS "verificationSucceededCount",
         COUNT(*) FILTER (WHERE item."verificationStatus" = 'FAILED')::integer AS "verificationFailedCount",
@@ -687,6 +814,9 @@ export async function refreshTargetSnapshotSetCounters({
         "variantCount" = counts."variantCount",
         "inventoryItemCount" = counts."inventoryItemCount",
         "metafieldCount" = counts."metafieldCount",
+        "productOptionCount" = counts."productOptionCount",
+        "collectionMembershipCount" = counts."collectionMembershipCount",
+        "inventoryLevelCount" = counts."inventoryLevelCount",
         "pendingCount" = counts."mutationPendingCount",
         "submittedCount" = counts."mutationSubmittedCount",
         "succeededCount" = counts."mutationSucceededCount",
@@ -710,9 +840,133 @@ export async function refreshTargetSnapshotSetCounters({
   });
 }
 
+function buildRepositoryError(code, message) {
+  const error = new Error(message || code);
+  error.code = code;
+  return error;
+}
+
+export function encodeSnapshotItemCursor({
+  shop = "",
+  snapshotSetId = "",
+  snapshotRevision = 1,
+  targetKey,
+  fieldPath = "",
+}) {
+  const key = String(targetKey || "").trim();
+  if (!key) return null;
+  const payload = {
+    version: 1,
+    shop: String(shop || "").trim(),
+    snapshotSetId: String(snapshotSetId || "").trim(),
+    snapshotRevision: Number(snapshotRevision || 1),
+    targetKey: key,
+    fieldPath: String(fieldPath || "").trim(),
+  };
+  return Buffer.from(JSON.stringify(payload)).toString("base64url");
+}
+
+export function decodeSnapshotItemCursor(cursorValue) {
+  if (!cursorValue || typeof cursorValue !== "string") return null;
+  try {
+    const raw = Buffer.from(cursorValue, "base64url").toString("utf8");
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === "object" && obj.targetKey) {
+      return {
+        version: obj.version || 1,
+        shop: String(obj.shop || ""),
+        snapshotSetId: String(obj.snapshotSetId || ""),
+        snapshotRevision: Number(obj.snapshotRevision || 1),
+        targetKey: String(obj.targetKey || ""),
+        fieldPath: String(obj.fieldPath || ""),
+      };
+    }
+  } catch {
+    const value = String(cursorValue || "").trim();
+    const separator = value.indexOf("\u001f");
+    if (separator >= 0) {
+      return {
+        version: 1,
+        shop: "",
+        snapshotSetId: "",
+        snapshotRevision: 1,
+        targetKey: value.slice(0, separator),
+        fieldPath: value.slice(separator + 1),
+      };
+    }
+    return {
+      version: 1,
+      shop: "",
+      snapshotSetId: "",
+      snapshotRevision: 1,
+      targetKey: value,
+      fieldPath: "",
+    };
+  }
+  return null;
+}
+
+export function validateSnapshotCursorScope(
+  cursor,
+  { shop, snapshotSetId, snapshotRevision = 1 }
+) {
+  if (!cursor) return;
+
+  if (
+    (cursor.shop && cursor.shop !== shop) ||
+    (cursor.snapshotSetId && cursor.snapshotSetId !== snapshotSetId) ||
+    (cursor.snapshotRevision && cursor.snapshotRevision !== snapshotRevision)
+  ) {
+    throw buildRepositoryError("SNAPSHOT_CURSOR_SCOPE_MISMATCH");
+  }
+}
+
+export function buildAfterCursorPredicate(cursor) {
+  if (!cursor) return {};
+
+  return {
+    OR: [
+      {
+        targetKey: {
+          gt: cursor.targetKey,
+        },
+      },
+      {
+        targetKey: cursor.targetKey,
+        fieldPath: {
+          gt: cursor.fieldPath,
+        },
+      },
+    ],
+  };
+}
+
+export async function findFrozenSnapshotBoundary({
+  snapshotSetId,
+  shop,
+  expectedRevision = 1,
+  tx = prisma,
+}) {
+  return tx.targetSnapshotSet.findFirst({
+    where: {
+      id: snapshotSetId,
+      shop,
+      revision: expectedRevision,
+      status: "FROZEN",
+    },
+    select: {
+      itemCount: true,
+      terminalCursor: true,
+      revision: true,
+    },
+  });
+}
+
 export async function listFrozenSnapshotItemsPage({
   shop,
   snapshotSetId,
+  snapshotRevision = 1,
+  cursorValue = null,
   cursorTargetKey = null,
   lastTargetKey = null,
   limit = 1000,
@@ -722,20 +976,36 @@ export async function listFrozenSnapshotItemsPage({
   undoStatus = null,
   db = prisma,
 }) {
-  const resolvedLastTargetKey = String(lastTargetKey || cursorTargetKey || "").trim() || null;
+  const rawCursor = cursorValue || cursorTargetKey || lastTargetKey || null;
+  const decodedCursor = decodeSnapshotItemCursor(rawCursor);
+  if (decodedCursor && decodedCursor.shop && decodedCursor.snapshotSetId) {
+    validateSnapshotCursorScope(decodedCursor, {
+      shop,
+      snapshotSetId,
+      snapshotRevision,
+    });
+  }
+
+  const cursorPredicate = buildAfterCursorPredicate(decodedCursor);
+
   const where = {
     shop,
     snapshotSetId,
-    ...(targetResourceType ? { targetResourceType } : {}),
+    snapshotRevision,
+    ...(Array.isArray(targetResourceType)
+      ? { targetResourceType: { in: targetResourceType } }
+      : targetResourceType
+        ? { targetResourceType }
+        : {}),
     ...(Array.isArray(targetKeys) && targetKeys.length > 0 ? { targetKey: { in: targetKeys } } : {}),
     ...(executionStatus ? { executionStatus } : {}),
     ...(undoStatus ? { undoStatus } : {}),
-    ...(resolvedLastTargetKey ? { targetKey: { gt: resolvedLastTargetKey } } : {}),
+    ...cursorPredicate,
   };
 
   const rows = await db.targetSnapshotItem.findMany({
     where,
-    orderBy: [{ targetKey: "asc" }],
+    orderBy: [{ targetKey: "asc" }, { fieldPath: "asc" }],
     take: limit + 1,
     select: {
       id: true,
@@ -743,6 +1013,7 @@ export async function listFrozenSnapshotItemsPage({
       variantId: true,
       targetResourceType: true,
       targetKey: true,
+      fieldPath: true,
       beforeValues: true,
       plannedMutation: true,
       rowChecksum: true,
@@ -753,10 +1024,21 @@ export async function listFrozenSnapshotItemsPage({
 
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = pageRows.length
+    ? encodeSnapshotItemCursor({
+        shop,
+        snapshotSetId,
+        snapshotRevision,
+        targetKey: pageRows[pageRows.length - 1].targetKey,
+        fieldPath: pageRows[pageRows.length - 1].fieldPath,
+      })
+    : null;
+
   return {
     rows: pageRows,
     hasMore,
-    cursorTargetKey: pageRows.length ? pageRows[pageRows.length - 1].targetKey : null,
+    cursorValue: nextCursor,
+    cursorTargetKey: nextCursor,
   };
 }
 

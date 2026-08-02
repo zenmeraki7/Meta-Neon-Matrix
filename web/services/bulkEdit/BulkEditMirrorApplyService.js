@@ -218,6 +218,7 @@ export async function applyMirrorFromSuccessfulChangeRecords({
     select: {
       id: true,
       targetIdentity: true,
+      fieldPath: true,
       productId: true,
       variantId: true,
       productFieldChanges: true,
@@ -232,20 +233,27 @@ export async function applyMirrorFromSuccessfulChangeRecords({
   let appliedProductRows = 0;
   let appliedVariantRows = 0;
 
-  const targetKeys = rows
-    .map((row) => String(row?.targetIdentity || "").trim())
-    .filter(Boolean);
-  const snapshotRows = targetKeys.length
+  const targetFields = [...new Map(
+    rows
+      .map((row) => ({
+        targetKey: String(row?.targetIdentity || "").trim(),
+        fieldPath: String(row?.fieldPath || "").trim(),
+      }))
+      .filter((row) => row.targetKey && row.fieldPath)
+      .map((row) => [`${row.targetKey}\u001f${row.fieldPath}`, row]),
+  ).values()];
+  const snapshotRows = targetFields.length
     ? await db.targetSnapshotItem.findMany({
         where: {
           shop,
           snapshotSetId,
-          targetKey: { in: targetKeys },
+          OR: targetFields,
           executionStatus: "SUCCEEDED",
         },
         select: {
           id: true,
           targetKey: true,
+          fieldPath: true,
           plannedMutation: true,
           beforeValues: true,
         },
@@ -253,6 +261,18 @@ export async function applyMirrorFromSuccessfulChangeRecords({
     : [];
   assertBoundedRows("Bulk mirror change batch", rows.length);
   assertSnapshotItemsFullyIngested(snapshotRows, "mirror_apply");
+  const snapshotTargetFields = new Set(
+    snapshotRows.map((row) => `${row.targetKey}\u001f${row.fieldPath}`),
+  );
+  const missingTargetField = targetFields.find(
+    (row) => !snapshotTargetFields.has(`${row.targetKey}\u001f${row.fieldPath}`),
+  );
+  if (missingTargetField) {
+    const error = new Error("MIRROR_APPLY_TRUSTED_SNAPSHOT_FIELD_REQUIRED");
+    error.code = "MIRROR_APPLY_TRUSTED_SNAPSHOT_FIELD_REQUIRED";
+    error.details = missingTargetField;
+    throw error;
+  }
 
   const productUpdates = new Map();
   const variantUpdates = new Map();
@@ -326,6 +346,8 @@ export async function applyMirrorFromSuccessfulChangeRecords({
           "seoTitle" = CASE WHEN row.patch ? 'seoTitle' THEN row.patch->>'seoTitle' ELSE product."seoTitle" END,
           "seoDescription" = CASE WHEN row.patch ? 'seoDescription' THEN row.patch->>'seoDescription' ELSE product."seoDescription" END,
           "tags" = CASE WHEN row.patch ? 'tags' THEN ARRAY(SELECT jsonb_array_elements_text(row.patch->'tags')) ELSE product."tags" END,
+          "lastSourceKind" = 'BULK_EDIT_VERIFICATION',
+          "lastReconciledAt" = ${now},
           "updatedAt" = ${now}
         FROM jsonb_to_recordset(${JSON.stringify(updates)}::jsonb) AS row(id text, patch jsonb)
         WHERE product."shop" = ${shop} AND product."mirrorBatchId" = ${mirrorBatchId} AND product."id" = row.id
@@ -351,6 +373,8 @@ export async function applyMirrorFromSuccessfulChangeRecords({
           "taxable" = CASE WHEN row.patch ? 'taxable' THEN (row.patch->>'taxable')::boolean ELSE variant."taxable" END,
           "tracked" = CASE WHEN row.patch ? 'tracked' THEN (row.patch->>'tracked')::boolean ELSE variant."tracked" END,
           "physicalProduct" = CASE WHEN row.patch ? 'physicalProduct' THEN (row.patch->>'physicalProduct')::boolean ELSE variant."physicalProduct" END,
+          "lastChangeSource" = 'BULK_EDIT_VERIFICATION',
+          "reconciliationCompletedAt" = ${now},
           "updatedAt" = ${now}
         FROM jsonb_to_recordset(${JSON.stringify(updates)}::jsonb) AS row(id text, patch jsonb)
         WHERE variant."shop" = ${shop} AND variant."mirrorBatchId" = ${mirrorBatchId} AND variant."id" = row.id
@@ -493,7 +517,7 @@ export async function reconcileVerifiedShopifyStateIntoActiveMirror({
           "seoTitle", "seoDescription", "reconciliationCompletedAt", "lastChangeSource", "createdAt", "updatedAt"
         )
         SELECT ${shop}, row."id", ${activeBatchId}, row."title", row."handle", row."status",
-               row."statusNormalized"::"ShopifyProductStatus", row."vendor", row."productType",
+               row."statusNormalized", row."vendor", row."productType",
                row."tags", row."descriptionHtml", row."descriptionText", row."seoTitle",
                row."seoDescription", row."reconciliationCompletedAt"::timestamp, row."lastChangeSource", ${now}, row."updatedAt"::timestamp
         FROM jsonb_to_recordset(${JSON.stringify(productRows)}::jsonb) AS row(

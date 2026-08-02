@@ -116,7 +116,7 @@ async function trackFilterQueryIfPossible({ shop, rawFilterInput, count }) {
         shop,
         rawFilterInput,
         respondProductCount: count || 0,
-        filterTrackType: "filter",
+        type: "filter",
         changeSource: "product_query",
         expiresAt,
       },

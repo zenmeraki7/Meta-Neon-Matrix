@@ -35,7 +35,7 @@ function normalizeVariants(variants = []) {
       option3Value: variant.option3Value ?? null,
       tracked: variant.tracked ?? null,
       physicalProduct: variant.physicalProduct ?? null,
-      profitMargin: variant.profitMargin ?? null,
+      profitMarginRatio: variant.profitMarginRatio ?? null,
       selectedOptionsJson: variant.selectedOptionsJson ?? null,
     }))
     .sort((left, right) => String(left.id).localeCompare(String(right.id)));

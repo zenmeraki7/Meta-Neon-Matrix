@@ -32,11 +32,11 @@ async function recoverStuckBulkMutations() {
     where: {
       OR: [
         {
-          executionState: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
+          executionStateNormalized: OPERATION_LIFECYCLE_STATES.SHOPIFY_RUNNING,
           updatedAt: { lt: cutoff },
         },
         {
-          executionState: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
+          executionStateNormalized: OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
           updatedAt: { lt: cutoff },
         },
         {
@@ -51,8 +51,8 @@ async function recoverStuckBulkMutations() {
     select: {
       id: true,
       shop: true,
-      status: true,
-      executionState: true,
+      statusNormalized: true,
+      executionStateNormalized: true,
       executionIdentity: true,
       shopifyBulkOperationId: true,
       batch: true,
@@ -214,4 +214,3 @@ async function registerRepeatableTick() {
 }
 
 await registerRepeatableTick();
-

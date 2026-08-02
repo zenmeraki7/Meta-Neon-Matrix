@@ -7,9 +7,10 @@ import {
 import { deriveTargetGranularityFromRules } from "./helpers/bulkEditOperationHelpers.js";
 
 export class BulkEditTargetFreezeService {
-  async freezeEditHistoryTargets({ db, historyId }) {
+  async freezeEditHistoryTargets({ db, historyId, shop }) {
+    if (!shop) throw new Error("SHOP_SCOPE_REQUIRED");
     const history = await db.editHistory.findUnique({
-      where: { id: historyId },
+      where: { shop_id: { shop, id: historyId } },
       select: {
         shop: true,
         rules: true,

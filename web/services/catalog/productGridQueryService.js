@@ -2,6 +2,7 @@ import { listProducts } from "../../../db/products.js";
 import { getDefinitions } from "../../db/metafieldDefinitions.js";
 import { getVariantsByProductIds } from "../../db/productGrid.js";
 import { getMetafieldsForVariants } from "../../db/variantMetafields.js";
+import { variantGidFromVerifiedLegacyId } from "../../utils/shopifyVariantGid.js";
 
 function encodeCursor(cursor) {
   if (!cursor) return null;
@@ -29,7 +30,7 @@ export async function getProductGrid(command) {
 
   const productIds = tagFilteredProducts.map((p) => BigInt(p.id));
   const variants = await getVariantsByProductIds(shopDomain, productIds);
-  const variantIds = variants.map((v) => BigInt(v.id));
+  const variantIds = variants.map((v) => variantGidFromVerifiedLegacyId(v.id));
   const [definitions, metafields] = await Promise.all([
     getDefinitions(shopDomain),
     getMetafieldsForVariants(shopDomain, variantIds),
@@ -43,7 +44,7 @@ export async function getProductGrid(command) {
   const metafieldByVariant = new Map();
 
   for (const mf of metafields) {
-    const variantId = String(mf.variant_id);
+    const variantId = String(mf.variant_gid);
     const mapKey = `${mf.namespace}.${mf.key}`;
     if (!metafieldByVariant.has(variantId)) metafieldByVariant.set(variantId, new Map());
     metafieldByVariant.get(variantId).set(mapKey, {
@@ -60,7 +61,8 @@ export async function getProductGrid(command) {
     .filter((variant) => productById.has(String(variant.product_id)))
     .map((variant) => {
       const product = productById.get(String(variant.product_id));
-      const existing = metafieldByVariant.get(String(variant.id)) || new Map();
+      const variantGid = variantGidFromVerifiedLegacyId(variant.id);
+      const existing = metafieldByVariant.get(variantGid) || new Map();
       const metafieldMap = {};
 
       for (const key of definitionKeys) {
@@ -80,7 +82,7 @@ export async function getProductGrid(command) {
       }
 
       return {
-        variantId: String(variant.id),
+        variantId: variantGid,
         variantTitle: variant.title,
         sku: variant.sku,
         price: variant.price,

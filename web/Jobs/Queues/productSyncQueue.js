@@ -1,5 +1,6 @@
 // web/Jobs/Queues/productSyncQueue.js
 
+import crypto from "node:crypto";
 import {
   productSyncExecuteQueue,
   productSyncSchedulerQueue,
@@ -10,6 +11,8 @@ import {
 } from "../../queues/productSyncQueue.constants.js";
 import { joinSafeJobId } from "../../utils/jobQueueUtils.js";
 import { SYNC_OPERATION_TYPE, SYNC_STATUS_NORMALIZED } from "../../constants/syncConstants.js";
+import { buildImmutablePayloadMetadata } from "../../utils/immutablePayloadUtils.js";
+import { normalizeShopDomain } from "../../utils/shopDomainUtils.js";
 
 function toIsoHourWindowStart(date = new Date()) {
   const d = new Date(date);
@@ -33,8 +36,10 @@ export async function enqueueProductSyncExecutionJob({
   delay,
   operationId = null,
 }) {
+  const canonicalShop = normalizeShopDomain(shopUrl);
+  if (!canonicalShop) throw new Error("PRODUCT_SYNC_CANONICAL_SHOP_REQUIRED");
   const jobId = buildProductSyncJobId({
-    shopUrl,
+    shopUrl: canonicalShop,
     reason: syncReason,
     windowStart,
     operationId: operationId || "",
@@ -49,7 +54,7 @@ export async function enqueueProductSyncExecutionJob({
           : 10;
     return await productSyncExecuteQueue.add(
       syncReason === "manual" ? "manual-product-sync" : "store-product-sync",
-      { shopUrl, syncReason, windowStart, operationId },
+      { shopUrl: canonicalShop, syncReason, windowStart, operationId },
       {
         ...PRODUCT_SYNC_JOB_OPTIONS,
         priority: computedPriority,
@@ -84,7 +89,9 @@ export async function setupProductSyncCron() {
 }
 
 export async function seedProductSyncOperation({ shopUrl, reason, operationId }) {
-  const id = operationId || joinSafeJobId("product-sync-op", shopUrl, reason, Date.now());
+  const canonicalShop = normalizeShopDomain(shopUrl);
+  if (!canonicalShop) throw new Error("PRODUCT_SYNC_CANONICAL_SHOP_REQUIRED");
+  const id = operationId || joinSafeJobId("product-sync-op", canonicalShop, reason, Date.now());
   const fingerprint = `${reason}:${id}`;
 
   // Execute single Prisma transaction for idempotency claim, sync operation, and outbox intent
@@ -93,14 +100,14 @@ export async function seedProductSyncOperation({ shopUrl, reason, operationId })
     await tx.operationFingerprint.upsert({
       where: {
         shop_operationType_fingerprint: {
-          shop: shopUrl,
+          shop: canonicalShop,
           operationType: "PRODUCT_SYNC",
           fingerprint,
         },
       },
       create: {
         id,
-        shop: shopUrl,
+        shop: canonicalShop,
         operationType: "PRODUCT_SYNC",
         fingerprint,
         fingerprintResourceType: "product_sync",
@@ -120,13 +127,13 @@ export async function seedProductSyncOperation({ shopUrl, reason, operationId })
     await tx.syncHistory.upsert({
       where: {
         shop_id: {
-          shop: shopUrl,
+          shop: canonicalShop,
           id,
         },
       },
       create: {
         id,
-        shop: shopUrl,
+        shop: canonicalShop,
         operationType: SYNC_OPERATION_TYPE.PRODUCT,
         status: "queued",
         stage: "QUEUED",
@@ -141,19 +148,20 @@ export async function seedProductSyncOperation({ shopUrl, reason, operationId })
     });
 
     // 3. Outbox event (OperationEnqueueIntent)
-    await tx.operationEnqueueIntent.create({
-      data: {
-        shop: shopUrl,
+    const intentPayload = { shopUrl: canonicalShop, syncReason: reason, operationId: id };
+    await tx.operationEnqueueIntent.createMany({
+      data: [{
+        id: crypto.randomUUID(),
+        shop: canonicalShop,
         queueRoutingKey: "product_sync",
         queueJobName: reason === "manual" ? "manual-product-sync" : "store-product-sync",
-        dispatchDedupeKey: `product_sync_${shopUrl}_${id}`,
-        payload: {
-          shopUrl,
-          syncReason: reason,
-          operationId: id,
-        },
+        dispatchScope: "product_sync",
+        dispatchDedupeKey: `product_sync_${canonicalShop}_${id}`,
+        payload: intentPayload,
+        ...buildImmutablePayloadMetadata({ payload: intentPayload, operationType: "OPERATION_ENQUEUE_INTENT" }),
         status: "PENDING",
-      },
+      }],
+      skipDuplicates: true,
     });
   });
 

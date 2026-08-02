@@ -235,7 +235,7 @@ function buildSnapshotReference(record) {
 
   return {
     previewContractId:
-      String(set?.previewContractId || "").trim() ||
+      String(set?.previewContracts?.[0]?.id || "").trim() ||
       String(batch?.previewContractId || "").trim() ||
       String(batch?.previewId || "").trim() ||
       null,
@@ -314,7 +314,7 @@ function buildExecutionTransparencyFields({ history, changeStatusCounts }) {
   const pendingCount = toNonNegativeInt(changeStatusCounts?.PENDING || 0, 0);
   const directSucceeded =
     String(batch.executionMode || "").toUpperCase() === "DIRECT" &&
-    String(history?.executionState || "").toUpperCase() === "COMPLETED" &&
+    String(history?.executionStateNormalized || "").toUpperCase() === "COMPLETED" &&
     successCount > 0 &&
     failedCount === 0;
   const explicitVerifiedCount = toNonNegativeInt(
@@ -352,9 +352,9 @@ function buildExecutionTransparencyFields({ history, changeStatusCounts }) {
         shopifyBulkOperationId: history?.shopifyBulkOperationId || null,
       },
       shopifyBulkOperationStatus: directGraphqlExecution
-        ? String(history?.executionState || "").toUpperCase()
+        ? String(history?.executionStateNormalized || "UNKNOWN").toUpperCase()
         : normalizeShopifyBulkStatus(
-            history?.executionState,
+            history?.executionStateNormalized,
             history?.shopifyBulkOperationId
           ),
       resultIngestionProgress: {
@@ -486,7 +486,11 @@ export class EditHistoryService {
           snapshotSet: {
             select: {
               id: true,
-              previewContractId: true,
+              previewContracts: {
+                orderBy: { revision: "desc" },
+                take: 1,
+                select: { id: true },
+              },
               mirrorBatchId: true,
               targetDefinitionHash: true,
               targetCount: true,
@@ -600,7 +604,11 @@ export class EditHistoryService {
           snapshotSet: {
             select: {
               id: true,
-              previewContractId: true,
+              previewContracts: {
+                orderBy: { revision: "desc" },
+                take: 1,
+                select: { id: true },
+              },
               mirrorBatchId: true,
               targetDefinitionHash: true,
               targetCount: true,
@@ -754,7 +762,11 @@ export class EditHistoryService {
           snapshotSet: {
             select: {
               id: true,
-              previewContractId: true,
+              previewContracts: {
+                orderBy: { revision: "desc" },
+                take: 1,
+                select: { id: true },
+              },
               mirrorBatchId: true,
               targetDefinitionHash: true,
               targetCount: true,
@@ -827,7 +839,7 @@ export class EditHistoryService {
         );
       console.info("[history-summary]", {
         id: history.id,
-        status: history.status,
+        status: history.statusNormalized,
         totalCount,
         successCount: executionCounts.successCount,
         failedCount: executionCounts.failedCount,

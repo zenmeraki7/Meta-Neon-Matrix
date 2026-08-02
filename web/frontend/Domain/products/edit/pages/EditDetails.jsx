@@ -271,9 +271,7 @@ export default function EditDetails() {
     enabled: Boolean(historyId),
     queryFn: async ({ signal }) => {
       const json = await api.get(
-        `/api/history/get-edit-history-summary/${encodeURIComponent(
-          historyId
-        )}?lang=${i18n.language}`,
+        `/api/history/get-edit-history-summary/${encodeURIComponent(historyId)}?lang=${i18n.language}`,
         { signal }
       );
       return json?.data || null;
@@ -394,21 +392,46 @@ export default function EditDetails() {
     showError(error);
   }, [error, showError]);
 
+  const handledTerminalStateRef = useRef(null);
+
   useEffect(() => {
     if (!summaryQuery.data) return;
-    const nextPrimaryStatus = getPrimaryStatus(summaryQuery.data);
-    const nextUndoStatus = getUndoStatus(summaryQuery.data);
-    if (
-      nextPrimaryStatus.key === "completed" ||
+
+    const primaryStatus = getPrimaryStatus(summaryQuery.data);
+    const undoStatus = getUndoStatus(summaryQuery.data);
+
+    const terminal =
+      primaryStatus.key === "completed" ||
       ["undo_verified", "undo_verification_failed"].includes(
-        nextUndoStatus?.key
-      )
-    ) {
-      fetchChanges(currentPage);
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["bootstrap-products"] });
+        undoStatus?.key,
+      );
+
+    if (!terminal) {
+      handledTerminalStateRef.current = null;
+      return;
     }
-  }, [summaryQuery.data, currentPage, fetchChanges, queryClient]);
+
+    const terminalKey = `${primaryStatus.key}:${undoStatus?.key || ""}`;
+
+    if (handledTerminalStateRef.current === terminalKey) {
+      return;
+    }
+
+    handledTerminalStateRef.current = terminalKey;
+
+    void fetchChanges(currentPage);
+    void queryClient.invalidateQueries({
+      queryKey: ["products"],
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ["bootstrap-products"],
+    });
+  }, [
+    summaryQuery.data,
+    currentPage,
+    fetchChanges,
+    queryClient,
+  ]);
 
   const formatAuditValue = useCallback(
     (value) => {

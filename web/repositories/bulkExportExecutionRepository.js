@@ -37,10 +37,10 @@ export async function claimExportJobExecution({ exportJobId, shop, executionId, 
     ) {
       return { state: "terminal", exportJob: currentJob };
     }
-    if (String(currentJob.executionState || "").toUpperCase() === "PAUSED") {
+    if (String(currentJob.executionStateNormalized || "").toUpperCase() === "PAUSED") {
       return { state: "paused", exportJob: currentJob };
     }
-    if (String(currentJob.executionState || "").toUpperCase() === "FINALIZING") {
+    if (String(currentJob.executionStateNormalized || "").toUpperCase() === "FINALIZING") {
       return { state: "finalizing", exportJob: currentJob };
     }
     if (
@@ -211,25 +211,95 @@ export async function markExportFinalizing(exportJobId, shop, executionId = null
       executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
     },
     data: {
-      executionState: EXPORT_EXECUTION_STATES.RUNNING,
-      executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
+      executionStateNormalized: normalizeExportJobExecutionState("FINALIZING"),
     },
   });
 
   return updated.count === 1;
 }
 
-export async function finalizeExportSuccessState(exportJob, downloadUrl, totalRows, executionId = null) {
+/**
+ * Marks an ExportJob as successfully completed and persists the download URL,
+ * row count, SHA-256 checksum, and byte size.
+ *
+ * Accepts either a named-parameter object (new canonical form):
+ *   finalizeExportSuccessState({ exportJobId, shop, executionId, downloadUrl,
+ *                                 checksum, sizeBytes, rowCount, startedAt })
+ *
+ * …or the legacy positional form (kept for backward compatibility):
+ *   finalizeExportSuccessState(exportJob, downloadUrl, totalRows, executionId)
+ *
+ * Throws EXPORT_CHECKSUM_CONFLICT when the row already has a checksum that
+ * differs from the one supplied — indicating a stale or duplicate finalization.
+ *
+ * Returns true when exactly one row was updated (CAS succeeded), false otherwise.
+ */
+export async function finalizeExportSuccessState(exportJobOrParams, downloadUrlArg, totalRowsArg, executionIdArg) {
+  let exportJobId, shop, executionId, downloadUrl, checksum, sizeBytes, rowCount, startedAt;
+
+  // Named-parameter form
+  if (
+    exportJobOrParams !== null
+    && typeof exportJobOrParams === "object"
+    && !Array.isArray(exportJobOrParams)
+    && ("exportJobId" in exportJobOrParams || "shop" in exportJobOrParams)
+  ) {
+    ({
+      exportJobId,
+      shop,
+      executionId = null,
+      downloadUrl,
+      checksum = null,
+      sizeBytes = null,
+      rowCount = 0,
+      startedAt = null,
+    } = exportJobOrParams);
+  } else {
+    // Legacy positional form: (exportJob, downloadUrl, totalRows, executionId)
+    const exportJob = exportJobOrParams;
+    exportJobId = exportJob?.id;
+    shop = exportJob?.shop;
+    startedAt = exportJob?.startedAt ?? null;
+    downloadUrl = downloadUrlArg;
+    rowCount = totalRowsArg;
+    executionId = executionIdArg ?? null;
+    checksum = null;
+    sizeBytes = null;
+  }
+
+  if (!exportJobId || !shop) {
+    throw new Error("finalizeExportSuccessState: exportJobId and shop are required");
+  }
+
+  // Guard: if caller supplied a checksum, verify it does not conflict with an
+  // already-stored checksum (would indicate a duplicate or misrouted finalization).
+  if (checksum) {
+    const existing = await prisma.exportJob.findFirst({
+      where: { id: exportJobId, shop },
+      select: { fileChecksum: true, startedAt: true },
+    });
+    if (existing?.fileChecksum && existing.fileChecksum !== checksum) {
+      const conflict = new Error("EXPORT_CHECKSUM_CONFLICT");
+      conflict.code = "EXPORT_CHECKSUM_CONFLICT";
+      conflict.details = { exportJobId, shop, storedChecksum: existing.fileChecksum, incomingChecksum: checksum };
+      throw conflict;
+    }
+    // Backfill startedAt when not provided by caller but available on DB row.
+    if (!startedAt && existing?.startedAt) {
+      startedAt = existing.startedAt;
+    }
+  }
+
   const now = new Date();
   const updated = await prisma.exportJob.updateMany({
     where: {
-      id: exportJob.id,
-      shop: exportJob.shop,
-      ...(executionId ? { id: String(executionId) } : {}),
+      id: exportJobId,
+      shop,
       statusNormalized: normalizeExportJobStatus("PROCESSING"),
       executionStateNormalized: {
         in: [
           normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.RUNNING),
+          normalizeExportJobExecutionState("FINALIZING"),
         ],
       },
     },
@@ -239,13 +309,15 @@ export async function finalizeExportSuccessState(exportJob, downloadUrl, totalRo
       status: "COMPLETED",
       statusNormalized: normalizeExportJobStatus("COMPLETED"),
       downloadUrl,
-      totalItems: totalRows,
+      totalItems: rowCount,
       executionCursorOrdinal: null,
-      durationMs: exportJob.startedAt
-        ? Math.max(now.getTime() - new Date(exportJob.startedAt).getTime(), 0)
+      durationMs: startedAt
+        ? Math.max(now.getTime() - new Date(startedAt).getTime(), 0)
         : null,
       completedAt: now,
       failureStage: null,
+      ...(checksum !== null ? { fileChecksum: checksum } : {}),
+      ...(sizeBytes !== null ? { sizeBytes: BigInt(sizeBytes) } : {}),
     },
   });
 
@@ -291,8 +363,7 @@ export async function markExportPaused({ exportJobId, shop, cursorOrdinal, execu
     data: {
       status: "PENDING",
       statusNormalized: normalizeExportJobStatus("PENDING"),
-      executionState: "PAUSED",
-      executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
+      executionStateNormalized: normalizeExportJobExecutionState("PAUSED"),
       pausedAt: new Date(),
       executionCursorOrdinal: cursorOrdinal,
     },
@@ -310,6 +381,19 @@ export async function findProductsForExport({ shop, productIds, mirrorBatchId })
       variants: {
         orderBy: { id: "asc" },
       },
+    },
+  });
+}
+
+export async function findVariantsForExport({ shop, variantIds, mirrorBatchId }) {
+  return prisma.productVariant.findMany({
+    where: {
+      shop,
+      id: { in: variantIds },
+      ...(mirrorBatchId ? { mirrorBatchId } : {}),
+    },
+    include: {
+      product: true,
     },
   });
 }
@@ -334,6 +418,6 @@ export async function checkpointExportCursor({ exportJobId, shop, cursorOrdinal,
 export async function findExportTerminalFlags(exportJobId, shop) {
   return prisma.exportJob.findFirst({
     where: { id: exportJobId, shop },
-    select: { statusNormalized: true, executionState: true },
+    select: { statusNormalized: true, executionStateNormalized: true },
   });
 }

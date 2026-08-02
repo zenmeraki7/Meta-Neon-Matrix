@@ -1,5 +1,5 @@
 // web/frontend/domains/subscription/hooks/useSubscriptionPlans.js
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslation } from "react-i18next";
 import {
@@ -18,80 +18,83 @@ export const useSubscriptionPlans = () => {
 
   // Redux selectors
   // const plans = useSelector(selectSubscriptionPlans);
-  const plans = [
-    {
-      _id: {
-        $oid: "6725d164de922726c9663d2e",
+  const plans = useMemo(
+    () => [
+      {
+        _id: {
+          $oid: "6725d164de922726c9663d2e",
+        },
+        plan_id: "freeversion",
+        name: "Free Version",
+        price: 0,
+        billed: "none",
+        Features: [
+          t("freeversion_feature_1"),
+          t("freeversion_feature_2"),
+          t("freeversion_feature_3"),
+        ],
+        billingCycle: "",
+        planType: "freeversion",
+        description: t("freeversion_description"),
+        isActive: true,
       },
-      plan_id: "freeversion",
-      name: "Free Version",
-      price: 0,
-      billed: "none",
-      Features: [
-        t("freeversion_feature_1"),
-        t("freeversion_feature_2"),
-        t("freeversion_feature_3"),
-      ],
-      billingCycle: "",
-      planType: "freeversion",
-      description: t("freeversion_description"),
-      isActive: true,
-    },
-    {
-      _id: {
-        $oid: "6725d196de922726c9663d30",
+      {
+        _id: {
+          $oid: "6725d196de922726c9663d30",
+        },
+        plan_id: "Basic_monthly",
+        name: "Basic (Monthly)",
+        price: 20,
+        billed: "Monthly",
+        Features: [
+          t("Basic_monthly_feature_1"),
+          t("Basic_monthly_feature_2"),
+          t("Basic_monthly_feature_3"),
+        ],
+        billingCycle: "monthly",
+        planType: "basic",
+        description: t("Basic_monthly_description"),
+        isActive: true,
       },
-      plan_id: "Basic_monthly",
-      name: "Basic (Monthly)",
-      price: 20,
-      billed: "Monthly",
-      Features: [
-        t("Basic_monthly_feature_1"),
-        t("Basic_monthly_feature_2"),
-        t("Basic_monthly_feature_3"),
-      ],
-      billingCycle: "monthly",
-      planType: "basic",
-      description: t("Basic_monthly_description"),
-      isActive: true,
-    },
-    {
-      _id: {
-        $oid: "6725d1f6de922726c9663d33",
+      {
+        _id: {
+          $oid: "6725d1f6de922726c9663d33",
+        },
+        plan_id: "Advanced_monthly",
+        name: "Advanced (Monthly)",
+        price: 50,
+        billed: "Monthly",
+        Features: [
+          t("Advanced_monthly_feature_1"),
+          t("Advanced_monthly_feature_2"),
+          t("Advanced_monthly_feature_3"),
+        ],
+        billingCycle: "monthly",
+        planType: "advanced",
+        description: t("Advanced_monthly_description"),
+        isActive: true,
       },
-      plan_id: "Advanced_monthly",
-      name: "Advanced (Monthly)",
-      price: 50,
-      billed: "Monthly",
-      Features: [
-        t("Advanced_monthly_feature_1"),
-        t("Advanced_monthly_feature_2"),
-        t("Advanced_monthly_feature_3"),
-      ],
-      billingCycle: "monthly",
-      planType: "advanced",
-      description: t("Advanced_monthly_description"),
-      isActive: true,
-    },
-    {
-      _id: {
-        $oid: "6725d21cde922726c9663d35",
+      {
+        _id: {
+          $oid: "6725d21cde922726c9663d35",
+        },
+        plan_id: "pro_monthly",
+        name: "Pro (Monthly)",
+        price: 100,
+        billed: "Monthly",
+        Features: [
+          t("pro_monthly_feature_1"),
+          t("pro_monthly_feature_2"),
+          t("pro_monthly_feature_3"),
+        ],
+        billingCycle: "monthly",
+        planType: "pro",
+        description: t("pro_monthly_description"),
+        isActive: true,
       },
-      plan_id: "pro_monthly",
-      name: "Pro (Monthly)",
-      price: 100,
-      billed: "Monthly",
-      Features: [
-        t("pro_monthly_feature_1"),
-        t("pro_monthly_feature_2"),
-        t("pro_monthly_feature_3"),
-      ],
-      billingCycle: "monthly",
-      planType: "pro",
-      description: t("pro_monthly_description"),
-      isActive: true,
-    },
-  ];
+    ],
+    [t],
+  );
 
   const status = useSelector(selectPlansStatus);
   const error = useSelector(selectPlansError);

@@ -14,7 +14,13 @@ const defaultJobOptions = buildDefaultJobOptions({
 });
 
 export async function addAppUninstallJob(data, options = {}) {
-  const jobId = options.jobId || joinSafeJobId("app-uninstall", data?.shop);
+  const jobId =
+    options.jobId ||
+    joinSafeJobId(
+      "app-redact",
+      data?.shop,
+      data?.webhookId || String(Date.now()),
+    );
 
   return appUninstallQueue.add(
     "app-uninstall",

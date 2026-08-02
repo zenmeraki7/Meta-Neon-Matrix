@@ -46,6 +46,8 @@ import mongoose from "mongoose";
 import { PrismaClient } from "./generated/prisma/index.js";
 import { createId } from "@paralleldrive/cuid2"; // or use: crypto.randomUUID()
 import { buildEncryptedTokenColumns } from "./utils/tokenCrypto.js";
+import crypto from "node:crypto";
+import { upsertAuthoritativeChangeRecords } from "./services/changeRecordIdentityService.js";
 
 // ── tiny helper ──────────────────────────────────────────────
 const toStr  = (v) => (v == null ? null : String(v));
@@ -297,16 +299,34 @@ console.log("── ChangeRecord ──");
       skipped++;
       continue;
     }
+    const productId = String(d.productId || "").trim();
+    if (!productId) {
+      warn("ChangeRecord — productId is required for authoritative identity", toStr(d._id));
+      skipped++;
+      continue;
+    }
+    const targetIdentity = String(d.targetIdentity || `PRODUCT:${productId}`).trim();
+    const legacyPayload = JSON.stringify({
+      productFieldChanges: d.productFieldChanges || [],
+      variantFieldChanges: d.variantFieldChanges || [],
+    });
+    const fieldPath = String(d.fieldPath || "").trim() ||
+      `legacy.atomic.${crypto.createHash("sha256").update(legacyPayload).digest("hex").slice(0, 24)}`;
     rows.push({
       editHistoryId:       prismaEditId,
-      productId:           d.productId,
+      targetResourceType:  String(d.targetResourceType || d.targetType || "PRODUCT").toUpperCase(),
+      targetIdentity,
+      fieldPath,
+      executionAttempt:    Number.isInteger(d.executionAttempt) && d.executionAttempt > 0 ? d.executionAttempt : 1,
+      productId,
+      variantId:           d.variantId ? String(d.variantId) : null,
       shop:                d.shop,
       options:             toJson(d.options),
       productFieldChanges: toJson(d.productFieldChanges),
       variantFieldChanges: toJson(d.variantFieldChanges),
       image:               d.image ?? null,
       title:               d.title,
-      changeScope:         d.scope,
+      changeScope:         d.scope || (d.variantId ? "variant" : "product"),
       status:              d.status  ?? "pending",
       batchId:             d.batchId ?? null,
       createdAt:           toDate(d.createdAt) ?? new Date(),
@@ -317,8 +337,10 @@ console.log("── ChangeRecord ──");
   // Insert in batches of 200
   for (let i = 0; i < rows.length; i += 200) {
     const batch = rows.slice(i, i + 200);
-    const r = await prisma.changeRecord.createMany({ data: batch, skipDuplicates: true });
-    n += r.count;
+    const inserted = await prisma.$transaction((tx) =>
+      upsertAuthoritativeChangeRecords({ tx, records: batch }),
+    );
+    n += inserted.length;
     console.log(`  … ChangeRecord batch ${i / 200 + 1}: ${n}/${rows.length}`);
   }
   log("ChangeRecord", n);

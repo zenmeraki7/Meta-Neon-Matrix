@@ -75,9 +75,9 @@ test("OperationEnqueueIntent includes both tenant-scoped and global worker claim
   const body = intentMatch[0];
 
   // Tenant-scoped read index
-  assert.match(body, /@@index\(\[shop,\s*status,\s*availableAt,\s*id\]\)/);
+  assert.match(body, /@@index\(\[shop,\s*status,\s*nextAttemptAt,\s*id\]\)/);
   // Global worker claim queue index
-  assert.match(body, /@@index\(\[status,\s*availableAt,\s*id\]\)/);
+  assert.match(body, /@@index\(\[status,\s*nextAttemptAt,\s*id\]\)/);
 });
 
 test("AutomaticProductRuleScheduleState implements narrow scheduler claim pattern", () => {

@@ -46,7 +46,7 @@ export class IdempotencyStoreService {
     this.db = db;
   }
 
-  async begin({ shop, scope, key, requestHash }) {
+  async begin({ shop, scope, key, requestHash, lockTtlMs = 60000, dbClient = null }) {
     const scopedShop = requireShopScope(shop);
     if (!scope || !key || !requestHash) {
       const error = new Error("IDEMPOTENCY_INPUT_INVALID");
@@ -55,59 +55,175 @@ export class IdempotencyStoreService {
     }
 
     const recordId = buildIdempotencyRecordId({ shop: scopedShop, scope, key });
-    const existing = await this.db.filterTrack.findUnique({
-      where: { id: recordId },
-    });
-    if (existing) {
-      return this.#resolveExisting(existing, requestHash);
-    }
+    const ownerToken = crypto.randomUUID();
+    const lockedUntil = new Date(Date.now() + lockTtlMs);
+    const client = dbClient || this.db;
 
-    try {
-      await this.db.filterTrack.create({
-        data: {
-          id: recordId,
-          shop: scopedShop,
-          filterTrackType: IDEMPOTENCY_TYPE,
-          field: scope,
-          searchKey: key,
-          value: {
-            state: "IN_PROGRESS",
-            requestHash,
-          },
-        },
-      });
-      return { mode: "execute", recordId };
-    } catch (error) {
-      if (error?.code !== "P2002") {
-        throw error;
-      }
-
-      const concurrent = await this.db.filterTrack.findUnique({
+    if (client.idempotencyRecord) {
+      const existing = await client.idempotencyRecord.findUnique({
         where: { id: recordId },
       });
-      if (!concurrent) {
-        throw error;
+
+      if (existing) {
+        return this.#resolveExistingIdempotencyRecord(existing, requestHash, ownerToken, lockedUntil, client);
       }
-      return this.#resolveExisting(concurrent, requestHash);
+
+      try {
+        await client.idempotencyRecord.create({
+          data: {
+            id: recordId,
+            shop: scopedShop,
+            scope,
+            key,
+            requestHash,
+            state: "IN_PROGRESS",
+            ownerToken,
+            lockedUntil,
+          },
+        });
+        return { mode: "execute", recordId, ownerToken };
+      } catch (error) {
+        if (error?.code !== "P2002") {
+          throw error;
+        }
+
+        const concurrent = await client.idempotencyRecord.findUnique({
+          where: { id: recordId },
+        });
+        if (!concurrent) {
+          throw error;
+        }
+        return this.#resolveExistingIdempotencyRecord(concurrent, requestHash, ownerToken, lockedUntil, client);
+      }
+    } else {
+      // Legacy fallback for FilterTrack or mock object in tests
+      const existing = await client.filterTrack.findUnique({
+        where: { id: recordId },
+      });
+      if (existing) {
+        return this.#resolveExisting(existing, requestHash);
+      }
+
+      try {
+        await client.filterTrack.create({
+          data: {
+            id: recordId,
+            shop: scopedShop,
+            type: IDEMPOTENCY_TYPE,
+            field: scope,
+            searchKey: key,
+            value: {
+              state: "IN_PROGRESS",
+              requestHash,
+              ownerToken,
+              lockedUntil: lockedUntil.toISOString(),
+            },
+          },
+        });
+        return { mode: "execute", recordId, ownerToken };
+      } catch (error) {
+        if (error?.code !== "P2002") {
+          throw error;
+        }
+
+        const concurrent = await client.filterTrack.findUnique({
+          where: { id: recordId },
+        });
+        if (!concurrent) {
+          throw error;
+        }
+        return this.#resolveExisting(concurrent, requestHash);
+      }
     }
   }
 
-  async complete({ recordId, response }) {
+  async complete({ recordId, shop, ownerToken, response, resourceType = null, resourceId = null, dbClient = null }) {
     if (!recordId) return;
-    const existing = await this.db.filterTrack.findUnique({
-      where: { id: recordId },
-    });
-    const existingValue = asObject(existing?.value);
-    await this.db.filterTrack.update({
-      where: { id: recordId },
-      data: {
-        value: {
-          requestHash: existingValue.requestHash || null,
-          state: "COMPLETED",
-          response,
+    const client = dbClient || this.db;
+
+    if (client.idempotencyRecord) {
+      const updated = await client.idempotencyRecord.updateMany({
+        where: {
+          id: recordId,
+          ...(shop ? { shop: requireShopScope(shop) } : {}),
+          state: "IN_PROGRESS",
+          ...(ownerToken ? { ownerToken } : {}),
         },
-      },
-    });
+        data: {
+          state: "COMPLETED",
+          responseJson: response,
+          resourceType: resourceType || null,
+          resourceId: resourceId || null,
+          lockedUntil: null,
+          ownerToken: null,
+        },
+      });
+
+      if (updated.count !== 1) {
+        const error = new Error("IDEMPOTENCY_OWNERSHIP_LOST");
+        error.code = "IDEMPOTENCY_OWNERSHIP_LOST";
+        throw error;
+      }
+    } else {
+      // Legacy fallback for FilterTrack or mock object in tests
+      const existing = await client.filterTrack.findUnique({
+        where: { id: recordId },
+      });
+      const existingValue = asObject(existing?.value);
+      await client.filterTrack.update({
+        where: { id: recordId },
+        data: {
+          value: {
+            requestHash: existingValue.requestHash || null,
+            state: "COMPLETED",
+            response,
+          },
+        },
+      });
+    }
+  }
+
+  async #resolveExistingIdempotencyRecord(record, requestHash, newOwnerToken, newLockedUntil, client) {
+    const existingHash = String(record?.requestHash || "");
+
+    if (!existingHash || existingHash !== String(requestHash)) {
+      throw buildConflictError(
+        "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD",
+        "Idempotency key was reused with a different payload.",
+      );
+    }
+
+    if (record.state === "COMPLETED" && record.responseJson && typeof record.responseJson === "object") {
+      return {
+        mode: "replay",
+        response: record.responseJson,
+        recordId: record.id,
+      };
+    }
+
+    // Check if in progress and lock has expired (safe takeover)
+    const isLocked = record.lockedUntil && new Date(record.lockedUntil) > new Date();
+    if (!isLocked && record.state === "IN_PROGRESS") {
+      const tookOver = await client.idempotencyRecord.updateMany({
+        where: {
+          id: record.id,
+          state: "IN_PROGRESS",
+          lockedUntil: record.lockedUntil,
+        },
+        data: {
+          ownerToken: newOwnerToken,
+          lockedUntil: newLockedUntil,
+        },
+      });
+      if (tookOver.count === 1) {
+        return { mode: "execute", recordId: record.id, ownerToken: newOwnerToken };
+      }
+    }
+
+    throw buildConflictError(
+      "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+      "A request with this idempotency key is already in progress.",
+    );
   }
 
   #resolveExisting(record, requestHash) {
@@ -135,5 +251,6 @@ export class IdempotencyStoreService {
     );
   }
 }
+
 
 export default IdempotencyStoreService;

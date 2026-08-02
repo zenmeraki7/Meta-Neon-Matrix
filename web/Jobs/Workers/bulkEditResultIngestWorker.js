@@ -113,7 +113,6 @@ async function findHistoryByBulkOperation({ shop, shopifyBulkOperationId }) {
       shop: true,
       executionIdentity: true,
       batch: true,
-      executionState: true,
       executionStateNormalized: true,
       cancelRequestedAt: true,
     },
@@ -309,7 +308,7 @@ async function processBulkEditResultIngest(job) {
       OPERATION_LIFECYCLE_STATES.CANCELLED,
       OPERATION_LIFECYCLE_STATES.COMPLETED,
       OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED,
-    ].includes(history.executionState)
+    ].includes(history.executionStateNormalized)
   ) {
     return {
       skipped: true,
@@ -362,7 +361,7 @@ async function processBulkEditResultIngest(job) {
       && ![
         OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
         OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
-      ].includes(history.executionState)
+      ].includes(history.executionStateNormalized)
     ) {
       const markedShopifyCompleted = await transitionOperation({
         shop,
@@ -586,9 +585,9 @@ async function processBulkEditResultIngest(job) {
       executionId,
       workflowStageKey: "RESULT_INGESTION",
       stageStatus: "COMPLETED",
-      counterA: Number(result?.successCount || 0),
-      counterB: Number(result?.failureCount || 0),
-      counterC: Number(result?.rowCount || 0),
+      succeededItemCount: Number(result?.successCount || 0),
+      failedItemCount: Number(result?.failureCount || 0),
+      observedItemCount: Number(result?.rowCount || 0),
       completed: true,
     });
   } catch (error) {
@@ -883,4 +882,3 @@ process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export default bulkEditResultIngestWorker;
-

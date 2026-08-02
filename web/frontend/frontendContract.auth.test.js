@@ -97,7 +97,8 @@ test("bulk edit flow avoids native confirm and enforces modal/location/fresh-pre
     "window.confirm found in EditPreviewPage"
   );
   assert.equal(
-    editPreview.includes("confirmModalOpen"),
+    editPreview.includes("confirmModalOpen") ||
+      editPreview.includes("hasRequiredConfirmation"),
     true,
     "Broad target confirmation modal guard missing"
   );

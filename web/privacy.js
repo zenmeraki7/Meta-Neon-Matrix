@@ -14,6 +14,16 @@ import logger from "./utils/loggerUtils.js";
 import crypto from "crypto";
 import { normalizeWebhookDeliveryStatus } from "./utils/normalizedStateUtils.js";
 import { requireShopScope } from "./utils/shopScope.js";
+import { executeShopRedaction } from "./services/shopRedactionService.js";
+import {
+  createEnqueueIntent,
+  dispatchPendingEnqueueIntents,
+  ENQUEUE_QUEUE_KEYS,
+} from "./services/operationEnqueueIntentService.js";
+import { joinSafeJobId } from "./utils/jobQueueUtils.js";
+import { ShopifyBillingService } from "./services/subscription/ShopifyBillingService.js";
+import { resolveBillingStateFromActiveSubscriptions } from "./services/subscriptionAuthorityService.js";
+import { applyBillingReconciliation } from "./services/billingReconciliationService.js";
 
 function safeParseJson(body) {
   try {
@@ -80,7 +90,14 @@ function buildWebhookDedupeKey({ topic, shop, webhookId, entityId }) {
   )}`;
 }
 
+export function buildWebhookJobId({ topic, shop, webhookId, entityId }) {
+  const scopedShop = requireShopScope(shop);
+  const raw = `${topic}:${scopedShop}:${webhookId || "none"}:${entityId || "none"}`;
+  return `wh_job_${hashStableId(raw)}`;
+}
+
 async function reserveWebhookDelivery({
+  tx = db,
   topic,
   shop,
   webhookId,
@@ -92,34 +109,7 @@ async function reserveWebhookDelivery({
   const payloadHash = createPayloadHash(payload);
 
   try {
-    const existing = await db.webhookDelivery.findUnique({
-      where: { shop_dedupeKey: { shop, dedupeKey } },
-      select: {
-        id: true,
-        status: true,
-        payloadHash: true,
-      },
-    });
-
-    if (existing) {
-     await db.webhookDelivery
-  .update({
-    where: { shop_dedupeKey: { shop, dedupeKey } },
-    data: {
-      attemptCount: { increment: 1 },
-      updatedAt: new Date(),
-    },
-  })
-  .catch(() => {});
-
-      return {
-        accepted: false,
-        deliveryId: existing.id,
-        payloadHash,
-      };
-    }
-
-    await db.webhookDelivery.create({
+    await tx.webhookDelivery.create({
       data: {
         id,
         topic,
@@ -136,15 +126,26 @@ async function reserveWebhookDelivery({
 
     return { accepted: true, deliveryId: id, payloadHash };
   } catch (error) {
-    logger.error("Webhook reservation failed", {
-      topic,
-      shop,
-      webhookId,
-      entityId,
-      message: error.message,
+    if (error?.code !== "P2002") throw error;
+
+    const existing = await tx.webhookDelivery.findUnique({
+      where: { shop_dedupeKey: { shop, dedupeKey } },
     });
 
-    return { accepted: false, deliveryId: id, payloadHash };
+    if (!existing) throw error;
+
+    if (existing.payloadHash && existing.payloadHash !== payloadHash) {
+      throw Object.assign(new Error("Webhook identity payload conflict"), {
+        code: "WEBHOOK_PAYLOAD_CONFLICT",
+      });
+    }
+
+    await tx.webhookDelivery.updateMany({
+      where: { id: existing.id, shop },
+      data: { attemptCount: { increment: 1 } },
+    });
+
+    return { accepted: false, duplicate: true, deliveryId: existing.id, payloadHash };
   }
 }
 
@@ -184,6 +185,7 @@ async function markWebhookFailed(deliveryId, error) {
 }
 
 async function upsertReconcileSignal({
+  tx = db,
   shop,
   entityType,
   entityId,
@@ -195,7 +197,7 @@ async function upsertReconcileSignal({
 
   const normalizedEntityId = String(entityId);
 
-  await db.mirrorReconcileSignal.upsert({
+  await tx.mirrorReconcileSignal.upsert({
     where: {
       shop_entityType_entityId: {
         shop,
@@ -234,23 +236,33 @@ async function queueProductWebhook({
   shop,
   webhookId,
   payload,
+  queueRoutingKey,
+  queueJobName,
   producer,
   entityId,
+  buildJobId,
 }) {
-  const reservation = await reserveWebhookDelivery({
-    topic,
-    shop,
-    webhookId,
-    entityId,
-    payload,
-  });
+  let deliveryId = null;
 
-  if (!reservation.accepted) {
-    return { success: true, message: "Duplicate ignored" };
-  }
+  await db.$transaction(async (tx) => {
+    const reservation = await reserveWebhookDelivery({
+      tx,
+      topic,
+      shop,
+      webhookId,
+      entityId,
+      payload,
+    });
 
-  try {
+    if (!reservation.accepted) {
+      deliveryId = null;
+      return;
+    }
+
+    deliveryId = reservation.deliveryId;
+
     await upsertReconcileSignal({
+      tx,
       shop,
       entityType: "product",
       entityId,
@@ -259,21 +271,58 @@ async function queueProductWebhook({
       webhookId,
     });
 
-    await producer({
-      ...payload,
+    const deterministicJobId = buildJobId
+      ? buildJobId({ topic, shop, webhookId, entityId })
+      : buildWebhookJobId({ topic, shop, webhookId, entityId });
+
+    await createEnqueueIntent({
+      tx,
       shop,
-      webhookId,
-      id: entityId,
+      queueRoutingKey: queueRoutingKey || topic,
+      queueJobName: queueJobName || topic,
+      payload: { ...payload, shop, webhookId, webhookDeliveryId: reservation.deliveryId, id: entityId },
+      options: { jobId: deterministicJobId },
+      dispatchDedupeKey: `webhook:${deliveryId}`,
     });
 
-    await markWebhookQueued(reservation.deliveryId);
-    await clearKeyCaches(`${shop}:sync_details`);
+    await tx.webhookDelivery.update({
+      where: { id: deliveryId },
+      data: {
+        status: "QUEUED",
+        statusNormalized: normalizeWebhookDeliveryStatus("QUEUED"),
+        updatedAt: new Date(),
+      },
+    });
+  });
 
-    return { success: true, message: `${topic} queued` };
-  } catch (error) {
-    await markWebhookFailed(reservation.deliveryId, error);
-    throw error;
+  if (!deliveryId) {
+    return { success: true, message: "Duplicate ignored" };
   }
+
+  try {
+    const deterministicJobId = buildJobId
+      ? buildJobId({ topic, shop, webhookId, entityId })
+      : buildWebhookJobId({ topic, shop, webhookId, entityId });
+
+    if (producer) {
+      await producer(
+        { ...payload, shop, webhookId, webhookDeliveryId: deliveryId, id: entityId },
+        { jobId: deterministicJobId },
+      );
+    } else {
+      await dispatchPendingEnqueueIntents({ shop, limit: 10 });
+    }
+  } catch (dispatchErr) {
+    logger.warn("Immediate webhook queue publish deferred to outbox worker", {
+      topic,
+      shop,
+      webhookId,
+      error: dispatchErr.message,
+    });
+  }
+
+  await clearKeyCaches(`${shop}:sync_details`);
+  return { success: true, message: `${topic} queued` };
 }
 
 async function queueShopSyncWebhook({
@@ -285,20 +334,27 @@ async function queueShopSyncWebhook({
   entityType = "shop_scope",
   payload = {},
 }) {
-  const reservation = await reserveWebhookDelivery({
-    topic,
-    shop,
-    webhookId,
-    entityId,
-    payload,
-  });
+  let deliveryId = null;
 
-  if (!reservation.accepted) {
-    return { success: true, message: "Duplicate ignored" };
-  }
+  await db.$transaction(async (tx) => {
+    const reservation = await reserveWebhookDelivery({
+      tx,
+      topic,
+      shop,
+      webhookId,
+      entityId,
+      payload,
+    });
 
-  try {
+    if (!reservation.accepted) {
+      deliveryId = null;
+      return;
+    }
+
+    deliveryId = reservation.deliveryId;
+
     await upsertReconcileSignal({
+      tx,
       shop,
       entityType,
       entityId: String(entityId || syncType || "shop"),
@@ -307,20 +363,59 @@ async function queueShopSyncWebhook({
       webhookId,
     });
 
-    await addShopSyncJob({
-      shopDomain: shop,
-      syncType,
-      reason: topic,
+    const deterministicJobId = buildWebhookJobId({
+      topic,
+      shop,
+      webhookId,
+      entityId: entityId || syncType,
     });
 
-    await markWebhookQueued(reservation.deliveryId);
-    await clearKeyCaches(`${shop}:sync_details`);
+    await createEnqueueIntent({
+      tx,
+      shop,
+      queueRoutingKey: ENQUEUE_QUEUE_KEYS.SHOP_SYNC,
+      queueJobName: "shop-sync",
+      payload: { shopDomain: shop, syncType, reason: topic },
+      options: { jobId: deterministicJobId },
+      dispatchDedupeKey: `webhook:${deliveryId}`,
+    });
 
-    return { success: true, message: `${topic} queued` };
-  } catch (error) {
-    await markWebhookFailed(reservation.deliveryId, error);
-    throw error;
+    await tx.webhookDelivery.update({
+      where: { id: deliveryId },
+      data: {
+        status: "QUEUED",
+        statusNormalized: normalizeWebhookDeliveryStatus("QUEUED"),
+        updatedAt: new Date(),
+      },
+    });
+  });
+
+  if (!deliveryId) {
+    return { success: true, message: "Duplicate ignored" };
   }
+
+  try {
+    const deterministicJobId = buildWebhookJobId({
+      topic,
+      shop,
+      webhookId,
+      entityId: entityId || syncType,
+    });
+
+    await addShopSyncJob(
+      { shopDomain: shop, syncType, reason: topic },
+      { jobId: deterministicJobId },
+    );
+  } catch (dispatchErr) {
+    logger.warn("Immediate shop sync queue publish deferred to outbox worker", {
+      topic,
+      shop,
+      error: dispatchErr.message,
+    });
+  }
+
+  await clearKeyCaches(`${shop}:sync_details`);
+  return { success: true, message: `${topic} queued` };
 }
 
 export default {
@@ -333,13 +428,17 @@ export default {
   CUSTOMERS_REDACT: {
     deliveryMethod: DeliveryMethod.Http,
     callbackUrl: "/api/webhooks",
-    callback: async () => ({ success: true }),
+    callback: async (_topic, shop, _body, webhookId) => {
+      return executeShopRedaction({ shop, topic: "CUSTOMERS_REDACT", webhookId });
+    },
   },
 
   SHOP_REDACT: {
     deliveryMethod: DeliveryMethod.Http,
     callbackUrl: "/api/webhooks",
-    callback: async () => ({ success: true }),
+    callback: async (_topic, shop, _body, webhookId) => {
+      return executeShopRedaction({ shop, topic: "SHOP_REDACT", webhookId });
+    },
   },
 
   SHOP_UPDATE: {
@@ -392,8 +491,12 @@ export default {
         shop,
         webhookId,
         payload,
+        queueRoutingKey: ENQUEUE_QUEUE_KEYS.PRODUCT_CREATE,
+        queueJobName: "product-create",
         producer: addProductCreateJob,
         entityId: productId,
+        buildJobId: ({ topic, shop, webhookId, entityId }) =>
+          buildWebhookJobId({ topic, shop, webhookId, entityId }),
       });
     },
   },
@@ -410,8 +513,12 @@ export default {
         shop,
         webhookId,
         payload,
+        queueRoutingKey: ENQUEUE_QUEUE_KEYS.PRODUCT_DELETE,
+        queueJobName: "product-delete",
         producer: addProductDeleteJob,
         entityId: productId,
+        buildJobId: ({ topic, shop, webhookId, entityId }) =>
+          buildWebhookJobId({ topic, shop, webhookId, entityId }),
       });
     },
   },
@@ -428,11 +535,16 @@ export default {
         shop,
         webhookId,
         payload,
+        queueRoutingKey: ENQUEUE_QUEUE_KEYS.PRODUCT_UPDATE,
+        queueJobName: "product-update",
         producer: addProductUpdateJob,
         entityId: productId,
+        buildJobId: ({ topic, shop, webhookId, entityId }) =>
+          buildWebhookJobId({ topic, shop, webhookId, entityId }),
       });
     },
   },
+
   VARIANTS_UPDATE: {
     deliveryMethod: DeliveryMethod.Http,
     callbackUrl: "/api/webhooks",
@@ -455,48 +567,18 @@ export default {
         return { success: true, message: "Variant update ignored (missing product id)" };
       }
 
-      const reservation = await reserveWebhookDelivery({
+      return queueProductWebhook({
         topic: "VARIANTS_UPDATE",
         shop,
         webhookId,
-        entityId: variantId || productId,
         payload,
+        queueRoutingKey: ENQUEUE_QUEUE_KEYS.PRODUCT_UPDATE,
+        queueJobName: "product-update",
+        producer: (jobData, opts) => addProductUpdateJob(jobData, opts),
+        entityId: productId,
+        buildJobId: ({ topic, shop, webhookId, entityId }) =>
+          buildWebhookJobId({ topic, shop, webhookId, entityId: variantId || entityId }),
       });
-
-      if (!reservation.accepted) {
-        return { success: true, message: "Duplicate ignored" };
-      }
-
-      try {
-        await upsertReconcileSignal({
-          shop,
-          entityType: "product",
-          entityId: productId,
-          topic: "VARIANTS_UPDATE",
-          payloadHash: reservation.payloadHash,
-          webhookId,
-        });
-
-        await addProductUpdateJob(
-          {
-            ...payload,
-            shop,
-            webhookId,
-            id: productId,
-          },
-          {
-            jobId: `product-update:${shop}:${productId}`,
-          },
-        );
-
-        await markWebhookQueued(reservation.deliveryId);
-        await clearKeyCaches(`${shop}:sync_details`);
-
-        return { success: true, message: "VARIANTS_UPDATE queued" };
-      } catch (error) {
-        await markWebhookFailed(reservation.deliveryId, error);
-        throw error;
-      }
     },
   },
 
@@ -752,15 +834,12 @@ export default {
     deliveryMethod: DeliveryMethod.Http,
     callbackUrl: "/api/webhooks",
     callback: async (_topic, shop, body, webhookId) => {
-      const payload = safeParseJson(body);
-      const sub = payload.app_subscription;
-
       const reservation = await reserveWebhookDelivery({
         topic: "APP_SUBSCRIPTIONS_UPDATE",
         shop,
         webhookId,
-        entityId: sub?.admin_graphql_api_id || shop,
-        payload,
+        entityId: shop,
+        payload: safeParseJson(body),
       });
 
       if (!reservation.accepted) {
@@ -768,130 +847,80 @@ export default {
       }
 
       try {
-        if (!sub) {
-          await markWebhookProcessed(reservation.deliveryId);
-          return { success: true };
-        }
-
-        const incomingSubId = sub.admin_graphql_api_id;
-        const existing = await db.subscription.findFirst({
-          where: { shop },
-        });
-
-        const toDateOrNull = (value) => (value ? new Date(value) : null);
-
-        if (sub.status === "ACTIVE") {
-          const isPendingApproval =
-            existing?.pendingSubscriptionId === incomingSubId;
-
-          if (isPendingApproval && existing) {
-            await db.subscription.updateMany({
-              where: { shop },
-              data: {
-                status: "ACTIVE",
-                subscriptionId: incomingSubId,
-                planKey: existing.pendingPlanKey,
-                planName: existing.pendingPlanName || sub.name,
-                currentPeriodEnd: toDateOrNull(sub.current_period_end),
-                trialEndsAt: toDateOrNull(sub.trial_ends_at),
-                pendingSubscriptionId: null,
-                pendingPlanKey: null,
-                pendingPlanName: null,
-              },
-            });
-          } else {
-            const planKey = mapPlanKeyFromName(sub.name);
-
-            if (existing) {
-              await db.subscription.updateMany({
-                where: { shop },
-                data: {
-                  status: "ACTIVE",
-                  subscriptionId: incomingSubId,
-                  planKey,
-                  planName: sub.name,
-                  currentPeriodEnd: toDateOrNull(sub.current_period_end),
-                  trialEndsAt: toDateOrNull(sub.trial_ends_at),
-                },
-              });
-            } else {
-              await db.subscription.create({
-                data: {
-                  shop,
-                  status: "ACTIVE",
-                  subscriptionId: incomingSubId,
-                  planKey,
-                  planName: sub.name,
-                  currentPeriodEnd: toDateOrNull(sub.current_period_end),
-                  trialEndsAt: toDateOrNull(sub.trial_ends_at),
-                },
-              });
-            }
-          }
-
-          await markWebhookProcessed(reservation.deliveryId);
-          return { success: true };
-        }
-
-        if (!["CANCELLED", "EXPIRED"].includes(sub.status)) {
-          await markWebhookProcessed(reservation.deliveryId);
-          return { success: true };
-        }
-
-        if (!existing) {
-          await markWebhookProcessed(reservation.deliveryId);
-          return { success: true };
-        }
-
-        if (existing.pendingSubscriptionId === incomingSubId) {
-          await db.subscription.updateMany({
-            where: { shop },
+        // 1. Record BillingEvent for idempotency. A unique constraint on
+        //    [shop, webhookId] prevents a concurrent duplicate delivery from
+        //    committing the same reconciliation twice.
+        try {
+          await db.billingEvent.create({
             data: {
-              pendingSubscriptionId: null,
-              pendingPlanKey: null,
-              pendingPlanName: null,
+              shop,
+              webhookId,
+              domainEventType: "APP_SUBSCRIPTIONS_UPDATE",
+              sourceSystem: "SHOPIFY_WEBHOOK",
             },
           });
-
-          await markWebhookProcessed(reservation.deliveryId);
-          return { success: true };
+        } catch (e) {
+          // P2002 = unique constraint violation — already processed by a concurrent delivery.
+          if (e?.code === "P2002") {
+            await markWebhookProcessed(reservation.deliveryId);
+            return { success: true, message: "Concurrent duplicate ignored via BillingEvent" };
+          }
+          throw e;
         }
 
-        if (
-          existing.subscriptionId &&
-          existing.subscriptionId !== incomingSubId &&
-          existing.status === "ACTIVE"
-        ) {
+        // 2. Treat the webhook only as a reconciliation signal.
+        //    Fetch the current authoritative subscription set from Shopify.
+        //    This guards against delayed / out-of-order webhook delivery.
+        const session = await db.shopifySession.findFirst({ where: { shop } });
+        if (!session) {
+          // Shop is already uninstalled/redacted — nothing to reconcile.
           await markWebhookProcessed(reservation.deliveryId);
-          return { success: true };
+          return { success: true, message: "No session, reconciliation skipped" };
         }
 
-        await db.subscription.updateMany({
-          where: {
-            shop,
-            subscriptionId: incomingSubId,
-            pendingSubscriptionId: null,
-          },
-          data: {
-            status: "FREE",
-            planKey: "FREE",
-            planName: "Free Plan",
-            subscriptionId: null,
-            currentPeriodEnd: null,
-            trialEndsAt: null,
-            pendingSubscriptionId: null,
-            pendingPlanKey: null,
-            pendingPlanName: null,
-          },
+        const billingService = new ShopifyBillingService(session);
+        const activeSubscriptions = await billingService.getActiveSubscriptions();
+
+        // 3. Fail-closed: FROZEN/RESTRICTED throws BILLING_RESTRICTED;
+        //    multiple ACTIVE throws MULTIPLE_ACTIVE_SUBSCRIPTIONS;
+        //    empty list produces FREE state (downgrade).
+        const state = resolveBillingStateFromActiveSubscriptions({
+          shop,
+          activeSubscriptions,
         });
 
+        // 4. CAS write — only succeeds if billingAuthorityVersion hasn't advanced.
+        const existingRow = await db.subscription.findFirst({ where: { shop } });
+        const { applied, reason } = await applyBillingReconciliation({
+          shop,
+          state,
+          existingRow,
+        });
+
+        logger.info("APP_SUBSCRIPTIONS_UPDATE reconciliation", {
+          shop,
+          webhookId,
+          status: state.status,
+          planKey: state.planKey,
+          applied,
+          reason,
+        });
+
+        if (!applied && reason === "CAS_CONFLICT") {
+          // A newer reconciliation already committed. Retry will re-fetch Shopify
+          // and re-apply if still necessary.
+          throw new Error("BILLING_CAS_CONFLICT");
+        }
+
         await markWebhookProcessed(reservation.deliveryId);
-        return { success: true };
+        return { success: true, applied, reason };
       } catch (error) {
         await markWebhookFailed(reservation.deliveryId, error);
         logger.error("APP_SUBSCRIPTIONS_UPDATE webhook failed", {
           shop,
+          webhookId,
           message: error.message,
+          code: error?.code ?? null,
         });
         throw error;
       }

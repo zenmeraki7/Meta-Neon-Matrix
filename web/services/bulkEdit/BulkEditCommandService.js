@@ -34,8 +34,11 @@ import { createIdempotencyStore } from "../../repositories/idempotencyRepository
 import {
   createManualEditHistoryWithImmutableCommand,
   extendPreviewContractExpiry,
+  findExecutablePreviewContractRecord,
   findPreviewContractRecord,
 } from "../../repositories/bulkEditCommandRepository.js";
+import { upsertAuthoritativeChangeRecord } from "../changeRecordIdentityService.js";
+import { consumeUsage } from "../usageLedgerService.js";
 
 const PREVIEW_EXECUTE_TTL_MS = Math.max(
   10 * 60 * 1000,
@@ -319,18 +322,46 @@ export class BulkEditCommandService {
         },
       );
 
-      const { historyId, historyShop, executionIdentity } =
+      const executionIdentity = command.executionIdentity || crypto.randomUUID();
+      const rawCommand = buildImmutableEditCommand({
+        operationType: "BULK_PRODUCT_EDIT",
+        shop: this.session.shop,
+        actorUserId: actor?.id || null,
+        edit: buildEditIntentFromRules(historyData.rules),
+      });
+      const immutableEditCommand = Object.isFrozen(rawCommand)
+        ? rawCommand
+        : Object.freeze(rawCommand);
+
+      const { historyId, historyShop } =
         await createManualEditHistoryWithImmutableCommand({
-          historyData,
-          buildImmutableEditCommandForHistory: (history) =>
-            buildImmutableEditCommand({
-              operationType: "BULK_PRODUCT_EDIT",
-              shop: history.shop,
-              actorUserId: history.actorId || null,
-              edit: buildEditIntentFromRules(history.rules),
-              targetSnapshotSetId: `EDIT_HISTORY:${history.id}`,
-            }),
+          shop: this.session.shop,
+          executionIdentity,
+          actor: {
+            type: actor?.type || "SHOPIFY_USER",
+            id: actor?.id || null,
+          },
+          editType: historyData.editType,
+          editedField: historyData.editedField,
+          targetCount: historyData.totalItems,
+          initialBatch: historyData.batch,
+          idempotencyKey: `bulk-edit:${idempotencyKey}`,
+          immutableEditCommand,
+          usageReservation: {
+            units: "TARGET_COUNT",
+            quantity: Math.max(1, Number(historyData.totalItems || 0)),
+            entitlementKey: "BULK_EDIT_TARGETS",
+            idempotencyKey: `bulk-edit:${idempotencyKey}:usage`,
+            metadata: {
+              expectedBillingAuthorityVersion:
+                authoritativeSubscription.billingAuthorityVersion,
+              limit: effectiveSubscription?.isUnlimited
+                ? null
+                : effectiveSubscription?.limit ?? null,
+            },
+          },
         });
+
 
       await clearKeyCaches(`${historyShop}:fetchHistories`);
 
@@ -340,6 +371,13 @@ export class BulkEditCommandService {
           historyShop,
           executionIdentity,
           historyData,
+        });
+        await consumeUsage({
+          shop: historyShop,
+          operationType: "BULK_EDIT",
+          operationId: historyId,
+          entitlementKey: "BULK_EDIT_TARGETS",
+          idempotencyKey: `bulk-edit:${historyId}:accepted`,
         });
 
         await this.idempotencyStore.complete({
@@ -355,6 +393,13 @@ export class BulkEditCommandService {
         shop: historyShop,
         source: "manual_bulk_edit_pipeline",
         executionId: executionIdentity,
+      });
+      await consumeUsage({
+        shop: historyShop,
+        operationType: "BULK_EDIT",
+        operationId: historyId,
+        entitlementKey: "BULK_EDIT_TARGETS",
+        idempotencyKey: `bulk-edit:${historyId}:accepted`,
       });
 
       const response = {
@@ -412,10 +457,11 @@ export class BulkEditCommandService {
       throw new Error("Preview is required before execute. Please run preview again.");
     }
 
-    const previewRecord = await findPreviewContractRecord(
+    const previewRecord = await findExecutablePreviewContractRecord({
       previewContractId,
-      this.session.shop,
-    );
+      shop: this.session.shop,
+      ...(operationContext?.tx ? { tx: operationContext.tx } : {}),
+    });
 
     if (!previewRecord) {
       throw buildCodedError(
@@ -424,20 +470,26 @@ export class BulkEditCommandService {
       );
     }
 
-    if (isPreviewContractExpired(previewRecord)) {
-      throw buildCodedError(
-        "Preview is stale. Run preview again before applying this edit.",
-        "PREVIEW_STALE",
-      );
-    }
-
     await extendPreviewContractExpiry({
       previewContractId,
       shop: this.session.shop,
+      expectedRevision: previewRecord.revision ?? 1,
       expiresAt: new Date(Date.now() + PREVIEW_EXECUTE_TTL_MS),
+    }).catch((err) => {
+      if (err.code === "PREVIEW_EXPIRY_EXTENSION_CONFLICT") {
+        const conflictError = new Error(
+          "Preview contract was not found or is no longer extendable",
+        );
+        conflictError.code = "PREVIEW_EXPIRY_EXTENSION_CONFLICT";
+        throw conflictError;
+      }
+      throw err;
     });
 
-    const fingerprint = previewRecord.value || {};
+    const fingerprint =
+      (previewRecord.filterJson && typeof previewRecord.filterJson === "object"
+        ? previewRecord.filterJson
+        : previewRecord.value) || {};
 
     const previewShop = String(
       previewRecord.shop ||
@@ -832,11 +884,13 @@ export class BulkEditCommandService {
       }
 
       // eslint-disable-next-line no-await-in-loop
-      await db.changeRecord.create({
+      await upsertAuthoritativeChangeRecord({
+        tx: db,
         data: {
           editHistoryId: historyId,
           targetResourceType: "VARIANT",
           targetIdentity: variantId,
+          fieldPath: String(row?.fieldPath || `variant.${field}`),
           productId: String(row?.productId || ""),
           variantId,
           shop: historyShop,

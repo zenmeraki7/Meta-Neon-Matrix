@@ -88,8 +88,8 @@ export async function transitionOperation({
     select: {
       id: true,
       shop: true,
-      status: true,
-      executionState: true,
+      statusNormalized: true,
+      executionStateNormalized: true,
       executionIdentity: true,
       completedAt: true,
       batch: true,
@@ -97,7 +97,7 @@ export async function transitionOperation({
   });
   if (!row) return { ok: false, reason: "NOT_FOUND" };
 
-  const currentState = String(row.executionState || "").toUpperCase();
+  const currentState = String(row.executionStateNormalized || "UNKNOWN").toUpperCase();
   const nextState = String(nextExecutionState || "").toUpperCase();
   const batch = asObject(row.batch);
   const fenceToken = Number(batch.executeLeaseFencingToken || 0);
@@ -134,7 +134,7 @@ export async function transitionOperation({
     };
   }
 
-  const derivedStatus = deriveStatusFromExecutionState(nextState, row.status);
+  const derivedStatus = deriveStatusFromExecutionState(nextState, row.statusNormalized);
   const nowIso = new Date().toISOString();
   const updatedBatch = appendTransitionAudit(batch, {
     at: nowIso,
@@ -170,6 +170,7 @@ export async function transitionOperation({
     expectedExecutionStates: expectedExecutionStates.length
       ? expectedExecutionStates
       : [currentState],
+    expectedStateVersion: row?.stateVersion ?? 0,
     extraWhere: expectedFenceToken === null
       ? {}
       : {
@@ -192,6 +193,6 @@ export async function transitionOperation({
     db: client,
   });
 
-  if (!moved) return { ok: false, reason: "STALE_STATE_OR_FENCE", currentState, nextState };
+  if (!moved || !moved.success) return { ok: false, reason: "STALE_STATE_OR_FENCE", currentState, nextState };
   return { ok: true, currentState, nextState };
 }

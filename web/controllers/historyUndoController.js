@@ -112,9 +112,7 @@ export async function requestHistoryUndo(req, res) {
       actor: actorFrom(session),
       historyId,
       confirmationOperationId,
-      idempotencyKey: String(
-        req.get?.("Idempotency-Key") || `undo:${historyId}`
-      ),
+      idempotencyKey: String(req.get?.("Idempotency-Key") || ""),
       subscription: req.subscription || null,
       entitlement: req.entitlement || null,
       activePlan: req.activePlan || {},

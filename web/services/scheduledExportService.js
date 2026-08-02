@@ -116,7 +116,7 @@ function indexLatestRuns(runs = []) {
 
 function serializeScheduledExport(item, countsById = {}, latestRunsById = {}) {
   const counts = countsById[item.id] || {
-    total: item.runCount || 0,
+    total: Number(item.runCount || 0n),
     success: 0,
     failed: 0,
     skipped: 0,
@@ -147,7 +147,7 @@ function serializeScheduledExport(item, countsById = {}, latestRunsById = {}) {
     totalRunsSucceed: counts.success,
     totalRunsSkipped: counts.skipped,
     totalFails: counts.failed,
-    runCount: item.runCount,
+    runCount: Number(item.runCount || 0n),
     nextRun: item.nextRunAt,
     nextRunAt: item.nextRunAt,
     lastRunAt: item.lastRunAt,
@@ -171,8 +171,8 @@ async function getScheduledExportHydrated(id, shop) {
   }
 
   const [statusCounts, latestRuns] = await Promise.all([
-    scheduledExportRunRepository.groupStatusCounts([scheduledExport.id]),
-    scheduledExportRunRepository.findLatestRuns([scheduledExport.id]),
+    scheduledExportRunRepository.groupStatusCounts([scheduledExport.id], shop),
+    scheduledExportRunRepository.findLatestRuns([scheduledExport.id], shop),
   ]);
 
   return serializeScheduledExport(
@@ -273,8 +273,8 @@ export async function listScheduledExports({ shop }) {
   const items = await scheduledExportRepository.listByShop(shop);
   const ids = items.map((item) => item.id);
   const [statusCounts, latestRuns] = await Promise.all([
-    scheduledExportRunRepository.groupStatusCounts(ids),
-    scheduledExportRunRepository.findLatestRuns(ids),
+    scheduledExportRunRepository.groupStatusCounts(ids, shop),
+    scheduledExportRunRepository.findLatestRuns(ids, shop),
   ]);
 
   const countsById = indexRunCounts(statusCounts);
@@ -323,9 +323,22 @@ export async function updateScheduledExport({
     body.filename !== undefined || body.fileName !== undefined
       ? normalizeFilename(body.filename ?? body.fileName)
       : existing.generatedFilename;
-  const rawFilterInput = Array.isArray(body.rawFilterInput)
-    ? body.rawFilterInput
-    : existing.rawFilterInput;
+  const hasAst = Object.hasOwn(body, "filterAst");
+  const hasLegacyFilters = Object.hasOwn(body, "rawFilterInput");
+
+  if (hasAst && hasLegacyFilters) {
+    const error = new Error("Ambiguous target definition");
+    error.code = "AMBIGUOUS_TARGET_DEFINITION";
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const requestedAst = hasAst
+    ? body.filterAst
+    : hasLegacyFilters
+      ? null
+      : existing.filterAst;
+
   const rawFilterInputToPersist = [];
   const title =
     body.title !== undefined
@@ -344,8 +357,8 @@ export async function updateScheduledExport({
         )
       : null;
   const targetingPayload = TargetingEngineService.prepareTargetingPayload({
-    filterAst: body.filterAst ?? existing.filterAst ?? null,
-    legacyFilterParams: body.filterAst ? null : rawFilterInput,
+    filterAst: requestedAst,
+    legacyFilterParams: hasLegacyFilters ? body.rawFilterInput : null,
     targetGranularity: body.targetGranularity ?? existing.targetGranularity ?? "PRODUCT",
     source: "EXPORT",
     applyMirrorScope: false,

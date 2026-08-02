@@ -17,29 +17,56 @@ import {
   buildIdempotencyRequestHash,
   IdempotencyStoreService,
 } from "../idempotency/IdempotencyStoreService.js";
+import { canonicalizeMappings } from "../storage/immutableObjectStorage.js";
 
 export class ProductImportCommandService {
-  constructor() {
-    this.idempotencyStore = new IdempotencyStoreService(db);
+  constructor(dbClient = null) {
+    this.dbClient = dbClient;
+    this.idempotencyStore = new IdempotencyStoreService(dbClient || db);
   }
 
   async createImportCommand({
     shop,
     actor,
-    file,
+    uploadToken,
     columnMappings,
     subscription = null,
     idempotencyKey,
+    dbClient = null,
   }) {
+    const database = dbClient || this.dbClient || db;
+    const idempotencyStore = dbClient ? new IdempotencyStoreService(dbClient) : this.idempotencyStore;
+
     if (!shop) {
       const error = new Error("SHOP_REQUIRED");
       error.code = "VALIDATION_FAILED";
       throw error;
     }
 
-    if (!file?.path) {
-      const error = new Error("CSV_FILE_REQUIRED");
+    if (!uploadToken) {
+      const error = new Error("UPLOAD_TOKEN_REQUIRED");
       error.code = "VALIDATION_FAILED";
+      throw error;
+    }
+
+    const upload = await database.spreadsheetFile.findFirst({
+      where: {
+        id: uploadToken,
+        shop,
+        status: "PREVIEW_READY",
+      },
+      select: {
+        id: true,
+        storageKey: true,
+        contentSha256: true,
+        sizeBytes: true,
+        originalFilename: true,
+      },
+    });
+
+    if (!upload) {
+      const error = new Error("PREVIEW_NOT_FOUND");
+      error.code = "PREVIEW_NOT_FOUND";
       throw error;
     }
 
@@ -55,16 +82,18 @@ export class ProductImportCommandService {
       throw error;
     }
 
-    const begin = await this.idempotencyStore.begin({
+    const requestHash = buildIdempotencyRequestHash({
+      shop,
+      uploadToken: upload.id,
+      contentSha256: upload.contentSha256,
+      columnMappings: canonicalizeMappings(columnMappings),
+    });
+
+    const begin = await idempotencyStore.begin({
       shop,
       scope: "IMPORT_CSV",
       key: idemKey,
-      requestHash: buildIdempotencyRequestHash({
-        shop,
-        fileName: file.originalname || null,
-        size: Number(file.size || 0),
-        columnMappings,
-      }),
+      requestHash,
     });
     if (begin.mode === "replay") {
       return begin.response;
@@ -76,10 +105,10 @@ export class ProductImportCommandService {
       subscription,
     });
 
-    const newHistory = await db.editHistory.create({
+    const newHistory = await database.editHistory.create({
       data: {
         shop,
-        title: createMultiLanguageForFileEdit(file.originalname),
+        title: createMultiLanguageForFileEdit(upload.originalFilename || "import.csv"),
         editedType: "mixed",
         startedAt: new Date(),
         status: "pending",
@@ -104,7 +133,7 @@ export class ProductImportCommandService {
       },
     });
 
-    await db.editHistory.update({
+    await database.editHistory.update({
       where: { id: newHistory.id },
       data: {
         batch: {
@@ -120,12 +149,13 @@ export class ProductImportCommandService {
       },
     });
 
-    const importDoc = await db.spreadsheetFile.create({
+    await database.spreadsheetFile.updateMany({
+      where: { id: upload.id, shop },
       data: {
-        shop,
         editHistoryId: newHistory.id,
         columnMappings,
-        downloadUrl: file.path,
+        executionClaimedAt: new Date(),
+        status: "EXECUTION_CLAIMED",
       },
     });
 
@@ -135,13 +165,10 @@ export class ProductImportCommandService {
       await addbulkImportEditJob({
         historyId: newHistory.id,
         shop,
-        filePath: file.path,
-        columnMappings,
-        source: "csv_import",
         executionId: newHistory.executionIdentity,
       });
     } catch (error) {
-      await db.editHistory.updateMany({
+      await database.editHistory.updateMany({
         where: { id: newHistory.id, shop },
         data: {
           status: "failed",
@@ -163,10 +190,10 @@ export class ProductImportCommandService {
 
     const response = {
       operationId: newHistory.id,
-      importId: importDoc.id,
+      importId: upload.id,
       status: "QUEUED",
     };
-    await this.idempotencyStore.complete({
+    await idempotencyStore.complete({
       recordId: begin.recordId,
       response,
     });

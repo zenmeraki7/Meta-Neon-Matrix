@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { lazy, Suspense, useState, useCallback, useMemo, useEffect } from "react";
 import {
   Page,
   Layout,
@@ -35,8 +35,6 @@ import FieldSelector from "../components/FieldSelector";
 import EditTypeSelector from "../components/EditTypeSelector";
 import ValueInput from "../components/ValueInput";
 import PreviewTable from "../components/PreviewTable";
-import ScheduleEdit from "../components/ScheduleEdit";
-import RecurringEditModal from "../components/RecurringEditModal";
 import { useFilterRegistry } from "../../list/hooks/useFilterRegistry";
 import {
   selectFilters,
@@ -59,6 +57,9 @@ import {
   useEditPreviewQuery,
   usePreviewQueryInput,
 } from "../hooks/useEditPreviewQuery";
+
+const ScheduleEdit = lazy(() => import("../components/ScheduleEdit"));
+const RecurringEditModal = lazy(() => import("../components/RecurringEditModal"));
 
 const MONEY_FIELDS = new Set(["price", "compareAtPrice", "cost"]);
 const INVENTORY_FIELDS = new Set([
@@ -1448,37 +1449,41 @@ export default function EditPreviewPage() {
       </Layout>
 
       {modalState.scheduleEdit && (
-        <ScheduleEdit
-          show
-          onHide={handleHideScheduleModal}
-          count={previewTotal}
-          editedField={selectedField.value}
-          previewFingerprint={previewFingerprint}
-          previewSignature={previewSignature}
-          hasFreshPreview={hasFreshPreview}
-          hasPreviewRegistryMismatch={hasPreviewRegistryMismatch}
-        />
+        <Suspense fallback={null}>
+          <ScheduleEdit
+            show
+            onHide={handleHideScheduleModal}
+            count={previewTotal}
+            editedField={selectedField.value}
+            previewFingerprint={previewFingerprint}
+            previewSignature={previewSignature}
+            hasFreshPreview={hasFreshPreview}
+            hasPreviewRegistryMismatch={hasPreviewRegistryMismatch}
+          />
+        </Suspense>
       )}
 
       {modalState.recurringEdit && (
-        <RecurringEditModal
-          show
-          onHide={handleHideRecurringModal}
-          count={previewTotal}
-          editedField={selectedField.value}
-          editedBy={editType?.value}
-          previewFingerprint={previewFingerprint}
-          previewSignature={previewSignature}
-          hasFreshPreview={hasFreshPreview}
-          hasPreviewRegistryMismatch={hasPreviewRegistryMismatch}
-          value={inputValue}
-          searchKey={searchReplace.search}
-          replaceText={searchReplace.replace}
-          location={locationValue}
-          rounding={rounding}
-          filters={effectiveFilters}
-          supportValue={supportValue}
-        />
+        <Suspense fallback={null}>
+          <RecurringEditModal
+            show
+            onHide={handleHideRecurringModal}
+            count={previewTotal}
+            editedField={selectedField.value}
+            editedBy={editType?.value}
+            previewFingerprint={previewFingerprint}
+            previewSignature={previewSignature}
+            hasFreshPreview={hasFreshPreview}
+            hasPreviewRegistryMismatch={hasPreviewRegistryMismatch}
+            value={inputValue}
+            searchKey={searchReplace.search}
+            replaceText={searchReplace.replace}
+            location={locationValue}
+            rounding={rounding}
+            filters={effectiveFilters}
+            supportValue={supportValue}
+          />
+        </Suspense>
       )}
     </Page>
   );

@@ -56,6 +56,7 @@ export async function heartbeatOperationLease({
   namespace,
   resourceId,
   ownerId,
+  fencingToken = null,
   ttlMs = DEFAULT_LEASE_MS,
 }) {
   const now = new Date();
@@ -66,6 +67,9 @@ export async function heartbeatOperationLease({
       namespace,
       resourceId,
       ownerId,
+      ...(fencingToken === null || fencingToken === undefined
+        ? {}
+        : { fencingToken: BigInt(fencingToken) }),
       expiresAt: { gt: now },
       releasedAt: null,
     },
@@ -82,6 +86,7 @@ export async function releaseOperationLease({
   namespace,
   resourceId,
   ownerId,
+  fencingToken = null,
 }) {
   await db.operationLease.updateMany({
     where: {
@@ -89,6 +94,9 @@ export async function releaseOperationLease({
       namespace,
       resourceId,
       ownerId,
+      ...(fencingToken === null || fencingToken === undefined
+        ? {}
+        : { fencingToken: BigInt(fencingToken) }),
       releasedAt: null,
     },
     data: {
@@ -103,6 +111,7 @@ export async function assertOperationLeaseOwnership({
   namespace,
   resourceId,
   ownerId,
+  fencingToken = null,
 }) {
   const now = new Date();
   const lease = await db.operationLease.findUnique({
@@ -128,6 +137,15 @@ export async function assertOperationLeaseOwnership({
   if (lease.ownerId !== ownerId) {
     const error = new Error("operation_lease_owner_mismatch");
     error.code = "operation_lease_owner_mismatch";
+    throw error;
+  }
+  if (
+    fencingToken !== null &&
+    fencingToken !== undefined &&
+    lease.fencingToken !== BigInt(fencingToken)
+  ) {
+    const error = new Error("operation_lease_fencing_token_mismatch");
+    error.code = "operation_lease_fencing_token_mismatch";
     throw error;
   }
   if (!(lease.expiresAt instanceof Date) || lease.expiresAt <= now) {

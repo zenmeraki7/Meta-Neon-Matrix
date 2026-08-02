@@ -10,6 +10,7 @@ export function useStoreDetailsQuery(options = {}) {
     queryFn: ({ signal }) => api.get("/api/store/details", { signal }),
     staleTime: 30 * 1000,
     initialData: initialData || undefined,
+    placeholderData: initialData || undefined,
     enabled: options?.enabled ?? true,
   });
 }

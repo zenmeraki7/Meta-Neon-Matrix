@@ -196,7 +196,6 @@ async function backfillOperation({ shop, operationId, dryRun = false }) {
           data: {
             shop,
             operationId,
-            previewContractId,
             mirrorBatchId,
             targetDefinitionHash,
             compilerVersion,
@@ -279,7 +278,7 @@ async function backfillOperation({ shop, operationId, dryRun = false }) {
       for (const update of updates) {
         // eslint-disable-next-line no-await-in-loop
         await tx.targetSnapshotItem.update({
-          where: { id: update.id },
+          where: { shop_id: { shop, id: update.id } },
           data: {
             snapshotSetId: update.snapshotSetId,
             targetKey: update.targetKey,

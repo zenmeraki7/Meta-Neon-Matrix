@@ -38,10 +38,13 @@ import {
   findSuccessfulChangeRecords,
   findUndoHistoryForExecution,
   findUndoSnapshotRows,
+  findTrustedUndoItems,
   findUndoStateOnly,
+  markUndoItemsSubmitted,
   moveUndoToAwaitingShopify,
   persistUndoConflictChunks,
   persistUndoConflictReport,
+  persistUndoItemPreflight,
   transitionUndoFailureOrRequeue,
   updateUndoOperationState,
 } from "../../repositories/bulkUndoExecutionRepository.js";
@@ -229,15 +232,26 @@ const bulkUndoWorker = new Worker(
         });
         assertSnapshotItemsFullyIngested(snapshotRows, "undo_worker");
         snapshotByIdentity = new Map(
-          snapshotRows.map((row) => [String(row.targetKey), row])
+          snapshotRows.map((row) => [
+            `${String(row.targetKey)}\u001f${String(row.fieldPath)}`,
+            row,
+          ])
         );
         snapshotSource = "target_snapshot";
       }
 
       const service = new UndoEditService(session);
-      const undoReplayProducts = service.buildUndoReplayRecords(
+      const reconstructedReplayProducts = service.buildUndoReplayRecords(
         products,
         snapshotByIdentity
+      );
+      const immutableUndoItems = await findTrustedUndoItems({
+        shop,
+        undoOperationId,
+      });
+      const undoReplayProducts = service.hydrateReplayRecordsFromUndoItems(
+        reconstructedReplayProducts,
+        immutableUndoItems
       );
       const snapshotIdentitySet = new Set(
         snapshotRows.map((row) => row.targetKey)
@@ -256,9 +270,16 @@ const bulkUndoWorker = new Worker(
       }
 
       await clearKeyCaches(`${shop}:fetchHistories`);
-      const { safeProducts, conflicts } = await service.verifyUndoConflicts(
-        replayableProducts
-      );
+      const { safeProducts, conflicts, observations } =
+        await service.verifyUndoConflicts(
+          replayableProducts,
+          immutableUndoItems
+        );
+      await persistUndoItemPreflight({
+        shop,
+        undoOperationId,
+        observations,
+      });
       const conflictReport = {
         generatedAt: new Date().toISOString(),
         totalReplayable: replayableProducts.length,
@@ -305,6 +326,13 @@ const bulkUndoWorker = new Worker(
       });
       const { shopifyBulkOperationId, lastProductId, count } =
         await service.undoEditBulkOperation(safeProducts, rule.field);
+      await markUndoItemsSubmitted({
+        shop,
+        undoOperationId,
+        targetIdentities: safeProducts
+          .map((record) => record.targetIdentity)
+          .filter(Boolean),
+      });
 
       const movedAwaitingShopify = await moveUndoToAwaitingShopify({
         historyId,

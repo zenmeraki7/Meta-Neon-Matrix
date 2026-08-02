@@ -1,42 +1,32 @@
-import React from "react";
-import {
-  Text,
-  BlockStack,
-  InlineStack,
-  Box,
-  Divider,
-} from "@shopify/polaris";
 import { useTranslation } from "react-i18next";
 
 import DemoVideo from "../components/DemoVideo";
 import MetamatrixCardGroup from "../components/MetamatrixCardGroup";
 
-const PromotionalContent = () => {
+function PromotionalContent() {
   const { t } = useTranslation();
 
   return (
-    <BlockStack gap="500">
-      <Box>
-        <MetamatrixCardGroup />
-      </Box>
+    <s-stack gap="large">
+      <MetamatrixCardGroup />
 
-      <Divider />
+      <s-divider></s-divider>
 
-      <BlockStack gap="400">
-        <Text variant="headingMd" as="h3">
-          {t("demoVideo")}
-        </Text>
-
-        <Box paddingBlock="400">
-          <InlineStack align="center">
+      <s-section heading={t("demoVideo")}>
+        <s-stack alignItems="center">
+          <s-box
+            inlineSize="100%"
+            maxInlineSize="960px"
+            paddingBlock="base"
+          >
             <DemoVideo />
-          </InlineStack>
-        </Box>
-      </BlockStack>
+          </s-box>
+        </s-stack>
+      </s-section>
 
-      <Divider />
-    </BlockStack>
+      <s-divider></s-divider>
+    </s-stack>
   );
-};
+}
 
 export default PromotionalContent;

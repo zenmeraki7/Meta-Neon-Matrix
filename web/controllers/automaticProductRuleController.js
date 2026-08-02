@@ -210,9 +210,16 @@ export async function createAutomaticProductRuleController(req, res) {
     const entitlement = requireEntitlementContext(res);
     const actor = buildActorContext(session, req);
 
-    const command = validateCreateAutomaticProductRuleCommand(
-      normalizeCreateAutomaticProductRuleBody(req.body),
-    );
+    const envelope = normalizeCreateAutomaticProductRuleBody(req.body);
+    validateCreateAutomaticProductRuleCommand(envelope);
+
+    const command = {
+      ...envelope.command,
+      commandVersion: envelope.commandVersion,
+      filterAstVersion: envelope.filterAstVersion,
+      editOperationVersion: envelope.editOperationVersion,
+      scheduleVersion: envelope.scheduleVersion,
+    };
 
     const rule = await automaticProductRuleCommandService.createRule({
       shop: session.shop,

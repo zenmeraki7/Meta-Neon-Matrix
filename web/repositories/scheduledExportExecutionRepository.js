@@ -45,7 +45,7 @@ export async function findExportJobForRunFinalize(exportJobId, db = prisma) {
       totalItems: true,
       durationMs: true,
       completedAt: true,
-      status: true,
+      statusNormalized: true,
       error: true,
       shop: true,
       generatedFilename: true,

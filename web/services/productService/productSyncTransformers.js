@@ -23,9 +23,7 @@ export function normalizeNullableString(value) {
 }
 
 export function normalizeNullableFloat(value) {
-  if (value === undefined || value === null || value === "") return null;
-  const n = Number(value);
-  return Number.isNaN(n) ? null : n;
+  return normalizeNullableMoney(value);
 }
 
 export function normalizeNullableInt(value) {
@@ -35,6 +33,30 @@ export function normalizeNullableInt(value) {
 }
 
 const MONEY_SCALE = 1_000_000n;
+const SHOPIFY_MONEY_SCALE = 10_000n;
+const MARGIN_RATIO_SCALE = 100_000_000n;
+
+function parseFixedFour(value) {
+  const match = String(value ?? "").trim().match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match) return null;
+  const sign = match[1] === "-" ? -1n : 1n;
+  const fraction = (match[3] || "").padEnd(5, "0");
+  let units = BigInt(match[2]) * SHOPIFY_MONEY_SCALE + BigInt(fraction.slice(0, 4));
+  if (fraction[4] >= "5") units += 1n;
+  return sign * units;
+}
+
+function formatFixed(units, scaleDigits) {
+  const scale = 10n ** BigInt(scaleDigits);
+  const sign = units < 0n ? "-" : "";
+  const absolute = units < 0n ? -units : units;
+  return `${sign}${absolute / scale}.${String(absolute % scale).padStart(scaleDigits, "0")}`;
+}
+
+export function normalizeNullableMoney(value) {
+  const units = parseFixedFour(value);
+  return units === null ? null : formatFixed(units, 4);
+}
 
 function parseFixedSix(value) {
   const match = String(value ?? "").trim().match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
@@ -58,15 +80,15 @@ function normalizeNullableDecimal(value) {
   return units === null ? null : formatFixedSix(units);
 }
 
-function calculateProfitMargin(priceValue, costValue) {
-  const priceUnits = parseFixedSix(priceValue);
-  const costUnits = parseFixedSix(costValue);
+function calculateProfitMarginRatio(priceValue, costValue) {
+  const priceUnits = parseFixedFour(priceValue);
+  const costUnits = parseFixedFour(costValue);
   if (priceUnits === null || costUnits === null || priceUnits <= 0n) return null;
 
-  const numerator = (priceUnits - costUnits) * 100n * MONEY_SCALE;
+  const numerator = (priceUnits - costUnits) * MARGIN_RATIO_SCALE;
   const absoluteNumerator = numerator < 0n ? -numerator : numerator;
   const rounded = (absoluteNumerator + priceUnits / 2n) / priceUnits;
-  return formatFixedSix(numerator < 0n ? -rounded : rounded);
+  return formatFixed(numerator < 0n ? -rounded : rounded, 8);
 }
 
 export function normalizeBoolean(value) {
@@ -458,7 +480,7 @@ export function flattenVariant(productId, variant, shop) {
   const price = normalizeNullableFloat(variant.price);
   const cost = normalizeNullableFloat(variant.inventoryItem?.unitCost?.amount);
 
-  const profitMargin = calculateProfitMargin(
+  const profitMarginRatio = calculateProfitMarginRatio(
     variant.price,
     variant.inventoryItem?.unitCost?.amount,
   );
@@ -507,6 +529,6 @@ export function flattenVariant(productId, variant, shop) {
     option3Value: getOptionValueByIndex(selectedOptions, 2),
     tracked: normalizeBoolean(variant.inventoryItem?.tracked),
     physicalProduct: normalizeBoolean(variant.inventoryItem?.requiresShipping),
-    profitMargin,
+    profitMarginRatio,
   };
 }

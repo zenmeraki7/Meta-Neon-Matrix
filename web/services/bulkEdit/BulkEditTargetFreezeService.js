@@ -30,6 +30,7 @@ async function attachFrozenSnapshotRefToFreezingHistory({
     id: historyId,
     shop: history.shop,
     expectedExecutionStates: ["TARGET_FREEZING"],
+    expectedStateVersion: history?.stateVersion ?? 0,
     extraWhere: {
       snapshotSetId: null,
     },
@@ -48,7 +49,7 @@ async function attachFrozenSnapshotRefToFreezingHistory({
     },
     db,
   });
-  if (!updated) {
+  if (!updated || !updated.success) {
     const error = new Error("Operation transition conflict");
     error.code = "OPERATION_STAGE_CONFLICT";
     throw error;
@@ -62,9 +63,11 @@ export class BulkEditTargetFreezeService {
 
   async freezeEditHistoryTargets(historyId, options = {}) {
     const database = options?.tx || db;
+    const shop = String(options?.shop || this.session?.shop || "").trim();
+    if (!shop) throw new Error("SHOP_SCOPE_REQUIRED");
 
     const history = await database.editHistory.findUnique({
-      where: { id: historyId },
+      where: { shop_id: { shop, id: historyId } },
       select: {
         shop: true,
         rules: true,

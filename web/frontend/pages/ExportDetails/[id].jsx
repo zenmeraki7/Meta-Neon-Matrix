@@ -69,8 +69,6 @@ export default function ExportHistoryDetailsPage() {
   const api = useApiClient();
   const authenticatedFetch = useAuthenticatedFetch();
 
-  const [exportJob, setExportJob] = useState(null);
-  const [error, setError] = useState(null);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const dateTimeFormatter = useMemo(
     () =>
@@ -188,7 +186,7 @@ export default function ExportHistoryDetailsPage() {
   const formatDuration = useCallback(
     (ms) => {
       if (!ms) return "-";
-      return `${(ms / 1000).toFixed(2)} ${t("common.seconds", {
+      return `${(ms / 1000).toFixed(2)} ${t("seconds", {
         defaultValue: "seconds",
       })}`;
     },
@@ -274,18 +272,10 @@ export default function ExportHistoryDetailsPage() {
     retry: false,
   });
 
-  useEffect(() => {
-    if (exportDetailQuery.data) {
-      setExportJob(exportDetailQuery.data);
-      setError(null);
-    }
-  }, [exportDetailQuery.data]);
-
-  useEffect(() => {
-    if (exportDetailQuery.error) {
-      setError(toSafeErrorMessage(t, exportDetailQuery.error, "common.errors.generic"));
-    }
-  }, [exportDetailQuery.error, t]);
+  const exportJob = exportDetailQuery.data ?? null;
+  const error = exportDetailQuery.error
+    ? toSafeErrorMessage(t, exportDetailQuery.error, "common.errors.generic")
+    : null;
 
   useEffect(() => {
     if (!error) return;

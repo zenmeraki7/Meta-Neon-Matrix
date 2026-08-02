@@ -76,8 +76,8 @@ const PlanGrid = memo(
 
     return (
       <InlineStack wrap gap="500">
-        {plans.map((plan, index) => (
-          <Box key={index} width="45%">
+        {plans.map((plan) => (
+          <Box key={plan.plan_id} width="45%">
             <PlanCard
               plan={plan}
               isActive={activePlan?.name === plan.name}

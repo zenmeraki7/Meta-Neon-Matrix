@@ -81,7 +81,7 @@ function isRetryablePipelineError(error) {
 }
 
 function assertPipelineExecutionState(history, allowedStates = []) {
-  const state = String(history?.executionState || "").toUpperCase();
+  const state = String(history?.executionStateNormalized || "UNKNOWN").toUpperCase();
 
   if (!allowedStates.includes(state)) {
     const error = new Error(`PIPELINE_STATE_CONFLICT:${state}`);
@@ -177,7 +177,7 @@ async function loadPipelineHistory({ historyId, shop }) {
       shop: true,
       cancelRequestedAt: true,
       executionIdentity: true,
-      executionState: true,
+      executionStateNormalized: true,
       batch: true,
     },
   });
@@ -263,6 +263,7 @@ async function processTargetFreeze(jobData) {
           OPERATION_LIFECYCLE_STATES.SCHEDULED_QUEUED,
           OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
         ],
+        expectedStateVersion: history?.stateVersion ?? 0,
         data: {
           executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
           executionStateNormalized: normalizeEditHistoryExecutionState(
@@ -271,7 +272,7 @@ async function processTargetFreeze(jobData) {
         },
       });
 
-      if (!movedToFreezing) {
+      if (!movedToFreezing || !movedToFreezing.success) {
         throw new Error("PIPELINE_TARGET_FREEZE_TRANSITION_REJECTED");
       }
 
@@ -298,6 +299,7 @@ async function processTargetFreeze(jobData) {
         id: historyId,
         shop,
         expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.TARGET_FREEZING],
+        expectedStateVersion: movedToFreezing.newVersion ?? (history?.stateVersion ? history.stateVersion + 1 : 0),
         data: {
           totalItems: frozenCount,
           targetSnapshotCount: frozenCount,
@@ -308,7 +310,7 @@ async function processTargetFreeze(jobData) {
         },
       });
 
-      if (!movedToFrozen) {
+      if (!movedToFrozen || !movedToFrozen.success) {
         throw new Error("PIPELINE_TARGET_FROZEN_TRANSITION_REJECTED");
       }
 
@@ -372,6 +374,7 @@ async function processMutationPlan(jobData) {
         id: historyId,
         shop,
         expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.TARGET_FROZEN],
+        expectedStateVersion: history?.stateVersion ?? 0,
         data: {
           executionState: OPERATION_LIFECYCLE_STATES.PLANNED,
           executionStateNormalized: normalizeEditHistoryExecutionState(
@@ -380,7 +383,7 @@ async function processMutationPlan(jobData) {
         },
       });
 
-      if (!movedToPlanned) {
+      if (!movedToPlanned || !movedToPlanned.success) {
         throw new Error("PIPELINE_MUTATION_PLAN_TRANSITION_REJECTED");
       }
 
@@ -487,7 +490,12 @@ async function processItemApplyDispatch(jobData) {
       productId: true,
       variantId: true,
       targetKey: true,
+      fieldPath: true,
       targetResourceType: true,
+      metafieldOwnerId: true,
+      metafieldOwnerType: true,
+      metafieldNamespace: true,
+      metafieldKey: true,
       plannedMutation: true,
     },
   });
@@ -511,16 +519,9 @@ async function processItemApplyDispatch(jobData) {
       mutation.input ||
       mutation;
 
-    const ownerId = String(
-      metafield.ownerId ||
-      metafield.owner_id ||
-      item.variantId ||
-      item.productId ||
-      "",
-    ).trim();
-
-    const namespace = String(metafield.namespace || "").trim();
-    const key = String(metafield.key || "").trim();
+    const ownerId = String(item.metafieldOwnerId || "").trim();
+    const namespace = String(item.metafieldNamespace || "").trim();
+    const key = String(item.metafieldKey || "").trim();
     const type = String(metafield.type || metafield.valueType || "").trim();
     const value = metafield.value ?? metafield.newValue ?? "";
 

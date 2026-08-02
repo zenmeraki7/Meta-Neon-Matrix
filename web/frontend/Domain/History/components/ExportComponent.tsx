@@ -1,80 +1,114 @@
-// web/frontend/Domain/History/components/ExportComponent.tsx
-import React from "react";
-import { BlockStack, Card, Tabs, Text, Box } from "@shopify/polaris";
-import ExportTable from "./ExportTable";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
+
+import ExportTable, {
+  EXPORT_TYPE,
+  EXPORT_DOWNLOAD_ERROR,
+  ExportType,
+  ExportDownloadErrorCode,
+} from "./ExportTable";
 import { useToast as useAppToast } from "../../../components/providers/ToastProvider";
 
-const EXPORT_TYPE = {
-  MANUAL: "Manual export",
-  SCHEDULED: "Scheduled export",
-} as const;
+type ExportTab = {
+  id: string;
+  label: string;
+  exportType: ExportType;
+};
 
-const ExportComponent: React.FC = () => {
-  const { t } = useTranslation();
-  const [selectedTab, setSelectedTab] = React.useState(0);
-
-  const tabs = React.useMemo(
-    () => [
-      {
-        id: "manual-exports",
-        content: t("ManualExport"),
-      },
-      {
-        id: "scheduled-exports",
-        content: t("ScheduledExport"),
-      },
-    ],
-    [t],
-  );
-
-  const selectedExportType = React.useMemo(
-    () => (selectedTab === 1 ? EXPORT_TYPE.SCHEDULED : EXPORT_TYPE.MANUAL),
-    [selectedTab],
-  );
-
+function ExportComponent() {
+  const { t } = useTranslation(["history", "common"]);
   const { showSuccess, showError } = useAppToast();
 
-  const handleExportSuccess = React.useCallback(() => {
-    showSuccess(t("exportSuccess"));
+  const [selectedExportType, setSelectedExportType] =
+    useState<ExportType>(EXPORT_TYPE.MANUAL);
+
+  const tabs: ExportTab[] = [
+    {
+      id: "manual-exports",
+      label: t("ManualExport", {
+        defaultValue: "Manual Export",
+      }),
+      exportType: EXPORT_TYPE.MANUAL,
+    },
+    {
+      id: "scheduled-exports",
+      label: t("ScheduledExport", {
+        defaultValue: "Scheduled Export",
+      }),
+      exportType: EXPORT_TYPE.SCHEDULED,
+    },
+  ];
+
+  const handleDownloadSuccess = useCallback(() => {
+    showSuccess(
+      t("common:downloadSuccess", {
+        defaultValue: "Download started",
+      }),
+    );
   }, [showSuccess, t]);
 
-  const handleExportError = React.useCallback(
-    (errorMessage: string) => {
-      showError(errorMessage);
+  const handleDownloadError = useCallback(
+    (errorCode: ExportDownloadErrorCode) => {
+      const message =
+        errorCode === EXPORT_DOWNLOAD_ERROR.MISSING_ID
+          ? t("common:exportDownloadLinkMissing", {
+            defaultValue: "Download link is missing.",
+          })
+          : t("common:exportDownloadFailed", {
+            defaultValue: "Download failed. Please try again.",
+          });
+
+      showError(message);
     },
-    [showError],
+    [showError, t],
   );
 
   return (
-    <BlockStack gap="400">
-      <Card>
-        <BlockStack gap="200">
-          <Box paddingInlineStart="600">
-            <Text as="h2" variant="headingLg">
-              {t("exportHistory")}
-            </Text>
+    <s-stack gap="large">
+      <s-section
+        heading={t("exportHistory", {
+          defaultValue: "Export History",
+        })}
+      >
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            {t("exportOverviewText", {
+              defaultValue:
+                "Track generated files, monitor progress, and download completed exports.",
+            })}
+          </s-paragraph>
 
-            <Box paddingBlockStart="200">
-              <Text as="p" tone="subdued" variant="bodyMd">
-                {t("exportOverviewText")}
-              </Text>
-            </Box>
-          </Box>
+          <s-button-group gap="none">
+            {tabs.map((tab) => {
+              const selected =
+                selectedExportType === tab.exportType;
 
-          <Tabs tabs={tabs} selected={selectedTab} onSelect={setSelectedTab} />
-        </BlockStack>
-      </Card>
+              return (
+                <s-button
+                  key={tab.id}
+                  variant="secondary"
+                  aria-pressed={selected}
+                  onClick={() => {
+                    setSelectedExportType(
+                      tab.exportType,
+                    );
+                  }}
+                >
+                  {tab.label}
+                </s-button>
+              );
+            })}
+          </s-button-group>
+        </s-stack>
+      </s-section>
 
-      <BlockStack gap="400">
-        <ExportTable
-          selectedType={selectedExportType}
-          onExportSuccess={handleExportSuccess}
-          onExportError={handleExportError}
-        />
-      </BlockStack>
-    </BlockStack>
+      <ExportTable
+        selectedType={selectedExportType}
+        onDownloadSuccess={handleDownloadSuccess}
+        onDownloadError={handleDownloadError}
+      />
+    </s-stack>
   );
-};
+}
 
 export default ExportComponent;

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -17,6 +17,7 @@ import { useScheduleTimezone } from "../../../../hooks/useScheduleTimezone";
 import { getDateInputInTimezone, zonedDateTimeToUtcIso } from "../../../../utils/timezoneDateTime";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import { toSafeErrorMessage } from "../../../../utils/frontendError";
+import { useSubscriptionSnapshot } from "../../../../hooks/useSubscriptionSnapshot";
 
 const SCHEDULED_EXPORTS_UPGRADE_MESSAGE =
   "Scheduled exports are not available on your current plan.";
@@ -29,16 +30,13 @@ function ScheduledExportModal({
   selectedFields,
   filters,
 }) {
-  const { t } = useTranslation();
+  const { t } = useTranslation(["common", "products"]);
   const api = useApiClient();
   const { scheduleTimezone } = useScheduleTimezone();
   const resolvedTimezone = scheduleTimezone || "UTC";
   const { showSuccess, showError } = useAppToast();
-  const scheduleCapabilityQuery = useQuery({
-    queryKey: ["subscription-capabilities", "scheduled-exports"],
-    queryFn: async () => api.get("/api/subscription/get-plans"),
+  const scheduleCapabilityQuery = useSubscriptionSnapshot({
     enabled: show === true,
-    staleTime: 30_000,
   });
 
   const navigate = useNavigate();
@@ -92,124 +90,139 @@ function ScheduledExportModal({
     onHide();
   }, [onHide, resetForm]);
 
- const handleScheduleExport = useCallback(async () => {
-  if (!canScheduleExports) {
-    setUpgradeWarning(
-      t("scheduledExport.upgradeRequiredMessage", {
-        defaultValue: SCHEDULED_EXPORTS_UPGRADE_MESSAGE,
-      }),
-    );
-    return;
-  }
-
-  if (!isFormValid) return;
-
-  setSubmitting(true);
-  setError(null);
-  setUpgradeWarning(null);
-
-  try {
-    const scheduledAt = zonedDateTimeToUtcIso(startExportDate, startExportTime, resolvedTimezone);
-
-    const payload = {
-      title: fileName.replace(/\.csv$/i, ""),
-      filename: fileName,
-      fields: selectedFields,
-      rawFilterInput: filters,
-      filterAst: buildFilterAstFromLegacyFilters({
-        rawFilterInput: filters,
-        targetGranularity: "PRODUCT",
-        source: "SCHEDULED_EXPORT_DEFINITION",
-      }),
-      scheduledAt,
-      timezone: resolvedTimezone,
-      status: "Active",
-    };
-
-    try {
-      await api.post("/api/products/create-scheduled-export", payload, {
-        idempotent: true,
-      });
-    } catch (requestError) {
-      const errorCode =
-        requestError?.payload?.code ||
-        requestError?.payload?.message ||
-        requestError?.message ||
-        "SCHEDULED_EXPORT_FAILED";
-
-      // 🔥 Upgrade case
-      if (
-        errorCode === "UPGRADE_REQUIRED" ||
-        errorCode === "SCHEDULED_EXPORT_PLAN_UPGRADE_REQUIRED" ||
-        requestError?.payload?.upgradeRequired === true
-      ) {
-        setUpgradeBillingUrl(
-          requestError?.payload?.billingUrl ||
-          requestError?.details?.billingUrl ||
-          DEFAULT_BILLING_URL,
-        );
-        setUpgradeWarning(
-          requestError?.payload?.message ||
-          t("scheduledExport.upgradeRequiredMessage", {
-            defaultValue: SCHEDULED_EXPORTS_UPGRADE_MESSAGE,
-          })
-        );
-        return;
-      }
-
-      // 🔥 Generic errors
-      throw new Error(
-        t(
-          `scheduledExport.errors.${errorCode}`,
-          t("scheduledExport.failedMessage")
-        )
+  const handleScheduleExport = useCallback(async () => {
+    if (!canScheduleExports) {
+      setUpgradeWarning(
+        t("scheduledExport.upgradeRequiredMessage", {
+          defaultValue: SCHEDULED_EXPORTS_UPGRADE_MESSAGE,
+        }),
       );
+      return;
     }
 
-    // ✅ Success
-    showSuccess(t("scheduledExport.successMessage"));
+    if (!isFormValid) return;
 
-    setTimeout(() => {
-      handleClose();
-      navigate("/history");
-    }, 1000);
+    setSubmitting(true);
+    setError(null);
+    setUpgradeWarning(null);
 
-  } catch (requestError) {
-    const message = toSafeErrorMessage(
-      t,
-      requestError,
-      "common.errors.generic",
-    );
+    try {
+      const scheduledAt = zonedDateTimeToUtcIso(startExportDate, startExportTime, resolvedTimezone);
 
-    setError(message);
+      const payload = {
+        title: fileName.replace(/\.csv$/i, ""),
+        filename: fileName,
+        fields: selectedFields,
+        rawFilterInput: filters,
+        filterAst: buildFilterAstFromLegacyFilters({
+          rawFilterInput: filters,
+          targetGranularity: "PRODUCT",
+          source: "SCHEDULED_EXPORT_DEFINITION",
+        }),
+        scheduledAt,
+        timezone: resolvedTimezone,
+        status: "Active",
+      };
 
-    showError(message);
-  } finally {
-    setSubmitting(false);
-  }
-}, [
-  fileName,
-  filters,
-  handleClose,
-  isFormValid,
-  navigate,
-  selectedFields,
-  startExportDate,
-  startExportTime,
-  resolvedTimezone,
-  api,
-  canScheduleExports,
-  t,
-  showError,
-  showSuccess,
-]);
+      try {
+        await api.post("/api/products/create-scheduled-export", payload, {
+          idempotent: true,
+        });
+      } catch (requestError) {
+        const errorCode =
+          requestError?.payload?.code ||
+          requestError?.payload?.message ||
+          requestError?.message ||
+          "SCHEDULED_EXPORT_FAILED";
+
+        // 🔥 Upgrade case
+        if (
+          errorCode === "UPGRADE_REQUIRED" ||
+          errorCode === "SCHEDULED_EXPORT_PLAN_UPGRADE_REQUIRED" ||
+          requestError?.payload?.upgradeRequired === true
+        ) {
+          setUpgradeBillingUrl(
+            requestError?.payload?.billingUrl ||
+            requestError?.details?.billingUrl ||
+            DEFAULT_BILLING_URL,
+          );
+          setUpgradeWarning(
+            requestError?.payload?.message ||
+            t("scheduledExport.upgradeRequiredMessage", {
+              defaultValue: SCHEDULED_EXPORTS_UPGRADE_MESSAGE,
+            })
+          );
+          return;
+        }
+
+        // 🔥 Generic errors
+        throw new Error(
+          t(
+            `scheduledExport.errors.${errorCode}`,
+            t("scheduledExport.failedMessage")
+          )
+        );
+      }
+
+      const completionTimerRef = useRef(null);
+
+      useEffect(() => {
+        return () => {
+          if (completionTimerRef.current !== null) {
+            window.clearTimeout(completionTimerRef.current);
+          }
+        };
+      }, []);
+
+      // ✅ Success
+      showSuccess(t("scheduledExport.successMessage"));
+
+      if (completionTimerRef.current !== null) {
+        window.clearTimeout(completionTimerRef.current);
+      }
+
+      completionTimerRef.current = window.setTimeout(() => {
+        completionTimerRef.current = null;
+        handleClose();
+        navigate("/history");
+      }, 1000);
+
+    } catch (requestError) {
+      const message = toSafeErrorMessage(
+        t,
+        requestError,
+        "common.errors.generic",
+      );
+
+      setError(message);
+
+      showError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [
+    fileName,
+    filters,
+    handleClose,
+    isFormValid,
+    navigate,
+    selectedFields,
+    startExportDate,
+    startExportTime,
+    resolvedTimezone,
+    api,
+    canScheduleExports,
+    t,
+    showError,
+    showSuccess,
+  ]);
 
   return (
     <>
       <Modal
         open={show}
         onClose={handleClose}
-         title={t("scheduledExport.modalTitle")}
+        title={t("scheduledExport.modalTitle")}
         primaryAction={{
           content: t("scheduledExport.scheduleButton"),
           onAction: handleScheduleExport,
@@ -235,7 +248,7 @@ function ScheduledExportModal({
                 title={t("scheduledExport.upgradeRequiredTitle")}
                 onDismiss={scheduleUpgradeRequired ? undefined : () => setUpgradeWarning(null)}
                 action={{
-                   content: t("scheduledExport.upgradePlanButton"),
+                  content: t("scheduledExport.upgradePlanButton"),
                   onAction: () => navigate(resolvedBillingUrl),
                 }}
               >
@@ -275,7 +288,7 @@ function ScheduledExportModal({
                   min={getDateInputInTimezone(resolvedTimezone)}
                 />
                 <TextField
-                   label={t("scheduledExport.timeLabel")}
+                  label={t("scheduledExport.timeLabel")}
                   type="time"
                   value={startExportTime}
                   onChange={setStartExportTime}

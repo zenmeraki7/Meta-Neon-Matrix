@@ -110,7 +110,7 @@ function toStableRowId(product) {
   return typeof id === "string" && id.trim() ? id.trim() : null;
 }
 
-function normalizeProductsPayload(data) {
+export function normalizeProductsPayload(data) {
   const payload = data?.data && typeof data.data === "object" ? data.data : data;
   const rawProducts = Array.isArray(payload?.products) ? payload.products : [];
   let droppedRows = 0;
@@ -167,7 +167,7 @@ export default function useProducts({
   );
 
   const resolvedFilterHash = useMemo(
-    () => buildCanonicalFilterHash(normalizedFilters),
+    () => JSON.stringify(normalizedFilters),
     [normalizedFilters],
   );
 

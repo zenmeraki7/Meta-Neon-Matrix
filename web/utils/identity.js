@@ -15,12 +15,12 @@ function requiredString(value, fieldName) {
 }
 
 export const SHOP_DOMAIN_PATTERN =
-  /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i;
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/i;
 
 /** @returns {ShopDomain} */
 export function requireShopDomain(value) {
   const shopDomain = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (!SHOP_DOMAIN_PATTERN.test(shopDomain)) {
+  if (shopDomain.length > 255 || !SHOP_DOMAIN_PATTERN.test(shopDomain)) {
     const error = new Error("INVALID_SHOP_DOMAIN");
     error.code = "INVALID_SHOP_DOMAIN";
     throw error;
@@ -55,6 +55,11 @@ export function asMirrorBatchId(value) {
 
 function asShopifyGid(value, resourceType, fieldName) {
   const gid = requiredString(value, fieldName);
+  if (gid.length > 255) {
+    const error = new Error(`${fieldName} exceeds the maximum Shopify GID length`);
+    error.code = "SHOPIFY_GID_TOO_LONG";
+    throw error;
+  }
   const expression = new RegExp(`^gid://shopify/${resourceType}/[1-9][0-9]*$`);
   if (!expression.test(gid)) {
     const error = new Error(`${fieldName} must be a Shopify ${resourceType} GID`);
@@ -72,4 +77,24 @@ export function asProductGid(value) {
 /** @returns {VariantGid} */
 export function asVariantGid(value) {
   return /** @type {VariantGid} */ (asShopifyGid(value, "ProductVariant", "variantGid"));
+}
+
+export function asMetafieldNamespace(value) {
+  const namespace = requiredString(value, "metafieldNamespace");
+  if (namespace.length > 255 || !/^[a-zA-Z0-9_-]+$/.test(namespace)) {
+    const error = new Error("INVALID_METAFIELD_NAMESPACE");
+    error.code = "INVALID_METAFIELD_NAMESPACE";
+    throw error;
+  }
+  return namespace;
+}
+
+export function asMetafieldKey(value) {
+  const key = requiredString(value, "metafieldKey");
+  if (key.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(key)) {
+    const error = new Error("INVALID_METAFIELD_KEY");
+    error.code = "INVALID_METAFIELD_KEY";
+    throw error;
+  }
+  return key;
 }

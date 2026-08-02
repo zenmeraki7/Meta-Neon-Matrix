@@ -7,6 +7,8 @@ import {
 import { buildPublicApiErrorResponse } from "../utils/publicApiError.js";
 import logger from "../utils/loggerUtils.js";
 import { db } from "../repositories/repositoryDb.js";
+import { resolveBillingStateFromActiveSubscriptions } from "../services/subscriptionAuthorityService.js";
+import { applyBillingReconciliation } from "../services/billingReconciliationService.js";
 
 function buildControllerError(code, message = code, details = null) {
   const error = new Error(message);
@@ -66,41 +68,6 @@ async function savePendingBillingApproval({ shop, plan, payload }) {
       pendingPlanName: plan.name,
     },
   });
-}
-
-async function activateSubscriptionFromShopify({ shop, subscription }) {
-  const plan = resolvePlanFromSubscriptionName(subscription?.name);
-  if (!plan) {
-    throw buildControllerError(
-      "UNKNOWN_BILLING_PLAN",
-      "Shopify returned an active subscription for an unknown billing plan.",
-      { subscriptionName: subscription?.name || null },
-    );
-  }
-
-  await db.subscription.upsert({
-    where: { shop },
-    create: {
-      shop,
-      status: "ACTIVE",
-      subscriptionId: subscription.id,
-      planKey: plan.planKey,
-      planName: plan.name,
-      currentPeriodEnd: toDateOrNull(subscription.currentPeriodEnd),
-    },
-    update: {
-      status: "ACTIVE",
-      subscriptionId: subscription.id,
-      planKey: plan.planKey,
-      planName: plan.name,
-      currentPeriodEnd: toDateOrNull(subscription.currentPeriodEnd),
-      pendingSubscriptionId: null,
-      pendingPlanKey: null,
-      pendingPlanName: null,
-    },
-  });
-
-  return plan;
 }
 
 export async function subscribeBillingController(req, res) {
@@ -213,41 +180,44 @@ export async function syncBillingController(_req, res) {
       });
     }
 
+    const shop = session.shop;
     const billingService = new ShopifyBillingService(session);
-    const subscriptions = await billingService.getActiveSubscriptions();
-    const activeSubscription =
-      subscriptions.find((subscription) => subscription?.status === "ACTIVE") ||
-      subscriptions[0] ||
-      null;
+    const activeSubscriptions = await billingService.getActiveSubscriptions();
 
-    if (!activeSubscription) {
-      return res.status(200).json({
-        ok: true,
-        success: true,
-        synced: false,
-        activeSubscription: null,
-      });
-    }
-
-    const plan = await activateSubscriptionFromShopify({
-      shop: session.shop,
-      subscription: activeSubscription,
+    // Fail-closed: FROZEN/RESTRICTED entries throw BILLING_RESTRICTED.
+    // Multiple ACTIVE entries throw MULTIPLE_ACTIVE_SUBSCRIPTIONS.
+    // An empty list produces a FREE state — the local row will be downgraded.
+    const state = resolveBillingStateFromActiveSubscriptions({
+      shop,
+      activeSubscriptions,
     });
 
-    logger.info("Billing subscription synced from Shopify", {
-      shop: session.shop,
-      subscriptionId: activeSubscription.id,
-      plan: plan.slug,
-      planKey: plan.planKey,
+    const existingRow = await db.subscription.findFirst({ where: { shop } });
+
+    const { applied, reason } = await applyBillingReconciliation({
+      shop,
+      state,
+      existingRow,
+    });
+
+    logger.info("Billing sync reconciliation", {
+      shop,
+      status: state.status,
+      planKey: state.planKey,
+      subscriptionId: state.subscriptionId ?? null,
+      applied,
+      reason,
     });
 
     return res.status(200).json({
       ok: true,
       success: true,
       synced: true,
-      plan: plan.slug,
-      planKey: plan.planKey,
-      subscriptionId: activeSubscription.id,
+      applied,
+      reason,
+      status: state.status,
+      planKey: state.planKey,
+      subscriptionId: state.subscriptionId ?? null,
     });
   } catch (error) {
     logger.error("Billing subscription sync failed", {

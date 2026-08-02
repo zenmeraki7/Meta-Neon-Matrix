@@ -85,8 +85,7 @@ test("productImportController factory supports dependency injection and passes c
   const req = mockReq(
     { "idempotency-key": "import_key_123" },
     {},
-    {},
-    { path: "/tmp/upload.csv", originalname: "products.csv", size: 1024, mimetype: "text/csv" },
+    { uploadToken: "token_123", columnMappings: JSON.stringify({ Title: "title" }) },
   );
   const res = mockRes();
 
@@ -102,7 +101,7 @@ test("productImportController factory supports dependency injection and passes c
   assert.equal(fileRemoved, null);
 });
 
-test("productImportController cleans up file when service throws BEFORE ownership transfer", async () => {
+test("productImportController handles service error prior to ownership transfer", async () => {
   let fileRemoved = null;
 
   const controller = createProductImportController({
@@ -122,15 +121,14 @@ test("productImportController cleans up file when service throws BEFORE ownershi
   const req = mockReq(
     { "idempotency-key": "import_key_456" },
     {},
-    {},
-    { path: "/tmp/failed_upload.csv", mimetype: "text/csv" },
+    { uploadToken: "token_456", columnMappings: JSON.stringify({ Title: "title" }) },
   );
   const res = mockRes();
 
   await controller.importCsvController(req, res);
 
   assert.equal(res.statusCode, 400);
-  assert.equal(fileRemoved, "/tmp/failed_upload.csv");
+  assert.equal(fileRemoved, undefined);
 });
 
 test("toProductImportAcceptedDto redacts internal fields", () => {

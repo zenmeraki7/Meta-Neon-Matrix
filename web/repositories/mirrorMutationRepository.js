@@ -8,14 +8,51 @@ export async function applyProductUpsertMutation({
   productData,
   variants,
   sourceEventOccurredAt,
+  webhookDeliveryId = null,
+  dbClient = null,
 }) {
-  return db.$transaction(async (tx) => {
+  const client = dbClient || db;
+  return client.$transaction(async (tx) => {
+    const current = typeof tx.$queryRaw === "function"
+      ? (await tx.$queryRaw`
+          SELECT "lastSourceEventAt" FROM "Product"
+          WHERE "shop" = ${shop} AND "id" = ${productId} AND "mirrorBatchId" = ${mirrorBatchId}
+          FOR UPDATE
+        `)[0]
+      : null;
+    if (webhookDeliveryId) {
+      const deliveryUpdated = await tx.webhookDelivery.updateMany({
+        where: {
+          id: webhookDeliveryId,
+          shop,
+          statusNormalized: { in: ["RECEIVED", "QUEUED"] },
+        },
+        data: {
+          status: "PROCESSED",
+          statusNormalized: "PROCESSED",
+          processedAt: new Date(),
+          lastError: null,
+        },
+      });
+
+      if (deliveryUpdated.count !== 1) {
+        const error = new Error("WEBHOOK_DELIVERY_COMPLETION_REJECTED");
+        error.code = "WEBHOOK_DELIVERY_COMPLETION_REJECTED";
+        throw error;
+      }
+    }
+
+    if (current?.lastSourceEventAt && sourceEventOccurredAt && new Date(current.lastSourceEventAt) > new Date(sourceEventOccurredAt)) {
+      return { sequence: null, skipped: true, reason: "STALE_SOURCE_EVENT" };
+    }
+
     const journal = await tx.mirrorMutationJournal.create({
       data: {
         shop,
         entityType: "PRODUCT",
         entityId: productId,
         productId,
+        webhookDeliveryId: webhookDeliveryId || null,
         mutationType,
         payload: {
           productData,
@@ -33,8 +70,20 @@ export async function applyProductUpsertMutation({
       where: {
         shop_id_mirrorBatchId: { shop, id: productId, mirrorBatchId },
       },
-      create: { shop, id: productId, mirrorBatchId, ...productData },
-      update: { ...productData },
+      create: {
+        shop, id: productId, mirrorBatchId, ...productData,
+        lastSourceEntityUpdatedAt: productData.updatedAt || sourceEventOccurredAt,
+        lastSourceEventOccurredAt: sourceEventOccurredAt,
+        lastChangeSource: mutationType,
+        isDeleted: false,
+      },
+      update: {
+        ...productData,
+        lastSourceEntityUpdatedAt: productData.updatedAt || sourceEventOccurredAt,
+        lastSourceEventOccurredAt: sourceEventOccurredAt,
+        lastChangeSource: mutationType,
+        isDeleted: false,
+      },
     });
 
     if (Array.isArray(variants)) {
@@ -54,12 +103,14 @@ export async function applyProductUpsertMutation({
           INSERT INTO "Variant" (
             "shop", "id", "productId", "mirrorBatchId", "title", "sku", "barcode", "price",
             "compareAtPrice", "inventoryQuantity", "inventoryPolicy", "taxable", "taxCode",
-            "position", "selectedOptionsJson", "option1Value", "option2Value", "option3Value", "createdAt", "updatedAt"
+            "position", "selectedOptionsJson", "option1Value", "option2Value", "option3Value",
+            "sourceEntityUpdatedAt", "sourceEventOccurredAt", "lastChangeSource", "isDeleted", "createdAt", "updatedAt"
           )
           SELECT ${shop}, row."id", ${productId}, ${mirrorBatchId}, row."title", row."sku", row."barcode",
                  row."price"::numeric, row."compareAtPrice"::numeric, row."inventoryQuantity", row."inventoryPolicy",
                  row."taxable", row."taxCode", row."position", row."selectedOptionsJson",
-                 row."option1Value", row."option2Value", row."option3Value", ${now}, ${now}
+                 row."option1Value", row."option2Value", row."option3Value",
+                 ${productData.updatedAt || sourceEventOccurredAt}, ${sourceEventOccurredAt}, ${mutationType}, FALSE, ${now}, ${now}
           FROM jsonb_to_recordset(${JSON.stringify(variantRows)}::jsonb) AS row(
             "id" text, "title" text, "sku" text, "barcode" text, "price" text, "compareAtPrice" text,
             "inventoryQuantity" integer, "inventoryPolicy" text, "taxable" boolean, "taxCode" text,
@@ -71,9 +122,32 @@ export async function applyProductUpsertMutation({
             "inventoryQuantity" = EXCLUDED."inventoryQuantity", "inventoryPolicy" = EXCLUDED."inventoryPolicy",
             "taxable" = EXCLUDED."taxable", "taxCode" = EXCLUDED."taxCode", "position" = EXCLUDED."position",
             "selectedOptionsJson" = EXCLUDED."selectedOptionsJson", "option1Value" = EXCLUDED."option1Value",
-            "option2Value" = EXCLUDED."option2Value", "option3Value" = EXCLUDED."option3Value", "updatedAt" = EXCLUDED."updatedAt"
+            "option2Value" = EXCLUDED."option2Value", "option3Value" = EXCLUDED."option3Value",
+            "sourceEntityUpdatedAt" = EXCLUDED."sourceEntityUpdatedAt", "sourceEventOccurredAt" = EXCLUDED."sourceEventOccurredAt",
+            "lastChangeSource" = EXCLUDED."lastChangeSource", "isDeleted" = FALSE, "updatedAt" = EXCLUDED."updatedAt"
+          WHERE "Variant"."sourceEventOccurredAt" IS NULL
+             OR EXCLUDED."sourceEventOccurredAt" >= "Variant"."sourceEventOccurredAt"
         `;
       }
+
+      await tx.$executeRaw`
+        INSERT INTO "VariantTombstone" (
+          "shop", "variantId", "productId", "tombstoneMutationSequence", "sourceEventOccurredAt",
+          "lastChangeSource", "deletedAt", "createdAt", "updatedAt"
+        )
+        SELECT variant."shop", variant."id", variant."productId", ${journal.sequence}, ${sourceEventOccurredAt},
+          ${mutationType}, NOW(), NOW(), NOW()
+        FROM "Variant" variant
+        WHERE variant."shop" = ${shop} AND variant."productId" = ${productId}
+          AND variant."mirrorBatchId" = ${mirrorBatchId}
+          AND NOT (variant."id" = ANY(${incomingIds}::text[]))
+        ON CONFLICT ("shop", "variantId") DO UPDATE SET
+          "tombstoneMutationSequence" = EXCLUDED."tombstoneMutationSequence",
+          "sourceEventOccurredAt" = EXCLUDED."sourceEventOccurredAt",
+          "lastChangeSource" = EXCLUDED."lastChangeSource", "deletedAt" = EXCLUDED."deletedAt", "updatedAt" = NOW()
+        WHERE "VariantTombstone"."sourceEventOccurredAt" IS NULL
+           OR EXCLUDED."sourceEventOccurredAt" >= "VariantTombstone"."sourceEventOccurredAt"
+      `;
 
       await tx.variant.deleteMany({
         where: {

@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { Toast } from '@shopify/polaris';
 
 const ToastContext = createContext();
@@ -37,6 +37,11 @@ export function ToastProvider({ children }) {
     setToast(prev => ({ ...prev, active: false }));
   }, []);
 
+  const contextValue = useMemo(
+    () => ({ showToast, showSuccess, showError }),
+    [showToast, showSuccess, showError],
+  );
+
   const toastMarkup = toast.active ? (
     <Toast
       content={toast.content}
@@ -48,7 +53,7 @@ export function ToastProvider({ children }) {
   ) : null;
 
   return (
-    <ToastContext.Provider value={{ showToast, showSuccess, showError }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       {toastMarkup}
     </ToastContext.Provider>

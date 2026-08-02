@@ -30,8 +30,9 @@ import {
   buildEntitlementSnapshot,
 } from "../utils/operationContextUtils.js";
 import { EXPORT_EXECUTION_STATES } from "./exportExecutionStateService.js";
-import {
-} from "../utils/jobQueueUtils.js";
+import { scheduledExportRunJobId } from "../utils/jobQueueUtils.js";
+import { createEnqueueIntent } from "./operationEnqueueIntentService.js";
+import { db } from "../repositories/repositoryDb.js";
 import {
   SCHEDULED_EXPORT_EXECUTION_QUEUE,
   enqueueScheduledExportExecution,
@@ -42,9 +43,30 @@ import {
   releaseRedisLock,
   renewRedisLock,
 } from "../utils/redisLockUtils.js";
+import {
+  advanceScheduledExportScheduleClaim,
+  claimDueScheduledExportSchedules,
+} from "../repositories/scheduleStateRepository.js";
 
 function buildExecutionKey(scheduledExportId, scheduledFor) {
   return `${scheduledExportId}:${new Date(scheduledFor).toISOString()}`;
+}
+
+function scheduledExportDefinitionFromRun(run) {
+  if (!run?.definitionSnapshot) {
+    if (run?.legacyRevisionUnknown || run?.definitionRevision == null) {
+      return run?.scheduledExport || null;
+    }
+    throw new Error("SCHEDULED_EXPORT_RUN_REVISION_REQUIRED");
+  }
+  const snapshot = run.definitionSnapshot.definitionSnapshot;
+  return {
+    ...run.scheduledExport,
+    ...(snapshot.schedulePolicy || {}),
+    ...(snapshot.filter || {}),
+    selectedFieldKeys: snapshot.selectedFields || [],
+    generatedFilename: snapshot.generatedFilename,
+  };
 }
 
 function isTerminalRunStatus(status) {
@@ -68,7 +90,7 @@ async function markRunFailed(run, scheduledExport, errorMessage) {
     id: scheduledExport.id,
     shop: scheduledExport.shop,
     data: {
-      runCount: { increment: 1 },
+      runCount: { increment: 1n },
       lastRunAt: new Date(),
       lastFailureAt: new Date(),
       lastFailureReason: errorMessage,
@@ -91,7 +113,7 @@ async function markRunSkipped(run, scheduledExport, reason) {
     id: scheduledExport.id,
     shop: scheduledExport.shop,
     data: {
-      runCount: { increment: 1 },
+      runCount: { increment: 1n },
       lastRunAt: new Date(),
     },
   });
@@ -188,34 +210,55 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
     const now = new Date();
     // console.log("🕒 Current time:", now.toISOString());
 
-    const dueIds = await scheduledExportRepository.findDueScheduledExportIds(now, limit);
+    const dueClaims = await claimDueScheduledExportSchedules({
+      now,
+      ownerId: `scheduled-export-scheduler:${schedulerLock.token}`,
+      leaseUntil: new Date(now.getTime() + SCHEDULER_LOCK_TTL_MS),
+      limit,
+    });
     // console.log("📦 Due Scheduled Exports:", dueIds);
 
     let scheduled = 0;
     let skipped = 0;
 
-    for (const { id } of dueIds) {
+    for (const claim of dueClaims) {
+      const id = claim.scheduledExportId;
       try {
         console.log("🔁 Processing scheduledExportId:", id);
         const reservation = await withScheduledExportExecutionTransaction(async (tx) => {
-          const locked = await tryAdvisoryLockTx(tx, `scheduled-export:${id}`);
-          if (!locked) {
-            return null;
-          }
-
-          const scheduledExport = await scheduledExportRepository.findById(id, tx);
+          const scheduledExport = await scheduledExportRepository.findByIdForShop(
+            claim.scheduledExportId,
+            claim.shop,
+            tx,
+          );
           if (
             !scheduledExport ||
             scheduledExport.isDeleted ||
             scheduledExport.status !== "ACTIVE" ||
-            !scheduledExport.nextRunAt ||
-            scheduledExport.nextRunAt > now
+            !claim.nextRunAt ||
+            claim.nextRunAt > now ||
+            scheduledExport.revision !== claim.definitionRevision
           ) {
             return null;
           }
 
-          const scheduledFor = scheduledExport.nextRunAt;
-          const executionDedupeKey = buildExecutionKey(id, scheduledFor);
+          const revision = await tx.scheduledExportRevision.findUnique({
+            where: { shop_scheduledExportId_revision: {
+              shop: claim.shop,
+              scheduledExportId: claim.scheduledExportId,
+              revision: claim.definitionRevision,
+            } },
+          });
+          if (!revision) throw new Error("SCHEDULED_EXPORT_REVISION_SNAPSHOT_MISSING");
+          const snapshot = revision.definitionSnapshot;
+          const immutableDefinition = {
+            ...scheduledExport,
+            ...(snapshot.schedulePolicy || {}),
+            ...(snapshot.filter || {}),
+            selectedFieldKeys: snapshot.selectedFields || [],
+          };
+          const scheduledFor = claim.nextRunAt;
+          const executionDedupeKey = buildExecutionKey(scheduledExport.id, scheduledFor);
           const existingRun = await scheduledExportRunRepository.findByExecutionKey(
             executionDedupeKey,
             scheduledExport.shop,
@@ -223,12 +266,7 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
           );
 
           if (existingRun) {
-            return {
-              scheduledExportRunId: existingRun.id,
-              shop: scheduledExport.shop,
-              scheduledExportId: scheduledExport.id,
-              scheduledFor,
-            };
+            return existingRun;
           }
 
           const run = await scheduledExportRunRepository.create(
@@ -238,46 +276,58 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
               scheduledFor,
               status: "PENDING",
               executionDedupeKey,
+              definitionRevision: revision.revision,
+              configurationHash: revision.configurationHash,
+              filterSnapshotHash: revision.filterSnapshotHash,
+              selectedFieldsSnapshotHash: revision.selectedFieldsSnapshotHash,
+              rulesActionsSnapshotHash: revision.rulesActionsSnapshotHash,
+              schedulePolicySnapshotHash: revision.schedulePolicySnapshotHash,
+              legacyRevisionUnknown: false,
             },
             tx,
           );
 
           const nextRunAt = computeScheduledExportNextRunAt(
-            scheduledExport,
+            immutableDefinition,
             new Date(scheduledFor.getTime() + 1000),
           );
 
-          await scheduledExportRepository.updateByIdForShop(
-            {
-              id: scheduledExport.id,
-              shop: scheduledExport.shop,
-              data: {
-                nextRunAt,
-                status: nextRunAt ? "ACTIVE" : "COMPLETED",
-              },
-            },
-            tx,
-          );
+          const advanced = await advanceScheduledExportScheduleClaim({ claim, nextRunAt }, tx);
+          if (advanced.count !== 1) throw new Error("SCHEDULED_EXPORT_CLAIM_FENCE_LOST");
+          await tx.scheduledExport.updateMany({
+            where: { id: scheduledExport.id, shop: scheduledExport.shop, revision: claim.definitionRevision },
+            data: { nextRunAt, status: nextRunAt ? "ACTIVE" : "COMPLETED" },
+          });
 
-          return {
-            scheduledExportRunId: run.id,
+          await createEnqueueIntent({
+            tx,
             shop: scheduledExport.shop,
-            scheduledExportId: scheduledExport.id,
-            scheduledFor,
-          };
+            queueRoutingKey: "SCHEDULED_EXPORT_RUN",
+            queueJobName: "scheduled-export-execution",
+            payload: {
+              scheduledExportRunId: run.id,
+              scheduledExportId: scheduledExport.id,
+              shop: scheduledExport.shop,
+              scheduledFor,
+            },
+            options: {
+              jobId: scheduledExportRunJobId({
+                shop: scheduledExport.shop,
+                scheduledExportId: scheduledExport.id,
+                scheduledFor,
+              }),
+            },
+            dispatchDedupeKey: `scheduled-export-run:${run.id}`,
+          });
+
+          return run;
         }, { timeout: 15_000 });
 
-        if (!reservation?.scheduledExportRunId) {
+        if (!reservation?.id) {
           skipped += 1;
           continue;
         }
 
-        await enqueueScheduledExportExecutionJob({
-          scheduledExportRunId: reservation.scheduledExportRunId,
-          shop: reservation.shop,
-          scheduledExportId: reservation.scheduledExportId,
-          scheduledFor: reservation.scheduledFor,
-        });
         scheduled += 1;
       } catch (error) {
         if (
@@ -300,7 +350,7 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
     return {
       scheduled,
       skipped,
-      scanned: dueIds.length,
+      scanned: dueClaims.length,
     };
   } finally {
     clearInterval(renewInterval);
@@ -309,7 +359,8 @@ export async function scheduleDueScheduledExportRuns({ limit = 100 } = {}) {
 }
 
 export async function executeScheduledExportRun(scheduledExportRunId, shopFromJob = null) {
-  let run = await scheduledExportRunRepository.findByIdWithScheduledExport(scheduledExportRunId);
+  if (!shopFromJob) throw new Error("SHOP_REQUIRED_FOR_SCHEDULED_EXPORT_RUN_EXECUTION");
+  let run = await scheduledExportRunRepository.findByIdWithScheduledExport(scheduledExportRunId, shopFromJob);
   if (!run) {
     return { skipped: true, reason: "run_not_found" };
   }
@@ -318,7 +369,7 @@ export async function executeScheduledExportRun(scheduledExportRunId, shopFromJo
     return { skipped: true, reason: "run_already_completed" };
   }
 
-  const scheduledExport = run.scheduledExport;
+  const scheduledExport = scheduledExportDefinitionFromRun(run);
   if (shopFromJob && scheduledExport?.shop && scheduledExport.shop !== shopFromJob) {
     throw new Error("Cross-shop scheduled export execution blocked");
   }
@@ -366,7 +417,7 @@ shopRenewInterval = setInterval(async () => {
   let exclusiveShopLockKey = null;
 
   try {
-    run = await scheduledExportRunRepository.findByIdWithScheduledExport(scheduledExportRunId);
+    run = await scheduledExportRunRepository.findByIdWithScheduledExport(scheduledExportRunId, shopFromJob);
     if (!run || isTerminalRunStatus(run.status)) {
       return { skipped: true, reason: "run_not_actionable" };
     }
@@ -424,10 +475,11 @@ shopRenewInterval = setInterval(async () => {
         return null;
       }
 
-      const currentRun = await scheduledExportRunRepository.findByIdWithScheduledExport(run.id, tx);
+      const currentRun = await scheduledExportRunRepository.findByIdWithScheduledExport(run.id, shopFromJob, tx);
       if (!currentRun || isTerminalRunStatus(currentRun.status)) {
         return null;
       }
+      const immutableScheduledExport = scheduledExportDefinitionFromRun(currentRun);
 
       if (currentRun.exportJobId) {
         const existingJob = await findExportJobById(currentRun.exportJobId, tx);
@@ -438,14 +490,14 @@ shopRenewInterval = setInterval(async () => {
       const createdExportJob = await createScheduledExportJob({
         data: {
           shop: currentRun.shop,
-          generatedFilename: currentRun.scheduledExport.generatedFilename,
-          selectedFieldKeys: currentRun.scheduledExport.selectedFieldKeys,
+          generatedFilename: immutableScheduledExport.generatedFilename,
+          selectedFieldKeys: immutableScheduledExport.selectedFieldKeys,
           legacyFilterQuery: "{}",
           status: "PENDING",
           executionState: EXPORT_EXECUTION_STATES.PLANNED,
           exportType: "Scheduled export",
           isScheduled: true,
-          scheduledExportId: currentRun.scheduledExport.id,
+          scheduledExportId: immutableScheduledExport.id,
           scheduledExportRunId: currentRun.id,
           triggerType: "SCHEDULED",
           entitlementSnapshot: buildEntitlementSnapshot({
@@ -471,10 +523,10 @@ shopRenewInterval = setInterval(async () => {
         shop: createdExportJob.shop,
         source: "EXPORT",
         targetResourceType: "PRODUCT",
-        targetGranularity: currentRun.scheduledExport.targetGranularity || "PRODUCT",
-        filterAst: currentRun.scheduledExport.filterAst ?? null,
-        legacyFilterParams: Array.isArray(currentRun.scheduledExport.rawFilterInput)
-          ? currentRun.scheduledExport.rawFilterInput
+        targetGranularity: immutableScheduledExport.targetGranularity || "PRODUCT",
+        filterAst: immutableScheduledExport.filterAst ?? null,
+        legacyFilterParams: Array.isArray(immutableScheduledExport.rawFilterInput)
+          ? immutableScheduledExport.rawFilterInput
           : [],
         ownerType: "EXPORT_JOB",
         ownerId: createdExportJob.id,
@@ -483,10 +535,10 @@ shopRenewInterval = setInterval(async () => {
           mutationType: "CSV_EXPORT",
           mutationPayload: {
             selectedFieldKeys: createdExportJob.selectedFieldKeys || [],
-            scheduledExportId: currentRun.scheduledExport.id,
+            scheduledExportId: immutableScheduledExport.id,
             scheduledExportRunId: currentRun.id,
           },
-          targetGranularity: currentRun.scheduledExport.targetGranularity || "PRODUCT",
+          targetGranularity: immutableScheduledExport.targetGranularity || "PRODUCT",
         },
         queryParams: { cursor: null, limit: 20 },
         sampleLimit: 20,
@@ -495,7 +547,7 @@ shopRenewInterval = setInterval(async () => {
           source: "EXPORT",
           semantics: "DYNAMIC_AT_RUN",
           scheduledExportRunId: currentRun.id,
-          scheduledExportId: currentRun.scheduledExport.id,
+          scheduledExportId: immutableScheduledExport.id,
         },
         db: tx,
       });
@@ -542,6 +594,21 @@ shopRenewInterval = setInterval(async () => {
         throw new Error("SCHEDULED_EXPORT_STATE_TRANSITION_REJECTED_TARGET_FROZEN");
       }
 
+      await createEnqueueIntent({
+        tx,
+        shop: createdExportJob.shop,
+        queueRoutingKey: "EXPORT_JOB",
+        queueJobName: "export-job",
+        payload: {
+          exportJobId: createdExportJob.id,
+          shop: createdExportJob.shop,
+          selectedFieldKeys: createdExportJob.selectedFieldKeys,
+          source: "scheduled_export",
+          executionId: createdExportJob.id,
+        },
+        dispatchDedupeKey: `scheduled-export-job:${createdExportJob.id}`,
+      });
+
       return { exportJob: createdExportJob, frozenCount, reused: false };
     }, { timeout: 15_000 });
 
@@ -553,13 +620,21 @@ shopRenewInterval = setInterval(async () => {
       };
     }
 
-    await addbulkExportJob({
-      exportJobId: exportJob.id,
-      shop: exportJob.shop,
-      selectedFieldKeys: exportJob.selectedFieldKeys,
-      source: "scheduled_export",
-      executionId: exportJob.id,
-    });
+    try {
+      await dispatchPendingEnqueueIntents({ exportJobId: exportJob.id });
+      await markExportJobQueued({
+        exportJobId: exportJob.id,
+        shop: exportJob.shop,
+        expectedExecutionState: EXPORT_EXECUTION_STATES.TARGET_FROZEN,
+      });
+    } catch (dispatchError) {
+      logger.warn("Scheduled export intent dispatch warning", {
+        exportJobId: exportJob.id,
+        shop: exportJob.shop,
+        error: dispatchError.message,
+      });
+    }
+
     const queued = await markExportJobQueued({
       exportJobId: exportJob.id,
       shop: exportJob.shop,
@@ -624,7 +699,7 @@ export async function finalizeScheduledExportRunFromExportJob({
 
   const completedAt = exportJob.completedAt || new Date();
   const normalizedStatus =
-    status === "SUCCESS" || exportJob.status === "COMPLETED" ? "SUCCESS" : "FAILED";
+    status === "SUCCESS" || exportJob.statusNormalized === "COMPLETED" ? "SUCCESS" : "FAILED";
 
   const transition = await scheduledExportRunRepository.markProcessingFinished(
     exportJob.scheduledExportRunId,
@@ -647,7 +722,7 @@ export async function finalizeScheduledExportRunFromExportJob({
     id: exportJob.scheduledExportId,
     shop: exportJob.shop,
     data: {
-      runCount: { increment: 1 },
+      runCount: { increment: 1n },
       lastRunAt: completedAt,
       ...(normalizedStatus === "SUCCESS"
         ? {
@@ -663,4 +738,45 @@ export async function finalizeScheduledExportRunFromExportJob({
   });
 
   return normalizedStatus;
+}
+
+export async function recoverLegacyPendingScheduledExportRuns({ limit = 50, dbClient = null } = {}) {
+  const database = dbClient || db;
+  const pendingRuns = await database.scheduledExportRun.findMany({
+    where: {
+      status: "PENDING",
+    },
+    take: Math.min(limit, 100),
+    orderBy: { createdAt: "asc" },
+  });
+
+  let recovered = 0;
+  for (const run of pendingRuns) {
+    const dedupeKey = `scheduled-export-run:${run.id}`;
+    await database.$transaction(async (tx) => {
+      await createEnqueueIntent({
+        tx,
+        shop: run.shop,
+        queueRoutingKey: "SCHEDULED_EXPORT_RUN",
+        queueJobName: "scheduled-export-execution",
+        payload: {
+          scheduledExportRunId: run.id,
+          scheduledExportId: run.scheduledExportId,
+          shop: run.shop,
+          scheduledFor: run.scheduledFor,
+        },
+        options: {
+          jobId: scheduledExportRunJobId({
+            shop: run.shop,
+            scheduledExportId: run.scheduledExportId,
+            scheduledFor: run.scheduledFor,
+          }),
+        },
+        dispatchDedupeKey: dedupeKey,
+      });
+    });
+    recovered++;
+  }
+
+  return { recovered };
 }

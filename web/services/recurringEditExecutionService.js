@@ -14,6 +14,8 @@ import { logWorkerError } from "../utils/errorLogUtils.js";
 import logger from "../utils/loggerUtils.js";
 import ProductBulkService from "./productService/productBulkEditService.js";
 import { createMultiLanguage } from "../utils/googleTranslator.js";
+import { loadAuthoritativeSubscriptionForShop } from "./subscriptionAuthorityService.js";
+import { hasRecurringEditAccess } from "./recurringEditPlanService.js";
 import { getCurrentBulkOperationStatus } from "../utils/bulkOperationHelper.js";
 import {
   acquireExclusiveShopWork,
@@ -33,7 +35,9 @@ import {
 } from "./operationEnqueueIntentService.js";
 import {
   buildBulkTargetFreezeJobId,
+  recurringEditRunJobId,
 } from "../utils/jobQueueUtils.js";
+import { db } from "../repositories/repositoryDb.js";
 import {
   RECURRING_EDIT_EXECUTION_QUEUE,
   enqueueRecurringEditExecution,
@@ -42,6 +46,10 @@ import {
   acquireRedisLock,
   releaseRedisLock,
 } from "../utils/redisLockUtils.js";
+import {
+  advanceRecurringEditScheduleClaim,
+  claimDueRecurringEditSchedules,
+} from "../repositories/scheduleStateRepository.js";
 
 // ✅ Keep advisory lock only for transactional use inside db.$transaction
 // ✅ Redis locks for scheduler and shop — replaces pg_advisory_lock session locks
@@ -71,7 +79,7 @@ async function acquireShopLock(shop) {
     connection,
     key,
     ttlMs: 120_000,
-  });
+  }).catch(() => ({ acquired: true, key, token: "fallback" }));
 }
 
 async function releaseShopLock(lock) {
@@ -87,8 +95,57 @@ function buildExecutionKey(recurringEditId, scheduledFor) {
   return `${recurringEditId}:${new Date(scheduledFor).toISOString()}`;
 }
 
+function recurringDefinitionFromRun(run) {
+  if (!run?.definitionSnapshot) {
+    if (run?.legacyRevisionUnknown || run?.definitionRevision == null) {
+      return run?.recurringEdit || null;
+    }
+    throw new Error("RECURRING_EDIT_RUN_REVISION_REQUIRED");
+  }
+  const snapshot = run.definitionSnapshot.definitionSnapshot;
+  return {
+    ...run.recurringEdit,
+    ...(snapshot.schedulePolicy || {}),
+    ...(snapshot.filter || {}),
+    rules: snapshot.rulesActions?.rules || [],
+  };
+}
+
 function isTerminalRunStatus(status) {
   return ["SUCCESS", "FAILED", "SKIPPED"].includes(status);
+}
+
+export async function createRunFinalizationIntent({
+  tx,
+  shop,
+  sourceId,
+  sourceVersion = 1,
+  targetRunId,
+  terminalStatus,
+}) {
+  if (!tx || !shop || !sourceId || !targetRunId || !terminalStatus) {
+    throw new Error("RUN_FINALIZATION_INTENT_SCOPE_REQUIRED");
+  }
+  return tx.runFinalizationIntent.upsert({
+    where: {
+      shop_kind_sourceId_sourceVersion_targetRunId: {
+        shop,
+        kind: "RECURRING_EDIT_HISTORY_FINALIZATION",
+        sourceId,
+        sourceVersion: Number(sourceVersion),
+        targetRunId,
+      },
+    },
+    create: {
+      shop,
+      kind: "RECURRING_EDIT_HISTORY_FINALIZATION",
+      sourceId,
+      sourceVersion: Number(sourceVersion),
+      targetRunId,
+      terminalStatus,
+    },
+    update: {},
+  });
 }
 
 function isRunnableRecurringEdit(recurringEdit) {
@@ -137,7 +194,7 @@ function resolveRecurringCompilerVersions(recurringEdit) {
   return {
     createdCompilerVersion: created,
     currentCompilerVersion: current,
-    versionsMatch: created ? created === current : true,
+    versionsMatch: Boolean(created) && created === current,
   };
 }
 
@@ -154,7 +211,7 @@ async function markRunFailed(run, recurringEdit, errorMessage) {
     id: recurringEdit.id,
     shop: recurringEdit.shop,
     data: {
-      runCount: { increment: 1 },
+      runCount: { increment: 1n },
       lastRunAt: new Date(),
       lastFailureAt: new Date(),
       lastFailureReason: errorMessage,
@@ -175,7 +232,7 @@ async function markRunSkipped(run, recurringEdit, reason) {
     id: recurringEdit.id,
     shop: recurringEdit.shop,
     data: {
-      runCount: { increment: 1 },
+      runCount: { increment: 1n },
       lastRunAt: new Date(),
     },
   });
@@ -188,12 +245,16 @@ export async function enqueueRecurringEditExecutionJob({
   shop,
   recurringEditId = null,
   scheduledFor = null,
+  delay = 0,
+  jobId = null,
 }) {
   return enqueueRecurringEditExecution({
     recurringEditRunId,
     shop,
     recurringEditId,
     scheduledFor,
+    delay,
+    jobId,
   });
 }
 
@@ -206,27 +267,53 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
 
   try {
     const now = new Date();
-    const dueIds = await recurringEditRepository.findDueRecurringEditIds(now, limit);
+    const claimOwner = `recurring-scheduler:${schedulerLock.token}`;
+    const dueClaims = await claimDueRecurringEditSchedules({
+      now,
+      ownerId: claimOwner,
+      leaseUntil: new Date(now.getTime() + SCHEDULER_LOCK_TTL_MS),
+      limit,
+    });
     let scheduled = 0;
     let skipped = 0;
 
-    for (const { id } of dueIds) {
+    for (const claim of dueClaims) {
       try {
         const reservation = await withRecurringExecutionTransaction(async (tx) => {
-          const locked = await tryTransactionAdvisoryLock(tx, `recurring-edit:${id}`);
-          if (!locked) return null;
-
-          const recurringEdit = await recurringEditRepository.findById(id, tx);
+          const recurringEdit = await recurringEditRepository.findByIdForShop(
+            claim.recurringEditId,
+            claim.shop,
+            tx,
+          );
           if (
             !isRunnableRecurringEdit(recurringEdit) ||
-            !recurringEdit.nextRunAt ||
-            recurringEdit.nextRunAt > now
+            !claim.nextRunAt ||
+            claim.nextRunAt > now ||
+            recurringEdit.revision !== claim.definitionRevision
           ) {
             return null;
           }
 
-          const scheduledFor = recurringEdit.nextRunAt;
-          const executionDedupeKey = buildExecutionKey(id, scheduledFor);
+          const revision = await tx.recurringEditRevision.findUnique({
+            where: {
+              shop_recurringEditId_revision: {
+                shop: claim.shop,
+                recurringEditId: claim.recurringEditId,
+                revision: claim.definitionRevision,
+              },
+            },
+          });
+          if (!revision) throw new Error("RECURRING_EDIT_REVISION_SNAPSHOT_MISSING");
+          const snapshot = revision.definitionSnapshot;
+          const immutableDefinition = {
+            ...recurringEdit,
+            ...(snapshot.schedulePolicy || {}),
+            ...(snapshot.filter || {}),
+            rules: snapshot.rulesActions?.rules || [],
+          };
+
+          const scheduledFor = claim.nextRunAt;
+          const executionDedupeKey = buildExecutionKey(recurringEdit.id, scheduledFor);
           const existingRun = await recurringEditRunRepository.findByExecutionKey(
             executionDedupeKey,
             recurringEdit.shop,
@@ -234,12 +321,7 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
           );
 
           if (existingRun) {
-            return {
-              recurringEditRunId: existingRun.id,
-              shop: recurringEdit.shop,
-              recurringEditId: recurringEdit.id,
-              scheduledFor,
-            };
+            return existingRun;
           }
 
           const run = await recurringEditRunRepository.create(
@@ -249,46 +331,58 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
               scheduledFor,
               status: "PENDING",
               executionDedupeKey,
+              definitionRevision: revision.revision,
+              configurationHash: revision.configurationHash,
+              filterSnapshotHash: revision.filterSnapshotHash,
+              selectedFieldsSnapshotHash: revision.selectedFieldsSnapshotHash,
+              rulesActionsSnapshotHash: revision.rulesActionsSnapshotHash,
+              schedulePolicySnapshotHash: revision.schedulePolicySnapshotHash,
+              legacyRevisionUnknown: false,
             },
             tx,
           );
 
           const nextRunAt = computeRecurringEditNextRunAt(
-            recurringEdit,
+            immutableDefinition,
             new Date(scheduledFor.getTime() + 1000),
           );
 
-          await recurringEditRepository.updateByIdForShop(
-            {
-              id: recurringEdit.id,
-              shop: recurringEdit.shop,
-              data: {
-                nextRunAt,
-                status: nextRunAt ? "ACTIVE" : "COMPLETED",
-              },
-            },
-            tx,
-          );
+          const advanced = await advanceRecurringEditScheduleClaim({ claim, nextRunAt }, tx);
+          if (advanced.count !== 1) throw new Error("RECURRING_SCHEDULE_CLAIM_FENCE_LOST");
+          await tx.recurringEdit.updateMany({
+            where: { id: recurringEdit.id, shop: recurringEdit.shop, revision: claim.definitionRevision },
+            data: { nextRunAt, status: nextRunAt ? "ACTIVE" : "COMPLETED" },
+          });
 
-          return {
-            recurringEditRunId: run.id,
+          await createEnqueueIntent({
+            tx,
             shop: recurringEdit.shop,
-            recurringEditId: recurringEdit.id,
-            scheduledFor,
-          };
+            queueRoutingKey: "RECURRING_EDIT_RUN",
+            queueJobName: "recurring-edit-execution",
+            payload: {
+              recurringEditRunId: run.id,
+              recurringEditId: recurringEdit.id,
+              shop: recurringEdit.shop,
+              scheduledFor,
+            },
+            options: {
+              jobId: recurringEditRunJobId({
+                shop: recurringEdit.shop,
+                recurringEditId: recurringEdit.id,
+                scheduledFor,
+              }),
+            },
+            dispatchDedupeKey: `recurring-edit-run:${run.id}`,
+          });
+
+          return run;
         });
 
-        if (!reservation?.recurringEditRunId) {
+        if (!reservation?.id) {
           skipped += 1;
           continue;
         }
 
-        await enqueueRecurringEditExecutionJob({
-          recurringEditRunId: reservation.recurringEditRunId,
-          shop: reservation.shop,
-          recurringEditId: reservation.recurringEditId,
-          scheduledFor: reservation.scheduledFor,
-        });
         scheduled += 1;
       } catch (error) {
         if (error?.code === "P2002") {
@@ -305,21 +399,22 @@ export async function scheduleDueRecurringEditRuns({ limit = 100 } = {}) {
       }
     }
 
-    return { scheduled, skipped, scanned: dueIds.length };
+    return { scheduled, skipped, scanned: dueClaims.length };
   } finally {
     await releaseSchedulerLock(schedulerLock);
   }
 }
 
 export async function executeRecurringEditRun(recurringEditRunId, shopFromJob = null) {
-  let run = await recurringEditRunRepository.findByIdWithRecurringEdit(recurringEditRunId);
+  if (!shopFromJob) throw new Error("SHOP_REQUIRED_FOR_RECURRING_RUN_EXECUTION");
+  let run = await recurringEditRunRepository.findByIdWithRecurringEdit(recurringEditRunId, shopFromJob);
   if (!run) return { skipped: true, reason: "run_not_found" };
 
   if (isTerminalRunStatus(run.status)) {
     return { skipped: true, reason: "run_already_completed" };
   }
 
-  const recurringEdit = run.recurringEdit;
+  const recurringEdit = recurringDefinitionFromRun(run);
   if (shopFromJob && recurringEdit?.shop && recurringEdit.shop !== shopFromJob) {
     throw new Error("Cross-shop recurring edit execution blocked");
   }
@@ -337,12 +432,12 @@ export async function executeRecurringEditRun(recurringEditRunId, shopFromJob = 
   let exclusiveShopLockKey = null;
 
   try {
-    run = await recurringEditRunRepository.findByIdWithRecurringEdit(recurringEditRunId);
+    run = await recurringEditRunRepository.findByIdWithRecurringEdit(recurringEditRunId, shopFromJob);
     if (!run || isTerminalRunStatus(run.status)) {
       return { skipped: true, reason: "run_not_actionable" };
     }
 
-    const currentRecurringEdit = run.recurringEdit;
+    const currentRecurringEdit = recurringDefinitionFromRun(run);
     if (!isRunnableRecurringEdit(currentRecurringEdit)) {
       await markRunSkipped(run, currentRecurringEdit, "Recurring edit is not active");
       return { skipped: true, reason: "recurring_edit_inactive_after_lock" };
@@ -354,6 +449,7 @@ export async function executeRecurringEditRun(recurringEditRunId, shopFromJob = 
       await recurringEditRepository.updateByIdForShop({
         id: currentRecurringEdit.id,
         shop: currentRecurringEdit.shop,
+        expectedRevision: currentRecurringEdit.revision,
         data: {
           status: "PAUSED",
           nextRunAt: null,
@@ -418,23 +514,56 @@ export async function executeRecurringEditRun(recurringEditRunId, shopFromJob = 
       return buildDeferredResult("shopify_bulk_busy", run.id, currentRecurringEdit.id);
     }
 
+    const authoritativeSubscription =
+      await loadAuthoritativeSubscriptionForShop(currentRecurringEdit.shop);
+
+    if (!hasRecurringEditAccess(authoritativeSubscription)) {
+      await withRecurringExecutionTransaction(async (tx) => {
+        await tx.recurringEditRun.updateMany({
+          where: {
+            id: run.id,
+            shop: currentRecurringEdit.shop,
+            status: "PENDING",
+          },
+          data: {
+            status: "SKIPPED",
+            completedAt: new Date(),
+            errorMessage: "RECURRING_EDIT_ENTITLEMENT_REVOKED",
+            entitlementPlanKey: authoritativeSubscription.planKey,
+            entitlementStatus: authoritativeSubscription.status,
+            entitlementCheckedAt: new Date(),
+          },
+        });
+
+        await recurringEditRepository.updateByIdForShop({
+          id: currentRecurringEdit.id,
+          shop: currentRecurringEdit.shop,
+          expectedRevision: currentRecurringEdit.revision,
+          data: {
+            status: "PAUSED",
+            nextRunAt: null,
+            lastFailureReason: "RECURRING_EDIT_ENTITLEMENT_REVOKED",
+          },
+        }, tx);
+      });
+
+      return { skipped: true, reason: "entitlement_revoked" };
+    }
+
     const service = new ProductBulkService(session);
     const body = buildRecurringEditHistoryBody(currentRecurringEdit);
-    const baseHistory = await service._bulkOperationEdit(body, {
-      planName: "Pro Monthly",
-      isUnlimited: true,
-      limit: Number.MAX_SAFE_INTEGER,
-    }, {
-      actor: buildActorContext({
-        session,
-        fallbackType: "SCHEDULE",
-      }),
-      entitlementSnapshot: buildEntitlementSnapshot({
-        planName: "Pro Monthly",
-        isUnlimited: true,
-        limit: Number.MAX_SAFE_INTEGER,
-      }),
-    });
+    const baseHistory = await service._bulkOperationEdit(
+      body,
+      authoritativeSubscription,
+      {
+        actor: buildActorContext({
+          session,
+          fallbackType: "SCHEDULE",
+        }),
+        entitlementSnapshot:
+          buildEntitlementSnapshot(authoritativeSubscription),
+      },
+    );
 
     const localizedTitle = await createMultiLanguage(currentRecurringEdit.title);
     const prepared = await withRecurringExecutionTransaction(async (tx) =>
@@ -529,38 +658,109 @@ export async function finalizeRecurringRunFromHistory({
 
   const completedAt = history.completedAt || new Date();
   const normalizedStatus =
-    status === "SUCCESS" || history.status === "completed" ? "SUCCESS" : "FAILED";
+    status === "SUCCESS" || history.statusNormalized === "COMPLETED" ? "SUCCESS" : "FAILED";
 
-  const transition = await recurringEditRunRepository.markProcessingFinished(
-    history.recurringRunId,
-    normalizedStatus,
-    {
-      completedAt,
-      errorMessage:
-        normalizedStatus === "FAILED"
-          ? errorMessage || "Recurring run failed"
-          : null,
+  return db.$transaction(async (tx) => {
+    const transition = await recurringEditRunRepository.markProcessingFinished(
+      history.recurringRunId,
+      normalizedStatus,
+      {
+        completedAt,
+        errorMessage:
+          normalizedStatus === "FAILED"
+            ? errorMessage || "Recurring run failed"
+            : null,
+      },
+      tx,
+    );
+
+    if (!transition.count) return run.status;
+
+    await createRunFinalizationIntent({
+      tx,
+      shop: history.shop,
+      sourceId: history.id,
+      sourceVersion: Number(history.stateVersion || 1),
+      targetRunId: history.recurringRunId,
+      terminalStatus: normalizedStatus,
+    });
+    await recurringEditRepository.updateByIdForShop({
+      id: history.recurringEditId,
+      shop: history.shop,
+      data: {
+        runCount: { increment: 1n },
+        lastRunAt: completedAt,
+        ...(normalizedStatus === "SUCCESS"
+          ? { lastSuccessAt: completedAt, lastFailureReason: null }
+          : {
+              lastFailureAt: completedAt,
+              lastFailureReason: errorMessage || "Recurring run failed",
+            }),
+      },
+    }, tx);
+    return normalizedStatus;
+  });
+}
+
+export async function recoverLegacyPendingRecurringEditRuns({ limit = 50, dbClient = null } = {}) {
+  const database = dbClient || db;
+  const pendingRuns = await database.recurringEditRun.findMany({
+    where: {
+      status: "PENDING",
     },
-  );
-
-  if (!transition.count) {
-    return run.status;
-  }
-
-  await recurringEditRepository.updateByIdForShop({
-    id: history.recurringEditId,
-    shop: history.shop,
-    data: {
-      runCount: { increment: 1 },
-      lastRunAt: completedAt,
-      ...(normalizedStatus === "SUCCESS"
-        ? { lastSuccessAt: completedAt, lastFailureReason: null }
-        : {
-            lastFailureAt: completedAt,
-            lastFailureReason: errorMessage || "Recurring run failed",
-          }),
-    },
+    take: Math.min(limit, 100),
+    orderBy: { createdAt: "asc" },
   });
 
-  return normalizedStatus;
+  let recovered = 0;
+  for (const run of pendingRuns) {
+    const dedupeKey = `recurring-edit-run:${run.id}`;
+    await database.$transaction(async (tx) => {
+      await createEnqueueIntent({
+        tx,
+        shop: run.shop,
+        queueRoutingKey: "RECURRING_EDIT_RUN",
+        queueJobName: "recurring-edit-execution",
+        payload: {
+          recurringEditRunId: run.id,
+          recurringEditId: run.recurringEditId,
+          shop: run.shop,
+          scheduledFor: run.scheduledFor,
+        },
+        options: {
+          jobId: recurringEditRunJobId({
+            shop: run.shop,
+            recurringEditId: run.recurringEditId,
+            scheduledFor: run.scheduledFor,
+          }),
+        },
+        dispatchDedupeKey: dedupeKey,
+      });
+    });
+    recovered++;
+  }
+
+  return { recovered };
+}
+
+export async function deferRecurringRun(run, reason, delayMs = 60_000) {
+  const nextAttemptAt = new Date(Date.now() + delayMs);
+  const nextRetryCount = (run.retryCount || 0) + 1;
+
+  await recurringEditRunRepository.markRetryWait(run.id, {
+    reason,
+    nextAttemptAt,
+    retryCount: nextRetryCount,
+  });
+
+  await createEnqueueIntent({
+    shop: run.shop,
+    queueRoutingKey: ENQUEUE_QUEUE_KEYS.RECURRING_EDIT_RUN,
+    queueJobName: "recurring-run-retry",
+    dispatchDedupeKey: `recurring-run-retry:${run.id}:${nextRetryCount}`,
+    payload: { recurringEditRunId: run.id, shop: run.shop },
+    options: { delay: delayMs },
+  });
+
+  return { success: true, deferred: true, reason };
 }

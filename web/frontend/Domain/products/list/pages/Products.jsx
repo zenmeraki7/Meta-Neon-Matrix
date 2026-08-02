@@ -19,14 +19,19 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTranslatedOperatorLabel } from "../utils/filterUtils";
 import ProductsFilters from "../components/ProductsFilters";
 import ProductsTable from "../components/ProductsTable";
-import useProducts from "../hooks/useProducts";
-import { useFilterRegistry } from "../hooks/useFilterRegistry";
+import useProducts, {
+  buildCanonicalFilterHash,
+  normalizeProductsPayload,
+} from "../hooks/useProducts";
+import {
+  useFilterRegistry,
+  normalizeRegistryData,
+} from "../hooks/useFilterRegistry";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
 import { useSyncStatusHelpers } from "../../../../hooks/useSyncStatusQuery";
 import { useApiClient } from "../../../../hooks/useApiClient";
 
 import {
-  setProducts,
   setSearch,
   selectFilters,
   selectCursor,
@@ -34,7 +39,6 @@ import {
   applyFilterHashAndResetCursor,
   setCursorForFilterHash,
 } from "../../../../store/slices/productSlice";
-import { buildCanonicalFilterHash } from "../hooks/useProducts";
 import { buildProductTargetingContract } from "../../shared/productTargetingContract";
 const MIN_PRODUCT_SEARCH_LENGTH = 2;
 
@@ -51,8 +55,42 @@ export default function ProductsPage() {
 
   const bootstrapQuery = useQuery({
     queryKey: ["bootstrap-products"],
-    queryFn: async ({ signal }) =>
-      api.get("/api/bootstrap/products?limit=50", { signal }),
+    queryFn: async ({ signal }) => {
+      const result = await api.get(
+        "/api/bootstrap/products?limit=50",
+        { signal },
+      );
+
+      if (result?.productList) {
+        queryClient.setQueryData(
+          ["products", null, 50, "[]"],
+          normalizeProductsPayload(result.productList),
+        );
+      }
+
+      if (result?.filterRegistry) {
+        queryClient.setQueryData(
+          ["product-filter-registry"],
+          normalizeRegistryData(result.filterRegistry),
+        );
+      }
+
+      if (result?.syncStatus) {
+        queryClient.setQueryData(
+          ["sync-status"],
+          result.syncStatus,
+        );
+      }
+
+      if (result?.storeDetails) {
+        queryClient.setQueryData(
+          ["store-details"],
+          result.storeDetails,
+        );
+      }
+
+      return result;
+    },
     staleTime: 10_000,
     retry: 1,
   });
@@ -60,18 +98,16 @@ export default function ProductsPage() {
   const bootstrapSyncStatus = bootstrapData?.syncStatus || null;
   const bootstrapFilterRegistry = bootstrapData?.filterRegistry || null;
   const bootstrapProductList = bootstrapData?.productList || null;
-  const bootstrapStoreDetails = bootstrapData?.storeDetails || null;
+
+  const bootstrapSettled =
+    bootstrapQuery.isSuccess || bootstrapQuery.isError;
 
   const {
     filters: availableFilters,
     getFilterByKey,
     fallbackReason: filterRegistryFallbackReason,
   } = useFilterRegistry({
-    initialData: bootstrapFilterRegistry || undefined,
-    initialDataUpdatedAt: bootstrapFilterRegistry
-      ? Date.parse(bootstrapData?.generatedAt || "") || Date.now()
-      : 0,
-    enabled: bootstrapQuery.isSuccess || bootstrapQuery.isError,
+    enabled: bootstrapSettled,
   });
   const isFilterRegistryDegraded =
     filterRegistryFallbackReason === "error" ||
@@ -85,8 +121,7 @@ export default function ProductsPage() {
     isSyncInProgress,
     isSyncStale,
   } = useSyncStatusHelpers({
-    initialData: bootstrapSyncStatus || undefined,
-    enabled: bootstrapQuery.isSuccess || bootstrapQuery.isError,
+    enabled: bootstrapSettled,
   });
   const { showSuccess, showError } = useAppToast();
 
@@ -116,21 +151,6 @@ export default function ProductsPage() {
     [effectiveFilters],
   );
 
-  const bootstrapProductInitialData =
-    cursor == null &&
-      effectiveFilterHash === "[]" &&
-      bootstrapProductList
-      ? {
-        products: Array.isArray(bootstrapProductList.products)
-          ? bootstrapProductList.products
-          : [],
-        pagination: bootstrapProductList.pagination || null,
-        count: Number(bootstrapProductList.count || 0),
-        unavailableReason: bootstrapProductList.unavailableReason || null,
-        mirrorHealth: bootstrapProductList.mirrorHealth || null,
-      }
-      : undefined;
-
   const {
     products,
     totalCount,
@@ -147,7 +167,7 @@ export default function ProductsPage() {
       cursor,
       rawFilterInput: effectiveFilters,
       cursorFilterHash,
-      initialData: bootstrapProductInitialData,
+      enabled: bootstrapSettled,
     });
 
   const productMirrorHealth = mirrorHealth || bootstrapProductList?.mirrorHealth || null;
@@ -185,14 +205,6 @@ export default function ProductsPage() {
     if (!bootstrapStoreDetails) return;
     queryClient.setQueryData(["store-details"], bootstrapStoreDetails);
   }, [bootstrapStoreDetails, queryClient]);
-
-  useEffect(() => {
-    // React Query owns the server response. Redux is only a compatibility copy
-    // for edit/export flows, so always hydrate it from the current response.
-    // Comparing IDs alone hid changed rows and could leave the table empty when
-    // Redux was reset while React Query retained the same page.
-    dispatch(setProducts(Array.isArray(products) ? products : []));
-  }, [dispatch, products]);
 
   const wasSyncingRef = useRef(false);
 

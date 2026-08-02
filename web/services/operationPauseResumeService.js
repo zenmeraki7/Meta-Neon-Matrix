@@ -72,7 +72,7 @@ export async function requestPauseEditOperation({
   try {
   const history = await db.editHistory.findFirst({ where: { id: historyId, shop } });
   if (!history) throw new Error("Edit history not found");
-  const state = normalizeToLifecycleState(history.executionState);
+  const state = normalizeToLifecycleState(history.executionStateNormalized);
   const now = new Date();
   if ([BULK_EDIT_EXECUTION_STATES.COMPLETED, BULK_EDIT_EXECUTION_STATES.CANCELLED, BULK_EDIT_EXECUTION_STATES.FAILED, BULK_EDIT_EXECUTION_STATES.PARTIAL, "COMPLETED", "CANCELLED", "FAILED", "PARTIAL_FAILED"].includes(state)) {
     throw new Error("Cannot pause a completed/cancelled/failed operation.");
@@ -152,7 +152,7 @@ export async function resumeEditOperation({
   try {
   const history = await db.editHistory.findFirst({ where: { id: historyId, shop } });
   if (!history) throw new Error("Edit history not found");
-  if (normalizeToLifecycleState(history.executionState) !== OPERATION_LIFECYCLE_STATES.PAUSED) {
+  if (normalizeToLifecycleState(history.executionStateNormalized) !== OPERATION_LIFECYCLE_STATES.PAUSED) {
     throw new Error("Only paused operations can be resumed.");
   }
   const resumedAt = new Date();
@@ -230,7 +230,7 @@ export async function requestPauseExportOperation({
   try {
   const job = await db.exportJob.findFirst({ where: { id: exportJobId, shop } });
   if (!job) throw new Error("Export job not found");
-  const state = normalizeToLifecycleState(job.executionState);
+  const state = normalizeToLifecycleState(job.executionStateNormalized);
   const now = new Date();
   if ([EXPORT_EXECUTION_STATES.COMPLETED, EXPORT_EXECUTION_STATES.CANCELLED, EXPORT_EXECUTION_STATES.FAILED].includes(state)) {
     throw new Error("Cannot pause a completed/cancelled/failed export.");
@@ -249,7 +249,7 @@ export async function requestPauseExportOperation({
         pauseRequestedAt: now,
         pausedAt: now,
         executionState: "PAUSED",
-        executionStateNormalized: normalizeExportJobExecutionState(EXPORT_EXECUTION_STATES.QUEUED),
+        executionStateNormalized: normalizeExportJobExecutionState("PAUSED"),
         status: "PENDING",
         statusNormalized: normalizeExportJobStatus("PENDING"),
       }
@@ -312,7 +312,7 @@ export async function resumeExportOperation({
   try {
   const job = await db.exportJob.findFirst({ where: { id: exportJobId, shop } });
   if (!job) throw new Error("Export job not found");
-  if (normalizeToLifecycleState(job.executionState) !== "PAUSED") {
+  if (normalizeToLifecycleState(job.executionStateNormalized) !== "PAUSED") {
     throw new Error("Only paused exports can be resumed.");
   }
   const resumedAt = new Date();

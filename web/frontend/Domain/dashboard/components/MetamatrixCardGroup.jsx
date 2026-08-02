@@ -1,114 +1,98 @@
-import React from "react";
-import {
-  Card,
-  Text,
-  BlockStack,
-  InlineStack,
-  Box,
-  Grid,
-  Icon,
-  Badge,
-} from "@shopify/polaris";
-import {
-  EditIcon,
-  ExportIcon,
-  PageClockFilledIcon,
-  ImportIcon,
-} from "@shopify/polaris-icons";
 import { useTranslation } from "react-i18next";
 
-export const MetamatrixCardGroup = () => {
+const CARD_GRID_COLUMNS =
+  "repeat(auto-fit, minmax(min(100%, 240px), 1fr))";
+
+const FEATURE_CARDS = Object.freeze([
+  Object.freeze({
+    key: "bulk-editing",
+    icon: "edit",
+    titleKey: "tipsForBulkEditing",
+    descriptionKey: "bulkEditingTipDescription",
+    href: "/bulk-edit",
+  }),
+  Object.freeze({
+    key: "spreadsheet",
+    icon: "import",
+    titleKey: "editWithSpreadsheet",
+    descriptionKey: "editWithSpreadsheetDescription",
+    href: "/spreadsheet",
+  }),
+  Object.freeze({
+    key: "export",
+    icon: "export",
+    titleKey: "exportProductData",
+    descriptionKey: "exportProductDataDescription",
+    href: "/exports",
+  }),
+  Object.freeze({
+    key: "changelog",
+    icon: "clock",
+    titleKey: "metamatrixChangelog",
+    descriptionKey: "metamatrixChangelogDescription",
+    href: "/changelog",
+  }),
+]);
+
+function FeatureCard({
+  icon,
+  title,
+  description,
+  href,
+}) {
+  return (
+    <s-box
+      background="base"
+      border="base"
+      borderRadius="base"
+      padding="base"
+    >
+      <s-stack gap="large">
+        <s-box
+          background="subdued"
+          borderRadius="base"
+          padding="small"
+          inlineSize="fit-content"
+        >
+          <s-icon type={icon} />
+        </s-box>
+
+        <s-stack gap="small-200">
+          <s-heading>{title}</s-heading>
+
+          <s-paragraph color="subdued">
+            {description}
+          </s-paragraph>
+        </s-stack>
+
+        <s-link href={href}>{title}</s-link>
+      </s-stack>
+    </s-box>
+  );
+}
+
+export function MetamatrixCardGroup() {
   const { t } = useTranslation();
 
-  const cards = [
-    {
-      icon: EditIcon,
-      title: t("tipsForBulkEditing"),
-      description: t("bulkEditingTipDescription"),
-      iconColor: "critical",
-      badge: t("guide"),
-    },
-    {
-      icon: ImportIcon,
-      title: t("editWithSpreadsheet"),
-      description: t("editWithSpreadsheetDescription"),
-      iconColor: "critical",
-      badge: t("import"),
-    },
-    {
-      icon: ExportIcon,
-      title: t("exportProductData"),
-      description: t("exportProductDataDescription"),
-      iconColor: "critical",
-      badge: t("export"),
-    },
-    {
-      icon: PageClockFilledIcon,
-      title: t("metamatrixChangelog"),
-      description: t("metamatrixChangelogDescription"),
-      iconColor: "critical",
-      badge: t("updates"),
-    },
-  ];
-
-  const FeatureCard = ({ icon, title, description, iconColor, badge }) => (
-    <Box height="100%">
-      <Card roundedAbove="sm">
-        <Box padding="500" minHeight="280px">
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="start">
-              <Box
-                background="bg-surface-secondary"
-                borderRadius="300"
-                padding="300"
-              >
-                <Icon source={icon} tone={iconColor} />
-              </Box>
-
-              <Badge tone="critical">{badge}</Badge>
-            </InlineStack>
-
-            <BlockStack gap="100">
-              <Box minHeight="40px">
-                <Text variant="headingMd" as="h3">
-                  {title}
-                </Text>
-              </Box>
-
-              <Box minHeight="120px">
-                <Text variant="bodyMd" tone="subdued" as="p">
-                  {description}
-                </Text>
-              </Box>
-            </BlockStack>
-          </BlockStack>
-        </Box>
-      </Card>
-    </Box>
-  );
-
   return (
-    <BlockStack gap="500">
-      <InlineStack align="space-between" blockAlign="center">
-        <Text variant="headingLg" as="h2">
-          {t("learnMore")}
-        </Text>
-      </InlineStack>
-
-      <Grid>
-        {cards.map((card, index) => (
-          <Grid.Cell
-            key={index}
-            columnSpan={{ xs: 6, sm: 3, md: 3, lg: 3, xl: 3 }}
-          >
-            <Box height="100%">
-              <FeatureCard {...card} />
-            </Box>
-          </Grid.Cell>
+    <s-section heading={t("learnMore")}>
+      <s-grid
+        gridTemplateColumns={CARD_GRID_COLUMNS}
+        gap="base"
+        alignItems="stretch"
+      >
+        {FEATURE_CARDS.map((card) => (
+          <FeatureCard
+            key={card.key}
+            icon={card.icon}
+            title={t(card.titleKey)}
+            description={t(card.descriptionKey)}
+            href={card.href}
+          />
         ))}
-      </Grid>
-    </BlockStack>
+      </s-grid>
+    </s-section>
   );
-};
+}
 
 export default MetamatrixCardGroup;

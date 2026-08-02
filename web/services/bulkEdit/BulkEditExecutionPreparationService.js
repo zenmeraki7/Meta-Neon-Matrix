@@ -229,8 +229,10 @@ export class BulkEditExecutionPreparationService {
   }
 
   async prepareNextExecutionBatch({ historyId, executionId } = {}) {
+    const shop = String(this.session?.shop || "").trim();
+    if (!shop) throw new Error("SHOP_SCOPE_REQUIRED");
     const history = await db.editHistory.findUnique({
-      where: { id: historyId },
+      where: { shop_id: { shop, id: historyId } },
       select: {
         id: true,
         shop: true,
@@ -333,6 +335,7 @@ export class BulkEditExecutionPreparationService {
           variantId: row.variantId,
           targetResourceType: row.targetResourceType,
           targetIdentity: row.targetKey,
+          fieldPath: row.fieldPath,
           beforeValues: row.beforeValues,
           plannedMutation: row.plannedMutation,
         }));
@@ -348,7 +351,10 @@ export class BulkEditExecutionPreparationService {
             ? history.batch.lastProductId
             : null,
         limit,
-        targetResourceType: targetGranularity === "VARIANT" ? "VARIANT" : "PRODUCT",
+        targetResourceType:
+          targetGranularity === "VARIANT"
+            ? ["VARIANT", "INVENTORY_ITEM", "INVENTORY_LEVEL"]
+            : ["PRODUCT", "PRODUCT_OPTION", "COLLECTION_MEMBERSHIP"],
       });
 
       rows = frozenTargetPage.rows.map((row) => ({
@@ -357,6 +363,7 @@ export class BulkEditExecutionPreparationService {
         variantId: row.variantId,
         targetResourceType: row.targetResourceType,
         targetIdentity: row.targetKey,
+        fieldPath: row.fieldPath,
         beforeValues: row.beforeValues,
         plannedMutation: row.plannedMutation,
       }));

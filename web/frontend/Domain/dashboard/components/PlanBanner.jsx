@@ -1,52 +1,147 @@
-import React from "react";
 import { useTranslation } from "react-i18next";
-import { Banner, Box, Button } from "@shopify/polaris";
 
-const POLARIS_PROPS = Object.freeze({
-  primaryVariant: "primary",
-  slimSize: "slim",
-});
+const USAGE_WARNING_THRESHOLD = 0.8;
 
-const PlanBanner = ({ plan }) => {
+function parseNonNegativeInteger(value) {
+  if (
+    typeof value !== "number" &&
+    typeof value !== "string"
+  ) {
+    return null;
+  }
+
+  if (
+    typeof value === "string" &&
+    value.trim() === ""
+  ) {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+
+  return Math.trunc(parsed);
+}
+
+function PlanBanner({ plan }) {
   const { t } = useTranslation();
 
-  // If no plan data or user is on premium plan, don't show banner
-  if (!plan || plan.active) return null;
+  if (!plan) {
+    return null;
+  }
 
-  const editLimitReached = plan.currentEditCount >= plan.maxEdits;
+  if (!plan.active) {
+    return (
+      <s-banner
+        heading={t("planBanner.inactiveTitle", {
+          defaultValue: "Plan Inactive",
+        })}
+        tone="warning"
+      >
+        <s-paragraph>
+          {t("planBanner.inactiveMessage", {
+            defaultValue:
+              "Your plan is currently inactive. Choose a plan to continue.",
+          })}
+        </s-paragraph>
+
+        <s-button
+          slot="primary-action"
+          href="/plans"
+        >
+          {t("planBanner.choosePlan", {
+            defaultValue: "Choose Plan",
+          })}
+        </s-button>
+      </s-banner>
+    );
+  }
+
+  if (plan.unlimitedEdits) {
+    return null;
+  }
+
+  const currentEditCount = parseNonNegativeInteger(
+    plan.currentEditCount,
+  );
+  const maxEdits = parseNonNegativeInteger(
+    plan.maxEdits,
+  );
+  const maxProductsPerEdit = parseNonNegativeInteger(
+    plan.maxProductsPerEdit,
+  );
+
+  if (
+    currentEditCount === null ||
+    maxEdits === null ||
+    maxEdits === 0 ||
+    maxProductsPerEdit === null
+  ) {
+    return null;
+  }
+
+  const editLimitReached =
+    currentEditCount >= maxEdits;
+
+  const usageRatio = currentEditCount / maxEdits;
+  const approachingLimit =
+    !editLimitReached &&
+    usageRatio >= USAGE_WARNING_THRESHOLD;
+
+  if (!editLimitReached && !approachingLimit) {
+    return null;
+  }
 
   return (
-    <Banner
-      title={t(
+    <s-banner
+      heading={t(
         editLimitReached
           ? "planBanner.limitReachedTitle"
-          : "planBanner.usageTitle"
+          : "planBanner.limitApproachingTitle",
+        {
+          defaultValue: editLimitReached
+            ? "Free Plan Limit Reached"
+            : "Approaching Plan Limit",
+        },
       )}
-      tone={editLimitReached ? "critical" : "info"}
+      tone={editLimitReached ? "critical" : "warning"}
     >
-      <p>
-        {editLimitReached
-          ? t("planBanner.limitReachedMessage", {
-            current: plan.currentEditCount,
-            maximum: plan.maxEdits,
-          })
-          : t("planBanner.usageMessage", {
-            current: plan.currentEditCount,
-            maximum: plan.maxEdits,
-            products: plan.maxProductsPerEdit,
-          })}
-      </p>
-      <Box paddingBlockStart="200">
-        <Button
-          variant={POLARIS_PROPS.primaryVariant}
-          size={POLARIS_PROPS.slimSize}
-          url="/plans"
-        >
-          {t(editLimitReached ? "planBanner.upgradeNow" : "planBanner.upgrade")}
-        </Button>
-      </Box>
-    </Banner>
+      <s-paragraph>
+        {t(
+          editLimitReached
+            ? "planBanner.limitReachedMessage"
+            : "planBanner.limitApproachingMessage",
+          {
+            current: currentEditCount,
+            maximum: maxEdits,
+            products: maxProductsPerEdit,
+            defaultValue: editLimitReached
+              ? "You've reached your free plan limit! ({{current}}/{{maximum}} edits)."
+              : "Free Plan: {{current}}/{{maximum}} edits used. Approaching limit.",
+          },
+        )}
+      </s-paragraph>
+
+      <s-button
+        slot="primary-action"
+        href="/plans"
+      >
+        {t(
+          editLimitReached
+            ? "planBanner.upgradeNow"
+            : "planBanner.viewPlans",
+          {
+            defaultValue: editLimitReached
+              ? "Upgrade Now"
+              : "View Plans",
+          },
+        )}
+      </s-button>
+    </s-banner>
   );
-};
+}
 
 export default PlanBanner;

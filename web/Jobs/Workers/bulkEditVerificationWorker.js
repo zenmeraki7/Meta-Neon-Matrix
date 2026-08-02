@@ -156,7 +156,6 @@ async function processBulkEditVerification(job) {
           executionIdentity: true,
           batch: true,
           executionStateNormalized: true,
-          executionState: true,
           cancelRequestedAt: true,
         },
       });
@@ -184,7 +183,7 @@ async function processBulkEditVerification(job) {
           OPERATION_LIFECYCLE_STATES.CANCELLED,
           OPERATION_LIFECYCLE_STATES.COMPLETED,
           OPERATION_LIFECYCLE_STATES.PARTIAL_FAILED,
-        ].includes(history.executionState)
+        ].includes(history.executionStateNormalized)
       ) {
         return { skipped: true, reason: "operation_already_terminal", historyId, shop };
       }
@@ -204,6 +203,7 @@ async function processBulkEditVerification(job) {
           OPERATION_LIFECYCLE_STATES.VERIFYING,
           OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
         ],
+        expectedStateVersion: history?.stateVersion ?? 0,
         data: {
           executionState: OPERATION_LIFECYCLE_STATES.VERIFYING,
           executionStateNormalized: normalizeEditHistoryExecutionState(
@@ -212,10 +212,10 @@ async function processBulkEditVerification(job) {
         },
       });
 
-      if (!updated) {
+      if (!updated || !updated.success) {
         const fresh = await db.editHistory.findFirst({
           where: { id: historyId, shop },
-          select: { batch: true, executionState: true },
+          select: { batch: true, executionStateNormalized: true },
         });
 
         if (fresh?.batch?.verification?.verifiedAt) {

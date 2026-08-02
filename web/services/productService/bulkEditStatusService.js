@@ -23,7 +23,7 @@ export async function getBulkEditStatus(command = {}) {
     select: {
       id: true,
       shop: true,
-      status: true,
+      statusNormalized: true,
       processedCount: true,
       totalItems: true,
       durationMs: true,
@@ -37,7 +37,7 @@ export async function getBulkEditStatus(command = {}) {
   return {
     id: history.id,
     shop: history.shop,
-    status: history.status || "completed",
+    status: String(history.statusNormalized || "UNKNOWN").toLowerCase(),
     rootObjectCount: history.processedCount || 0,
     totalItems: history.totalItems || 0,
     duration: history.durationMs || 0,

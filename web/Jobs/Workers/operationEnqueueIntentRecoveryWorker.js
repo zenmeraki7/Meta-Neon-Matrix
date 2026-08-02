@@ -5,8 +5,9 @@ import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { enqueueOperationEnqueueIntentRecoveryTick } from "../../queues/adapters/workerSchedulerQueueAdapter.js";
 import {
   dispatchPendingEnqueueIntents,
-  ENQUEUE_QUEUE_KEYS,
 } from "../../services/operationEnqueueIntentService.js";
+import { recoverLegacyPendingScheduledExportRuns } from "../../services/scheduledExportExecutionService.js";
+import { recoverLegacyPendingRecurringEditRuns } from "../../services/recurringEditExecutionService.js";
 import {
   acquireRedisLock,
   releaseRedisLock,
@@ -18,23 +19,24 @@ const LIMIT = 100;
 const LEADER_LOCK_KEY = "leader:operation-enqueue-intent-recovery:scheduler";
 const LEADER_LOCK_TTL_MS = 45_000;
 
-async function runIntentDispatch(queueRoutingKey) {
-  const result = await dispatchPendingEnqueueIntents({ queueRoutingKey, limit: LIMIT });
-  return Number(result.dispatched || 0);
-}
-
 async function runTick() {
   try {
-    const [scheduledDispatched, pipelineDispatched] = await Promise.all([
-      runIntentDispatch(ENQUEUE_QUEUE_KEYS.SCHEDULED_EDIT),
-      runIntentDispatch(ENQUEUE_QUEUE_KEYS.BULK_EDIT_PIPELINE),
-    ]);
+    await recoverLegacyPendingScheduledExportRuns({ limit: LIMIT }).catch(() => {});
+    await recoverLegacyPendingRecurringEditRuns({ limit: LIMIT }).catch(() => {});
 
-    if (scheduledDispatched > 0 || pipelineDispatched > 0) {
+    const scheduledDispatched = await dispatchPendingEnqueueIntents({ limit: LIMIT })
+      .then((result) => Number(result.dispatched || 0));
+    const pipelineDispatched = 0;
+    const exportRunDispatched = 0;
+    const editRunDispatched = 0;
+
+    if (scheduledDispatched > 0 || pipelineDispatched > 0 || exportRunDispatched > 0 || editRunDispatched > 0) {
       logger.info("Operation enqueue intent recovery dispatched pending intents", {
         worker: "operationEnqueueIntentRecoveryWorker",
         scheduledDispatched,
         pipelineDispatched,
+        exportRunDispatched,
+        editRunDispatched,
       });
     }
   } catch (error) {

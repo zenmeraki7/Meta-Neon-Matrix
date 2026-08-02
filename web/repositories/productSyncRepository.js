@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { prisma } from "../config/database.js";
 import { clearKeyCaches } from "../utils/cacheUtils.js";
 import {
@@ -8,7 +9,7 @@ import {
   createMirrorBatchId,
   markFullSyncStarted,
 } from "../services/mirrorHealthService.js";
-import { enqueueRetiredMirrorCleanup } from "../Jobs/Queues/mirrorCleanupQueue.js";
+import { buildImmutablePayloadMetadata } from "../utils/immutablePayloadUtils.js";
 
 const PRODUCT_SYNC_CACHE_KEYS = [":sync_details", ":sync_summary"];
 
@@ -365,7 +366,24 @@ export async function applyProductTombstonesToCandidate({
   });
 
   const productIds = [...new Set(tombstones.map((row) => row.productId))];
-  if (productIds.length === 0) return 0;
+  const [variantTombstones, metafieldTombstones, inventoryTombstones, collectionTombstones] = await Promise.all([
+    prisma.variantTombstone.findMany({
+      where: { shop, tombstoneMutationSequence: { gt: batch.replayStartSequence ?? 0n } },
+      orderBy: { tombstoneMutationSequence: "asc" },
+    }),
+    prisma.metafieldTombstone.findMany({
+      where: { shop, tombstoneMutationSequence: { gt: batch.replayStartSequence ?? 0n } },
+      orderBy: { tombstoneMutationSequence: "asc" },
+    }),
+    prisma.inventoryItemTombstone.findMany({
+      where: { shop, tombstoneMutationSequence: { gt: batch.replayStartSequence ?? 0n } },
+      orderBy: { tombstoneMutationSequence: "asc" },
+    }),
+    prisma.collectionTombstone.findMany({
+      where: { shop, tombstoneMutationSequence: { gt: batch.replayStartSequence ?? 0n } },
+      orderBy: { tombstoneMutationSequence: "asc" },
+    }),
+  ]);
 
   const variants = await prisma.variant.findMany({
     where: {
@@ -446,7 +464,30 @@ export async function applyProductTombstonesToCandidate({
     }),
   ]);
 
-  return productIds.length;
+  for (const tombstone of variantTombstones) {
+    // eslint-disable-next-line no-await-in-loop
+    await prisma.variant.deleteMany({ where: { shop, mirrorBatchId, id: tombstone.variantId } });
+  }
+  for (const tombstone of inventoryTombstones) {
+    // eslint-disable-next-line no-await-in-loop
+    await prisma.inventoryItemMirror.deleteMany({ where: { shop, mirrorBatchId, id: tombstone.inventoryItemId } });
+  }
+  for (const tombstone of metafieldTombstones) {
+    // eslint-disable-next-line no-await-in-loop
+    await prisma.metafieldMirror.deleteMany({
+      where: {
+        shop, mirrorBatchId, ownerType: tombstone.ownerType, ownerId: tombstone.ownerId,
+        namespace: tombstone.namespace, key: tombstone.key,
+      },
+    });
+  }
+  for (const tombstone of collectionTombstones) {
+    // eslint-disable-next-line no-await-in-loop
+    await prisma.collection.deleteMany({ where: { shop, mirrorBatchId, shopifyId: tombstone.collectionId } });
+  }
+
+  return productIds.length + variantTombstones.length + inventoryTombstones.length
+    + metafieldTombstones.length + collectionTombstones.length;
 }
 
 export async function validateAndFinalizeProductMirrorBatch({
@@ -556,12 +597,26 @@ export async function activateProductMirrorBatch({
   shop,
   mirrorBatchId,
   expectedPreviousActiveBatchId,
+  expectedMirrorMutationVersion,
   syncHistoryId,
 }) {
   const completedAt = new Date();
 
   const activation = await prisma.$transaction(
     async (tx) => {
+      const [lockedStore] = await tx.$queryRaw`
+        SELECT "shopUrl", "activeMirrorBatchId", "mirrorMutationVersion"
+        FROM "Store"
+        WHERE "shopUrl" = ${shop}
+        FOR UPDATE
+      `;
+      if (!lockedStore) throw buildCodedError("STORE_NOT_FOUND", "Store is missing");
+      if ((lockedStore.activeMirrorBatchId ?? null) !== (expectedPreviousActiveBatchId ?? null)) {
+        throw buildCodedError("STALE_ACTIVE_GENERATION", "Active mirror changed before candidate promotion");
+      }
+      if (BigInt(lockedStore.mirrorMutationVersion || 0) !== BigInt(expectedMirrorMutationVersion || 0)) {
+        throw buildCodedError("STALE_MIRROR_MUTATION_VERSION", "Mirror mutation version changed before activation");
+      }
       const candidate = await tx.mirrorBatch.findFirst({
         where: {
           id: mirrorBatchId,
@@ -576,42 +631,6 @@ export async function activateProductMirrorBatch({
         throw buildCodedError(
           "CANDIDATE_NOT_FINALIZED",
           "Candidate is missing, stale, or not FINALIZED",
-        );
-      }
-
-      const storeActivated = await tx.store.updateMany({
-        where:
-          expectedPreviousActiveBatchId === null
-            ? { shopUrl: shop, currentProductMirrorBatchId: null }
-            : {
-                shopUrl: shop,
-                currentProductMirrorBatchId: expectedPreviousActiveBatchId,
-              },
-        data: {
-          currentProductMirrorBatchId: mirrorBatchId,
-          mirrorMutationVersion: { increment: 1 },
-          mirrorHealthState: "HEALTHY",
-          staleReason: null,
-          requiresMirrorRepair: false,
-          mirrorUnsafeSince: null,
-          lastSyncErrorSummary: null,
-          lastFullSyncAt: completedAt,
-          isProductSyncing: false,
-          isProductInitiallySyncing: false,
-          syncProgressStage: "IDLE",
-          hasCompletedShopifyBulkJob: true,
-          storeTotalProducts: candidate.actualProducts ?? 0,
-          productInitialSyncProgress: candidate.actualProducts ?? 0,
-          lastProductSyncAt: completedAt,
-          productSyncStartedAt: null,
-          requiresProductSyncRecovery: false,
-        },
-      });
-
-      if (storeActivated.count !== 1) {
-        throw buildCodedError(
-          "STALE_ACTIVE_GENERATION",
-          "Active mirror changed before candidate promotion",
         );
       }
 
@@ -652,6 +671,52 @@ export async function activateProductMirrorBatch({
           "CANDIDATE_ACTIVATION_REJECTED",
           "Candidate activation state transition failed",
         );
+      }
+
+      const storeActivated = await tx.store.updateMany({
+        where: {
+          shopUrl: shop,
+          currentProductMirrorBatchId: expectedPreviousActiveBatchId,
+          mirrorMutationVersion: BigInt(expectedMirrorMutationVersion || 0),
+        },
+        data: {
+          currentProductMirrorBatchId: mirrorBatchId,
+          mirrorMutationVersion: { increment: 1 },
+          mirrorHealthState: "HEALTHY",
+          staleReason: null,
+          requiresMirrorRepair: false,
+          mirrorUnsafeSince: null,
+          lastSyncErrorSummary: null,
+          lastFullSyncAt: completedAt,
+          isProductSyncing: false,
+          isProductInitiallySyncing: false,
+          syncProgressStage: "IDLE",
+          hasCompletedShopifyBulkJob: true,
+          storeTotalProducts: candidate.actualProducts ?? 0,
+          productInitialSyncProgress: candidate.actualProducts ?? 0,
+          lastProductSyncAt: completedAt,
+          productSyncStartedAt: null,
+          requiresProductSyncRecovery: false,
+        },
+      });
+      if (storeActivated.count !== 1) throw buildCodedError("STALE_ACTIVE_GENERATION", "Store activation CAS failed");
+
+      if (expectedPreviousActiveBatchId && expectedPreviousActiveBatchId !== mirrorBatchId) {
+        const cleanupPayload = { shop, mirrorBatchId: expectedPreviousActiveBatchId };
+        await tx.operationEnqueueIntent.createMany({
+          data: [{
+            id: crypto.randomUUID(),
+            shop,
+            queueRoutingKey: "MIRROR_CLEANUP",
+            queueJobName: "cleanup-retired-product-mirror",
+            dispatchScope: "MIRROR_CLEANUP",
+            dispatchDedupeKey: `mirror-cleanup:${expectedPreviousActiveBatchId}`,
+            payload: cleanupPayload,
+            ...buildImmutablePayloadMetadata({ payload: cleanupPayload, operationType: "OPERATION_ENQUEUE_INTENT" }),
+            status: "PENDING",
+          }],
+          skipDuplicates: true,
+        });
       }
 
       if (syncHistoryId) {
@@ -714,13 +779,6 @@ export async function activateProductMirrorBatch({
   );
 
   await clearProductSyncCache(shop);
-
-  if (activation.retiredBatchId) {
-    await enqueueRetiredMirrorCleanup({
-      shop,
-      mirrorBatchId: activation.retiredBatchId,
-    });
-  }
 
   return activation;
 }

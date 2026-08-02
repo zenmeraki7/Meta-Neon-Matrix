@@ -118,6 +118,9 @@ export function validateCreateAutomaticProductRuleCommand(command) {
 
   const actions = Array.isArray(payload.actions) ? payload.actions : [];
   const hasLegacyAction = toTrimmedString(payload.editedField).length > 0;
+  if (actions.length > 0 && hasLegacyAction) {
+    throw createValidationError("Ambiguous actions definition", "AMBIGUOUS_ACTION_DEFINITION");
+  }
   if (actions.length === 0 && !hasLegacyAction) {
     throw createValidationError(
       "actions are required",

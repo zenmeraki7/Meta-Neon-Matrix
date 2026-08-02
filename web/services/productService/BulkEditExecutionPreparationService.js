@@ -66,8 +66,10 @@ export class BulkEditExecutionPreparationService {
   }
 
   async prepareBulkOperation({ historyId }) {
+    const shop = String(this.session?.shop || "").trim();
+    if (!shop) throw new Error("SHOP_SCOPE_REQUIRED");
     const history = await db.editHistory.findUnique({
-      where: { id: historyId },
+      where: { shop_id: { shop, id: historyId } },
       select: {
         shop: true,
         batch: true,

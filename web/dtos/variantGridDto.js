@@ -71,7 +71,7 @@ export function toLegacyVariantMetafieldGridDto(payload) {
   const grouped = new Map();
 
   for (const row of variants.rows || []) {
-    const variantId = String(row?.variant_id || "").trim();
+    const variantId = String(row?.variant_gid || "").trim();
     if (!variantId) continue;
     if (!grouped.has(variantId)) {
       grouped.set(variantId, {

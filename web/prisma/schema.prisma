@@ -15,7 +15,8 @@ model Product {
   title            String
   handle           String?
   status           String
-  statusNormalized ShopifyProductStatus @default(UNKNOWN)
+  /// Application-normalized projection. Raw Shopify status remains in `status`.
+  statusNormalized String @default("UNKNOWN") @db.VarChar(32)
   productType      String?
   vendor           String?
   tags             String[]
@@ -68,8 +69,10 @@ model Product {
   visibleOnlineStore          Boolean?
   lastSourceEntityUpdatedAt   DateTime? @map("lastSourceUpdatedAt")
   lastSourceEventOccurredAt   DateTime? @map("lastSourceEventAt")
+  sourceVersion               String?
   lastChangeSource            String?   @map("lastSourceKind")
   reconciliationCompletedAt   DateTime? @map("lastReconciledAt")
+  isDeleted                   Boolean   @default(false)
   variants                    Variant[]
   mirrorBatch                 MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
   media                       ProductMediaMirror[]
@@ -106,13 +109,6 @@ model Product {
   @@index([shop, mirrorBatchId, templateSuffix])
 }
 
-enum ShopifyProductStatus {
-  ACTIVE
-  DRAFT
-  ARCHIVED
-  UNKNOWN
-}
-
 model Variant {
   shop                String
   id                  String
@@ -122,15 +118,15 @@ model Variant {
   title               String?
   sku                 String?
   barcode             String?
-  price               Decimal? @db.Decimal(20, 6)
-  compareAtPrice      Decimal? @db.Decimal(20, 6)
+  price               Decimal? @db.Decimal(20, 4)
+  compareAtPrice      Decimal? @db.Decimal(20, 4)
   inventoryQuantity   Int?
   inventoryPolicy     String?
   taxable             Boolean?
   taxCode             String?
   position            Int?
   selectedOptionsJson Json?
-  cost                Decimal? @db.Decimal(20, 6)
+  cost                Decimal? @db.Decimal(20, 4)
   countryOfOrigin     String?
   hsTariffCode        String?
   weight              Decimal? @db.Decimal(20, 6)
@@ -139,8 +135,15 @@ model Variant {
   option2Value        String?
   option3Value        String?
   physicalProduct     Boolean?
-  profitMargin        Decimal? @db.Decimal(20, 6)
+  /// Ratio, not percentage: (price - cost) / price. Rounded to 8 decimals.
+  profitMarginRatio   Decimal? @db.Decimal(12, 8)
   tracked             Boolean?
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion         String?
+  lastChangeSource      String?
+  reconciliationCompletedAt DateTime?
+  isDeleted             Boolean @default(false)
   product             Product  @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
   inventoryItems      InventoryItemMirror[]
 
@@ -174,7 +177,9 @@ model Variant {
 model VariantMetafield {
   id                 BigInt     @id @default(autoincrement())
   shopDomain             String     @map("shop_id")
-  variantId          BigInt     @map("variant_id")
+  /// Compatibility projection for the drained v1 queue only.
+  variantId          BigInt?    @map("variant_id")
+  variantGid         String     @map("variant_gid") @db.VarChar(255)
   shopifyMetafieldId String?    @map("shopify_metafield_id")
   namespace          String
   key                String
@@ -191,7 +196,8 @@ model VariantMetafield {
   shop    Store            @relation(fields: [shopDomain], references: [shopUrl], onDelete: Cascade)
   changes BulkEditChange[]
 
-  @@unique([shopDomain, variantId, namespace, key])
+  @@unique([shopDomain, variantGid, namespace, key])
+  @@index([shopDomain, variantId, namespace, key], map: "variant_metafields_legacy_identity_idx")
   @@unique([shopDomain, id])
   @@index([shopDomain, isDirty])
   @@map("variant_metafields")
@@ -264,23 +270,28 @@ model SyncCursor {
 model SpreadsheetFile {
   id                 String    @id @default(cuid())
   shop               String
+  storageKey         String    @default("")
+  contentSha256      String    @default("") @map("checksum")
+  sizeBytes          BigInt    @default(0)
   editHistoryId      String?
   operationType      String?
   operationId        String?
   status             String    @default("UPLOADED")
   originalFilename   String?
-  storageKey         String?
-  fileChecksum       String? @map("checksum")
   rowParseErrorCount Int?      @default(0)
+  previewedAt        DateTime?
+  executionClaimedAt DateTime?
   validatedAt        DateTime?
-  downloadUrl        String?  @map("fileUrl")
+  downloadUrl        String?   @map("fileUrl")
   columnMappings     Json?
   totalRows          Int?
   expiresAt          DateTime?
-  storageDeletedAt  DateTime?
+  storageDeletedAt   DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  @@unique([shop, id])
+  @@unique([shop, contentSha256, id])
   @@index([shop, createdAt, id])
   @@index([shop, editHistoryId])
   @@index([shop, operationType, operationId])
@@ -328,6 +339,10 @@ model Store {
   installedAt                     DateTime?
   uninstalledAt                   DateTime?          @map("unInstalledAt")
   installationStatus              StoreInstallationStatus @default(INSTALLED)
+  installationExecutionId         String?
+  installationStage               String?
+  installationLeaseUntil          DateTime?
+  installationAttemptCount        Int                     @default(0)
   referralCode                    String?           @unique
   referralLink                    String?           @unique
   referredBy                      String?
@@ -336,7 +351,7 @@ model Store {
   refRewardExpiresAt              DateTime?
   refRewarded                     Boolean           @default(false)
   refSubscribedPlanDetails        Json?
-  refEarnedPrice                  Decimal           @default(0) @db.Decimal(20, 6)
+  refEarnedPrice                  Decimal           @default(0) @db.Decimal(20, 4)
   isCreditAvailable               Boolean           @default(false)
   lastActivityAt                  DateTime?
   createdAt                       DateTime          @default(now())
@@ -368,20 +383,93 @@ model Store {
 }
 
 model Subscription {
-  id                    String             @id @default(cuid())
-  shop                  String             @unique
-  planKey               String?
-  planName              String?
-  subscriptionId        String?
-  status                SubscriptionStatus @default(FREE)
-  pendingSubscriptionId String?
-  pendingPlanKey        String?
-  pendingPlanName       String?
-  trialEndsAt           DateTime?
-  currentPeriodEnd      DateTime?
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
+  id                      String             @id @default(cuid())
+  shop                    String             @unique
+  planKey                 String?
+  planName                String?
+  subscriptionId          String?
+  status                  SubscriptionStatus @default(FREE)
+  pendingSubscriptionId   String?
+  pendingPlanKey          String?
+  pendingPlanName         String?
+  trialEndsAt             DateTime?
+  currentPeriodEnd        DateTime?
+  billingAuthorityVersion BigInt             @default(0)
+  billingReconciledAt     DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
+}
+
+/// One authoritative entitlement accounting window. Aggregate amounts are
+/// projections of the immutable ledger and can be rebuilt during recovery.
+model UsagePeriod {
+  id                      String   @id @default(cuid())
+  shop                    String
+  entitlementKey          String
+  periodStartsAt          DateTime
+  periodEndsAt            DateTime
+  reservedAmount          BigInt   @default(0)
+  consumedAmount          BigInt   @default(0)
+  releasedAmount          BigInt   @default(0)
+  billingAuthorityVersion BigInt
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  reservations            UsageReservation[]
+  ledgerEntries           UsageLedgerEntry[]
+
+  @@unique([shop, id])
+  @@unique([shop, entitlementKey, periodStartsAt, periodEndsAt])
+  @@index([shop, entitlementKey, periodEndsAt])
+}
+
+model UsageReservation {
+  id                      String   @id @default(cuid())
+  shop                    String
+  periodId                String
+  entitlementKey          String
+  operationType           String
+  operationId             String
+  reservedAmount          BigInt
+  consumedAmount          BigInt   @default(0)
+  releasedAmount          BigInt   @default(0)
+  status                  String   @default("RESERVED")
+  idempotencyKeyHash      String
+  subscriptionVersion     BigInt
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  consumedAt              DateTime?
+  releasedAt              DateTime?
+  period                  UsagePeriod @relation(fields: [shop, periodId], references: [shop, id], onDelete: Restrict)
+  ledgerEntries           UsageLedgerEntry[]
+
+  @@unique([shop, id])
+  @@unique([shop, operationType, operationId, entitlementKey])
+  @@unique([shop, idempotencyKeyHash])
+  @@index([shop, periodId, entitlementKey, status])
+}
+
+model UsageLedgerEntry {
+  id                      String   @id @default(cuid())
+  shop                    String
+  usagePeriodId           String
+  reservationId           String
+  entitlementKey          String
+  operationType           String
+  operationId             String
+  entryType               String
+  amount                  BigInt
+  idempotencyKey          String
+  billingAuthorityVersion BigInt
+  createdAt               DateTime @default(now())
+  period                  UsagePeriod @relation(fields: [shop, usagePeriodId], references: [shop, id], onDelete: Restrict)
+  reservation             UsageReservation @relation(fields: [shop, reservationId], references: [shop, id], onDelete: Restrict)
+
+  @@unique([shop, id])
+  @@unique([shop, idempotencyKey])
+  @@index([shop, usagePeriodId, createdAt])
+  @@index([shop, reservationId, createdAt])
+  @@index([shop, operationType, operationId, entitlementKey])
 }
 
 model Suggestion {
@@ -474,7 +562,15 @@ model MirrorBatch {
 model EditHistory {
   id                        String                           @id @default(cuid())
   shop                      String
-  shopifyBulkOperationId           String?                          @map("bulkOperationId")
+  stateVersion              Int                              @default(0)
+  executionOwnerId          String?
+  executionLeaseUntil       DateTime?
+  executionHeartbeatAt      DateTime?
+  executeLeaseFencingToken  BigInt?
+  executeLeaseOwner         String?
+  executeLeaseExpiresAt     DateTime?
+  lastHeartbeatAt           DateTime?
+  shopifyBulkOperationId    String?                          @map("bulkOperationId")
   /// Legacy lifecycle detail; workflow selection must use executionStateNormalized.
   executionState            String                           @default("planned")
   executionStateNormalized  EditHistoryExecutionState        @default(PLANNED)
@@ -482,6 +578,10 @@ model EditHistory {
   targetSnapshotCount       Int                              @default(0)
   targetProductMirrorBatchId String?                          @map("targetMirrorBatchId")
   failureStage              String?
+  failureCode               String?
+  latestErrorMessage        String?
+  latestErrorAt             DateTime?
+  retryCount                Int                              @default(0)
   title                     Json?
   legacyQueryFilter         String                           @default("") @map("queryFilter")
   editedType                String?
@@ -512,12 +612,15 @@ model EditHistory {
   recurringEditId           String?
   recurringRunId            String?
   snapshotSetId             String?
+  snapshotSetRevision       Int?                             @default(1)
   automaticProductRuleId    String?
-  automaticProductRuleRunId String?                          @unique
+  automaticProductRuleRunId String?
   triggerType               EditHistoryTriggerType           @default(MANUAL)
   error                     Json?
   createdAt                 DateTime                         @default(now())
   updatedAt                 DateTime                         @updatedAt
+  retentionUntil            DateTime? @default(dbgenerated("(now() + interval '7 years')"))
+  redactedAt                DateTime?
   filterVersion             Int?
   canonicalFilterKey        String?
   filterAst                 Json?
@@ -541,34 +644,73 @@ model EditHistory {
   pauseRequestedAt          DateTime?
   pausedAt                  DateTime?
   resumedAt                 DateTime?
+  operationType             String?                          @default("BULK_EDIT")
+  idempotencyKey            String?
   changeRecords             ChangeRecord[]
   ingestionCheckpoints      EditHistoryIngestionCheckpoint[]
   undoOperations            UndoOperation[]
   recoveryAudits            BulkEditRecoveryAudit[]
-  snapshotSet               TargetSnapshotSet?               @relation(fields: [snapshotSetId], references: [id], onDelete: SetNull)
+  immutableEditCommands     ImmutableEditCommand[]
+  failureAttempts           EditHistoryFailureAttempt[]
+  snapshotSet               TargetSnapshotSet?               @relation(fields: [shop, snapshotSetId], references: [shop, id], onDelete: Restrict)
 
   @@index([shop, executionStateNormalized])
+  @@index([shop, executionStateNormalized, stateVersion, id])
+  @@index([shop, executionStateNormalized, executeLeaseExpiresAt, id])
   @@unique([shop, id])
   @@unique([shop, executionIdentity])
+  @@unique([shop, operationType, idempotencyKey])
+  @@index([shop, executionState, createdAt, id])
+  @@index([shop, executionState, id])
   @@index([shop, statusNormalized])
   @@index([shop, statusNormalized, editType, updatedAt], map: "shop_status_norm_type_recent")
   @@index([shop, createdAt, id])
   @@index([shop, statusNormalized, updatedAt, id])
   @@index([isSpreadsheetEdit])
-  @@index([recurringEditId])
-  @@index([recurringRunId])
+  @@index([shop, recurringEditId])
+  @@index([shop, recurringRunId])
   @@index([shop, snapshotSetId])
-  @@index([automaticProductRuleId])
-  @@index([automaticProductRuleRunId])
+  @@index([shop, automaticProductRuleId])
+  @@index([shop, automaticProductRuleRunId])
   @@index([shop, canonicalFilterKey])
 }
+
+
+model ImmutableEditCommand {
+  id                String   @id @default(cuid())
+  shop              String
+  historyId         String
+  executionIdentity String?
+  revision          Int      @default(1)
+  command           Json
+  commandHash       String
+  payload           Json?
+  payloadHash       String?
+  createdAt         DateTime @default(now())
+
+  history EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Restrict)
+
+
+  @@unique([shop, historyId])
+  @@unique([shop, historyId, revision])
+  @@index([shop, commandHash])
+}
+
 
 model UndoOperation {
   id                  String    @id @default(cuid())
   shop                String
   sourceEditHistoryId String
+  previewContractId   String?
+  executionId         String?
   executionIdentity   String
-  idempotencyKeyHash  String?
+  idempotencyKeyHash  String
+  /// Nullable during migration. New undo operations must own an immutable item set.
+  undoItemSetRevision Int       @default(1)
+  serializerVersion   String?
+  trustStatus         UndoOperationTrustStatus @default(TRUSTED)
+  approvedAt          DateTime?
+  approvedByActorId   String?
   /// Durable domain result (pending/completed/partial/failed).
   outcomeStatus       String    @default("pending") @map("status")
   /// Runtime state used by claims, retries, and Shopify dispatch.
@@ -587,29 +729,78 @@ model UndoOperation {
   completedAt         DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+  retentionUntil      DateTime? @default(dbgenerated("(now() + interval '7 years')"))
+  redactedAt           DateTime?
 
-  editHistory    EditHistory                  @relation(fields: [shop, sourceEditHistoryId], references: [shop, id], onDelete: Cascade)
+  editHistory    EditHistory                  @relation(fields: [shop, sourceEditHistoryId], references: [shop, id], onDelete: Restrict)
+  previewContract PreviewContract?             @relation(fields: [shop, previewContractId], references: [shop, id], onDelete: Restrict)
   command        UndoCommand?
   conflictChunks UndoOperationConflictChunk[]
+  items          UndoItem[]
 
-  @@unique([shop, sourceEditHistoryId])
   @@unique([shop, id])
   @@unique([shop, executionIdentity])
+  @@unique([shop, idempotencyKeyHash])
   @@index([shop, outcomeStatus, updatedAt], map: "UndoOperation_shop_status_updatedAt_idx")
+  @@index([shop, sourceEditHistoryId, createdAt])
+  @@index([shop, previewContractId])
+}
+
+/// Immutable authority for one field in an undo revision. Runtime workers may
+/// update outcome metadata only; targets, restore values, and hashes never change.
+model UndoItem {
+  id                       String                @id @default(cuid())
+  shop                     String
+  undoOperationId          String
+  targetIdentity           String
+  targetResourceType       TargetSnapshotTargetType
+  targetId                 String
+  productId                String
+  variantId                String?
+  fieldPath                String
+  targetContext            Json
+  beforeValue              Json
+  beforeValueHash          String
+  writtenValueHash         String
+  observedCurrentValueHash String?
+  serializerVersion        String
+  outcome                  UndoItemOutcome       @default(ELIGIBLE)
+  failureCode              String?
+  failureMessage           String?
+  observedAt               DateTime?
+  submittedAt              DateTime?
+  restoredAt               DateTime?
+  createdAt                DateTime              @default(now())
+
+  undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Restrict)
+
+  @@unique([shop, undoOperationId, targetIdentity, fieldPath])
+  @@unique([shop, id])
+  @@index([shop, undoOperationId, outcome])
+  @@index([shop, targetResourceType, targetId])
+  @@index([shop, productId])
+  @@index([shop, variantId])
 }
 
 model UndoCommand {
   id                  String   @id @default(cuid())
   shop                String
-  undoOperationId     String   @unique
+  undoOperationId     String
   sourceEditHistoryId String
   commandVersion      Int      @default(1)
   commandHash         String
   commandJson         Json
+  payloadByteSize     Int
+  payloadSchemaVersion Int @default(1)
+  payloadCompression  String? @db.VarChar(24)
+  payloadStorageKey   String? @db.VarChar(1024)
+  retentionUntil      DateTime? @default(dbgenerated("(now() + interval '7 years')"))
+  redactedAt          DateTime?
   createdAt           DateTime @default(now())
 
-  undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Cascade)
+  undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Restrict)
 
+  @@unique([shop, undoOperationId])
   @@unique([shop, commandHash])
   @@index([shop, sourceEditHistoryId])
 }
@@ -622,9 +813,14 @@ model UndoOperationConflictChunk {
   chunkIndex      Int
   totalItems      Int      @default(0)
   payload         Json
+  payloadByteSize Int
+  payloadHash     String @db.Char(64)
+  payloadSchemaVersion Int @default(1)
+  payloadCompression String? @db.VarChar(24)
+  payloadStorageKey String? @db.VarChar(1024)
   createdAt       DateTime @default(now())
 
-  undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Cascade)
+  undoOperation UndoOperation @relation(fields: [shop, undoOperationId], references: [shop, id], onDelete: Restrict)
 
   @@unique([shop, undoOperationId, chunkType, chunkIndex])
 }
@@ -641,8 +837,10 @@ model BulkEditRecoveryAudit {
   result     String
   metadata   Json?
   createdAt  DateTime @default(now())
+  retentionUntil DateTime? @default(dbgenerated("(now() + interval '7 years')"))
+  redactedAt DateTime?
 
-  editHistory EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Cascade)
+  editHistory EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Restrict)
 
   @@index([shop, historyId, createdAt])
 }
@@ -665,11 +863,30 @@ model EditHistoryIngestionCheckpoint {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  editHistory EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Cascade)
+  editHistory EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Restrict)
 
   @@unique([shop, historyId, ingestionRunId])
   @@index([shop, historyId, status, updatedAt])
   @@index([shop, historyId, updatedAt])
+}
+
+model EditHistoryFailureAttempt {
+  id           String   @id @default(cuid())
+  shop         String
+  historyId    String
+  stateVersion Int
+  fenceToken   BigInt?
+  stage        String   @db.VarChar(100)
+  code         String   @db.VarChar(100)
+  message      String   @db.VarChar(2000)
+  retryable    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  history EditHistory @relation(fields: [shop, historyId], references: [shop, id], onDelete: Restrict)
+
+  @@unique([shop, historyId, stateVersion, stage, code])
+  @@index([shop, historyId, createdAt, id])
+  @@index([createdAt, id])
 }
 
 model RecurringEdit {
@@ -686,7 +903,7 @@ model RecurringEdit {
   endAt                    DateTime?
   rawFilterInput           Json                 @map("filterParams")
   rules                    Json
-  runCount                 Int                   @default(0)
+  runCount                 BigInt                @default(0)
   lastRunAt                DateTime?
   nextRunAt                DateTime?
   lastSuccessAt            DateTime?
@@ -712,12 +929,51 @@ model RecurringEdit {
   actorEmail               String?
   actorDisplayName         String?               @map("actorName")
   runs                     RecurringEditRun[]
+  revisions                RecurringEditRevision[]
+  scheduleState            RecurringEditScheduleState?
 
   @@unique([shop, id])
-  @@index([shop])
   @@index([shop, status])
-  @@index([shop, nextRunAt])
   @@index([shop, canonicalFilterKey])
+}
+
+model RecurringEditRevision {
+  shop                       String
+  recurringEditId            String
+  revision                   Int
+  configurationHash          String
+  filterSnapshotHash         String
+  selectedFieldsSnapshotHash String
+  rulesActionsSnapshotHash   String
+  schedulePolicySnapshotHash String
+  definitionSnapshot         Json
+  createdAt                  DateTime @default(now())
+  recurringEdit              RecurringEdit @relation(fields: [shop, recurringEditId], references: [shop, id], onDelete: Cascade)
+  scheduleStates             RecurringEditScheduleState[]
+  runs                       RecurringEditRun[]
+
+  @@id([shop, recurringEditId, revision])
+  @@index([shop, createdAt])
+}
+
+model RecurringEditScheduleState {
+  shop                 String
+  recurringEditId      String
+  definitionRevision   Int
+  scheduleVersion      Int      @default(1)
+  nextRunAt            DateTime?
+  claimedAt            DateTime?
+  claimOwner           String?
+  claimExpiresAt       DateTime?
+  fencingToken         BigInt   @default(0)
+  missedRunPolicy      String   @default("SKIP")
+  disabledAt           DateTime?
+  updatedAt            DateTime @updatedAt
+  recurringEdit        RecurringEdit @relation(fields: [shop, recurringEditId], references: [shop, id], onDelete: Cascade)
+  revision             RecurringEditRevision @relation(fields: [shop, recurringEditId, definitionRevision], references: [shop, recurringEditId, revision], onDelete: Restrict)
+
+  @@id([shop, recurringEditId])
+  @@index([shop, claimExpiresAt, recurringEditId])
 }
 
 model RecurringEditRun {
@@ -729,6 +985,13 @@ model RecurringEditRun {
   completedAt              DateTime?
   status                   RecurringEditRunStatus @default(PENDING)
   executionDedupeKey             String                 @map("executionKey")
+  definitionRevision       Int?
+  configurationHash        String?
+  filterSnapshotHash       String?
+  selectedFieldsSnapshotHash String?
+  rulesActionsSnapshotHash String?
+  schedulePolicySnapshotHash String?
+  legacyRevisionUnknown    Boolean                @default(false)
   mirrorBatchId            String?
   filterAst                Json?
   normalizedFilterAst      Json?
@@ -742,16 +1005,27 @@ model RecurringEditRun {
   targetResolvedAt         DateTime?
   errorMessage             String?
   editHistoryId            String?
+  entitlementPlanKey       String?
+  entitlementStatus        String?
+  entitlementCheckedAt     DateTime?
+  entitlementVersion       BigInt?
+  nextAttemptAt            DateTime?
+  retryCount               Int                    @default(0)
+  executionOwnerId         String?
+  executionLeaseUntil      DateTime?
+  executionFence           BigInt                 @default(0)
   createdAt                DateTime               @default(now())
   updatedAt                DateTime               @updatedAt
   recurringEdit            RecurringEdit          @relation(fields: [shop, recurringEditId], references: [shop, id], onDelete: Cascade)
+  definitionSnapshot       RecurringEditRevision? @relation(fields: [shop, recurringEditId, definitionRevision], references: [shop, recurringEditId, revision], onDelete: Restrict)
 
   @@unique([shop, executionDedupeKey], map: "RecurringEditRun_shop_executionKey_key")
-  @@index([recurringEditId])
+  @@index([shop, recurringEditId])
   @@index([shop, status])
   @@index([shop, scheduledFor, id])
   @@index([shop, mirrorBatchId])
-  @@index([editHistoryId])
+  @@index([shop, editHistoryId])
+  @@index([shop, nextAttemptAt, id], map: "RecurringEditRun_retry_idx")
 }
 
 model AutomaticProductRule {
@@ -785,7 +1059,7 @@ model AutomaticProductRule {
   priority                   Int                                @default(100)
   cooldownMinutes            Int?
   maxAffectedPerRun          Int?
-  runCount                   Int                                @default(0)
+  runCount                   BigInt                             @default(0)
   lastRunAt                  DateTime?
   nextRunAt                  DateTime?
   lastSuccessAt              DateTime?
@@ -915,6 +1189,7 @@ model AutomaticProductRuleRun {
   conditionsSnapshot       Json?
   actionsSnapshot          Json?
   scopeTypeSnapshot        AutomaticProductRuleScopeType?
+  targetResourceTypeSnapshot String?
   applyModeSnapshot        String?
   matchedCount             Int                                  @default(0)
   affectedCount            Int                                  @default(0)
@@ -957,6 +1232,11 @@ model TargetFreezeCommand {
   filterAst            Json?   @map("filterAstJson")
   savedTargetSetId  String?
   editOperationJson Json?
+  payloadByteSize Int
+  payloadHash String @db.Char(64)
+  payloadSchemaVersion Int @default(1)
+  payloadCompression String? @db.VarChar(24)
+  payloadStorageKey String? @db.VarChar(1024)
   status            TargetFreezeCommandStatus
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -968,32 +1248,54 @@ model TargetFreezeCommand {
 /// Transactional domain-event publication. Concrete worker enqueue commands
 /// belong in OperationEnqueueIntent, not in this event stream.
 model OutboxEvent {
-  id            String    @id @default(cuid())
-  shop          String
-  /// Domain-event aggregate identity; validate against the event's aggregate allow-list.
-  aggregateType String
-  aggregateId   String
-  domainEventType String @map("eventType")
-  eventDedupeKey String?   @map("eventIdentity")
-  payloadJson   Json?
-  /// Legacy projection kept synchronized during the enum transition.
-  status        String
+  id               String    @id @default(cuid())
+  shop             String
+  aggregateType    String
+  aggregateId      String
+  eventType        String?
+  domainEventType  String?   @map("eventType_domain")
+  deduplicationKey String?
+  eventDedupeKey   String?   @map("eventIdentity") @db.VarChar(512)
+  payload          Json?
+  payloadJson      Json?
+  payloadHash      String?   @default("")
+  payloadByteSize  Int       @default(0)
+  payloadSchemaVersion Int   @default(1)
+  payloadCompression String? @db.VarChar(24)
+  payloadStorageKey String?  @db.VarChar(1024)
+  status           String
   statusNormalized OutboxEventStatus @default(PENDING)
-  attemptCount  Int       @default(0)
-  nextAttemptAt DateTime  @default(now())
-  lockedAt      DateTime?
-  lockedBy      String?
-  lastErrorCode String?
-  lastErrorAt   DateTime?
-  dispatchedAt  DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  availableAt      DateTime? @default(now())
+  leaseOwner       String?
+  leaseExpiresAt   DateTime?
+  publishedAt      DateTime?
+  attempts         Int       @default(0)
+  attemptCount     Int       @default(0)
+  nextAttemptAt    DateTime  @default(now())
+  lockedAt         DateTime?
+  lockedBy         String?
+  lockToken        String?
+  lockExpiresAt    DateTime?
+  fencingToken     BigInt    @default(0)
+  deadLetteredAt   DateTime?
+  lastErrorCode    String?
+  lastErrorAt      DateTime?
+  dispatchedAt     DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  retentionUntil   DateTime? @default(dbgenerated("(now() + interval '7 years')"))
+  redactedAt       DateTime?
 
+  @@unique([shop, deduplicationKey])
   @@unique([shop, eventDedupeKey], map: "OutboxEvent_shop_eventIdentity_key")
+  @@unique([shop, aggregateType, aggregateId, eventType])
+  @@index([status, availableAt, leaseExpiresAt, createdAt, id])
+  @@index([shop, aggregateType, aggregateId, createdAt, id])
   @@index([statusNormalized, nextAttemptAt, createdAt])
   @@index([shop, statusNormalized, nextAttemptAt])
   @@index([shop, aggregateType, aggregateId])
 }
+
 
 model AutomaticProductRuleProductState {
   id                     String                         @id @default(cuid())
@@ -1087,6 +1389,12 @@ model Collection {
   handle          String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion         String?
+  lastChangeSource      String?
+  reconciliationCompletedAt DateTime?
+  isDeleted             Boolean @default(false)
   mirrorBatch     MirrorBatch       @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
   products        ProductCollection[]
 
@@ -1096,7 +1404,6 @@ model Collection {
   @@index([shop, mirrorBatchId])
   @@index([shop, title])
   @@index([shop, mirrorBatchId, titleNormalized, shopifyId])
-  @@index([shop, mirrorBatchId, shopifyId])
 }
 
 model ScheduledExport {
@@ -1114,7 +1421,7 @@ model ScheduledExport {
   rawFilterInput           Json                  @map("filterParams")
   selectedFieldKeys        String[]              @map("fields")
   generatedFilename        String                @map("filename")
-  runCount                 Int                   @default(0)
+  runCount                 BigInt                @default(0)
   lastRunAt                DateTime?
   nextRunAt                DateTime?
   lastSuccessAt            DateTime?
@@ -1138,12 +1445,51 @@ model ScheduledExport {
   operatorRegistryVersion  String?
   normalizedFilterHash     String?               @map("filterHash")
   runs                     ScheduledExportRun[]
+  revisions                ScheduledExportRevision[]
+  scheduleState            ScheduledExportScheduleState?
 
   @@unique([shop, id])
-  @@index([shop])
   @@index([shop, status])
-  @@index([shop, nextRunAt])
   @@index([shop, canonicalFilterKey])
+}
+
+model ScheduledExportRevision {
+  shop                       String
+  scheduledExportId          String
+  revision                   Int
+  configurationHash          String
+  filterSnapshotHash         String
+  selectedFieldsSnapshotHash String
+  rulesActionsSnapshotHash   String
+  schedulePolicySnapshotHash String
+  definitionSnapshot         Json
+  createdAt                  DateTime @default(now())
+  scheduledExport            ScheduledExport @relation(fields: [shop, scheduledExportId], references: [shop, id], onDelete: Cascade)
+  scheduleStates             ScheduledExportScheduleState[]
+  runs                       ScheduledExportRun[]
+
+  @@id([shop, scheduledExportId, revision])
+  @@index([shop, createdAt])
+}
+
+model ScheduledExportScheduleState {
+  shop                 String
+  scheduledExportId    String
+  definitionRevision   Int
+  scheduleVersion      Int      @default(1)
+  nextRunAt            DateTime?
+  claimedAt            DateTime?
+  claimOwner           String?
+  claimExpiresAt       DateTime?
+  fencingToken         BigInt   @default(0)
+  missedRunPolicy      String   @default("SKIP")
+  disabledAt           DateTime?
+  updatedAt            DateTime @updatedAt
+  scheduledExport      ScheduledExport @relation(fields: [shop, scheduledExportId], references: [shop, id], onDelete: Cascade)
+  revision             ScheduledExportRevision @relation(fields: [shop, scheduledExportId, definitionRevision], references: [shop, scheduledExportId, revision], onDelete: Restrict)
+
+  @@id([shop, scheduledExportId])
+  @@index([shop, claimExpiresAt, scheduledExportId])
 }
 
 model ScheduledExportRun {
@@ -1155,6 +1501,13 @@ model ScheduledExportRun {
   completedAt              DateTime?
   status                   ScheduledExportRunStatus @default(PENDING)
   executionDedupeKey             String                   @map("executionKey")
+  definitionRevision       Int?
+  configurationHash        String?
+  filterSnapshotHash       String?
+  selectedFieldsSnapshotHash String?
+  rulesActionsSnapshotHash String?
+  schedulePolicySnapshotHash String?
+  legacyRevisionUnknown    Boolean                  @default(false)
   targetProductMirrorBatchId String?               @map("targetMirrorBatchId")
   filterAst                Json?
   normalizedFilterAst      Json?
@@ -1171,22 +1524,30 @@ model ScheduledExportRun {
   downloadUrl              String?               @map("fileUrl")
   totalItems               Int?
   durationMs               Int?
+  retryGeneration          Int                      @default(0)
+  nextAttemptAt            DateTime?
+  lastDeferralReason       String?
+  executionOwnerId         String?
+  executionLeaseUntil      DateTime?
+  executionFence           BigInt                   @default(0)
   createdAt                DateTime                 @default(now())
   updatedAt                DateTime                 @updatedAt
   scheduledExport          ScheduledExport          @relation(fields: [shop, scheduledExportId], references: [shop, id], onDelete: Cascade)
+  definitionSnapshot       ScheduledExportRevision? @relation(fields: [shop, scheduledExportId, definitionRevision], references: [shop, scheduledExportId, revision], onDelete: Restrict)
   exportJob                ExportJob?                @relation(fields: [shop, exportJobId], references: [shop, id], onDelete: Restrict)
 
   @@unique([shop, executionDedupeKey], map: "ScheduledExportRun_shop_executionKey_key")
-  @@index([scheduledExportId])
+  @@index([shop, scheduledExportId])
   @@index([shop, status])
   @@index([shop, scheduledFor, id])
   @@index([shop, targetProductMirrorBatchId])
-  @@index([exportJobId])
+  @@index([shop, exportJobId])
 }
 
 model ExportJob {
   id                       String                  @id @default(cuid())
   shop                     String
+  stateVersion             Int                     @default(0)
   legacyFilterQuery        String                  @default("{}") @map("filterQuery")
   /// Legacy lifecycle detail; workflow selection must use executionStateNormalized.
   executionState           String                  @default("planned")
@@ -1274,6 +1635,9 @@ model ChangeRecord {
   editHistoryId       String
   targetResourceType  String @map("targetType")
   targetIdentity      String
+  fieldPath           String
+  changeIdentity      String      @db.VarChar(64)
+  executionAttempt    Int         @default(1)
   productId           String
   variantId           String?
   shop                String
@@ -1292,9 +1656,12 @@ model ChangeRecord {
   shopifySubmissionBatchId String? @map("batchId")
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
-  editHistory         EditHistory @relation(fields: [shop, editHistoryId], references: [shop, id], onDelete: Cascade)
+  retentionUntil      DateTime? @default(dbgenerated("(now() + interval '7 years')"))
+  redactedAt          DateTime?
+  editHistory         EditHistory @relation(fields: [shop, editHistoryId], references: [shop, id], onDelete: Restrict)
 
-  @@unique([shop, editHistoryId, shopifySubmissionBatchId, targetIdentity], map: "uniq_change_record_shop_history_batch_target")
+  @@unique([shop, editHistoryId, targetIdentity, fieldPath, executionAttempt], map: "ChangeRecord_authoritative_field_attempt_uq")
+  @@unique([shop, changeIdentity], name: "shop_changeIdentity", map: "ChangeRecord_shop_changeIdentity_uq")
   @@index([shop, editHistoryId, status, id])
   @@index([shop, editHistoryId, targetResourceType, id])
   @@index([shop, editHistoryId, createdAt, id])
@@ -1338,6 +1705,9 @@ model OperationStageProgress {
   counterA      Int?
   counterB      Int?
   counterC      Int?
+  succeededItemCount Int?
+  failedItemCount Int?
+  observedItemCount Int?
   detail        Json?
 
   @@unique([shop, operationType, operationId, workflowStageKey], map: "uniq_operation_stage_progress")
@@ -1345,30 +1715,58 @@ model OperationStageProgress {
 }
 
 model FilterTrack {
-  id                  String          @id @default(cuid())
-  shop                String
-  changeSource        String? @map("source")
-  userId              String?
-  expiresAt           DateTime?
-  rawFilterInput        Json? @map("filterParams")
-  previewRawFilterInput Json? @map("previewFilterParams")
-  respondProductCount Int?
-  previewResCount     Int?
-  filterTrackType     FilterTrackType @default(filter) @map("type")
-  field               String?
-  editOption          String?
-  searchKey           String?
-  replaceText         String?
-  supportValue        String?
-  value               Json?
-  en                  String?
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
+  id                    String    @id @default(cuid())
+  shop                  String
+  type                  String    @default("filter")
+  changeSource          String?   @map("source")
+  userId                String?
+  status                String    @default("APPROVED")
+  expiresAt             DateTime?
+  revision              Int       @default(1)
+  contractHash          String?
+  executionId           String?
+  filterJson            Json?
+  explicitProductIds   Json?
+  rawFilterInput        Json?     @map("filterParams")
+  previewRawFilterInput Json?     @map("previewFilterParams")
+  respondProductCount   Int?
+  previewResCount       Int?
+  field                 String?
+  editOption            String?
+  searchKey             String?
+  replaceText           String?
+  supportValue          String?
+  value                 Json?
+  en                    String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
+  @@unique([shop, id])
+  @@index([shop, type, changeSource, status, executionId, expiresAt, id])
   @@index([shop, createdAt])
   @@index([shop, expiresAt])
   @@index([expiresAt])
-  @@index([shop, filterTrackType, createdAt], map: "FilterTrack_shop_type_createdAt_idx")
+}
+
+/// Durable billing command. FilterTrack is UI/filter telemetry and must not be
+/// used as a command store.
+model SubscriptionCommand {
+  id                 String   @id @default(cuid())
+  shop               String
+  planKey            String
+  returnUrl           String?
+  status              String   @default("PENDING_CONFIRMATION")
+  idempotencyKeyHash String?
+  confirmationUrl    String?
+  subscriptionId     String?
+  stateVersion       Int      @default(0)
+  lastErrorCode      String?
+  lastErrorMessage   String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([shop, id])
+  @@index([shop, status, updatedAt])
 }
 
 model ReferralCode {
@@ -1388,7 +1786,7 @@ model AffiliateUser {
   referralLink             String   @unique
   numberOfReferrals        Int      @default(0)
   numberOfStoresSubscribed Int      @default(0)
-  totalAmountEarned        Decimal  @default(0) @db.Decimal(20, 6)
+  totalAmountEarned        Decimal  @default(0) @db.Decimal(20, 4)
   phone                    String?
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
@@ -1417,6 +1815,12 @@ model ProductMediaMirror {
   alt           String?
   position      Int?
   status        String?
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion String?
+  lastChangeSource String?
+  reconciliationCompletedAt DateTime?
+  isDeleted Boolean @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   product       Product  @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
@@ -1433,12 +1837,18 @@ model InventoryItemMirror {
   mirrorBatchId        String
   tracked              Boolean?
   sku                  String?
-  cost                 Decimal? @db.Decimal(20, 6)
+  cost                 Decimal? @db.Decimal(20, 4)
   countryCodeOfOrigin  String?
   provinceCodeOfOrigin String?
   harmonizedSystemCode String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion         String?
+  lastChangeSource      String?
+  reconciliationCompletedAt DateTime?
+  isDeleted             Boolean @default(false)
   product              Product  @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
   variant              Variant  @relation(fields: [shop, variantId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
   levels               InventoryLevelMirror[]
@@ -1460,6 +1870,12 @@ model InventoryLevelMirror {
   incoming        Int?
   updatedAt       DateTime?
   createdAt       DateTime  @default(now())
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion         String?
+  lastChangeSource      String?
+  reconciliationCompletedAt DateTime?
+  isDeleted             Boolean @default(false)
   inventoryItem   InventoryItemMirror @relation(fields: [shop, inventoryItemId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
 
   @@id([shop, inventoryItemId, locationId, mirrorBatchId])
@@ -1494,21 +1910,35 @@ model ErrorLog {
 model TargetSnapshotSet {
   id                   String @id @default(cuid())
   shop                 String
-  operationId          String
-  previewContractId    String
-  mirrorBatchId        String
-  targetDefinitionHash String @map("targetingFingerprint")
+  ownerType            String?
+  ownerId              String?
+  sourceType           String?
+  revision             Int      @default(1)
+  itemCount            Int      @default(0)
+  terminalCursor       String?
+  finalizedAt          DateTime?
+  operationId          String?
+  mirrorBatchId        String?
+  targetDefinitionHash String? @map("targetingFingerprint")
 
   targetCount  Int @default(0)
   productCount Int @default(0)
   variantCount Int @default(0)
   inventoryItemCount Int @default(0)
   metafieldCount     Int @default(0)
+  productOptionCount Int @default(0)
+  collectionMembershipCount Int @default(0)
+  inventoryLevelCount Int @default(0)
 
   mutationPendingCount   Int @default(0) @map("pendingCount")
-  mutationSubmittedCount Int @default(0) @map("submittedCount")
+  mutationClaimedCount   Int @default(0)
+  mutationApplyingCount  Int @default(0)
+  mutationDeferredCount  Int @default(0)
   mutationSucceededCount Int @default(0) @map("succeededCount")
   mutationFailedCount    Int @default(0) @map("failedCount")
+  mutationConflictCount  Int @default(0)
+  mutationCancelledCount Int @default(0)
+  mutationSubmittedCount Int @default(0) @map("submittedCount")
   mutationSkippedCount   Int @default(0) @map("skippedCount")
 
   verificationPendingCount   Int @default(0)
@@ -1523,8 +1953,8 @@ model TargetSnapshotSet {
   undoSkippedCount     Int @default(0)
 
   targetSetHash     String? @map("checksum")
-  compilerVersion   String
-  projectionVersion String
+  compilerVersion   String?
+  projectionVersion String?
   plannerVersion    String?
 
   status TargetSnapshotSetStatus @default(FREEZING)
@@ -1537,25 +1967,59 @@ model TargetSnapshotSet {
   failedAt  DateTime?
   expiresAt DateTime?
 
-  items         TargetSnapshotItem[]
-  editHistories EditHistory[]
-  mirrorBatch   MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
+  previewContracts PreviewContract[]
+  items            TargetSnapshotItem[]
+  editHistories    EditHistory[]
+  mirrorBatch      MirrorBatch? @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Restrict)
 
+  @@unique([shop, ownerType, ownerId])
   @@unique([shop, operationId])
-  @@unique([shop, id, mirrorBatchId])
   @@unique([shop, id])
-  @@index([shop, previewContractId])
+  @@unique([shop, id, revision])
   @@index([shop, mirrorBatchId, targetDefinitionHash])
   @@index([shop, status])
+  @@index([shop, status, createdAt, id])
+  @@index([shop, status, id, revision])
   @@index([shop, operationId, status])
   @@index([shop, createdAt])
   @@index([shop, expiresAt])
 }
 
+
+
+
+model PreviewContract {
+  id                String                @id @default(cuid())
+  shop              String
+  revision          Int                   @default(1)
+  status            PreviewContractStatus @default(BUILDING)
+  stateVersion      Int                   @default(0)
+  contractHash      String
+  payloadHash       String
+  mirrorBatchId     String
+  snapshotSetId     String
+  approvedAt        DateTime?
+  approvedByActorId String?
+  expiresAt         DateTime
+  executionId       String?
+  executedAt        DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  snapshotSet TargetSnapshotSet @relation(fields: [shop, snapshotSetId], references: [shop, id], onDelete: Restrict)
+  undoOperations UndoOperation[]
+
+  @@unique([shop, id])
+  @@unique([shop, contractHash])
+  @@unique([shop, snapshotSetId, revision])
+  @@index([shop, status, expiresAt])
+}
+
 model TargetSnapshotItem {
-  id String @id @default(cuid())
+  id String @default(cuid())
 
   snapshotSetId String
+  snapshotRevision Int @default(1)
   shop          String
   operationId   String
   mirrorBatchId String
@@ -1565,7 +2029,13 @@ model TargetSnapshotItem {
   collectionId    String?
   inventoryItemId String?
   locationId      String?
+  productOptionPosition Int?
+  metafieldOwnerId   String?
+  metafieldOwnerType String?
+  metafieldNamespace String?
+  metafieldKey       String?
   targetKey  String
+  fieldPath String
   targetResourceType TargetSnapshotTargetType @map("targetType")
   targetGranularity String?
   ordinal          Int
@@ -1575,13 +2045,30 @@ model TargetSnapshotItem {
   beforeValues    Json
   plannedMutation Json
 
+  beforeValueHash  String
+  plannedValueHash String
+  writtenValueHash String?
+  currentValueHash String?
+  conflictReason   String?
+  sourceVersion    String?
+  sourceUpdatedAt  DateTime?
+
   targetRowHash String @map("targetFingerprint")
   rowChecksum       String
 
   executionStatus        TargetSnapshotItemExecutionStatus @default(PENDING)
   verificationStatus     TargetSnapshotItemVerificationStatus?
-  executionAttemptCount  Int                               @default(0)
-  lastExecutionAttemptAt DateTime?
+  executionAttemptCount    Int                               @default(0)
+  lastExecutionAttemptAt   DateTime?
+  executionOwnerId         String?
+  externalAttemptId        String?
+  executionLeaseToken      BigInt?
+  executionLeaseAt         DateTime?
+  executionLeaseExpiresAt  DateTime?
+  lastHeartbeatAt          DateTime?
+  nextAttemptAt            DateTime?
+  retryGeneration          Int                               @default(0)
+  retryable                Boolean                           @default(false)
 
   shopifyBulkLineNumber Int?
   shopifyResultId       String?
@@ -1597,21 +2084,31 @@ model TargetSnapshotItem {
 
   createdAt       DateTime  @default(now())
   submittedAt     DateTime?
+  applyStartedAt  DateTime?
+  shopifyAppliedAt DateTime?
   executedAt      DateTime?
   verifiedAt      DateTime?
   undoSubmittedAt DateTime?
   undoneAt        DateTime?
 
-  snapshotSet TargetSnapshotSet @relation(fields: [shop, snapshotSetId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+  snapshotSet TargetSnapshotSet @relation(fields: [shop, snapshotSetId], references: [shop, id], onDelete: Cascade)
 
+  @@id([shop, id])
+  @@unique([shop, snapshotSetId, targetKey, fieldPath])
+  @@unique([shop, snapshotSetId, snapshotRevision, targetKey, fieldPath])
   @@unique([shop, snapshotSetId, targetKey])
+  @@unique([shop, operationId, externalAttemptId])
   @@index([shop, snapshotSetId])
+  @@index([shop, snapshotSetId, snapshotRevision, targetKey, fieldPath])
   @@index([shop, operationId])
   @@index([shop, operationId, executionStatus])
+  @@index([shop, operationId, executionStatus, retryable, nextAttemptAt, executionLeaseExpiresAt, id])
   @@index([shop, operationId, undoStatus])
   @@index([shop, snapshotSetId, executionStatus])
+  @@index([shop, snapshotSetId, executionStatus, nextAttemptAt])
   @@index([shop, snapshotSetId, verificationStatus])
   @@index([shop, snapshotSetId, undoStatus])
+
   @@index([shop, snapshotSetId, mutationGroupKey])
   @@index([shop, snapshotSetId, targetResourceType, ordinal, id])
   @@index([shop, mirrorBatchId])
@@ -1626,6 +2123,12 @@ model ProductCollection {
   collectionId  String
   mirrorBatchId String
   createdAt     DateTime @default(now())
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion String?
+  lastChangeSource String?
+  reconciliationCompletedAt DateTime?
+  isDeleted Boolean @default(false)
   product       Product    @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
   collection    Collection @relation(fields: [shop, collectionId, mirrorBatchId], references: [shop, shopifyId, mirrorBatchId], onDelete: Cascade)
 
@@ -1650,6 +2153,14 @@ model MetafieldMirror {
   valueJson           Json?
   mirrorBatchId       String
   updatedAt           DateTime  @default(now())
+  valueDigest         String?
+  compareDigest       String?
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion         String?
+  lastChangeSource      String?
+  reconciliationCompletedAt DateTime?
+  isDeleted             Boolean @default(false)
   mirrorBatch         MirrorBatch @relation(fields: [shop, mirrorBatchId], references: [shop, id], onDelete: Cascade)
 
   @@id([shop, ownerType, ownerId, namespace, key, mirrorBatchId])
@@ -1778,13 +2289,15 @@ model PlanEntitlement {
 }
 
 model BillingEvent {
-  id        String   @id @default(cuid())
-  shop      String
-  domainEventType String @map("eventType")
-  sourceSystem    String @map("source")
-  payload   Json?
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  shop            String
+  webhookId       String?
+  domainEventType String   @map("eventType")
+  sourceSystem    String   @map("source")
+  payload         Json?
+  createdAt       DateTime @default(now())
 
+  @@unique([shop, webhookId])
   @@index([shop, createdAt])
   @@index([shop, domainEventType, createdAt])
 }
@@ -1813,23 +2326,35 @@ model OperationEnqueueIntent {
   queueRoutingKey String @map("queueKey")
   queueJobName    String @map("jobName")
   payload      Json
+  payloadByteSize Int
+  payloadHash String @db.Char(64)
+  payloadSchemaVersion Int @default(1)
+  payloadCompression String? @db.VarChar(24)
+  payloadStorageKey String? @db.VarChar(1024)
   options      Json?
-  dispatchDedupeKey String? @map("dedupeKey")
+  dispatchScope String @default("LEGACY") @db.VarChar(120)
+  dispatchDedupeKey String? @map("dedupeKey") @db.VarChar(512)
   status       OperationEnqueueIntentStatus @default(PENDING)
   dispatchAttemptCount Int @default(0) @map("attempts")
   lastError    String?
-  availableAt  DateTime  @default(now()) @map("runAt")
+  nextAttemptAt DateTime @default(now())
   dispatchedAt DateTime?
   dispatchStartedAt DateTime?
   dispatchHeartbeatAt DateTime?
+  dispatchLeaseExpiresAt DateTime?
   dispatchOwnerId String? @map("dispatchOwner")
+  dispatchClaimToken String?
+  dispatchFencingToken BigInt @default(0)
+  lastErrorCode String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+  retentionUntil DateTime? @default(dbgenerated("(now() + interval '90 days')"))
+  redactedAt DateTime?
 
-  /// NULL opts out of deduplication; non-null keys are unique via a SQL partial index.
-  @@index([shop, status, availableAt, id])
-  @@index([status, availableAt, id])
-  @@index([status, dispatchHeartbeatAt, id])
+  @@unique([shop, dispatchDedupeKey])
+  @@index([shop, status, nextAttemptAt, id])
+  @@index([status, nextAttemptAt, id])
+  @@index([status, dispatchLeaseExpiresAt, id])
 }
 
 /// Terminal queue/job delivery failures. Per-record bulk mutation failures are
@@ -1858,6 +2383,7 @@ model ProductTombstone {
   tombstoneMutationSequence BigInt @map("mutationSequence")
   sourceEntityUpdatedAt  DateTime? @map("sourceUpdatedAt")
   sourceEventOccurredAt  DateTime? @map("sourceEventAt")
+  sourceVersion          String?
   deletedAt        DateTime?
   changeSource     String? @map("sourceKind")
   reconciliationCompletedAt DateTime? @map("lastReconciledAt")
@@ -1873,6 +2399,73 @@ model ProductTombstone {
   @@index([shop, updatedAt])
 }
 
+model VariantTombstone {
+  shop String
+  variantId String
+  productId String?
+  tombstoneMutationSequence BigInt
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion String?
+  lastChangeSource String?
+  deletedAt DateTime?
+  reconciliationCompletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@id([shop, variantId])
+  @@index([shop, tombstoneMutationSequence])
+}
+
+model MetafieldTombstone {
+  shop String
+  ownerType String
+  ownerId String
+  namespace String
+  key String
+  tombstoneMutationSequence BigInt
+  sourceEventOccurredAt DateTime?
+  sourceVersion String?
+  lastChangeSource String?
+  valueDigest String?
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@id([shop, ownerType, ownerId, namespace, key])
+  @@index([shop, tombstoneMutationSequence])
+}
+
+model InventoryItemTombstone {
+  shop String
+  inventoryItemId String
+  productId String?
+  variantId String?
+  tombstoneMutationSequence BigInt
+  sourceEventOccurredAt DateTime?
+  sourceVersion String?
+  lastChangeSource String?
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@id([shop, inventoryItemId])
+  @@index([shop, tombstoneMutationSequence])
+}
+
+model CollectionTombstone {
+  shop String
+  collectionId String
+  tombstoneMutationSequence BigInt
+  sourceEntityUpdatedAt DateTime?
+  sourceEventOccurredAt DateTime?
+  sourceVersion String?
+  lastChangeSource String?
+  deletedAt DateTime?
+  reconciliationCompletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@id([shop, collectionId])
+  @@index([shop, tombstoneMutationSequence])
+}
+
 model MirrorMutationJournal {
   sequence      BigInt    @id @default(autoincrement())
   shop          String
@@ -1880,6 +2473,7 @@ model MirrorMutationJournal {
   entityType    String
   entityId      String
   productId     String?
+  webhookDeliveryId String?
   mutationType  String
   payload       Json?
   payloadStorageKey String?
@@ -1888,8 +2482,10 @@ model MirrorMutationJournal {
   purgeAfter    DateTime?
   createdAt     DateTime  @default(now())
   store         Store     @relation(fields: [shop], references: [shopUrl], onDelete: Cascade)
+  webhookDelivery WebhookDelivery? @relation(fields: [shop, webhookDeliveryId], references: [shop, id], onDelete: Restrict)
 
   @@index([shop, sequence])
+  @@index([shop, webhookDeliveryId])
   @@index([shop, productId, sequence])
   @@index([shop, entityType, entityId, sequence])
   @@index([createdAt])
@@ -1917,7 +2513,9 @@ model WebhookDelivery {
   attemptCount     Int                   @default(1)
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
+  mirrorMutationJournals MirrorMutationJournal[]
 
+  @@unique([shop, id])
   @@unique([shop, dedupeKey])
   @@index([shop, shopifyWebhookId])
   @@index([shop, topic, createdAt])
@@ -1925,14 +2523,35 @@ model WebhookDelivery {
 }
 
 enum EditHistoryExecutionState {
+  DRAFT
+  PREVIEWED
+  TARGET_FREEZING
+  TARGET_FROZEN
+  PLANNING
+  SCHEDULED_PENDING_QUEUE
+  SCHEDULED_QUEUED
   PLANNED
   QUEUED
+  PAUSED
+  WAITING_FOR_SHOPIFY_SLOT
+  EXECUTING
+  RECONCILE_SUBMITTED
+  SHOPIFY_BULK_SUBMITTED
+  SHOPIFY_RUNNING
+  SHOPIFY_COMPLETED
+  INGESTING_RESULTS
+  VERIFYING
+  MIRROR_UPDATING
+  UNDO_QUEUED
+  UNDO_RUNNING
+  UNDO_COMPLETED
   DISPATCHING
   AWAITING_SHOPIFY
   FINALIZING
   COMPLETED
   FAILED
   PARTIAL
+  PARTIAL_FAILED
   CANCELLED
   UNKNOWN
 }
@@ -1944,13 +2563,16 @@ enum EditHistoryStatus {
   FAILED
   PARTIAL
   UNDO_PENDING
+  CANCELLED
   UNKNOWN
 }
 
 enum ExportJobExecutionState {
   PLANNED
   QUEUED
+  PAUSED
   RUNNING
+  FINALIZING
   COMPLETED
   FAILED
   CANCELLED
@@ -2058,7 +2680,10 @@ enum SyncProgressStage {
 }
 
 enum StoreInstallationStatus {
+  INSTALLING
   INSTALLED
+  INSTALL_FAILED
+  REDACTING
   UNINSTALLED
   SUSPENDED
 }
@@ -2144,6 +2769,8 @@ enum RecurringEditRunStatus {
   SUCCESS
   FAILED
   SKIPPED
+  CANCELLED
+  PARTIAL
 }
 
 enum AutomaticProductRuleStatus {
@@ -2243,6 +2870,7 @@ enum ScheduledExportRunStatus {
   SUCCESS
   FAILED
   SKIPPED
+  CANCELLED
 }
 
 enum ExportJobTriggerType {
@@ -2259,19 +2887,58 @@ enum TargetSnapshotSetStatus {
   CORRUPTED
 }
 
+enum PreviewContractStatus {
+  BUILDING
+  READY_FOR_REVIEW
+  APPROVED
+  EXECUTION_CREATED
+  EXECUTING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+  EXPIRED
+  CORRUPTED
+  LEGACY_UNTRUSTED
+}
+
 enum TargetSnapshotTargetType {
   PRODUCT
   VARIANT
   INVENTORY_ITEM
   METAFIELD
+  PRODUCT_OPTION
+  COLLECTION_MEMBERSHIP
+  INVENTORY_LEVEL
+}
+
+enum TargetSnapshotExecutionStatus {
+  PENDING
+  CLAIMED
+  APPLYING
+  APPLIED_UNVERIFIED
+  RECONCILIATION_REQUIRED
+  DEFERRED
+  SUCCEEDED
+  FAILED_TERMINAL
+  CANCELLED
+  CONFLICT
 }
 
 enum TargetSnapshotItemExecutionStatus {
   PENDING
+  CLAIMED
+  APPLYING
+  APPLIED_UNVERIFIED
+  RECONCILIATION_REQUIRED
   SUBMITTED
+  DEFERRED
   SUCCEEDED
   FAILED
+  FAILED_TERMINAL
   SKIPPED
+  CANCELLED
+  CONFLICT
 }
 
 enum TargetSnapshotItemVerificationStatus {
@@ -2287,6 +2954,22 @@ enum TargetSnapshotItemUndoStatus {
   SUCCEEDED
   FAILED
   SKIPPED
+}
+
+enum UndoOperationTrustStatus {
+  TRUSTED
+  LEGACY_UNTRUSTED
+}
+
+enum UndoItemOutcome {
+  ELIGIBLE
+  CONFLICT
+  APPROVED
+  SUBMITTED
+  RESTORED
+  FAILED
+  SKIPPED
+  MANUAL_REVIEW
 }
 
 model ProductSyncCommand {
@@ -2306,23 +2989,135 @@ model ProductSyncCommand {
   @@index([shop, status, createdAt])
 }
 
-model OutboxEvent {
-  id            String   @id @default(cuid())
-  shop          String
-  aggregateType String
-  aggregateId   String
-  eventType     String
-  payload       Json
-  status        OutboxEventStatus @default(PENDING)
-  availableAt   DateTime @default(now())
-  attemptCount  Int      @default(0)
-  lockedAt      DateTime?
-  lockedBy      String?
-  createdAt     DateTime @default(now())
+model ComplianceRequest {
+  id          String   @id @default(cuid())
+  shop        String
+  topic       String
+  webhookId   String
+  status      String   @default("PENDING")
+  payloadHash String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  @@unique([shop, id])
-  @@unique([shop, aggregateType, aggregateId, eventType])
-  @@index([status, availableAt])
-  @@index([shop, aggregateId])
+  @@unique([shop, topic, webhookId])
+  @@index([shop, status, createdAt])
 }
 
+model IdempotencyRecord {
+  id           String   @id
+  shop         String
+  scope        String
+  key          String
+  requestHash  String
+  state        String
+  ownerToken   String?
+  lockedUntil  DateTime?
+  responseJson Json?
+  resourceType String?
+  resourceId   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([shop, scope, key])
+  @@index([state, lockedUntil])
+}
+
+model OperationIdempotency {
+  id             String   @id @default(cuid())
+  shop           String
+  scope          String
+  idempotencyKey String
+  payloadHash    String
+  status         String
+  resultId       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([shop, scope, idempotencyKey])
+  @@index([shop, status, createdAt, id])
+}
+
+
+model RecurringEditMutation {
+  id             String   @id @default(cuid())
+  shop           String
+  idempotencyKey String
+  payload        Json?
+  createdAt      DateTime @default(now())
+
+  @@unique([shop, idempotencyKey], map: "RecurringEditMutation_shop_key_uq")
+}
+
+model ShopFeatureQuota {
+  shop       String
+  feature    String
+  used       Int
+  limit      Int
+  version    Int      @default(1)
+  updatedAt  DateTime @updatedAt
+
+  @@id([shop, feature])
+}
+
+model AutomaticRuleRunQuota {
+  shop       String
+  ruleId     String
+  bucketHour DateTime
+  used       Int
+  limit      Int
+
+  @@id([shop, ruleId, bucketHour])
+}
+
+enum ExportFieldGranularity {
+  PRODUCT
+  VARIANT
+}
+
+model TerminalProjection {
+  id            String    @id @default(cuid())
+  shop          String
+  sourceType    String
+  sourceId      String
+  sourceVersion Int       @default(1)
+  targetType    String
+  targetId      String
+  status        String
+  processedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([shop, sourceType, sourceId, sourceVersion, targetType], map: "TerminalProjection_shop_source_version_key")
+  @@index([shop, targetType, targetId])
+}
+
+model RunFinalizationIntent {
+  id            String    @id @default(cuid())
+  shop          String
+  kind          String
+  sourceId      String
+  sourceVersion Int       @default(1)
+  targetRunId   String
+  terminalStatus String
+  createdAt     DateTime  @default(now())
+
+  @@unique([shop, kind, sourceId, sourceVersion, targetRunId])
+  @@index([shop, targetRunId])
+}
+
+model AppliedMutation {
+  id                String   @id @default(cuid())
+  shop              String
+  operationId       String
+  snapshotItemId    String
+  mutationHash      String
+  externalAttemptId String
+  status            String   @default("CLAIMED")
+  shopifyResultId   String?
+  createdAt         DateTime @default(now())
+  appliedAt         DateTime?
+  verifiedAt        DateTime?
+
+  @@unique([shop, snapshotItemId, mutationHash])
+  @@unique([shop, operationId, externalAttemptId])
+  @@index([shop, operationId, status, createdAt, id])
+}

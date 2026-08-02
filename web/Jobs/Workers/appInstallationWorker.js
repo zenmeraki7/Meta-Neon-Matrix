@@ -1,4 +1,5 @@
 import { Worker } from "bullmq";
+import crypto from "node:crypto";
 import { connection } from "../../config/redis.js";
 import { getShopOwnerEmailAddress, getSession } from "../../utils/sessionHandler.js";
 import { Services } from "../../services/productService/productFilterService.js";
@@ -18,29 +19,41 @@ import { adminGraphqlWithRetry } from "../../utils/shopifyAdminApi.js";
 
 const QUEUE_NAME = process.env.APP_INSTALLATION_QUEUE || "app-installation";
 const productService = new Services();
+const INSTALL_LEASE_MS = 5 * 60 * 1000;
 
-async function claimInstallation(shop) {
+export async function claimInstallation(shop, ownerId) {
   const store = await ensureStoreForShop({ shop });
   logStoreMutation("appInstallationWorker.claimInstallation.updateMany", {
     shop,
     storeId: store.id,
   });
-  const result = await db.store.updateMany({
+
+  const now = new Date();
+
+  const claimed = await db.store.updateMany({
     where: {
       shopUrl: shop,
       OR: [
-        { installedAt: null },
         { installationStatus: "UNINSTALLED" },
+        { installedAt: null },
+        {
+          installationStatus: "INSTALLING",
+          installationLeaseUntil: { lt: now },
+        },
+        { installationStatus: "INSTALL_FAILED" },
       ],
     },
     data: {
-      installationStatus: "INSTALLED",
-      installedAt: new Date(),
+      installationStatus: "INSTALLING",
+      installationExecutionId: ownerId,
+      installationStage: "CLAIMED",
+      installationLeaseUntil: new Date(now.getTime() + INSTALL_LEASE_MS),
+      installationAttemptCount: { increment: 1 },
       uninstalledAt: null,
     },
   });
 
-  return result.count > 0;
+  return claimed.count === 1;
 }
 
 const appInstallationWorker = new Worker(
@@ -51,6 +64,8 @@ const appInstallationWorker = new Worker(
       throw new Error("app-installation job requires shop");
     }
 
+    const ownerId = `app-install:${job.id || "manual"}:${crypto.randomUUID()}`;
+
     // Always resolve from secure session store — never accept token from payload.
     const session = await getSession(shop);
     if (!session?.accessToken) {
@@ -58,7 +73,7 @@ const appInstallationWorker = new Worker(
     }
 
     try {
-      const claimed = await claimInstallation(shop);
+      const claimed = await claimInstallation(shop, ownerId);
       if (!claimed) {
         logger.info("App installation already claimed, skipping", {
           worker: "appInstallationWorker",
@@ -137,11 +152,15 @@ const appInstallationWorker = new Worker(
           storeId: ensuredStore.id,
         });
         await db.store.updateMany({
-          where: { shopUrl: shop },
+          where: {
+            shopUrl: shop,
+            installationExecutionId: ownerId,
+          },
           data: {
             storeTotalProducts: count,
             isProductInitiallySyncing: true,
             hasCompletedShopifyBulkJob: false,
+            installationStage: "INITIAL_SYNC_STARTED",
           },
         });
       } else {
@@ -151,10 +170,14 @@ const appInstallationWorker = new Worker(
           storeId: ensuredStore.id,
         });
         await db.store.updateMany({
-          where: { shopUrl: shop },
+          where: {
+            shopUrl: shop,
+            installationExecutionId: ownerId,
+          },
           data: {
             storeTotalProducts: count,
             isProductInitiallySyncing: false,
+            installationStage: "INITIAL_SYNC_SKIPPED",
           },
         });
       }
@@ -163,6 +186,24 @@ const appInstallationWorker = new Worker(
         sentWelcomeMailToStore({ email, shopOwner, shop }),
         sentInstalledMailToAdmin({ email, shop }),
       ]);
+
+      const completed = await db.store.updateMany({
+        where: {
+          shopUrl: shop,
+          installationStatus: "INSTALLING",
+          installationExecutionId: ownerId,
+        },
+        data: {
+          installationStatus: "INSTALLED",
+          installedAt: new Date(),
+          installationStage: "COMPLETED",
+          installationLeaseUntil: null,
+        },
+      });
+
+      if (completed.count !== 1) {
+        throw new Error("INSTALLATION_OWNERSHIP_LOST");
+      }
 
       logger.info("App installation background job completed", {
         worker: "appInstallationWorker",
@@ -177,6 +218,19 @@ const appInstallationWorker = new Worker(
         startedInitialSync: shouldStartInitialSync,
       };
     } catch (error) {
+      await db.store.updateMany({
+        where: {
+          shopUrl: shop,
+          installationStatus: "INSTALLING",
+          installationExecutionId: ownerId,
+        },
+        data: {
+          installationStatus: "INSTALL_FAILED",
+          installationStage: "FAILED",
+          installationLeaseUntil: null,
+        },
+      }).catch(() => {});
+
       await logWorkerError({
         shop,
         err: error,

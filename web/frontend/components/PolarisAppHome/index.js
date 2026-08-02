@@ -1,7 +1,6 @@
 export {
   SPage,
   SSection,
-  SCard,
   SButton,
   SText,
   SBanner,

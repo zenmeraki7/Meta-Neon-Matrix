@@ -366,7 +366,7 @@ function indexLatestRuns(runs = []) {
 
 function serializeRecurringEdit(edit, countsById = {}, latestRunsById = {}) {
   const counts = countsById[edit.id] || {
-    total: edit.runCount || 0,
+    total: Number(edit.runCount || 0n),
     success: 0,
     failed: 0,
     skipped: 0,
@@ -397,7 +397,7 @@ function serializeRecurringEdit(edit, countsById = {}, latestRunsById = {}) {
     totalRunsSucceed: counts.success,
     totalRunsSkipped: counts.skipped,
     totalFails: counts.failed,
-    runCount: edit.runCount,
+    runCount: Number(edit.runCount || 0n),
     nextRun: edit.nextRunAt,
     nextRunAt: edit.nextRunAt,
     lastRunAt: edit.lastRunAt,
@@ -462,8 +462,8 @@ async function getRecurringEditHydrated(id, shop) {
   }
 
   const [statusCounts, latestRuns] = await Promise.all([
-    recurringEditRunRepository.groupStatusCounts([edit.id]),
-    recurringEditRunRepository.findLatestRuns([edit.id]),
+    recurringEditRunRepository.groupStatusCounts([edit.id], shop),
+    recurringEditRunRepository.findLatestRuns([edit.id], shop),
   ]);
 
   const countsById = indexRunCounts(statusCounts);
@@ -497,6 +497,32 @@ async function getRecurringEditHydrated(id, shop) {
     processedCount: latestHistory?.processedCount ?? 0,
     durationMs: latestHistory?.durationMs ?? 0,
   };
+}
+
+export async function reserveActiveRecurringEditCapacity(shop, tx = db) {
+  await tx.shopFeatureQuota.upsert({
+    where: { shop_feature: { shop, feature: "ACTIVE_RECURRING_EDITS" } },
+    create: { shop, feature: "ACTIVE_RECURRING_EDITS", used: 0, limit: MAX_ACTIVE_RECURRING_EDITS },
+    update: {},
+  });
+
+  const reserved = await tx.shopFeatureQuota.updateMany({
+    where: { shop, feature: "ACTIVE_RECURRING_EDITS", used: { lt: MAX_ACTIVE_RECURRING_EDITS } },
+    data: { used: { increment: 1 }, version: { increment: 1 } },
+  });
+  if (reserved.count !== 1) {
+    throw buildRecurringServiceError(
+      "ACTIVE_RECURRING_EDIT_LIMIT_REACHED",
+      `Your store already has ${MAX_ACTIVE_RECURRING_EDITS} active recurring edits. Pause or cancel one before activating another.`,
+    );
+  }
+}
+
+export async function releaseActiveRecurringEditCapacity(shop, tx = db) {
+  await tx.shopFeatureQuota.updateMany({
+    where: { shop, feature: "ACTIVE_RECURRING_EDITS", used: { gt: 0 } },
+    data: { used: { decrement: 1 }, version: { increment: 1 } },
+  });
 }
 
 export async function createRecurringEdit({ shop, body, actor = null, subscription }) {
@@ -577,7 +603,7 @@ export async function createRecurringEdit({ shop, body, actor = null, subscripti
     resolvedAt: null,
   };
 
-  const created = await recurringEditRepository.create({
+  const createPayload = {
     shop,
     title,
     status,
@@ -604,7 +630,17 @@ export async function createRecurringEdit({ shop, body, actor = null, subscripti
     actorDisplayName: actor?.name || null,
     rules,
     nextRunAt,
-  });
+  };
+
+  let created;
+  if (status === "ACTIVE") {
+    created = await db.$transaction(async (tx) => {
+      await reserveActiveRecurringEditCapacity(shop, tx);
+      return recurringEditRepository.create(createPayload, tx);
+    });
+  } else {
+    created = await recurringEditRepository.create(createPayload);
+  }
 
   logger.info("Recurring edit created", {
     shop,
@@ -693,8 +729,8 @@ export async function listRecurringEdits({
   const endCursor = pageItems.length ? pageItems[pageItems.length - 1].id : null;
   const ids = pageItems.map((edit) => edit.id);
   const [statusCounts, latestRuns] = await Promise.all([
-    recurringEditRunRepository.groupStatusCounts(ids),
-    recurringEditRunRepository.findLatestRuns(ids),
+    recurringEditRunRepository.groupStatusCounts(ids, shop),
+    recurringEditRunRepository.findLatestRuns(ids, shop),
   ]);
 
   const countsById = indexRunCounts(statusCounts);
@@ -724,10 +760,41 @@ export async function updateRecurringEdit({
   recurringEditId,
   body,
   subscription,
+  expectedRevision = null,
+  idempotencyKey = null,
 }) {
+  const targetRevision = expectedRevision ?? body?.expectedRevision;
+  if (!Number.isInteger(targetRevision)) {
+    throw buildRecurringServiceError("EXPECTED_REVISION_REQUIRED", "expectedRevision is required and must be an integer");
+  }
+
+  if (idempotencyKey) {
+    try {
+      await db.recurringEditMutation.create({
+        data: {
+          shop,
+          idempotencyKey,
+          payload: body,
+        },
+      });
+    } catch (error) {
+      if (
+        error?.code === "P2002" ||
+        String(error?.message || "").includes("RecurringEditMutation_shop_key_uq")
+      ) {
+        return getRecurringEditHydrated(recurringEditId, shop);
+      }
+      throw error;
+    }
+  }
+
   const existing = await recurringEditRepository.findByIdForShop(recurringEditId, shop);
   if (!existing) {
     throw new Error("Recurring edit not found");
+  }
+
+  if (existing.revision !== targetRevision) {
+    throw buildRecurringServiceError("RECURRING_EDIT_REVISION_CONFLICT", "Recurring edit revision conflict");
   }
 
   const mergedBody = {
@@ -825,35 +892,39 @@ export async function updateRecurringEdit({
     resolvedAt: null,
   };
 
-  await recurringEditRepository.updateByIdForShop({
+  const updated = await recurringEditRepository.updateByIdForShop({
     id: existing.id,
     shop,
-    expectedRevision: existing.revision,
+    expectedRevision: targetRevision,
     data: {
-    title,
-    status: nextStatus,
-    scheduleType: scheduleInput.scheduleType,
-    timezone: scheduleInput.timezone,
-    scheduleConfig: scheduleInput.scheduleConfig,
-    cronExpression: scheduleInput.cronExpression,
-    intervalMinutes: scheduleInput.intervalMinutes,
-    startAt: scheduleInput.startAt,
-    endAt: scheduleInput.endAt,
-    rawFilterInput: rawFilterInputToPersist,
-    filterAst: targetingPayload.filterAst,
-    normalizedFilterAst: targetingPayload.normalizedFilterAst,
-    targetingSnapshotMeta,
-    targetFreezeMode: "DYNAMIC_AT_RUN",
-    targetGranularity: targetingPayload.targetGranularity,
-    targetingCompilerVersion: targetingPayload.versions.targetingCompilerVersion,
-    fieldRegistryVersion: targetingPayload.versions.fieldRegistryVersion,
-    operatorRegistryVersion: targetingPayload.versions.operatorRegistryVersion,
-    normalizedFilterHash: targetingPayload.normalizedFilterHash,
-    rules,
-    nextRunAt,
-    isDeleted: false,
+      title,
+      status: nextStatus,
+      scheduleType: scheduleInput.scheduleType,
+      timezone: scheduleInput.timezone,
+      scheduleConfig: scheduleInput.scheduleConfig,
+      cronExpression: scheduleInput.cronExpression,
+      intervalMinutes: scheduleInput.intervalMinutes,
+      startAt: scheduleInput.startAt,
+      endAt: scheduleInput.endAt,
+      rawFilterInput: rawFilterInputToPersist,
+      filterAst: targetingPayload.filterAst,
+      normalizedFilterAst: targetingPayload.normalizedFilterAst,
+      targetingSnapshotMeta,
+      targetFreezeMode: "DYNAMIC_AT_RUN",
+      targetGranularity: targetingPayload.targetGranularity,
+      targetingCompilerVersion: targetingPayload.versions.targetingCompilerVersion,
+      fieldRegistryVersion: targetingPayload.versions.fieldRegistryVersion,
+      operatorRegistryVersion: targetingPayload.versions.operatorRegistryVersion,
+      normalizedFilterHash: targetingPayload.normalizedFilterHash,
+      rules,
+      nextRunAt,
+      isDeleted: false,
     },
   });
+
+  if (updated.count !== 1) {
+    throw buildRecurringServiceError("RECURRING_EDIT_REVISION_CONFLICT", "Recurring edit revision conflict");
+  }
 
   return getRecurringEditHydrated(existing.id, shop);
 }
@@ -874,26 +945,47 @@ export async function toggleRecurringEditStatus({
     existing.status === "ACTIVE" ? "PAUSED" : "ACTIVE",
   );
 
-  if (requestedStatus === "ACTIVE") {
-    await assertPaidRecurringEditAccess(subscription);
-    await assertRecurringEditActiveLimit({
-      shop,
-      excludeRecurringEditId: existing.id,
-    });
-  }
-
   const nextRunAt = requestedStatus === "ACTIVE"
     ? computeRecurringEditNextRunAt(existing, new Date())
     : null;
 
-  await recurringEditRepository.updateByIdForShop({
-    id: existing.id,
-    shop,
-    data: {
-      status: requestedStatus,
-      nextRunAt,
-    },
-  });
+  if (requestedStatus === "ACTIVE" && existing.status !== "ACTIVE") {
+    await assertPaidRecurringEditAccess(subscription);
+    await db.$transaction(async (tx) => {
+      await reserveActiveRecurringEditCapacity(shop, tx);
+      await recurringEditRepository.updateByIdForShop({
+        id: existing.id,
+        shop,
+        expectedRevision: existing.revision,
+        data: {
+          status: "ACTIVE",
+          nextRunAt,
+        },
+      }, tx);
+    });
+  } else if (requestedStatus !== "ACTIVE" && existing.status === "ACTIVE") {
+    await db.$transaction(async (tx) => {
+      await recurringEditRepository.updateByIdForShop({
+        id: existing.id,
+        shop,
+        expectedRevision: existing.revision,
+        data: {
+          status: requestedStatus,
+          nextRunAt: null,
+        },
+      }, tx);
+      await releaseActiveRecurringEditCapacity(shop, tx);
+    });
+  } else {
+    await recurringEditRepository.updateByIdForShop({
+      id: existing.id,
+      shop,
+      data: {
+        status: requestedStatus,
+        nextRunAt,
+      },
+    });
+  }
 
   return getRecurringEditHydrated(existing.id, shop);
 }
@@ -904,16 +996,33 @@ export async function deleteRecurringEdit({ shop, recurringEditId }) {
     throw new Error("Recurring edit not found");
   }
 
-  await recurringEditRepository.updateByIdForShop({
-    id: existing.id,
-    shop,
-    data: {
-      status: "CANCELLED",
-      isDeleted: true,
-      nextRunAt: null,
-      endAt: existing.endAt || new Date(),
-    },
-  });
+  if (existing.status === "ACTIVE") {
+    await db.$transaction(async (tx) => {
+      await recurringEditRepository.updateByIdForShop({
+        id: existing.id,
+        shop,
+        expectedRevision: existing.revision,
+        data: {
+          status: "CANCELLED",
+          isDeleted: true,
+          nextRunAt: null,
+          endAt: existing.endAt || new Date(),
+        },
+      }, tx);
+      await releaseActiveRecurringEditCapacity(shop, tx);
+    });
+  } else {
+    await recurringEditRepository.updateByIdForShop({
+      id: existing.id,
+      shop,
+      data: {
+        status: "CANCELLED",
+        isDeleted: true,
+        nextRunAt: null,
+        endAt: existing.endAt || new Date(),
+      },
+    });
+  }
 
   return {
     id: existing.id,

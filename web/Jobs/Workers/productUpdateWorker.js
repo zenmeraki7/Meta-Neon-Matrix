@@ -15,12 +15,15 @@ import { enforceShopRateLimit } from "../../utils/shopRateLimit.js";
 const QUEUE_NAME = process.env.NODE_ENV === "production" ? "product-update" : "product-update-job-dev";
 
 const productUpdateWorker = new Worker(QUEUE_NAME, async (job) => {
-  const { shop, id, ...payload } = job.data || {};
+  const { shop, id, webhookDeliveryId = null, ...payload } = job.data || {};
   if (!shop || !id) throw new Error("product-update requires shop and id");
   await enforceShopRateLimit({ connection, shop, scope: "product-update", max: 10, durationMs: 1000 });
 
   try {
-    const store = await db.store.findUnique({ where: { shopUrl: shop }, select: { currentProductMirrorBatchId: true } });
+    const store = await db.store.findUnique({ where: { shopUrl: shop }, select: { currentProductMirrorBatchId: true, installationStatus: true } });
+    if (!store || store.installationStatus !== "INSTALLED") {
+      return { skipped: true, reason: "store_not_installed" };
+    }
     const mirrorBatchId = store?.currentProductMirrorBatchId || null;
     if (!mirrorBatchId) {
       await markRepairRequired({ shop, reason: MIRROR_STALE_REASONS.PARTIAL_MIRROR_DETECTED, summary: "Product update webhook received without active mirror", details: { productId: id } }).catch(() => {});
@@ -41,7 +44,8 @@ const productUpdateWorker = new Worker(QUEUE_NAME, async (job) => {
       await addShopSyncJob({ shopDomain: shop, syncType: "product", reason: "product_update_missing_variants" }).catch(() => {});
     }
 
-    const journal = await applyProductUpsertMutation({ shop, productId: id, mirrorBatchId, mutationType: "PRODUCT_UPDATE", productData, variants, sourceEventOccurredAt });
+    const journal = await applyProductUpsertMutation({ shop, productId: id, mirrorBatchId, mutationType: "PRODUCT_UPDATE", productData, variants, sourceEventOccurredAt, webhookDeliveryId });
+    if (journal?.skipped) return { skipped: true, reason: journal.reason };
     await markWebhookProcessed(shop, { lastIncrementalSyncAt: new Date() }).catch(() => {});
     await Promise.allSettled([
       clearKeyCaches(`${shop}:ProductFetch:`),
@@ -51,6 +55,16 @@ const productUpdateWorker = new Worker(QUEUE_NAME, async (job) => {
     await enqueueAutomaticProductRuleSignalJob({ shop, productIds: [id], triggerReference: `product_update:${id}:${payload.updated_at || payload.created_at || ""}`, triggerSource: "WEBHOOK" });
     return { success: true, productId: id, mirrorMutationSequence: String(journal.sequence) };
   } catch (error) {
+    if (webhookDeliveryId) {
+      await db.webhookDelivery.updateMany({
+        where: { id: webhookDeliveryId, shop },
+        data: {
+          lastError: String(error?.message || error).slice(0, 1000),
+          attemptCount: { increment: 1 },
+          updatedAt: new Date(),
+        },
+      }).catch(() => {});
+    }
     await recordMirrorAnomaly({ shop, severity: "high", type: "product_update_worker_failure", entityType: "product", entityId: id, message: error.message }).catch(() => {});
     throw error;
   }

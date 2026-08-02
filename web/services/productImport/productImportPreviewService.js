@@ -4,6 +4,7 @@ import {
   buildIdempotencyRequestHash,
   IdempotencyStoreService,
 } from "../idempotency/IdempotencyStoreService.js";
+import { immutableObjectStorage } from "../storage/immutableObjectStorage.js";
 
 const DEFAULT_PREVIEW_LIMIT = 25;
 const MAX_PREVIEW_LIMIT = 250;
@@ -96,16 +97,22 @@ function buildPreviewResponse({ allItems, headers, cursor, limit }) {
   };
 }
 
-async function parseCsvWithGuardrails(filePath) {
-  const stat = await fs.promises.stat(filePath);
-  if (Number(stat.size || 0) > MAX_PREVIEW_BYTES) {
-    const error = new Error("CSV_FILE_TOO_LARGE");
-    error.code = "CSV_FILE_TOO_LARGE";
-    throw error;
+async function parseCsvWithGuardrails(storageKeyOrPath) {
+  const stream = immutableObjectStorage.openReadStream(storageKeyOrPath);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+    size += chunk.length;
+    if (size > MAX_PREVIEW_BYTES) {
+      const error = new Error("CSV_FILE_TOO_LARGE");
+      error.code = "CSV_FILE_TOO_LARGE";
+      throw error;
+    }
   }
 
   const startedAt = Date.now();
-  const fileContents = await fs.promises.readFile(filePath, "utf8");
+  const fileContents = Buffer.concat(chunks).toString("utf8");
   const parsed = await parseCsvRows(fileContents);
 
   if (Date.now() - startedAt > PREVIEW_PARSE_TIMEOUT_MS) {
@@ -124,6 +131,9 @@ export async function createCsvPreview({ shop, file, limit, idempotencyKey }) {
     error.code = "IDEMPOTENCY_KEY_REQUIRED";
     throw error;
   }
+
+  const saved = await immutableObjectStorage.saveFile({ shop, file });
+
   const begin = await idempotencyStore.begin({
     shop,
     scope: "CSV_PREVIEW_CREATE",
@@ -131,8 +141,8 @@ export async function createCsvPreview({ shop, file, limit, idempotencyKey }) {
     requestHash: buildIdempotencyRequestHash({
       shop,
       operationType: "CSV_PREVIEW_CREATE",
-      fileName: file?.originalname || null,
-      size: Number(file?.size || 0),
+      contentSha256: saved.contentSha256,
+      size: Number(saved.sizeBytes),
       limit: Number(limit || 0),
     }),
   });
@@ -146,17 +156,22 @@ export async function createCsvPreview({ shop, file, limit, idempotencyKey }) {
   const previewDoc = await db.spreadsheetFile.create({
     data: {
       shop,
-      downloadUrl: file.path,
+      storageKey: saved.storageKey,
+      contentSha256: saved.contentSha256,
+      sizeBytes: saved.sizeBytes,
       originalFilename: file.originalname || null,
-      status: "UPLOADED",
+      status: "PREVIEW_READY",
+      previewedAt: new Date(),
+      downloadUrl: saved.storageKey,
     },
     select: {
       id: true,
-      downloadUrl: true,
+      storageKey: true,
+      contentSha256: true,
     },
   });
 
-  const { items: allItems, headers } = await parseCsvWithGuardrails(previewDoc.downloadUrl);
+  const { items: allItems, headers } = await parseCsvWithGuardrails(previewDoc.storageKey);
   const normalizedLimit = clampLimit(limit);
   const payload = buildPreviewResponse({
     allItems,
@@ -185,17 +200,20 @@ export async function previewCsvPage({ shop, uploadToken, cursor, limit }) {
     },
     select: {
       id: true,
+      storageKey: true,
       downloadUrl: true,
     },
   });
 
-  if (!spreadsheetFile?.downloadUrl) {
+  const targetKey = spreadsheetFile?.storageKey || spreadsheetFile?.downloadUrl;
+
+  if (!targetKey) {
     const error = new Error("UPLOAD_NOT_FOUND");
     error.code = "UPLOAD_NOT_FOUND";
     throw error;
   }
 
-  const { items: allItems, headers } = await parseCsvWithGuardrails(spreadsheetFile.downloadUrl);
+  const { items: allItems, headers } = await parseCsvWithGuardrails(targetKey);
   const normalizedLimit = clampLimit(limit);
   const currentOffset = decodeCursor(cursor);
 

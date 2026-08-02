@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -20,6 +20,7 @@ import {
   getScheduleDateTimeValidation,
 } from "../../../../utils/timezoneDateTime";
 import { useToast as useAppToast } from "../../../../components/providers/ToastProvider";
+import { useSubscriptionSnapshot } from "../../../../hooks/useSubscriptionSnapshot";
 
 const SCHEDULED_EDITS_UPGRADE_MESSAGE =
   "Scheduled edits require an active paid plan.";
@@ -41,11 +42,8 @@ function ScheduleEdit({
   const { scheduleTimezone } = useScheduleTimezone();
   const resolvedTimezone = scheduleTimezone || "UTC";
   const { showSuccess, showError } = useAppToast();
-  const scheduleCapabilityQuery = useQuery({
-    queryKey: ["subscription-capabilities", "scheduled-edits"],
-    queryFn: async () => api.get("/api/subscription/get-plans"),
+  const scheduleCapabilityQuery = useSubscriptionSnapshot({
     enabled: show === true,
-    staleTime: 30_000,
   });
   // State for form fields
   const [startEditChecked, setStartEditChecked] = useState(false);
@@ -270,14 +268,28 @@ function ScheduleEdit({
         scheduleConfirmationText: requiresTypedConfirm ? confirmText.trim() : null,
       };
 
+  const completionTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (completionTimerRef.current !== null) {
+        window.clearTimeout(completionTimerRef.current);
+      }
+    };
+  }, []);
+
       await api.post("/api/products/schedule-task", payload, {
         idempotent: true,
       });
       // Show success toast
       showSuccess(t("schedule_msg"));
 
-      // Reset form, close modal, and navigate to history
-      setTimeout(() => {
+      if (completionTimerRef.current !== null) {
+        window.clearTimeout(completionTimerRef.current);
+      }
+
+      completionTimerRef.current = window.setTimeout(() => {
+        completionTimerRef.current = null;
         resetForm();
         onHide();
         navigate("/history");

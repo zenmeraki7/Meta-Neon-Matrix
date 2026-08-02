@@ -19,7 +19,6 @@ async function processBulkUndoResultIngest(job) {
     shop,
     shopifyBulkOperationId: String(shopifyBulkOperationId),
     status,
-    resultUrl: job.data?.url || job.data?.partialDataUrl || null,
   });
 
   return {

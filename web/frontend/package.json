@@ -54,8 +54,11 @@
   },
   "devDependencies": {
     "@babel/preset-flow": "^7.27.1",
+    "@shopify/polaris-types": "^1.0.0",
     "@shopify/stylelint-polaris": "^12.0.0",
     "@types/express": "^5.0.6",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^4.7.0",
     "eslint": "^9.31.0",

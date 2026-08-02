@@ -148,7 +148,7 @@ Queue terminology:
 - `queueRoutingKey`: logical in-process routing selector.
 - `queueJobName` / `queueJobId`: external queue job identity.
 - `dispatchDedupeKey`: cross-retry dispatch identity.
-- `availableAt`: earliest claim time.
+- `nextAttemptAt`: earliest claim or retry time.
 - `dispatchAttemptCount`: number of dispatch claims.
 
 Target snapshot counter semantics:
@@ -248,7 +248,7 @@ Primary keys and unique constraints automatically build backing indexes. Do not 
 
 ## Put shop first only for tenant queries
 
-Tenant queries lead with `shop` (`@@index([shop, status, createdAt])`). Global dispatcher worker claim queues lead with status across tenants (`@@index([status, availableAt, id])`). `OperationEnqueueIntent` supports both access patterns.
+Tenant queries lead with `shop` (`@@index([shop, status, createdAt])`). Global dispatcher worker claim queues lead with status across tenants (`@@index([status, nextAttemptAt, id])`). `OperationEnqueueIntent` supports both access patterns.
 
 ## Use narrow scheduler and claim tables
 
@@ -281,7 +281,6 @@ After `TargetSnapshotSet` reaches a frozen state, item definitions, `beforeValue
 ## Measure before removing overlapping indexes
 
 Before dropping questionable indexes, inspect `pg_stat_user_indexes` and `pg_stat_statements` to measure scan counts, write overhead, dead tuples, and query shapes.
-
 
 
 

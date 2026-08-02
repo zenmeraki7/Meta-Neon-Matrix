@@ -1,5 +1,9 @@
 {
   "scheduledTimeMustBeFuture": "Scheduled edit time must be in the future.",
+  "scheduleDateRequired": "Choose a schedule date.",
+  "scheduleTimeRequired": "Choose a schedule time.",
+  "scheduleTimezoneUnavailable": "Shop timezone is unavailable. Refresh and try again.",
+  "invalidScheduledDateTime": "Enter a valid schedule date and time.",
   "undoTimeMustBeLater": "Undo time must be later than the scheduled edit time",
   "schedule_msg": "Edit scheduled successfully!",
   "scheduleEditLabel": "Schedule Edit",

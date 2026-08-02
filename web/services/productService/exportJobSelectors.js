@@ -6,9 +6,7 @@ export const EXPORT_JOB_LIST_SELECT = Object.freeze({
   completedAt: true,
   exportType: true,
   targetGranularity: true,
-  status: true,
   statusNormalized: true,
-  executionState: true,
   executionStateNormalized: true,
   totalItems: true,
   targetSnapshotCount: true,
@@ -28,10 +26,8 @@ export function deriveExportProcessedCount(job = {}) {
 }
 
 export function deriveExportProgressPercent(job = {}) {
-  const status = String(job.statusNormalized || job.status || "").toUpperCase();
-  const executionState = String(
-    job.executionStateNormalized || job.executionState || "",
-  ).toUpperCase();
+  const status = String(job.statusNormalized || "UNKNOWN").toUpperCase();
+  const executionState = String(job.executionStateNormalized || "UNKNOWN").toUpperCase();
 
   if (status === "COMPLETED" || executionState === "COMPLETED" || job.completedAt) {
     return 100;

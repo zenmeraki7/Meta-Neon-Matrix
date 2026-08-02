@@ -26,7 +26,7 @@ test("only the set-and-item target snapshot schema remains", () => {
   assert.match(schema, /model\s+TargetSnapshotSet\s*\{/);
   assert.match(schema, /model\s+TargetSnapshotItem\s*\{/);
   assert.match(schema, /ordinal\s+Int/);
-  assert.match(schema, /@@unique\(\[shop, snapshotSetId, targetKey\]\)/);
+  assert.match(schema, /@@unique\(\[shop, snapshotSetId, targetKey, fieldPath\]\)/);
   assert.doesNotMatch(schema, /@@unique\(\[snapshotSetId, targetKey\]\)/);
 });
 

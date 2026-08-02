@@ -16,7 +16,7 @@ import {
   ToastProvider,
 } from "./components/providers";
 import ErrorBoundary from "./components/Error/ErrorBoundary";
-import { SPage, SCard, SBanner, SButton, SText } from "./components/PolarisAppHome";
+
 
 import { getShopifyContext } from "./utils/shopifyContext";
 
@@ -42,6 +42,7 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const { t } = useTranslation();
   const routerBasename = getEmbeddedRouterBasename();
+  const routeData = useMemo(() => ({ setIsSyncing }), []);
 
   if (!host || !hasApiKey) {
     return (
@@ -63,7 +64,7 @@ export default function App() {
                 <QueryProvider>
                   <EmbeddedNavMenu isSyncing={isSyncing} t={t} />
                   <ErrorBoundary context="App routes">
-                    <Routes pages={pages} data={{ setIsSyncing }} />
+                    <Routes pages={pages} data={routeData} />
                   </ErrorBoundary>
                 </QueryProvider>
               </ToastProvider>
@@ -77,34 +78,34 @@ export default function App() {
 
 function MissingEmbeddedContext({ missingApiKey = false }) {
   return (
-    <SPage title="Open MetaMatrix from Shopify Admin">
-      <SCard>
+    <s-page heading="Open MetaMatrix from Shopify Admin">
+      <s-section>
         <Box padding="500">
           <BlockStack gap="300">
-            <SBanner tone="warning">
-              <SText as="p">
+            <s-banner tone="warning" heading={missingApiKey ? "API Key Missing" : "Context Unavailable"}>
+              <s-text>
                 {missingApiKey
                   ? "Shopify API key is not configured for this frontend build."
                   : "Shopify embedded context was not available for this page."}
-              </SText>
-            </SBanner>
-            <SText as="p" tone="subdued">
+              </s-text>
+            </s-banner>
+            <s-text tone="subdued">
               {missingApiKey
                 ? "Configure the frontend environment and reload from Shopify Admin."
                 : "Open this app from Shopify Admin Apps, then retry from the app navigation."}
-            </SText>
+            </s-text>
             <Box>
-              <SButton
+              <s-button
                 onClick={() => window.location.reload()}
                 variant="primary"
               >
                 Retry
-              </SButton>
+              </s-button>
             </Box>
           </BlockStack>
         </Box>
-      </SCard>
-    </SPage>
+      </s-section>
+    </s-page>
   );
 }
 

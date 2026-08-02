@@ -47,15 +47,48 @@ const productDeleteWorker = new Worker(
       durationMs: 1000,
     });
 
+    const webhookDeliveryId = job.data?.webhookDeliveryId || null;
+
     try {
+      const store = await db.store.findUnique({
+        where: { shopUrl: shop },
+        select: { installationStatus: true },
+      });
+      if (!store || store.installationStatus !== "INSTALLED") {
+        return { skipped: true, reason: "store_not_installed" };
+      }
+
       const result = await db.$transaction(
         async (tx) => {
+          if (webhookDeliveryId) {
+            const deliveryUpdated = await tx.webhookDelivery.updateMany({
+              where: {
+                id: webhookDeliveryId,
+                shop,
+                statusNormalized: { in: ["RECEIVED", "QUEUED"] },
+              },
+              data: {
+                status: "PROCESSED",
+                statusNormalized: "PROCESSED",
+                processedAt: new Date(),
+                lastError: null,
+              },
+            });
+
+            if (deliveryUpdated.count !== 1) {
+              const error = new Error("WEBHOOK_DELIVERY_COMPLETION_REJECTED");
+              error.code = "WEBHOOK_DELIVERY_COMPLETION_REJECTED";
+              throw error;
+            }
+          }
+
           const journal = await tx.mirrorMutationJournal.create({
             data: {
               shop,
               entityType: "PRODUCT",
               entityId: productId,
               productId,
+              webhookDeliveryId: webhookDeliveryId || null,
               mutationType: "PRODUCT_DELETE",
               payload: {
                 webhookId: job.data?.webhookId || null,
@@ -167,6 +200,16 @@ const productDeleteWorker = new Worker(
         mirrorMutationSequence: String(result.mirrorMutationSequence),
       };
     } catch (error) {
+      if (webhookDeliveryId) {
+        await db.webhookDelivery.updateMany({
+          where: { id: webhookDeliveryId, shop },
+          data: {
+            lastError: String(error?.message || error).slice(0, 1000),
+            attemptCount: { increment: 1 },
+            updatedAt: new Date(),
+          },
+        }).catch(() => {});
+      }
       await recordMirrorAnomaly({
         shop,
         severity: "high",

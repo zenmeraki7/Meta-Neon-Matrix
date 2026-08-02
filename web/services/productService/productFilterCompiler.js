@@ -1,3 +1,5 @@
+import { percentageToRatio } from "../../utils/decimalArithmetic.js";
+
 export function buildPrismaSortQuery(sortKey, sortOrder) {
   const order = sortOrder === "desc" ? "desc" : "asc";
 
@@ -127,6 +129,22 @@ export function buildPrismaNumberFilter(field, operator, value) {
 
     default:
       return {};
+  }
+}
+
+export function buildPrismaDecimalFilter(field, operator, value) {
+  if (["is empty", "is empty/blank"].includes(operator)) return { [field]: null };
+  if (operator === "is not empty") return { [field]: { not: null } };
+  const decimal = String(value ?? "").trim();
+  if (!/^[+-]?\d+(?:\.\d+)?$/.test(decimal)) return {};
+  switch (operator) {
+    case "<": case "less than": return { [field]: { lt: decimal } };
+    case "<=": case "less than or equal": return { [field]: { lte: decimal } };
+    case ">": case "greater than": return { [field]: { gt: decimal } };
+    case ">=": case "greater than or equal": return { [field]: { gte: decimal } };
+    case "=": case "equals": case "is": return { [field]: { equals: decimal } };
+    case "!=": case "does not equal": case "is not": return { NOT: { [field]: { equals: decimal } } };
+    default: return {};
   }
 }
 
@@ -584,7 +602,7 @@ export function getProductPrismaWhere(rawFilterInput = [], shop) {
       case "price":
         AND.push({
           variants: {
-            some: buildPrismaNumberFilter("price", operator, value),
+            some: buildPrismaDecimalFilter("price", operator, value),
           },
         });
         break;
@@ -592,7 +610,7 @@ export function getProductPrismaWhere(rawFilterInput = [], shop) {
       case "compare_at_price":
         AND.push({
           variants: {
-            some: buildPrismaNumberFilter("compareAtPrice", operator, value),
+            some: buildPrismaDecimalFilter("compareAtPrice", operator, value),
           },
         });
         break;
@@ -616,7 +634,7 @@ export function getProductPrismaWhere(rawFilterInput = [], shop) {
       case "cost":
         AND.push({
           variants: {
-            some: buildPrismaNumberFilter("cost", operator, value),
+            some: buildPrismaDecimalFilter("cost", operator, value),
           },
         });
         break;
@@ -715,7 +733,13 @@ export function getProductPrismaWhere(rawFilterInput = [], shop) {
       case "profit_margin":
         AND.push({
           variants: {
-            some: buildPrismaNumberFilter("profitMargin", operator, value),
+            some: buildPrismaDecimalFilter(
+              "profitMarginRatio",
+              operator,
+              ["is empty", "is empty/blank", "is not empty"].includes(operator)
+                ? value
+                : percentageToRatio(value),
+            ),
           },
         });
         break;
@@ -723,7 +747,7 @@ export function getProductPrismaWhere(rawFilterInput = [], shop) {
       case "weight":
         AND.push({
           variants: {
-            some: buildPrismaNumberFilter("weight", operator, value),
+            some: buildPrismaDecimalFilter("weight", operator, value),
           },
         });
         break;

@@ -1,7 +1,5 @@
 import { BULK_EDIT_LIMITS } from "./bulkEditValidationLimits.js";
 import {
-  normalizeFilterAst,
-  normalizeIdempotencyKey,
   normalizeOperationId,
   normalizeOptionalString,
   normalizePreviewContractId,
@@ -327,19 +325,6 @@ function normalizeLang(value) {
   return lang;
 }
 
-function normalizeIdempotencyKey(headers = {}) {
-  const safeHeaders = headers && typeof headers === "object" ? headers : {};
-  const key = normalizeText(safeHeaders.idempotencyKey, "Idempotency-Key", 200);
-
-  if (!key) {
-    throw buildRequestError(
-      "Idempotency-Key header is required",
-      "IDEMPOTENCY_KEY_REQUIRED",
-    );
-  }
-
-  return key;
-}
 
 function normalizeFilterAst(value) {
   if (value === undefined || value === null) {
@@ -617,6 +602,8 @@ function assertCommandContext(context) {
   return Object.freeze({
     shop: normalizeRequiredText(safe.shop, "shop", 255),
     actor: normalizeOptionalPlainObject(safe.actor, "actor"),
+    accessToken: safe.accessToken || null,
+    oauthScopes: safe.oauthScopes || null,
   });
 }
 
@@ -823,6 +810,11 @@ const PREVIEW_BODY_KEYS = new Set([
   "targets",
   "rounding",
   "location",
+  "locationId",
+  "filterFingerprint",
+  "filterVersion",
+  "limit",
+  "page",
   "lang",
 ]);
 

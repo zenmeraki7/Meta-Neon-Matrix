@@ -25,13 +25,14 @@ function toDisplayValue(value) {
   }
 
   if (typeof value === "string") {
+    const formatted = value.replace(/(\.\d{2})00$/, "$1");
     return {
       displayText:
-        value.length > MAX_DISPLAY_TEXT
-          ? `${value.slice(0, MAX_DISPLAY_TEXT)}...`
-          : value,
+        formatted.length > MAX_DISPLAY_TEXT
+          ? `${formatted.slice(0, MAX_DISPLAY_TEXT)}...`
+          : formatted,
       rawType: "string",
-      truncated: value.length > MAX_DISPLAY_TEXT,
+      truncated: formatted.length > MAX_DISPLAY_TEXT,
       inspectable: false,
     };
   }
@@ -193,7 +194,7 @@ export function toBulkEditPreviewResponseDto(result) {
       operation: safeString(data?.operation, "") || null,
       matchingProductCount,
       affectedVariantCount,
-      rows: responseRows,
+      rows: rows,
       isVariant,
       requiresConfirmation: data?.requiresConfirmation === true,
       pagination: {

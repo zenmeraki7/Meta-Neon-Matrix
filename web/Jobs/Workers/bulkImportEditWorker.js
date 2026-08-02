@@ -35,6 +35,8 @@ import {
 } from "../../utils/normalizedStateUtils.js";
 import { isAllowedImportFieldKey } from "../../services/productImport/importFieldRegistry.js";
 import { QUEUE_NAMES } from "../../queues/queueNames.js";
+import { immutableObjectStorage } from "../../services/storage/immutableObjectStorage.js";
+import { upsertAuthoritativeChangeRecords } from "../../services/changeRecordIdentityService.js";
 
 const QUEUE_NAME = QUEUE_NAMES.CSV_IMPORT_PREPARE;
 const WORKER_NAME = "bulkImportEditWorker";
@@ -63,27 +65,15 @@ function assertImportJobPayload(job) {
   const payload = job?.data || {};
   const historyId = String(payload.historyId || "").trim();
   const shop = String(payload.shop || "").trim();
-  const filePath = String(payload.filePath || "").trim();
   const executionId = String(payload.executionId || "").trim() || null;
-  const columnMappings = payload.columnMappings;
 
-  if (!historyId || !shop || !filePath) {
+  if (!historyId || !shop) {
     throw new Error("CSV_IMPORT_JOB_PAYLOAD_INVALID");
-  }
-  if (!columnMappings || typeof columnMappings !== "object" || Array.isArray(columnMappings)) {
-    throw new Error("CSV_IMPORT_COLUMN_MAPPINGS_INVALID");
-  }
-  for (const fieldKey of Object.values(columnMappings)) {
-    if (typeof fieldKey !== "string" || !isAllowedImportFieldKey(fieldKey)) {
-      throw new Error("CSV_IMPORT_UNKNOWN_MAPPING_FIELD");
-    }
   }
 
   return {
     historyId,
     shop,
-    filePath,
-    columnMappings,
     executionId,
   };
 }
@@ -161,7 +151,7 @@ function mapExistingVariantsForDiff(existingVariants) {
       : [],
     tracked: variant.tracked,
     physicalProduct: variant.physicalProduct,
-    profitMargin: variant.profitMargin,
+    profitMarginRatio: variant.profitMarginRatio,
   }));
 }
 
@@ -175,23 +165,51 @@ async function removeLocalFile(filePath) {
   } catch (_error) {}
 }
 
-async function claimImportHistoryForShop(historyId, shop) {
-  const result = await db.editHistory.updateMany({
+export async function claimImportHistory({
+  historyId,
+  shop,
+  ownerId,
+  leaseMs = 5 * 60 * 1000,
+  dbClient = null,
+}) {
+  const database = dbClient || db;
+  const now = new Date();
+  const leaseUntil = new Date(now.getTime() + leaseMs);
+
+  const claimed = await database.editHistory.updateMany({
     where: {
       id: historyId,
-      ...(shop ? { shop } : {}),
-      status: "pending",
+      shop,
+      OR: [
+        {
+          executionStateNormalized: "PLANNED",
+          statusNormalized: "PENDING",
+        },
+        {
+          executionStateNormalized: "TARGET_FREEZING",
+          executionLeaseUntil: { lt: now },
+        },
+        {
+          executionStateNormalized: "PLANNED",
+          executionLeaseUntil: { lt: now },
+        },
+      ],
     },
     data: {
       status: "processing",
+      statusNormalized: normalizeEditHistoryStatus("processing"),
       executionState: OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
       executionStateNormalized: normalizeEditHistoryExecutionState(
         OPERATION_LIFECYCLE_STATES.TARGET_FREEZING,
       ),
+      executionOwnerId: ownerId,
+      executionLeaseUntil: leaseUntil,
+      executionHeartbeatAt: now,
+      stateVersion: { increment: 1 },
     },
   });
 
-  return result.count === 1;
+  return claimed.count === 1;
 }
 
 function buildMappedProductRows(
@@ -318,6 +336,42 @@ function buildMappedProductRows(
   }
 }
 
+export function isImportValidationError(error) {
+  if (!error) return false;
+  const msg = String(error.message || "").toUpperCase();
+  const code = String(error.code || "").toUpperCase();
+  return (
+    code.includes("VALIDATION") ||
+    code.includes("INVALID") ||
+    code.includes("FORMAT") ||
+    msg.includes("VALIDATION") ||
+    msg.includes("INVALID") ||
+    msg.includes("CSV_IMPORT_JOB_PAYLOAD_INVALID") ||
+    msg.includes("MAPPING") ||
+    msg.includes("HEADER")
+  );
+}
+
+export async function markImportRetryWait(historyId, shop, error, delayMs = 60_000) {
+  const nextAttemptAt = new Date(Date.now() + delayMs);
+  await db.editHistory.updateMany({
+    where: { id: historyId, shop },
+    data: {
+      status: "pending",
+      statusNormalized: normalizeEditHistoryStatus("pending"),
+      executionOwnerId: null,
+      executionLeaseUntil: null,
+      nextAttemptAt,
+      error: buildExecutionError({
+        code: "import_transient_failure",
+        stage: "queue_execution",
+        message: error.message,
+        retryable: true,
+      }),
+    },
+  });
+}
+
 const bulkImportEditWorker = new Worker(
   QUEUE_NAME,
   async (job) => {
@@ -331,36 +385,54 @@ const bulkImportEditWorker = new Worker(
     const attempt = getJobAttempt(job);
 
     try {
-      const history = await db.editHistory.findUnique({
-        where: { id: historyId },
-        select: {
-          id: true,
-          shop: true,
-          status: true,
-          executionIdentity: true,
+      const history = await db.editHistory.findFirst({
+        where: { id: historyId, shop },
+        include: {
+          spreadsheetFile: {
+            select: {
+              storageKey: true,
+              contentSha256: true,
+              columnMappings: true,
+              downloadUrl: true,
+            },
+          },
         },
       });
 
-      if (!history) {
-        throw new Error("History document not found");
+      if (!history || !history.spreadsheetFile) {
+        throw new Error("History document or spreadsheet file not found");
       }
 
       if (!shop || history.shop !== shop) {
         throw new Error("Cross-shop import execution blocked");
       }
 
-      if (history.status === "processing" && job.attemptsMade > 0) {
-        return {
-          skipped: true,
-          reason: "already_processing",
-        };
+      const storageKey = history.spreadsheetFile.storageKey || history.spreadsheetFile.downloadUrl;
+      const contentSha256 = history.spreadsheetFile.contentSha256;
+      const columnMappings = history.spreadsheetFile.columnMappings;
+
+      if (!storageKey || !columnMappings) {
+        throw new Error("CSV_IMPORT_FILE_METADATA_INVALID");
       }
 
-      const claimed = await claimImportHistoryForShop(historyId, shop);
-      if (!claimed && history.status !== "processing") {
+      if (contentSha256) {
+        await immutableObjectStorage.verifyStreamSha256(storageKey, contentSha256);
+      }
+
+      const ownerId = `csv-import:${job.id}:${crypto.randomUUID()}`;
+      const IMPORT_LEASE_MS = 5 * 60 * 1000;
+
+      const claimed = await claimImportHistory({
+        historyId,
+        shop: history.shop,
+        ownerId,
+        leaseMs: IMPORT_LEASE_MS,
+      });
+
+      if (!claimed) {
         return {
           skipped: true,
-          reason: "already_claimed",
+          reason: "not_claimed",
         };
       }
 
@@ -375,7 +447,8 @@ const bulkImportEditWorker = new Worker(
       });
 
       await new Promise((resolve, reject) => {
-        fs.createReadStream(filePath)
+        const stream = immutableObjectStorage.openReadStream(storageKey);
+        stream
           .pipe(csv())
           .on("data", (row) => {
             totalRows += 1;
@@ -594,15 +667,35 @@ const bulkImportEditWorker = new Worker(
       }
 
       if (changeRecords.length) {
-        await db.changeRecord.createMany({
-          data: changeRecords.map((record) => {
+        const authoritativeRecords = changeRecords.map((record) => {
             const {
               csvMutationRow,
               options,
               ...rest
             } = record;
+            const productFields = Array.isArray(record.productFieldChanges)
+              ? record.productFieldChanges.map((change) => change?.field).filter(Boolean)
+              : [];
+            const variantFields = Array.isArray(record.variantFieldChanges)
+              ? record.variantFieldChanges.flatMap((group) =>
+                  (Array.isArray(group?.changes) ? group.changes : [group])
+                    .map((change) => change?.field)
+                    .filter(Boolean)
+                )
+              : [];
+            const fields = [...productFields, ...variantFields];
+            const fieldPath = fields.length === 1
+              ? `${variantFields.length ? "variant" : "product"}.${String(fields[0]).trim()}`
+              : `atomic.import.${crypto
+                  .createHash("sha256")
+                  .update(JSON.stringify(fields.sort()))
+                  .digest("hex")
+                  .slice(0, 24)}`;
             return {
               ...rest,
+              shop,
+              editHistoryId: historyId,
+              fieldPath,
               options: {
                 csvMutationRow,
                 csvImport: true,
@@ -610,8 +703,13 @@ const bulkImportEditWorker = new Worker(
                 productOptions: options,
               },
             };
-          }),
         });
+        await db.$transaction((tx) =>
+          upsertAuthoritativeChangeRecords({
+            tx,
+            records: authoritativeRecords,
+          }),
+        );
       }
 
       const normalizedFilterHash = crypto
@@ -642,6 +740,22 @@ const bulkImportEditWorker = new Worker(
         shop: history.shop,
         mirrorBatchId,
       });
+
+      const ownershipBeforeFinalize = await db.editHistory.count({
+        where: {
+          id: historyId,
+          shop: history.shop,
+          executionOwnerId: ownerId,
+          executionLeaseUntil: { gt: new Date() },
+          executionStateNormalized: { in: ["PLANNED", "TARGET_FREEZING"] },
+        },
+      });
+
+      if (ownershipBeforeFinalize !== 1) {
+        const error = new Error("IMPORT_OWNERSHIP_LOST");
+        error.code = "IMPORT_OWNERSHIP_LOST";
+        throw error;
+      }
 
       const snapshotSet = await finalizeFrozenSnapshotSet({
         shop: history.shop,
@@ -723,6 +837,27 @@ const bulkImportEditWorker = new Worker(
         data: { totalRows },
       });
 
+      const ownershipBeforeEnqueue = await db.editHistory.count({
+        where: {
+          id: historyId,
+          shop: history.shop,
+          executionOwnerId: ownerId,
+          executionLeaseUntil: { gt: new Date() },
+          executionStateNormalized: {
+            in: [
+              normalizeEditHistoryExecutionState(OPERATION_LIFECYCLE_STATES.TARGET_FREEZING),
+              normalizeEditHistoryExecutionState(OPERATION_LIFECYCLE_STATES.TARGET_FROZEN),
+            ],
+          },
+        },
+      });
+
+      if (ownershipBeforeEnqueue !== 1) {
+        const error = new Error("IMPORT_OWNERSHIP_LOST");
+        error.code = "IMPORT_OWNERSHIP_LOST";
+        throw error;
+      }
+
       await addBulkEditExecuteJob({
         historyId,
         shop: history.shop,
@@ -793,44 +928,44 @@ const bulkImportEditWorker = new Worker(
         totalItems: frozenCount,
       };
     } catch (error) {
-      logger.error("Bulk import edit worker failed", {
-        worker: WORKER_NAME,
-        queue: QUEUE_NAME,
-        jobId: job.id,
-        shop,
-        historyId,
-        executionId,
-        attempt,
-        message: error.message,
-      });
+      const storageKey = job?.data?.storageKey;
+      const terminal = isImportValidationError(error);
+      const exhausted = isRetryExhausted(job);
 
-      await removeLocalFile(filePath);
+      if (terminal || exhausted) {
+        await removeLocalFile(filePath);
+        if (storageKey) {
+          await immutableObjectStorage.deleteObject(storageKey).catch(() => {});
+        }
 
-      await db.editHistory.updateMany({
-        where: { id: historyId, ...(shop ? { shop } : {}) },
-        data: {
-          status: "failed",
-          statusNormalized: normalizeEditHistoryStatus("failed"),
-          executionState: BULK_EDIT_EXECUTION_STATES.FAILED,
-          executionStateNormalized: normalizeEditHistoryExecutionState(
-            BULK_EDIT_EXECUTION_STATES.FAILED,
-          ),
-          error: appendExecutionError(
-            null,
-            buildExecutionError({
-              code: "bulk_import_worker_failure",
-              stage: "queue_execution",
-              message: error.message,
-              retryable: false,
-              details: {
-                validation: error.details || null,
-                stack: error.stack || null,
-                failedAt: new Date().toISOString(),
-              },
-            }),
-          ),
-        },
-      });
+        await db.editHistory.updateMany({
+          where: { id: historyId, ...(shop ? { shop } : {}) },
+          data: {
+            status: "failed",
+            statusNormalized: normalizeEditHistoryStatus("failed"),
+            executionState: BULK_EDIT_EXECUTION_STATES.FAILED,
+            executionStateNormalized: normalizeEditHistoryExecutionState(
+              BULK_EDIT_EXECUTION_STATES.FAILED,
+            ),
+            error: appendExecutionError(
+              null,
+              buildExecutionError({
+                code: "bulk_import_worker_failure",
+                stage: "queue_execution",
+                message: error.message,
+                retryable: false,
+                details: {
+                  validation: error.details || null,
+                  stack: error.stack || null,
+                  failedAt: new Date().toISOString(),
+                },
+              }),
+            ),
+          },
+        });
+      } else {
+        await markImportRetryWait(historyId, shop, error);
+      }
 
       await logWorkerError({
         shop,

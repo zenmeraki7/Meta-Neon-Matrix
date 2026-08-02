@@ -62,6 +62,7 @@ const CREATE_KEYS = new Set([
   "rawFilterInput",
   "rules",
   "actions",
+  "editedField",
   "trigger",
   "triggerType",
   "schedule",
@@ -121,13 +122,26 @@ export function normalizeCreateAutomaticProductRuleBody(body = {}) {
   if (hasDynamic && hasStaticIds) {
     throw createValidationError("Ambiguous target mode", "AMBIGUOUS_TARGET_MODE");
   }
+  const hasExplicitActions = (Array.isArray(src.rules) && src.rules.length > 0) || (Array.isArray(src.actions) && src.actions.length > 0);
+  const hasEditedField = Boolean(src.editedField);
+  if (hasExplicitActions && hasEditedField) {
+    throw createValidationError("Ambiguous actions definition", "AMBIGUOUS_ACTION_DEFINITION");
+  }
+  const actions = Array.isArray(src.rules)
+    ? src.rules
+    : Array.isArray(src.actions)
+      ? src.actions
+      : src.editedField
+        ? [{ field: src.editedField, locationId: src.locationId ?? null }]
+        : undefined;
+
   const command = {
     title: toStringOrNull(src.title),
     description: toStringOrNull(src.description),
     filterAst: src.filterAst ?? null,
     conditions: Array.isArray(src.conditions) ? src.conditions : undefined,
     rawFilterInput: Array.isArray(src.rawFilterInput) ? src.rawFilterInput : undefined,
-    actions: Array.isArray(src.rules) ? src.rules : Array.isArray(src.actions) ? src.actions : undefined,
+    actions,
     triggerType: toStringOrNull(src.triggerType || src.trigger),
     scheduleType: toStringOrNull(src.scheduleType || src.schedule?.type),
     scheduleConfig: src.scheduleConfig ?? src.schedule ?? null,
@@ -165,6 +179,7 @@ const UPDATE_KEYS = new Set([
   "rawFilterInput",
   "rules",
   "actions",
+  "editedField",
   "trigger",
   "triggerType",
   "schedule",
@@ -227,24 +242,39 @@ export function normalizeUpdateAutomaticProductRuleBody(body = {}) {
       throw createValidationError(`Unsupported field: ${key}`, "UNSUPPORTED_FIELD");
     }
   }
-  const normalizedEnvelope = normalizeCreateAutomaticProductRuleBody(src);
+  const { expectedRevision, ...patch } = src;
+  const normalizedEnvelope = normalizeCreateAutomaticProductRuleBody(patch);
   const normalized = normalizedEnvelope.command;
   Object.keys(normalized).forEach((key) => {
-    if (!Object.prototype.hasOwnProperty.call(src, key)
+    if (!Object.prototype.hasOwnProperty.call(patch, key)
       && !["actions", "triggerType", "scheduleType", "scheduleConfig", "cronExpression", "intervalMinutes", "timezone", "enabled", "status"].includes(key)) {
       delete normalized[key];
     }
   });
-  if (Object.prototype.hasOwnProperty.call(src, "rules")) normalized.actions = src.rules;
-  if (Object.prototype.hasOwnProperty.call(src, "trigger")) normalized.triggerType = src.trigger;
-  if (Object.prototype.hasOwnProperty.call(src, "schedule")) normalized.scheduleConfig = src.schedule;
+  if (!Object.prototype.hasOwnProperty.call(patch, "rules") && !Object.prototype.hasOwnProperty.call(patch, "actions") && !Object.prototype.hasOwnProperty.call(patch, "editedField")) {
+    delete normalized.actions;
+  }
+  if (!Object.prototype.hasOwnProperty.call(patch, "trigger") && !Object.prototype.hasOwnProperty.call(patch, "triggerType")) {
+    delete normalized.triggerType;
+  }
+  if (!Object.prototype.hasOwnProperty.call(patch, "schedule") && !Object.prototype.hasOwnProperty.call(patch, "scheduleConfig")) {
+    delete normalized.scheduleConfig;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "rules")) normalized.actions = patch.rules;
+  if (Object.prototype.hasOwnProperty.call(patch, "trigger")) normalized.triggerType = patch.trigger;
+  if (Object.prototype.hasOwnProperty.call(patch, "schedule")) normalized.scheduleConfig = patch.schedule;
+
+  const parsedRevision = expectedRevision !== undefined && expectedRevision !== null && expectedRevision !== ""
+    ? Number(expectedRevision)
+    : undefined;
+
   return {
-    commandVersion: Number(src.commandVersion || 1),
-    filterAstVersion: Number(src.filterAstVersion || 1),
-    editOperationVersion: Number(src.editOperationVersion || 1),
-    scheduleVersion: Number(src.scheduleVersion || 1),
-    expectedRevision: toStringOrNull(src.expectedRevision),
-    command: normalized,
+    ...normalized,
+    commandVersion: normalizedEnvelope.commandVersion,
+    filterAstVersion: normalizedEnvelope.filterAstVersion,
+    editOperationVersion: normalizedEnvelope.editOperationVersion,
+    scheduleVersion: normalizedEnvelope.scheduleVersion,
+    expectedRevision: parsedRevision,
   };
 }
 

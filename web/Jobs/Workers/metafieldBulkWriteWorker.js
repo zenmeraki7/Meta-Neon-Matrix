@@ -9,6 +9,7 @@ import {
 } from "../../db/bulkEditChanges.js";
 import { markDeadLetterNotified, moveToDeadLetter } from "../../db/deadLetterChanges.js";
 import { addShopSyncJob } from "../Queues/shopSyncJob.js";
+import { requireVariantGid } from "../../utils/shopifyVariantGid.js";
 
 const QUEUE_NAME = process.env.METAFIELD_BULK_WRITE_QUEUE || "metafield-bulk-write";
 const WORKER_CONCURRENCY = Number.parseInt(
@@ -63,7 +64,7 @@ function normalizeRow(row) {
     id: String(row.id),
     sessionId: String(row.session_id),
     shop: String(row.shop_id),
-    variantId: String(row.variant_id),
+    variantGid: requireVariantGid(row.variant_gid),
     namespace: String(row.namespace),
     key: String(row.key),
     type: String(row.type),
@@ -81,7 +82,7 @@ async function notifyMerchantTerminalFailure(shop, row, errorCode) {
   console.error("[metafieldBulkWriteWorker] terminal row failure", {
     shop,
     changeId: row?.id,
-    variantId: row?.variantId,
+    variantGid: row?.variantGid,
     namespace: row?.namespace,
     key: row?.key,
     errorCode,
@@ -243,14 +244,17 @@ async function callMetafieldsSet(client, rows) {
  * - chunk size 25
  * - STALE_OBJECT terminal, no retry
  *
- * @param {{ sessionId: string, shop: string }} input
+ * @param {{ sessionId: string, shop: string, variantIdentityVersion?: number }} input
  * @returns {Promise<{processed:number,written:number,errored:number}>}
  */
-export async function runMetafieldBulkWrite({ sessionId, shop }) {
+export async function runMetafieldBulkWrite({ sessionId, shop, variantIdentityVersion = 2 }) {
   const resolvedSessionId = String(sessionId || "").trim();
   const resolvedShop = String(shop || "").trim();
   if (!resolvedSessionId || !resolvedShop) {
     throw new Error("sessionId and shop are required");
+  }
+  if (Number(variantIdentityVersion) !== 2) {
+    throw new Error("LEGACY_VARIANT_IDENTITY_QUEUE_PAYLOAD_REJECTED");
   }
 
   const pendingRows = await listPendingLedgerRows(resolvedSessionId, resolvedShop);
@@ -339,7 +343,8 @@ export const metafieldBulkWriteWorker = new Worker(
   async (job) => {
     const sessionId = String(job?.data?.sessionId || "").trim();
     const shop = String(job?.data?.shop || "").trim();
-    return runMetafieldBulkWrite({ sessionId, shop });
+    const variantIdentityVersion = Number(job?.data?.variantIdentityVersion || 0);
+    return runMetafieldBulkWrite({ sessionId, shop, variantIdentityVersion });
   },
   {
     connection: redisConnection,

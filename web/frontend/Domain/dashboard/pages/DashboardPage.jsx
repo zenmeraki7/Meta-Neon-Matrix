@@ -1,45 +1,29 @@
-import React, { memo, Suspense, useMemo, useState } from "react";
-import {
-  Page,
-  Layout,
-  Card,
-  InlineStack,
-  BlockStack,
-  Icon,
-  Button,
-  Text,
-  Box,
-  Badge,
-  Banner,
-  Select,
-  SkeletonBodyText,
-  Grid,
-} from "@shopify/polaris";
+import React, {
+  lazy,
+  memo,
+  Suspense,
+  useEffect,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useDispatch } from "react-redux";
-import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  EditIcon,
-  ExportIcon,
-  ImportIcon,
-  PlusIcon,
-} from "@shopify/polaris-icons";
+
 import { useStoreAccess } from "../hooks/useStoreAccess";
 import { useApiClient } from "../../../hooks/useApiClient";
 import { hydrateSubscriptionSnapshot } from "../../../store/slices/subscriptionSlice";
 
-const PromotionalContent = React.lazy(() =>
-  import("../components/PromotionalContent")
+const PromotionalContent = lazy(() =>
+  import("../components/PromotionalContent"),
 );
 
 const LANGUAGE_OPTIONS = [
   { label: "English", value: "en" },
   { label: "Deutsch", value: "de" },
-  { label: "Francais", value: "fr" },
-  { label: "Espanol", value: "es" },
-  { label: "Portugues", value: "pt" },
+  { label: "Français", value: "fr" },
+  { label: "Español", value: "es" },
+  { label: "Português", value: "pt" },
   { label: "Arabic", value: "ar" },
   { label: "Hindi", value: "hi" },
   { label: "Chinese", value: "zh" },
@@ -48,84 +32,122 @@ const LANGUAGE_OPTIONS = [
   { label: "Russian", value: "ru" },
 ];
 
+const METRIC_GRID_COLUMNS =
+  "repeat(auto-fit, minmax(min(100%, 220px), 1fr))";
+
+const ACTION_GRID_COLUMNS =
+  "repeat(auto-fit, minmax(min(100%, 240px), 1fr))";
+
+const OVERVIEW_GRID_COLUMNS =
+  "repeat(auto-fit, minmax(min(100%, 280px), 1fr))";
+
 const MetricCard = memo(function MetricCard({
   title,
   value,
-  icon,
   tone = "info",
 }) {
+  const numericValue = Number(value);
+  const valueTone =
+    Number.isFinite(numericValue) && numericValue > 0 ? "success" : "neutral";
+
   return (
-    <Card roundedAbove="sm">
-      <Box padding="500" minHeight="140px">
-        <BlockStack gap="400">
-          <InlineStack align="space-between" blockAlign="start">
-            <InlineStack gap="300" blockAlign="center">
-              <Box
-                background="bg-surface-secondary"
-                borderRadius="200"
-                padding="300"
-              >
-                <Icon source={icon} tone={tone} />
-              </Box>
+    <s-box
+      border="base"
+      borderRadius="base"
+      background="base"
+      padding="base"
+      minBlockSize="140px"
+    >
+      <s-stack gap="base">
+        <s-grid
+          gridTemplateColumns="1fr auto"
+          gap="base"
+          alignItems="start"
+        >
+          <s-stack gap="small-200">
+            <s-text type="strong">{title}</s-text>
 
-              <BlockStack gap="100">
-                <Text as="span" variant="bodyLg" fontWeight="semibold">
-                  {title}
-                </Text>
-                <Text
-                  as="p"
-                  variant="heading2xl"
-                  tone={Number(value) > 0 ? "success" : "subdued"}
-                >
-                  {value}
-                </Text>
-              </BlockStack>
-            </InlineStack>
+            <s-heading>
+              <s-text type="strong" tone={valueTone}>
+                {value}
+              </s-text>
+            </s-heading>
+          </s-stack>
 
-            <Badge tone={tone}>{title}</Badge>
-          </InlineStack>
-          <Text as="p" variant="bodyMd" fontWeight="medium">
-            {title}
-          </Text>
-        </BlockStack>
-      </Box>
-    </Card>
+          <s-badge tone={tone}>{title}</s-badge>
+        </s-grid>
+
+        <s-paragraph color="subdued">{title}</s-paragraph>
+      </s-stack>
+    </s-box>
   );
 });
 
-function MetricSkeleton() {
+function MetricSkeleton({ label }) {
   return (
-    <Card roundedAbove="sm">
-      <Box padding="500" minHeight="140px">
-        <SkeletonBodyText lines={3} />
-      </Box>
-    </Card>
+    <s-box
+      border="base"
+      borderRadius="base"
+      background="base"
+      padding="base"
+      minBlockSize="140px"
+    >
+      <s-stack gap="base" alignItems="center">
+        <s-spinner
+          size="base"
+          accessibilityLabel={`Loading ${label}`}
+        ></s-spinner>
+
+        <s-text color="subdued">{label}</s-text>
+      </s-stack>
+    </s-box>
   );
 }
 
-function QuickActionCard({ title, description, buttonText, onAction }) {
+function QuickActionCard({
+  title,
+  description,
+  buttonText,
+  onAction,
+}) {
   return (
-    <Card roundedAbove="sm">
-      <Box padding="500">
-        <BlockStack gap="400">
-          <Box minHeight="90px">
-            <BlockStack gap="100">
-              <Text as="h3" variant="headingMd">
-                {title}
-              </Text>
+    <s-box
+      border="base"
+      borderRadius="base"
+      background="base"
+      padding="base"
+      minBlockSize="210px"
+    >
+      <s-stack gap="base">
+        <s-box minBlockSize="110px">
+          <s-stack gap="small-200">
+            <s-heading>{title}</s-heading>
+            <s-paragraph color="subdued">{description}</s-paragraph>
+          </s-stack>
+        </s-box>
 
-              <Text as="p" variant="bodyMd" tone="subdued">
-                {description}
-              </Text>
-            </BlockStack>
-          </Box>
+        <s-button variant="primary" onClick={onAction}>
+          {buttonText}
+        </s-button>
+      </s-stack>
+    </s-box>
+  );
+}
 
-          <Button fullWidth variant="primary" onClick={onAction}>
-            {buttonText}
-          </Button>
-        </BlockStack>
-      </Box>
-    </Card>
+function PromotionalContentFallback({ label }) {
+  return (
+    <s-box
+      minBlockSize="320px"
+      border="base"
+      borderRadius="base"
+      background="subdued"
+      padding="base"
+    >
+      <s-stack gap="base" alignItems="center">
+        <s-spinner size="large" accessibilityLabel={label}></s-spinner>
+        <s-text color="subdued">{label}</s-text>
+      </s-stack>
+    </s-box>
   );
 }
 
@@ -134,33 +156,51 @@ export default function DashboardPage() {
   const dispatch = useDispatch();
   const api = useApiClient();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
+  const [showPromotionalContent, setShowPromotionalContent] =
+    useState(false);
+
   const bootstrapQuery = useQuery({
     queryKey: ["bootstrap-dashboard"],
-    queryFn: ({ signal }) => api.get("/api/bootstrap/dashboard", { signal }),
+    queryFn: ({ signal }) =>
+      api.get("/api/bootstrap/dashboard", { signal }),
     staleTime: 10_000,
     retry: 1,
   });
+
   const bootstrapData = bootstrapQuery.data || null;
-  const bootstrapStoreDetails = bootstrapData?.storeDetails || null;
-  const bootstrapSyncStatus = bootstrapData?.syncStatus || null;
-  const bootstrapPlanSnapshot = bootstrapData?.planSnapshot || null;
+  const bootstrapStoreDetails =
+    bootstrapData?.storeDetails || null;
+  const bootstrapSyncStatus =
+    bootstrapData?.syncStatus || null;
+  const bootstrapPlanSnapshot =
+    bootstrapData?.planSnapshot || null;
 
   const { storeAccess, loadingStoreData } = useStoreAccess({
     initialData: bootstrapStoreDetails || undefined,
-    enabled: Boolean(bootstrapStoreDetails) || bootstrapQuery.isError,
+    enabled: bootstrapQuery.isError,
   });
-  const navigate = useNavigate();
-  const [showPromotionalContent, setShowPromotionalContent] = useState(false);
 
   useEffect(() => {
     if (bootstrapStoreDetails) {
-      queryClient.setQueryData(["store-details"], bootstrapStoreDetails);
+      queryClient.setQueryData(
+        ["store-details"],
+        bootstrapStoreDetails,
+      );
     }
+
     if (bootstrapSyncStatus) {
-      queryClient.setQueryData(["sync-status"], bootstrapSyncStatus);
+      queryClient.setQueryData(
+        ["sync-status"],
+        bootstrapSyncStatus,
+      );
     }
+
     if (bootstrapPlanSnapshot) {
-      dispatch(hydrateSubscriptionSnapshot(bootstrapPlanSnapshot));
+      dispatch(
+        hydrateSubscriptionSnapshot(bootstrapPlanSnapshot),
+      );
     }
   }, [
     bootstrapStoreDetails,
@@ -170,300 +210,296 @@ export default function DashboardPage() {
     dispatch,
   ]);
 
-  const handleLanguageChange = (value) => {
-    i18n.changeLanguage(value);
+  const handleLanguageChange = (event) => {
+    const value = event.currentTarget.value;
+
+    void i18n.changeLanguage(value);
+
     const persistLanguage = () => {
       try {
         localStorage.setItem("appLanguage", value);
       } catch {
-        // ignore
+        // Language persistence is optional.
       }
     };
+
     if (
       typeof window !== "undefined" &&
       typeof window.requestIdleCallback === "function"
     ) {
       window.requestIdleCallback(persistLanguage);
-    } else {
-      setTimeout(persistLanguage, 0);
+      return;
     }
+
+    window.setTimeout(persistLanguage, 0);
   };
 
-  const metricCards = useMemo(
-    () => [
-      {
-        key: "bulk-edits",
-        title: t("bulkEdits"),
-        value: storeAccess?.totalbulkEditCount ?? 0,
-        icon: EditIcon,
-        tone: "success",
-      },
-      {
-        key: "exports",
-        title: t("productExports"),
-        value: storeAccess?.totalExportCount ?? 0,
-        icon: ExportIcon,
-        tone: "info",
-      },
-      {
-        key: "imports",
-        title: t("productImports"),
-        value: storeAccess?.totalImportCount ?? 0,
-        icon: ImportIcon,
-        tone: "attention",
-      },
-    ],
-    [storeAccess, t]
-  );
+  const totalBulkEditCount =
+    storeAccess?.totalbulkEditCount ?? 0;
+  const totalExportCount =
+    storeAccess?.totalExportCount ?? 0;
+  const totalImportCount =
+    storeAccess?.totalImportCount ?? 0;
+
+  const metricCards = [
+    {
+      key: "bulk-edits",
+      title: t("bulkEdits"),
+      value: totalBulkEditCount,
+      tone: "success",
+    },
+    {
+      key: "exports",
+      title: t("productExports"),
+      value: totalExportCount,
+      tone: "info",
+    },
+    {
+      key: "imports",
+      title: t("productImports"),
+      value: totalImportCount,
+      tone: "warning",
+    },
+  ];
+
   const shouldShowDashboardStatusRail =
     Boolean(storeAccess?.isCreditAvailable) ||
     Boolean(storeAccess?.isProductInitiallySyncing);
 
   return (
-    <Page
-      fullWidth
-      title={t("dashboard")}
-      subtitle={t("manageStoreOperations")}
+    <s-page
+      heading={t("dashboard")}
+      subheading={t("manageStoreOperations")}
+      inlineSize="large"
     >
-      <Layout>
-        <Layout.Section>
-          <Card roundedAbove="sm">
-            <Box padding="500">
-              <Grid>
-                <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 3, lg: 7, xl: 7 }}>
-                  <Box paddingBlock="200">
-                    <BlockStack gap="300">
-                      <Text as="h2" variant="heading2xl">
-                        {t("Overview")}
-                      </Text>
+      <s-stack gap="large">
+        <s-section>
+          <s-grid
+            gridTemplateColumns={OVERVIEW_GRID_COLUMNS}
+            gap="large"
+            alignItems="start"
+          >
+            <s-stack gap="base">
+              <s-heading>{t("Overview")}</s-heading>
 
-                      <Text as="p" variant="bodyMd" tone="subdued">
-                        {t("dashboardOverviewDescription")}
-                      </Text>
-                      <Box paddingBlockStart="400">
-                        <InlineStack gap="500" wrap blockAlign="center">
-                          <Box>
-                            <Button onClick={() => navigate("/history")}>
-                              {t("History")}
-                            </Button>
-                          </Box>
+              <s-paragraph color="subdued">
+                {t("dashboardOverviewDescription")}
+              </s-paragraph>
 
-                          <Box>
-                            <Button onClick={() => navigate("/refresh")}>
-                              {t("SyncData")}
-                            </Button>
-                          </Box>
+              <s-stack
+                direction="inline"
+                gap="base"
+                alignItems="center"
+              >
+                <s-button onClick={() => navigate("/history")}>
+                  {t("History")}
+                </s-button>
 
-                          <Box>
-                            <Button
-                              variant="primary"
-                              icon={PlusIcon}
-                              onClick={() => navigate("/products")}
-                            >
-                              {t("editNow")}
-                            </Button>
-                          </Box>
-                        </InlineStack>
-                      </Box>
-                    </BlockStack>
-                  </Box>
-                </Grid.Cell>
+                <s-button onClick={() => navigate("/refresh")}>
+                  {t("SyncData")}
+                </s-button>
 
-                <Grid.Cell columnSpan={{ xs: 6, sm: 6, md: 3, lg: 5, xl: 5 }}>
-                  <InlineStack align="start">
-                    <Box width="100%" maxWidth="420px">
-                      <Card background="bg-surface-secondary" roundedAbove="sm">
-                        <Box padding="350">
-                          <BlockStack gap="150">
-                            <Text as="h3" variant="headingMd">
-                              {t("language")}
-                            </Text>
+                <s-button
+                  variant="primary"
+                  icon="plus"
+                  onClick={() => navigate("/products")}
+                >
+                  {t("editNow")}
+                </s-button>
+              </s-stack>
+            </s-stack>
 
-                            <Text as="p" variant="bodySm" tone="subdued">
-                              {t("chooseDashboardLanguage")}
-                            </Text>
+            <s-box
+              border="base"
+              borderRadius="base"
+              background="subdued"
+              padding="base"
+            >
+              <s-stack gap="small-200">
+                <s-heading>{t("language")}</s-heading>
 
-                            <Select
-                              label={t("language")}
-                              labelHidden
-                              options={LANGUAGE_OPTIONS}
-                              value={i18n.language}
-                              onChange={handleLanguageChange}
-                            />
-                          </BlockStack>
-                        </Box>
-                      </Card>
-                    </Box>
-                  </InlineStack>
-                </Grid.Cell>
-              </Grid>
-            </Box>
-          </Card>
-        </Layout.Section>
+                <s-paragraph color="subdued">
+                  {t("chooseDashboardLanguage")}
+                </s-paragraph>
+
+                <s-select
+                  label={t("language")}
+                  labelAccessibilityVisibility="exclusive"
+                  name="dashboard-language"
+                  value={i18n.language}
+                  onChange={handleLanguageChange}
+                >
+                  {LANGUAGE_OPTIONS.map((option) => (
+                    <s-option
+                      key={option.value}
+                      value={option.value}
+                    >
+                      {option.label}
+                    </s-option>
+                  ))}
+                </s-select>
+              </s-stack>
+            </s-box>
+          </s-grid>
+        </s-section>
 
         {shouldShowDashboardStatusRail ? (
-          <Layout.Section>
-            <BlockStack gap="300">
-              {storeAccess?.isCreditAvailable && (
-                <Banner
-                  tone="success"
-                  title={t("dashboardStatus.freeAccessTitle")}
-                  action={{
-                    content: t("dashboardStatus.requestExtension"),
-                    onAction: () => navigate("/suggestionpage"),
-                  }}
-                >
-                  <p>{t("freeAccessMessage")}</p>
-                </Banner>
-              )}
+          <s-stack gap="base">
+            {storeAccess?.isCreditAvailable ? (
+              <s-banner
+                tone="success"
+                heading={t(
+                  "dashboardStatus.freeAccessTitle",
+                )}
+              >
+                <s-paragraph>
+                  {t("freeAccessMessage")}
+                </s-paragraph>
 
-              {storeAccess?.isProductInitiallySyncing && (
-                <Banner
-                  tone="info"
-                  title={t("dashboardStatus.productSyncTitle")}
-                  action={{
-                    content: t("dashboardStatus.checkStatus"),
-                    onAction: () => navigate("/refresh"),
-                  }}
+                <s-button
+                  slot="secondary-actions"
+                  variant="secondary"
+                  onClick={() =>
+                    navigate("/suggestionpage")
+                  }
                 >
-                  <p>{t("productSyncMessage")}</p>
-                </Banner>
-              )}
-            </BlockStack>
-          </Layout.Section>
+                  {t(
+                    "dashboardStatus.requestExtension",
+                  )}
+                </s-button>
+              </s-banner>
+            ) : null}
+
+            {storeAccess?.isProductInitiallySyncing ? (
+              <s-banner
+                tone="info"
+                heading={t(
+                  "dashboardStatus.productSyncTitle",
+                )}
+              >
+                <s-paragraph>
+                  {t("productSyncMessage")}
+                </s-paragraph>
+
+                <s-button
+                  slot="secondary-actions"
+                  variant="secondary"
+                  onClick={() => navigate("/refresh")}
+                >
+                  {t("dashboardStatus.checkStatus")}
+                </s-button>
+              </s-banner>
+            ) : null}
+          </s-stack>
         ) : null}
 
-        <Layout.Section>
-          <Grid>
-            {loadingStoreData
-              ? metricCards.map((card) => (
-                  <Grid.Cell
-                    key={card.key}
-                    columnSpan={{ xs: 6, sm: 3, md: 2, lg: 4, xl: 4 }}
-                  >
-                    <MetricSkeleton />
-                  </Grid.Cell>
-                ))
-              : metricCards.map((card) => (
-                  <Grid.Cell
-                    key={card.key}
-                    columnSpan={{ xs: 6, sm: 3, md: 2, lg: 4, xl: 4 }}
-                  >
-                    <MetricCard {...card} />
-                  </Grid.Cell>
-                ))}
-          </Grid>
-        </Layout.Section>
+        <s-grid
+          gridTemplateColumns={METRIC_GRID_COLUMNS}
+          gap="base"
+        >
+          {loadingStoreData
+            ? metricCards.map((card) => (
+              <MetricSkeleton
+                key={card.key}
+                label={card.title}
+              />
+            ))
+            : metricCards.map((card) => (
+              <MetricCard key={card.key} {...card} />
+            ))}
+        </s-grid>
 
-        <Layout.Section>
-          <Card roundedAbove="sm">
-            <Box padding="500">
-              <BlockStack gap="400">
-                <BlockStack gap="100">
-                  <Text as="h3" variant="headingLg">
-                    {t("quickActions")}
-                  </Text>
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    {t("quickActionsDescription")}
-                  </Text>
-                </BlockStack>
+        <s-section heading={t("quickActions")}>
+          <s-stack gap="base">
+            <s-paragraph color="subdued">
+              {t("quickActionsDescription")}
+            </s-paragraph>
 
-                <Grid>
-                  <Grid.Cell columnSpan={{ xs: 6, sm: 3, md: 3, lg: 3, xl: 3 }}>
-                    <Box height="100%">
-                      <QuickActionCard
-                        title={t("products")}
-                        description={t("productsDescription")}
-                        buttonText={t("openProducts")}
-                        onAction={() => navigate("/products")}
-                      />
-                    </Box>
-                  </Grid.Cell>
+            <s-grid
+              gridTemplateColumns={ACTION_GRID_COLUMNS}
+              gap="base"
+              alignItems="stretch"
+            >
+              <QuickActionCard
+                title={t("products")}
+                description={t("productsDescription")}
+                buttonText={t("openProducts")}
+                onAction={() => navigate("/products")}
+              />
 
-                  <Grid.Cell columnSpan={{ xs: 6, sm: 3, md: 3, lg: 3, xl: 3 }}>
-                    <QuickActionCard
-                      title={t("bulkEdit")}
-                      description={t("bulkEditDescription")}
-                      buttonText={t("createBulkEdit")}
-                      onAction={() => navigate("/edit")}
-                    />
-                  </Grid.Cell>
+              <QuickActionCard
+                title={t("bulkEdit")}
+                description={t("bulkEditDescription")}
+                buttonText={t("createBulkEdit")}
+                onAction={() => navigate("/edit")}
+              />
 
-                  <Grid.Cell columnSpan={{ xs: 6, sm: 3, md: 3, lg: 3, xl: 3 }}>
-                    <QuickActionCard
-                      title={t("exports")}
-                      description={t("exportsDescription")}
-                      buttonText={t("createExport")}
-                      onAction={() => navigate("/exportdata")}
-                    />
-                  </Grid.Cell>
+              <QuickActionCard
+                title={t("exports")}
+                description={t("exportsDescription")}
+                buttonText={t("createExport")}
+                onAction={() => navigate("/exportdata")}
+              />
 
-                  <Grid.Cell columnSpan={{ xs: 6, sm: 3, md: 3, lg: 3, xl: 3 }}>
-                    <QuickActionCard
-                      title={t("snippetStudio")}
-                      description={t("snippetStudioDescription")}
-                      buttonText={t("openSnippetStudio")}
-                      onAction={() => navigate("/product-code-snippets")}
-                    />
-                  </Grid.Cell>
-                </Grid>
-              </BlockStack>
-            </Box>
-          </Card>
-        </Layout.Section>
+              <QuickActionCard
+                title={t("snippetStudio")}
+                description={t(
+                  "snippetStudioDescription",
+                )}
+                buttonText={t("openSnippetStudio")}
+                onAction={() =>
+                  navigate("/product-code-snippets")
+                }
+              />
+            </s-grid>
+          </s-stack>
+        </s-section>
 
-        <Layout.Section>
-          <Card roundedAbove="sm">
-            <Box padding="500">
-              <BlockStack gap="400">
-                <BlockStack gap="100">
-                  <Text as="h3" variant="headingLg">
-                    {t("learnAndOptimize")}
-                  </Text>
-                  <Text as="p" variant="bodyMd" tone="subdued">
+        <s-section heading={t("learnAndOptimize")}>
+          <s-stack gap="base">
+            <s-paragraph color="subdued">
+              {t("learnAndOptimizeDescription")}
+            </s-paragraph>
+
+            {!showPromotionalContent ? (
+              <s-box
+                background="subdued"
+                border="base"
+                borderRadius="base"
+                padding="base"
+              >
+                <s-grid
+                  gridTemplateColumns="1fr auto"
+                  gap="base"
+                  alignItems="center"
+                >
+                  <s-paragraph color="subdued">
                     {t("learnAndOptimizeDescription")}
-                  </Text>
-                </BlockStack>
+                  </s-paragraph>
 
-                {!showPromotionalContent ? (
-                  <Box
-                    background="bg-surface-secondary"
-                    borderRadius="300"
-                    padding="400"
-                    borderWidth="025"
-                    borderColor="border-secondary"
-                    borderStyle="solid"
-                  >
-                    <InlineStack
-                      align="space-between"
-                      blockAlign="center"
-                      wrap
-                      gap="300"
-                    >
-                      <Text as="p" variant="bodyMd" tone="subdued">
-                        {t("learnAndOptimizeDescription")}
-                      </Text>
-                      <Button onClick={() => setShowPromotionalContent(true)}>
-                        {t("watchDemo")}
-                      </Button>
-                    </InlineStack>
-                  </Box>
-                ) : (
-                  <Suspense
-                    fallback={
-                      <Box minHeight="320px">
-                        <SkeletonBodyText lines={8} />
-                      </Box>
+                  <s-button
+                    onClick={() =>
+                      setShowPromotionalContent(true)
                     }
                   >
-                    <PromotionalContent />
-                  </Suspense>
-                )}
-              </BlockStack>
-            </Box>
-          </Card>
-        </Layout.Section>
-      </Layout>
-    </Page>
+                    {t("watchDemo")}
+                  </s-button>
+                </s-grid>
+              </s-box>
+            ) : (
+              <Suspense
+                fallback={
+                  <PromotionalContentFallback
+                    label={t("loading")}
+                  />
+                }
+              >
+                <PromotionalContent />
+              </Suspense>
+            )}
+          </s-stack>
+        </s-section>
+      </s-stack>
+    </s-page>
   );
 }

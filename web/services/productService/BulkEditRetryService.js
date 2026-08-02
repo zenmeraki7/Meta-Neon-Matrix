@@ -32,14 +32,14 @@ export class BulkEditRetryService {
         id: true,
         shop: true,
         executionIdentity: true,
-        executionState: true,
+        executionStateNormalized: true,
         batch: true,
       },
     });
     if (!history) {
       throw new Error("Edit history not found");
     }
-    if (!RETRY_ALLOWED_SOURCE_STATES.has(String(history.executionState || "").toUpperCase())) {
+    if (!RETRY_ALLOWED_SOURCE_STATES.has(String(history.executionStateNormalized || "").toUpperCase())) {
       const error = new Error("RETRY_STATE_CONFLICT");
       error.code = "CONFLICT";
       throw error;
@@ -108,4 +108,3 @@ export class BulkEditRetryService {
     };
   }
 }
-

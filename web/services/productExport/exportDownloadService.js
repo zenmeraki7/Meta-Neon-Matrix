@@ -101,9 +101,7 @@ export async function findDownloadableExport({ exportJobId, shop, db = defaultDb
       shop: true,
       generatedFilename: true,
       downloadUrl: true,
-      status: true,
       statusNormalized: true,
-      executionState: true,
       executionStateNormalized: true,
     },
   });
@@ -113,7 +111,7 @@ export async function findDownloadableExport({ exportJobId, shop, db = defaultDb
   }
 
   const normalizedStatus = String(
-    exportJob.statusNormalized || exportJob.status || "",
+    exportJob.statusNormalized || "UNKNOWN",
   ).toUpperCase();
   if (!DOWNLOADABLE_STATUSES.has(normalizedStatus)) {
     throw new ExportDownloadError(

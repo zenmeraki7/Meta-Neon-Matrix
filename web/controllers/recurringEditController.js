@@ -315,3 +315,20 @@ export async function deleteRecurringEditController(req, res) {
  */
 export const listRecurringEditsSummaryController = listRecurringEditsController;
 export const getRecurringEditDetailController = getRecurringEditByIdController;
+
+export const SUPPORTED_SCHEDULE_TIMEZONES = [
+  "Asia/Kolkata",
+  "UTC",
+  "America/New_York",
+  "Europe/London",
+  "Asia/Tokyo",
+];
+
+export function getScheduleTimezonesController(_req, res) {
+  return res.json({
+    timezones: SUPPORTED_SCHEDULE_TIMEZONES.map((value) => ({
+      value,
+      label: value,
+    })),
+  });
+}

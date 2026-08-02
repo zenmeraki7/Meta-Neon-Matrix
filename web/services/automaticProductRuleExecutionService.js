@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { Prisma } from "../repositories/prismaTypes.js";
+import { db } from "../repositories/repositoryDb.js";
 import { automaticProductRuleRepository } from "../repositories/automaticProductRuleRepository.js";
 import { automaticProductRuleRunRepository } from "../repositories/automaticProductRuleRunRepository.js";
 import {
@@ -57,6 +58,7 @@ import {
   getActiveMirrorBatchId,
 } from "./productService/productTargetingService.js";
 import { getTargetingVersionBundle } from "./targeting/versioning.js";
+import { TargetingEngineService } from "./targeting/TargetingEngineService.js";
 const productFilterService = new Services();
 const PENDING_RUN_RECOVERY_BATCH_SIZE = 100;
 const STALE_PROCESSING_RECOVERY_MINUTES = Number.parseInt(
@@ -405,7 +407,7 @@ async function markRunSkipped(run, reason, data = {}) {
   }
 
   await automaticProductRuleRepository.updateByIdForShop(run.automaticProductRuleId, run.shop, {
-    runCount: { increment: 1 },
+    runCount: { increment: 1n },
     lastRunAt: new Date(),
   });
 
@@ -440,7 +442,7 @@ async function markRunFailed({ run, rule, errorMessage, processingToken = null, 
   }
 
   await automaticProductRuleRepository.updateByIdForShop(rule.id, rule.shop, {
-    runCount: { increment: 1 },
+    runCount: { increment: 1n },
     lastRunAt: new Date(),
     lastFailureAt: new Date(),
     lastFailureReason: errorMessage,
@@ -666,30 +668,102 @@ export async function scheduleDueAutomaticProductRuleRuns({ limit = 100 } = {}) 
   }
 }
 
-export async function createManualAutomaticProductRuleRun({ rule, requestKey = null }) {
-  const mirrorBatchId = await getActiveMirrorBatchId(rule.shop, {
+export function startOfUtcHour(date = new Date()) {
+  const d = new Date(date);
+  d.setUTCMinutes(0, 0, 0);
+  return d;
+}
+
+export async function createManualAutomaticProductRuleRun({
+  rule,
+  requestKey = null,
+  maxManualRunsPerRulePerHour = 5,
+  dbClient = null,
+}) {
+  const database = dbClient || db;
+  const shop = rule.shop;
+  const ruleId = rule.id;
+  const bucketHour = startOfUtcHour(new Date());
+
+  const mirrorBatchId = await getActiveMirrorBatchId(shop, {
     purpose: "EXECUTE",
   });
-  const run = await automaticProductRuleRunRepository.createPendingRun({
-    automaticProductRuleId: rule.id,
-    shop: rule.shop,
-    mirrorBatchId,
-    triggerSource: "MANUAL",
-    triggerReference: buildTriggerReference({
-      triggerReference: "manual",
-      source: "MANUAL",
-    }),
-    status: RUN_STATUS.TARGET_FREEZE_QUEUED,
-    executionDedupeKey: buildManualExecutionKey(rule.id, requestKey),
-    ruleSnapshot: buildRunRuleSnapshot(rule),
-    conditionsSnapshot: Array.isArray(rule.conditions) ? rule.conditions : [],
-    actionsSnapshot: Array.isArray(rule.actions) ? rule.actions : [],
-    targetResourceTypeSnapshot: rule.targetResourceType,
-    applyModeSnapshot: rule.applyMode ?? null,
-  });
 
-  await enqueueExecutionRun(run.id, rule.shop);
-  return run;
+  return await database.$transaction(async (tx) => {
+    await tx.automaticRuleRunQuota.upsert({
+      where: {
+        shop_ruleId_bucketHour: {
+          shop,
+          ruleId,
+          bucketHour,
+        },
+      },
+      create: {
+        shop,
+        ruleId,
+        bucketHour,
+        used: 0,
+        limit: maxManualRunsPerRulePerHour,
+      },
+      update: {},
+    });
+
+    const reserved = await tx.automaticRuleRunQuota.updateMany({
+      where: {
+        shop,
+        ruleId,
+        bucketHour,
+        used: { lt: maxManualRunsPerRulePerHour },
+      },
+      data: { used: { increment: 1 } },
+    });
+
+    if (reserved.count !== 1) {
+      const error = new Error("AUTOMATIC_RULE_RUN_LIMIT_REACHED");
+      error.statusCode = 429;
+      error.code = "AUTOMATIC_RULE_RUN_LIMIT_REACHED";
+      error.expose = true;
+      throw error;
+    }
+
+    try {
+      const run = await automaticProductRuleRunRepository.createPendingRun(
+        {
+          automaticProductRuleId: rule.id,
+          shop: rule.shop,
+          mirrorBatchId,
+          triggerSource: "MANUAL",
+          triggerReference: buildTriggerReference({
+            triggerReference: "manual",
+            source: "MANUAL",
+          }),
+          status: RUN_STATUS.TARGET_FREEZE_QUEUED,
+          executionDedupeKey: buildManualExecutionKey(rule.id, requestKey),
+          ruleSnapshot: buildRunRuleSnapshot(rule),
+          conditionsSnapshot: Array.isArray(rule.conditions) ? rule.conditions : [],
+          actionsSnapshot: Array.isArray(rule.actions) ? rule.actions : [],
+          targetResourceTypeSnapshot: rule.targetResourceType,
+          applyModeSnapshot: rule.applyMode ?? null,
+        },
+        tx,
+      );
+
+      await enqueueExecutionRun(run.id, rule.shop);
+      return run;
+    } catch (error) {
+      if (
+        (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") ||
+        String(error?.message || "").includes("AutomaticProductRuleRun_one_active_per_rule_uq")
+      ) {
+        const conflictError = new Error("AUTOMATIC_RULE_RUN_ALREADY_ACTIVE");
+        conflictError.statusCode = 409;
+        conflictError.code = "AUTOMATIC_RULE_RUN_ALREADY_ACTIVE";
+        conflictError.expose = true;
+        throw conflictError;
+      }
+      throw error;
+    }
+  });
 }
 
 async function failHistoryAndRun({ rule, run, historyId, error, processingToken = null }) {
@@ -913,10 +987,38 @@ export async function executeAutomaticProductRuleRun(automaticRuleRunId, shopFro
       };
     }
 
-    const where = productFilterService.getProductPrismaWhere(
-      Array.isArray(executionRule.conditions) ? executionRule.conditions : [],
-      rule.shop,
-    );
+    const filterAst =
+      run.ruleSnapshot?.normalizedFilterAst ||
+      run.ruleSnapshot?.filterAst ||
+      rule.normalizedFilterAst ||
+      rule.filterAst;
+
+    if (!filterAst) {
+      await automaticProductRuleRepository.updateByIdForShop({
+        id: rule.id,
+        shop: rule.shop,
+        data: {
+          status: "PAUSED",
+          nextRunAt: null,
+          lastFailureAt: new Date(),
+          lastFailureReason: "Automatic rule paused: Missing canonical versioned filter AST. Migration and merchant confirmation required.",
+        },
+      });
+      const error = new Error("Automatic rule requires a canonical versioned filter AST");
+      error.code = "AUTOMATIC_RULE_CANONICAL_FILTER_REQUIRED";
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const targeting = TargetingEngineService.prepareTargetingPayload({
+      filterAst,
+      legacyFilterParams: null,
+      targetGranularity: executionRule.targetResourceType || "PRODUCT",
+      source: "AUTOMATIC_RULE_RUN",
+      shop: rule.shop,
+      mirrorBatchId: run.mirrorBatchId,
+    });
+    const where = targeting.compiled.where;
 
     const {
       matchedCount,
@@ -1415,7 +1517,7 @@ export async function finalizeAutomaticProductRuleRunFromHistory({
   }
 
   await automaticProductRuleRepository.updateByIdForShop(history.automaticProductRuleId, run.shop, {
-    runCount: { increment: 1 },
+    runCount: { increment: 1n },
     lastRunAt: completedAt,
     ...(normalizedStatus === RUN_STATUS.SUCCEEDED
       ? {

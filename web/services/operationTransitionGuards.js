@@ -9,15 +9,21 @@ const db = repositoryDb;
 export async function guardedEditHistoryUpdate({
   id,
   shop,
-  expectedExecutionStates = [],
+  expectedExecutionStates,
   expectedStatuses = [],
+  expectedStateVersion,
   extraWhere = {},
   data,
-  db = repositoryDb,
+  tx,
+  db,
 }) {
+  const targetClient = tx || db || repositoryDb;
   const where = {
     id,
     shop,
+    ...(expectedStateVersion !== null && expectedStateVersion !== undefined
+      ? { stateVersion: Number(expectedStateVersion) }
+      : {}),
     ...(Array.isArray(expectedExecutionStates) && expectedExecutionStates.length
       ? {
         executionStateNormalized: {
@@ -35,6 +41,28 @@ export async function guardedEditHistoryUpdate({
     ...(extraWhere && typeof extraWhere === "object" ? extraWhere : {}),
   };
 
-  const result = await db.editHistory.updateMany({ where, data });
-  return result.count === 1;
+  const updateData = {
+    ...data,
+    stateVersion: { increment: 1 },
+  };
+
+  const result = await targetClient.editHistory.updateMany({ where, data: updateData });
+  if (result.count === 1) {
+    const newVersion =
+      expectedStateVersion !== undefined && expectedStateVersion !== null
+        ? Number(expectedStateVersion) + 1
+        : null;
+    return {
+      success: true,
+      count: 1,
+      newVersion,
+    };
+  }
+
+  return {
+    success: false,
+    count: 0,
+    newVersion: null,
+  };
 }
+

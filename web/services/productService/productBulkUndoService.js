@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { immutableOutboxEvent } from "../../helpers/immutableOutboxEvent.js";
 import { uploadToShopifyStagedTarget } from "../../utils/productBulkEditUtils.js";
 import {
   getProductSetMutation,
@@ -16,6 +17,13 @@ import {
 import { ProductEditOperationRegistry } from "../bulkEdit/planner/productEditOperationRegistry.js";
 import logger from "../../utils/loggerUtils.js";
 import { refreshTargetSnapshotSetCounters } from "../../repositories/targetSnapshotSetRepository.js";
+import {
+  buildImmutableUndoItems,
+  hashUndoValue,
+  UNDO_VALUE_SERIALIZER_VERSION,
+  unwrapUndoValue,
+} from "../undo/undoValueIntegrity.js";
+import { buildImmutablePayloadMetadata } from "../../utils/immutablePayloadUtils.js";
 
 const OPTION_NAME_FIELDS = new Set([
   "option1Name",
@@ -68,24 +76,6 @@ function stableHash(value) {
     .digest("hex");
 }
 
-function canonicalComparable(field, value) {
-  if (value === undefined) return { kind: "absent" };
-  if (value === null) return { kind: "null" };
-  if (field === "tags" && Array.isArray(value)) {
-    return { kind: "set", value: [...value].map(String).sort() };
-  }
-  if (["price", "compareAtPrice"].includes(field)) {
-    const number = Number(value);
-    return Number.isFinite(number)
-      ? {
-          kind: "decimal",
-          value: number.toFixed(6).replace(/0+$/, "").replace(/\.$/, ""),
-        }
-      : { kind: "string", value: String(value) };
-  }
-  return { kind: typeof value, value };
-}
-
 function currentNodeValue(node, field) {
   if (field === "Meta Title" || field === "metaTitle") return node?.seo?.title;
   if (field === "Meta Description" || field === "metaDescription")
@@ -93,13 +83,6 @@ function currentNodeValue(node, field) {
   if (field === "description") return node?.descriptionHtml;
   if (field === "inventory") return node?.inventoryQuantity;
   return node?.[field];
-}
-
-function valuesMatch(field, current, expected) {
-  return (
-    stableHash(canonicalComparable(field, current)) ===
-    stableHash(canonicalComparable(field, expected))
-  );
 }
 
 function isDatabaseUnavailable(error) {
@@ -189,12 +172,10 @@ class UndoEditService {
               );
             }
 
-            const existing = await tx.undoOperation.findUnique({
+            const existing = await tx.undoOperation.findFirst({
               where: {
-                shop_sourceEditHistoryId: {
-                  shop: this.session.shop,
-                  sourceEditHistoryId: history.id,
-                },
+                shop: this.session.shop,
+                idempotencyKeyHash,
               },
             });
             if (existing) {
@@ -206,16 +187,30 @@ class UndoEditService {
                 return toUndoResponse(existing, { idempotent: true });
               }
             }
+            const activeForSource = await tx.undoOperation.findFirst({
+              where: {
+                shop: this.session.shop,
+                sourceEditHistoryId: history.id,
+                executionState: { in: [...ACTIVE_UNDO_STATES] },
+              },
+              select: { id: true },
+            });
+            if (activeForSource) {
+              throw buildUndoError(
+                "UNDO_ALREADY_ACTIVE",
+                "Another undo revision is already active for this edit"
+              );
+            }
 
             const undoData = normalizeUndoState(
               history.undo,
               buildPlannedUndoState({ allowed: false })
             );
             const status = String(
-              history.statusNormalized || history.status || ""
+              history.statusNormalized || "UNKNOWN"
             ).toLowerCase();
             const executionState = String(
-              history.executionStateNormalized || history.executionState || ""
+              history.executionStateNormalized || "UNKNOWN"
             ).toLowerCase();
             if (
               !["completed", "partial"].includes(status) &&
@@ -260,8 +255,14 @@ class UndoEditService {
                 status: { in: SUCCESSFUL_CHANGE_STATUSES },
               },
               select: {
+                id: true,
                 targetIdentity: true,
+                fieldPath: true,
+                targetResourceType: true,
+                productId: true,
+                variantId: true,
                 beforeValues: true,
+                afterValues: true,
                 productFieldChanges: true,
                 variantFieldChanges: true,
                 options: true,
@@ -288,20 +289,30 @@ class UndoEditService {
               history?.batch?.targetSnapshotRef?.snapshotSetId || ""
             ).trim();
             let snapshotSource = "change_record_before_values";
+            let trustedSnapshotRows = [];
             if (snapshotSetId) {
               snapshotSource = "target_snapshot";
               const undoableTargetKeys = appliedChanges
                 .map((record) => String(record.targetIdentity || "").trim())
                 .filter(Boolean);
-              const snapshotCount = await tx.targetSnapshotItem.count({
+              trustedSnapshotRows = await tx.targetSnapshotItem.findMany({
                 where: {
                   shop: this.session.shop,
                   snapshotSetId,
                   targetKey: { in: undoableTargetKeys },
                   executionStatus: "SUCCEEDED",
                 },
+                select: {
+                  targetKey: true,
+                  fieldPath: true,
+                  productId: true,
+                  variantId: true,
+                  targetResourceType: true,
+                  beforeValues: true,
+                  plannedMutation: true,
+                },
               });
-              if (snapshotCount !== undoableTargetKeys.length) {
+              if (trustedSnapshotRows.length !== undoableTargetKeys.length) {
                 throw buildUndoError(
                   "UNDO_SNAPSHOTS_INCOMPLETE",
                   "Trusted before-state snapshots are incomplete"
@@ -313,7 +324,9 @@ class UndoEditService {
                   snapshotSetId,
                   targetKey: { in: undoableTargetKeys },
                   executionStatus: "SUCCEEDED",
-                  undoStatus: "NOT_REQUIRED",
+                  undoStatus: {
+                    in: ["NOT_REQUIRED", "SUCCEEDED", "FAILED", "SKIPPED"],
+                  },
                 },
                 data: { undoStatus: "PENDING" },
               });
@@ -337,39 +350,88 @@ class UndoEditService {
               }
             }
 
+            const snapshotByIdentity = new Map(
+              trustedSnapshotRows.map((row) => [
+                `${String(row.targetKey)}\u001f${String(row.fieldPath)}`,
+                row,
+              ])
+            );
+            const replayRecords = this.buildUndoReplayRecords(
+              appliedChanges,
+              snapshotByIdentity
+            );
+            const immutableItems = buildImmutableUndoItems(replayRecords);
+            if (!immutableItems.length) {
+              throw buildUndoError(
+                "UNDO_SNAPSHOTS_INCOMPLETE",
+                "Exact before and written values cannot be reconstructed"
+              );
+            }
+
             const operation = await tx.undoOperation.create({
               data: {
                 shop: this.session.shop,
                 sourceEditHistoryId: history.id,
                 executionIdentity,
                 idempotencyKeyHash,
+                serializerVersion: UNDO_VALUE_SERIALIZER_VERSION,
+                trustStatus: "TRUSTED",
+                approvedAt: requestedAt,
+                approvedByActorId:
+                  String(options?.actor?.id || options?.actor?.actorId || "").trim() || null,
                 outcomeStatus: "pending",
                 executionState: "queued",
-                totalEligibleCount: appliedChanges.length,
+                totalEligibleCount: immutableItems.length,
                 requestedAt,
               },
             });
+            await tx.undoItem.createMany({
+              data: immutableItems.map((item) => ({
+                ...item,
+                shop: this.session.shop,
+                undoOperationId: operation.id,
+              })),
+            });
             const commandJson = {
-              version: 1,
+              version: 2,
               shop: this.session.shop,
               sourceEditHistoryId: history.id,
               undoExecutionId: operation.id,
               executionIdentity,
               snapshotSource,
               snapshotSetId: snapshotSetId || null,
+              undoItemSetRevision: 1,
+              serializerVersion: UNDO_VALUE_SERIALIZER_VERSION,
+              undoItemCount: immutableItems.length,
+              undoItemSetHash: stableHash(
+                immutableItems.map(({ targetIdentity, targetId, fieldPath, targetContext, beforeValueHash, writtenValueHash }) => ({
+                  targetIdentity,
+                  targetId,
+                  fieldPath,
+                  targetContext,
+                  beforeValueHash,
+                  writtenValueHash,
+                }))
+              ),
               requestedAt: requestedAt.toISOString(),
             };
+            const {
+              payloadHash: commandHash,
+              ...commandPayloadMetadata
+            } = buildImmutablePayloadMetadata({ payload: commandJson, operationType: "UNDO_COMMAND" });
             await tx.undoCommand.create({
               data: {
                 shop: this.session.shop,
                 undoOperationId: operation.id,
                 sourceEditHistoryId: history.id,
-                commandHash: stableHash(commandJson),
+                commandVersion: 2,
+                commandHash,
                 commandJson,
+                ...commandPayloadMetadata,
               },
             });
             await tx.outboxEvent.create({
-              data: {
+              data: immutableOutboxEvent({
                 shop: this.session.shop,
                 aggregateType: "UNDO_EXECUTION",
                 aggregateId: operation.id,
@@ -383,7 +445,7 @@ class UndoEditService {
                   undoExecutionId: operation.id,
                 },
                 status: "PENDING",
-              },
+              }),
             });
 
             const moved = await tx.editHistory.updateMany({
@@ -438,12 +500,10 @@ class UndoEditService {
         return result;
       } catch (error) {
         if (error?.code === "P2002") {
-          const existing = await db.undoOperation.findUnique({
+          const existing = await db.undoOperation.findFirst({
             where: {
-              shop_sourceEditHistoryId: {
-                shop: this.session.shop,
-                sourceEditHistoryId: requestedHistoryId,
-              },
+              shop: this.session.shop,
+              idempotencyKeyHash,
             },
           });
           if (existing) return toUndoResponse(existing, { idempotent: true });
@@ -557,7 +617,9 @@ class UndoEditService {
           const changePayload =
             variant.changes?.reduce((accumulator, fieldChange) => {
               accumulator[fieldChange.field] =
-                fieldChange.revertValue ?? fieldChange.oldValue;
+                Object.hasOwn(fieldChange, "revertValue")
+                  ? fieldChange.revertValue
+                  : fieldChange.oldValue;
               return accumulator;
             }, {}) || {};
 
@@ -707,7 +769,11 @@ class UndoEditService {
     };
   }
 
-  async verifyUndoConflicts(products = []) {
+  async verifyUndoConflicts(
+    products = [],
+    immutableItems = [],
+    { expectedHashField = "writtenValueHash" } = {}
+  ) {
     const conflicts = [];
     const observations = [];
     const productIds = [
@@ -772,6 +838,12 @@ class UndoEditService {
     );
 
     const safeProducts = [];
+    const itemByField = new Map(
+      immutableItems.map((item) => [
+        `${item.targetIdentity}|${item.fieldPath}`,
+        item,
+      ])
+    );
     for (const record of products) {
       let hasConflict = false;
       for (const fieldChange of Array.isArray(record?.productFieldChanges)
@@ -779,6 +851,9 @@ class UndoEditService {
         : []) {
         const node = nodeMap.get(String(record.productId));
         const field = String(fieldChange?.field || "");
+        const immutableItem = itemByField.get(
+          `${record.targetIdentity}|product.${field}`
+        );
         if (!node || node.__typename !== "Product") {
           hasConflict = true;
           observations.push({
@@ -787,8 +862,8 @@ class UndoEditService {
             productId: record.productId,
             variantId: null,
             field,
-            expectedValue: fieldChange?.newValue,
-            currentShopifyValue: null,
+            undoItemId: immutableItem?.id || null,
+            expectedValueHash: immutableItem?.writtenValueHash || null,
             verified: false,
           });
           conflicts.push({
@@ -798,28 +873,30 @@ class UndoEditService {
           });
           continue;
         }
-        const expectedAfter = fieldChange?.newValue;
+        const expectedAfterHash = immutableItem?.[expectedHashField] || null;
         const current = currentNodeValue(node, field);
-        const verified =
-          !Object.hasOwn(fieldChange || {}, "newValue") ||
-          valuesMatch(field, current, expectedAfter);
+        const currentValueHash = hashUndoValue(`product.${field}`, current);
+        const verified = Boolean(
+          immutableItem && expectedAfterHash === currentValueHash
+        );
         observations.push({
           targetIdentity: record.targetIdentity,
           scope: "product",
           productId: record.productId,
           variantId: null,
           field,
-          expectedValue: expectedAfter,
-          currentShopifyValue: current,
+          undoItemId: immutableItem?.id || null,
+          expectedValueHash: expectedAfterHash,
+          currentValueHash,
           verified,
         });
-        if (Object.hasOwn(fieldChange || {}, "newValue") && !verified) {
+        if (!verified) {
           hasConflict = true;
           conflicts.push({
             targetIdentity: record.targetIdentity,
             field,
-            expectedAfter,
-            current,
+            expectedValueHash: expectedAfterHash,
+            currentValueHash,
           });
         }
       }
@@ -832,14 +909,19 @@ class UndoEditService {
           for (const fieldChange of Array.isArray(variantChange?.changes)
             ? variantChange.changes
             : [variantChange]) {
+            const field = String(fieldChange?.field || "");
+            const immutableItem = itemByField.get(
+              `${record.targetIdentity}|variant:${variantChange?.variantId}.${field}`
+            );
             observations.push({
               targetIdentity: record.targetIdentity,
               scope: "variant",
               productId: record.productId,
               variantId: variantChange?.variantId || null,
-              field: String(fieldChange?.field || ""),
-              expectedValue: fieldChange?.newValue,
-              currentShopifyValue: null,
+              field,
+              undoItemId: immutableItem?.id || null,
+              expectedValueHash:
+                immutableItem?.[expectedHashField] || null,
               verified: false,
             });
           }
@@ -855,28 +937,34 @@ class UndoEditService {
           : [variantChange];
         for (const fieldChange of changes) {
           const field = String(fieldChange?.field || "");
-          const expectedAfter = fieldChange?.newValue;
+          const fieldPath = `variant:${variantChange?.variantId}.${field}`;
+          const immutableItem = itemByField.get(
+            `${record.targetIdentity}|${fieldPath}`
+          );
+          const expectedAfterHash = immutableItem?.[expectedHashField] || null;
           const current = currentNodeValue(node, field);
-          const verified =
-            !Object.hasOwn(fieldChange || {}, "newValue") ||
-            valuesMatch(field, current, expectedAfter);
+          const currentValueHash = hashUndoValue(fieldPath, current);
+          const verified = Boolean(
+            immutableItem && expectedAfterHash === currentValueHash
+          );
           observations.push({
             targetIdentity: record.targetIdentity,
             scope: "variant",
             productId: record.productId,
             variantId: variantChange?.variantId || null,
             field,
-            expectedValue: expectedAfter,
-            currentShopifyValue: current,
+            undoItemId: immutableItem?.id || null,
+            expectedValueHash: expectedAfterHash,
+            currentValueHash,
             verified,
           });
-          if (Object.hasOwn(fieldChange || {}, "newValue") && !verified) {
+          if (!verified) {
             hasConflict = true;
             conflicts.push({
               targetIdentity: record.targetIdentity,
               field,
-              expectedAfter,
-              current,
+              expectedValueHash: expectedAfterHash,
+              currentValueHash,
             });
           }
         }
@@ -889,26 +977,82 @@ class UndoEditService {
     return { safeProducts, conflicts, observations };
   }
 
-  async verifyUndoRestored(products = []) {
+  hydrateReplayRecordsFromUndoItems(records = [], immutableItems = []) {
+    const byTarget = new Map();
+    for (const item of immutableItems) {
+      const key = String(item.targetIdentity);
+      if (!byTarget.has(key)) byTarget.set(key, []);
+      byTarget.get(key).push(item);
+    }
+
+    return records.map((record) => {
+      const items = byTarget.get(String(record.targetIdentity)) || [];
+      const productFieldChanges = items
+        .filter((item) => item.targetResourceType === "PRODUCT")
+        .map((item) => ({
+          field: item.fieldPath.replace(/^product\./, ""),
+          revertValue: unwrapUndoValue(item.beforeValue),
+        }));
+      const variants = new Map();
+      for (const item of items.filter((entry) => entry.targetResourceType === "VARIANT")) {
+        const field = item.fieldPath.replace(/^variant:[^.]+\./, "");
+        if (!variants.has(item.targetId)) variants.set(item.targetId, []);
+        variants.get(item.targetId).push({
+          field,
+          revertValue: unwrapUndoValue(item.beforeValue),
+        });
+      }
+      if (!items.length) {
+        throw buildUndoError(
+          "UNDO_IMMUTABLE_ITEMS_REQUIRED",
+          "Undo execution has no trusted immutable field items",
+          { targetIdentity: record.targetIdentity }
+        );
+      }
+      return {
+        ...record,
+        productId: String(items[0]?.productId || ""),
+        variantId:
+          items.find((item) => item.variantId)?.variantId || null,
+        productFieldChanges,
+        variantFieldChanges: [...variants.entries()].map(([variantId, changes]) => ({
+          variantId,
+          changes,
+          selectedOptions:
+            items.find((item) => item.variantId === variantId)?.targetContext
+              ?.selectedOptions || [],
+        })),
+        options: items[0]?.targetContext?.productOptions || [],
+      };
+    });
+  }
+
+  async verifyUndoRestored(products = [], immutableItems = []) {
     const verificationInput = products.map((record) => ({
       ...record,
       productFieldChanges: (record.productFieldChanges || []).map((change) => ({
         ...change,
-        newValue: change.revertValue ?? change.oldValue,
+        newValue: Object.hasOwn(change, "revertValue")
+          ? change.revertValue
+          : change.oldValue,
       })),
       variantFieldChanges: (record.variantFieldChanges || []).map(
         (variant) => ({
           ...variant,
           changes: (variant.changes || []).map((change) => ({
             ...change,
-            newValue: change.revertValue ?? change.oldValue,
+            newValue: Object.hasOwn(change, "revertValue")
+              ? change.revertValue
+              : change.oldValue,
           })),
         })
       ),
     }));
     const verifiedAt = new Date().toISOString();
     const { conflicts, observations } = await this.verifyUndoConflicts(
-      verificationInput
+      verificationInput,
+      immutableItems,
+      { expectedHashField: "beforeValueHash" }
     );
     return {
       verified: conflicts.length === 0,
@@ -916,7 +1060,7 @@ class UndoEditService {
       verifiedAt,
       evidence: observations.map((observation) => ({
         ...observation,
-        restoredValue: observation.expectedValue,
+        restoredValueHash: observation.expectedValueHash,
         verifiedAt,
       })),
     };
@@ -932,7 +1076,10 @@ class UndoEditService {
         error.details = { changeRecordId: record?.id || null };
         throw error;
       }
-      const snapshot = snapshotByIdentity.get(targetIdentity) || null;
+      const snapshot =
+        snapshotByIdentity.get(
+          `${targetIdentity}\u001f${String(record?.fieldPath || "")}`
+        ) || snapshotByIdentity.get(targetIdentity) || null;
       const snapshotBeforeValues =
         snapshot?.beforeValues && typeof snapshot.beforeValues === "object"
           ? snapshot.beforeValues
@@ -1045,7 +1192,7 @@ class UndoEditService {
   }
 
   getProductFieldPayload(field, revertValue, oldValue) {
-    const value = revertValue ?? oldValue;
+    const value = revertValue !== undefined ? revertValue : oldValue;
 
     const fieldMap = {
       description: { descriptionHtml: value ?? "" },

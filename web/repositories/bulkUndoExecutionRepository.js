@@ -1,10 +1,12 @@
 import crypto from "crypto";
+import { immutableOutboxEvent } from "../helpers/immutableOutboxEvent.js";
 import { prisma } from "../config/database.js";
 import {
   BULK_UNDO_STATES,
   buildExecutionError,
   normalizeUndoState,
 } from "../services/bulkEditExecutionStateService.js";
+import { buildImmutablePayloadMetadata } from "../utils/immutablePayloadUtils.js";
 
 const CONFLICT_CHUNK_SIZE = 500;
 const SUCCESSFUL_CHANGE_STATUSES = [
@@ -54,10 +56,6 @@ export async function persistUndoConflictChunks({
 }) {
   if (!undoOperationId) return;
 
-  await prisma.undoOperationConflictChunk.deleteMany({
-    where: { shop, undoOperationId },
-  });
-
   const safeTargetIdentities = safeProducts
     .map((row) => row?.targetIdentity)
     .filter(Boolean);
@@ -91,7 +89,10 @@ export async function persistUndoConflictChunks({
     });
   }
 
-  const all = [...safeChunks, ...conflictChunks];
+  const all = [...safeChunks, ...conflictChunks].map((chunk) => ({
+    ...chunk,
+    ...buildImmutablePayloadMetadata({ payload: chunk.payload, operationType: "UNDO_CONFLICT_CHUNK" }),
+  }));
   if (!all.length) return;
 
   for (let i = 0; i < all.length; i += 250) {
@@ -222,11 +223,11 @@ export async function findUndoSnapshotRows({
       snapshotSetId,
       targetKey: { in: targetKeys },
       executionStatus: "SUCCEEDED",
-      undoStatus: "PENDING",
     },
     select: {
       id: true,
       targetKey: true,
+      fieldPath: true,
       productId: true,
       variantId: true,
       targetResourceType: true,
@@ -236,6 +237,89 @@ export async function findUndoSnapshotRows({
       executionStatus: true,
       shopifyResultId: true,
     },
+  });
+}
+
+export async function findTrustedUndoItems({ shop, undoOperationId }) {
+  const operation = await prisma.undoOperation.findFirst({
+    where: {
+      id: undoOperationId,
+      shop,
+      trustStatus: "TRUSTED",
+      serializerVersion: { not: null },
+    },
+    select: {
+      id: true,
+      serializerVersion: true,
+      items: {
+        where: { outcome: { in: ["APPROVED", "SUBMITTED"] } },
+        orderBy: [{ targetIdentity: "asc" }, { fieldPath: "asc" }],
+      },
+    },
+  });
+  if (!operation || !operation.items.length) {
+    const error = new Error("UNDO_IMMUTABLE_ITEMS_REQUIRED");
+    error.code = "UNDO_IMMUTABLE_ITEMS_REQUIRED";
+    throw error;
+  }
+  return operation.items;
+}
+
+export async function persistUndoItemPreflight({
+  shop,
+  undoOperationId,
+  observations = [],
+}) {
+  const observedAt = new Date();
+  const blockedTargets = new Set(
+    observations
+      .filter((item) => item?.verified === false)
+      .map((item) => item.targetIdentity)
+  );
+  const writes = observations
+    .filter((item) => item?.undoItemId)
+    .map((item) =>
+      prisma.undoItem.updateMany({
+        where: {
+          id: item.undoItemId,
+          shop,
+          undoOperationId,
+          outcome: "APPROVED",
+          observedCurrentValueHash: null,
+        },
+        data: {
+          observedCurrentValueHash: item.currentValueHash || null,
+          observedAt,
+          outcome: item.verified
+            ? blockedTargets.has(item.targetIdentity)
+              ? "SKIPPED"
+              : "APPROVED"
+            : "CONFLICT",
+          failureCode: item.verified
+            ? blockedTargets.has(item.targetIdentity)
+              ? "SIBLING_FIELD_CONFLICT"
+              : null
+            : "CURRENT_VALUE_MISMATCH",
+        },
+      })
+    );
+  if (writes.length) await prisma.$transaction(writes);
+}
+
+export async function markUndoItemsSubmitted({
+  shop,
+  undoOperationId,
+  targetIdentities = [],
+}) {
+  if (!targetIdentities.length) return { count: 0 };
+  return prisma.undoItem.updateMany({
+    where: {
+      shop,
+      undoOperationId,
+      targetIdentity: { in: targetIdentities },
+      outcome: "APPROVED",
+    },
+    data: { outcome: "SUBMITTED", submittedAt: new Date() },
   });
 }
 
@@ -362,7 +446,7 @@ export async function recoverFailedUndoExecution({
       });
 
       await tx.outboxEvent.create({
-        data: {
+        data: immutableOutboxEvent({
           shop,
           aggregateType: "UNDO_EXECUTION",
           aggregateId: operation.id,
@@ -377,7 +461,7 @@ export async function recoverFailedUndoExecution({
             recoveryId,
           },
           status: "PENDING",
-        },
+        }),
       });
 
       await tx.bulkEditRecoveryAudit.create({
@@ -489,7 +573,7 @@ export async function reopenFalseCompletedUndoExecution({
       });
 
       await tx.outboxEvent.create({
-        data: {
+        data: immutableOutboxEvent({
           shop,
           aggregateType: "UNDO_EXECUTION",
           aggregateId: operation.id,
@@ -504,7 +588,7 @@ export async function reopenFalseCompletedUndoExecution({
             recoveryId,
           },
           status: "PENDING",
-        },
+        }),
       });
 
       await tx.bulkEditRecoveryAudit.create({

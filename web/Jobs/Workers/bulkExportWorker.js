@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -12,6 +13,7 @@ import { finalizeScheduledExportRunFromExportJob } from "../../services/schedule
 import {
   computeTargetSetHash,
   getFrozenTargetProductIds,
+  getFrozenTargetVariantIds,
 } from "../../services/productService/productTargetingService.js";
 import {
   acquireExclusiveShopWork,
@@ -38,6 +40,7 @@ import {
   findExportOperationState,
   findExportTerminalFlags,
   findProductsForExport,
+  findVariantsForExport,
   markExportCancelled,
   markExportFailureState,
   markExportFinalizing,
@@ -101,6 +104,25 @@ function endCsvAndWaitForFile({ csvStream, writeStream }) {
     writeStream.once("error", reject);
     csvStream.once("error", reject);
     csvStream.end();
+  });
+}
+
+/**
+ * Streams filePath through SHA-256 and returns the hex digest plus the exact
+ * number of bytes read from disk.  Called after endCsvAndWaitForFile so the
+ * file is fully flushed before we start reading.
+ */
+async function hashExportFile(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    let sizeBytes = 0;
+    const readStream = fs.createReadStream(filePath);
+    readStream.on("data", (chunk) => {
+      sizeBytes += chunk.length;
+      hash.update(chunk);
+    });
+    readStream.on("end", () => resolve({ checksum: hash.digest("hex"), sizeBytes }));
+    readStream.on("error", reject);
   });
 }
 
@@ -168,6 +190,7 @@ const bulkExportWorker = new Worker(
     }
 
     let filePath = null;
+    let tempDirectory = null;
     let shopLockKey = null;
     let budgetLeases = null;
 
@@ -249,8 +272,14 @@ const bulkExportWorker = new Worker(
 
       await clearKeyCaches(`${shop}:fetchExportHistories:`);
 
-      filePath = path.join(os.tmpdir(), exportJob.generatedFilename);
-      const writeStream = fs.createWriteStream(filePath);
+      tempDirectory = await fs.promises.mkdtemp(
+        path.join(os.tmpdir(), "metamatrix-export-"),
+      );
+      filePath = path.join(tempDirectory, `${exportJob.id}.csv`);
+      const writeStream = fs.createWriteStream(filePath, {
+        flags: "wx",
+        mode: 0o600,
+      });
       const selectedFields =
         Array.isArray(selectedFieldKeys) && selectedFieldKeys.length
           ? selectedFieldKeys
@@ -288,48 +317,96 @@ const csvStream = format({
           break;
         }
 
-        const snapshotPage = await getFrozenTargetProductIds({
-          ownerType: "EXPORT_JOB",
-          ownerId: exportJobId,
-          shop,
-          mirrorBatchId: exportJob.targetProductMirrorBatchId,
-          normalizedFilterHash: exportJob.normalizedFilterHash || null,
-          limit: pageSize,
-          cursorOrdinal,
-        });
+        const snapshotPage =
+          targetGranularity === EXPORT_FIELD_GRANULARITY.VARIANT
+            ? await getFrozenTargetVariantIds({
+                ownerType: "EXPORT_JOB",
+                ownerId: exportJobId,
+                shop,
+                mirrorBatchId: exportJob.targetProductMirrorBatchId,
+                normalizedFilterHash: exportJob.normalizedFilterHash || null,
+                limit: pageSize,
+                cursorOrdinal,
+              })
+            : await getFrozenTargetProductIds({
+                ownerType: "EXPORT_JOB",
+                ownerId: exportJobId,
+                shop,
+                mirrorBatchId: exportJob.targetProductMirrorBatchId,
+                normalizedFilterHash: exportJob.normalizedFilterHash || null,
+                limit: pageSize,
+                cursorOrdinal,
+              });
 
-        const productIds = snapshotPage.rows.map((row) => row.productId);
-        if (!productIds.length) {
-          break;
-        }
-
-        const products = await findProductsForExport({
-          shop,
-          productIds,
-          mirrorBatchId: exportJob.targetProductMirrorBatchId,
-        });
-
-        const productMap = new Map(products.map((product) => [product.id, product]));
-
-        for (const productId of productIds) {
-          const product = productMap.get(productId);
-          if (!product) continue;
-
-          if (targetGranularity === EXPORT_FIELD_GRANULARITY.PRODUCT) {
-            csvStream.write(buildExportCsvRow({ fieldDefinitions, product }));
-            totalRows += 1;
-            if (totalRows % 1000 === 0) {
-              await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
-            }
-            continue;
+        if (targetGranularity === EXPORT_FIELD_GRANULARITY.VARIANT) {
+          const variantIds = snapshotPage.rows.map((row) => row.variantId || row.targetId);
+          if (!variantIds.length) {
+            break;
           }
 
-          const variants = product.variants?.length ? product.variants : [null];
-          for (const variant of variants) {
-            csvStream.write(buildExportCsvRow({ fieldDefinitions, product, variant }));
-            totalRows += 1;
-            if (totalRows % 1000 === 0) {
-              await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
+          const variants = await findVariantsForExport({
+            shop,
+            variantIds,
+            mirrorBatchId: exportJob.targetProductMirrorBatchId,
+          });
+
+          const variantsById = new Map(variants.map((v) => [v.id, v]));
+          const missingVariantIds = variantIds.filter((id) => !variantsById.has(id));
+
+          if (missingVariantIds.length) {
+            const error = new Error("EXPORT_SNAPSHOT_DATA_MISSING");
+            error.code = "EXPORT_SNAPSHOT_DATA_MISSING";
+            error.details = {
+              missingCount: missingVariantIds.length,
+              sample: missingVariantIds.slice(0, 20),
+            };
+            throw error;
+          }
+
+          for (const row of snapshotPage.rows) {
+            const variantId = row.variantId || row.targetId;
+            const variant = variantsById.get(variantId);
+            if (variant) {
+              csvStream.write(buildExportCsvRow({ fieldDefinitions, variant, product: variant.product }));
+              totalRows += 1;
+              if (totalRows % 1000 === 0) {
+                await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
+              }
+            }
+          }
+        } else {
+          const productIds = snapshotPage.rows.map((row) => row.productId || row.targetId);
+          if (!productIds.length) {
+            break;
+          }
+
+          const products = await findProductsForExport({
+            shop,
+            productIds,
+            mirrorBatchId: exportJob.targetProductMirrorBatchId,
+          });
+
+          const productMap = new Map(products.map((product) => [product.id, product]));
+          const missingProductIds = productIds.filter((id) => !productMap.has(id));
+
+          if (missingProductIds.length) {
+            const error = new Error("EXPORT_SNAPSHOT_DATA_MISSING");
+            error.code = "EXPORT_SNAPSHOT_DATA_MISSING";
+            error.details = {
+              missingCount: missingProductIds.length,
+              sample: missingProductIds.slice(0, 20),
+            };
+            throw error;
+          }
+
+          for (const productId of productIds) {
+            const product = productMap.get(productId);
+            if (product) {
+              csvStream.write(buildExportCsvRow({ fieldDefinitions, product }));
+              totalRows += 1;
+              if (totalRows % 1000 === 0) {
+                await job.updateProgress({ stage: "streaming_csv", pct: 60, rows: totalRows });
+              }
             }
           }
         }
@@ -352,22 +429,26 @@ const csvStream = format({
       const cancelled = await findExportTerminalFlags(exportJobId, shop);
       if (String(cancelled?.statusNormalized || "").toUpperCase() === "CANCELLED") {
         await endCsvAndWaitForFile({ csvStream, writeStream });
-        if (filePath) {
-          await fs.promises.unlink(filePath).catch(() => {});
+        if (tempDirectory) {
+          await fs.promises.rm(tempDirectory, { recursive: true, force: true }).catch(() => {});
+          tempDirectory = null;
           filePath = null;
         }
         return toWorkerOperationStatusDto({ skipped: true, reason: "cancelled_during_execution", shop, exportJobId });
       }
       if (String(cancelled?.executionState || "").toUpperCase() === "PAUSED") {
         await endCsvAndWaitForFile({ csvStream, writeStream });
-        if (filePath) {
-          await fs.promises.unlink(filePath).catch(() => {});
+        if (tempDirectory) {
+          await fs.promises.rm(tempDirectory, { recursive: true, force: true }).catch(() => {});
+          tempDirectory = null;
           filePath = null;
         }
         return toWorkerOperationStatusDto({ skipped: true, reason: "paused_during_execution", shop, exportJobId });
       }
 
       await endCsvAndWaitForFile({ csvStream, writeStream });
+
+      const { checksum, sizeBytes } = await hashExportFile(filePath);
 
       const movedToFinalizing = await markExportFinalizing(
         exportJob.id,
@@ -385,15 +466,21 @@ const csvStream = format({
       );
       await job.updateProgress({ stage: "uploaded", pct: 90, rows: totalRows });
 
-      await fs.promises.unlink(filePath).catch(() => {});
-      filePath = null;
+      if (tempDirectory) {
+        await fs.promises.rm(tempDirectory, { recursive: true, force: true }).catch(() => {});
+        tempDirectory = null;
+        filePath = null;
+      }
 
-      const finalized = await finalizeExportSuccessState(
-        exportJob,
-        downloadUrl,
-        totalRows,
+      const finalized = await finalizeExportSuccessState({
+        exportJobId: exportJob.id,
+        shop: exportJob.shop,
         executionId,
-      );
+        downloadUrl,
+        checksum,
+        sizeBytes,
+        rowCount: totalRows,
+      });
       if (!finalized) {
         throw new Error("Export completion state could not be persisted safely");
       }
@@ -502,8 +589,10 @@ const csvStream = format({
 
       await clearKeyCaches(`${shop}:fetchExportHistories:`);
 
-      if (filePath) {
-        await fs.promises.unlink(filePath).catch(() => {});
+      if (tempDirectory) {
+        await fs.promises.rm(tempDirectory, { recursive: true, force: true }).catch(() => {});
+        tempDirectory = null;
+        filePath = null;
       }
 
       await logWorkerError({

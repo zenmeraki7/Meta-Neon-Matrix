@@ -778,6 +778,7 @@ export class BulkEditVerificationService {
           OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
           OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
         ],
+        expectedStateVersion: history?.stateVersion ?? 0,
         data: {
           status: "completed",
           statusNormalized: normalizeEditHistoryStatus("completed"),
@@ -799,7 +800,7 @@ export class BulkEditVerificationService {
         },
       });
 
-      if (!updated) {
+      if (!updated || !updated.success) {
         throw new Error("EDIT_HISTORY_UPDATE_FAILED_VERIFY_NONE_COMPLETE");
       }
 
@@ -827,6 +828,7 @@ export class BulkEditVerificationService {
       select: {
         id: true,
         targetIdentity: true,
+        fieldPath: true,
         productId: true,
         variantId: true,
         afterValues: true,
@@ -940,23 +942,26 @@ export class BulkEditVerificationService {
     let verified = 0;
     let failed = 0;
     const verifiedIds = [];
-    const verifiedTargetKeys = [];
+    const verifiedTargetFields = [];
     const failedRows = [];
 
     const snapshotSetId =
       String(
         history.snapshotSetId || history.batch?.targetSnapshotRef?.snapshotSetId || "",
       ).trim() || null;
-    const verifyTargetKeys = verifyRows
-      .map((row) => String(row.targetIdentity || "").trim())
-      .filter(Boolean);
+    const verifyTargetFields = verifyRows
+      .map((row) => ({
+        targetKey: String(row.targetIdentity || "").trim(),
+        fieldPath: String(row.fieldPath || "").trim(),
+      }))
+      .filter((row) => row.targetKey && row.fieldPath);
 
-    if (snapshotSetId && verifyTargetKeys.length > 0) {
+    if (snapshotSetId && verifyTargetFields.length > 0) {
       await db.targetSnapshotItem.updateMany({
         where: {
           shop,
           snapshotSetId,
-          targetKey: { in: verifyTargetKeys },
+          OR: verifyTargetFields,
           executionStatus: "SUCCEEDED",
         },
         data: { verificationStatus: "PENDING" },
@@ -979,12 +984,16 @@ export class BulkEditVerificationService {
       if (mismatches.length === 0) {
         verified += 1;
         verifiedIds.push(row.id);
-        verifiedTargetKeys.push(row.targetIdentity);
+        verifiedTargetFields.push({
+          targetKey: row.targetIdentity,
+          fieldPath: row.fieldPath,
+        });
       } else {
         failed += 1;
         failedRows.push({
           id: row.id,
           targetIdentity: row.targetIdentity,
+          fieldPath: row.fieldPath,
           message: JSON.stringify(mismatches.slice(0, 20)).slice(0, 2000),
         });
       }
@@ -1028,24 +1037,27 @@ export class BulkEditVerificationService {
     }
 
     if (snapshotSetId) {
-      for (let i = 0; i < verifiedTargetKeys.length; i += chunkSize) {
-        const targetKeyChunk = verifiedTargetKeys.slice(i, i + chunkSize);
+      for (let i = 0; i < verifiedTargetFields.length; i += chunkSize) {
+        const targetFieldChunk = verifiedTargetFields.slice(i, i + chunkSize);
         // eslint-disable-next-line no-await-in-loop
         await db.targetSnapshotItem.updateMany({
-          where: { shop, snapshotSetId, targetKey: { in: targetKeyChunk } },
+          where: { shop, snapshotSetId, OR: targetFieldChunk },
           data: { verificationStatus: "SUCCEEDED", verifiedAt: new Date() },
         });
       }
 
       for (let i = 0; i < failedRows.length; i += chunkSize) {
-        const targetKeyChunk = failedRows
+        const targetFieldChunk = failedRows
           .slice(i, i + chunkSize)
-          .map((row) => row.targetIdentity)
-          .filter(Boolean);
-        if (targetKeyChunk.length === 0) continue;
+          .map((row) => ({
+            targetKey: String(row.targetIdentity || "").trim(),
+            fieldPath: String(row.fieldPath || "").trim(),
+          }))
+          .filter((row) => row.targetKey && row.fieldPath);
+        if (targetFieldChunk.length === 0) continue;
         // eslint-disable-next-line no-await-in-loop
         await db.targetSnapshotItem.updateMany({
-          where: { shop, snapshotSetId, targetKey: { in: targetKeyChunk } },
+          where: { shop, snapshotSetId, OR: targetFieldChunk },
           data: { verificationStatus: "FAILED", verifiedAt: new Date() },
         });
       }
@@ -1069,6 +1081,7 @@ export class BulkEditVerificationService {
         OPERATION_LIFECYCLE_STATES.SHOPIFY_COMPLETED,
         OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS,
       ],
+      expectedStateVersion: history?.stateVersion ?? 0,
       data: {
         executionState: OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
         executionStateNormalized: normalizeEditHistoryExecutionState(
@@ -1077,7 +1090,7 @@ export class BulkEditVerificationService {
       },
     });
 
-    if (!movedToMirrorUpdating) {
+    if (!movedToMirrorUpdating || !movedToMirrorUpdating.success) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_MIRROR_UPDATING");
     }
 
@@ -1086,6 +1099,7 @@ export class BulkEditVerificationService {
       select: {
         batch: true,
         executionState: true,
+        stateVersion: true,
       },
     });
 
@@ -1124,6 +1138,7 @@ export class BulkEditVerificationService {
         OPERATION_LIFECYCLE_STATES.MIRROR_UPDATING,
         OPERATION_LIFECYCLE_STATES.VERIFYING,
       ],
+      expectedStateVersion: latest?.stateVersion ?? movedToMirrorUpdating.newVersion ?? (history?.stateVersion ? history.stateVersion + 1 : 0),
       data: {
         status: finalStatus,
         statusNormalized: normalizeEditHistoryStatus(finalStatus),
@@ -1154,7 +1169,7 @@ export class BulkEditVerificationService {
       },
     });
 
-    if (!historyUpdate) {
+    if (!historyUpdate || !historyUpdate.success) {
       throw new Error("EDIT_HISTORY_UPDATE_FAILED_SET_VERIFICATION_RESULT");
     }
 
@@ -1170,9 +1185,9 @@ export class BulkEditVerificationService {
         totalFailed > 0 || completionBlockedByCoverage
           ? "PARTIAL_FAILED"
           : "COMPLETED",
-      counterA: verified,
-      counterB: totalFailed,
-      counterC: verifyRows.length,
+      succeededItemCount: verified,
+      failedItemCount: totalFailed,
+      observedItemCount: verifyRows.length,
       detail: {
         mode,
         deterministicFullRequired,

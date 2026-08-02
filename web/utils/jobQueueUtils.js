@@ -175,3 +175,16 @@ export function scheduledExportRunJobId({
     normalizeScheduledFor(scheduledFor),
   );
 }
+
+export function recurringEditRunJobId({
+  shop,
+  recurringEditId,
+  scheduledFor,
+}) {
+  return joinSafeJobId(
+    "recurring-edit-run",
+    shop,
+    recurringEditId,
+    normalizeScheduledFor(scheduledFor),
+  );
+}

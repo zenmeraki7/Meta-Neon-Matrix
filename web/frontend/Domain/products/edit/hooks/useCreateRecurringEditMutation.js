@@ -10,20 +10,8 @@ const UPGRADE_REQUIRED_CODES = new Set([
 ]);
 
 export const RECURRING_EDIT_QUERY_KEYS = Object.freeze({
-  all: ["recurring-edits"],
-
-  lists: () => ["recurring-edits", "list"],
-  list: (params = {}) => ["recurring-edits", "list", params],
-
-  historyLists: () => ["recurring-edits", "history"],
-  history: (params = {}) => ["recurring-edits", "history", params],
-
-  status: (id) => ["recurring-edits", "status", id],
-
-  scheduledLists: () => ["recurring-edits", "scheduled"],
-  scheduled: (params = {}) => ["recurring-edits", "scheduled", params],
-
-  productHistory: (params = {}) => ["product-edit-history", params],
+  summary: ["recurring-list-summary"],
+  history: ["recurring-history-list"],
 });
 
 export function mapCreateRecurringEditError(t, error) {
@@ -72,18 +60,15 @@ export function useCreateRecurringEditMutation() {
       return response?.data ?? response;
     },
     retry: false,
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: RECURRING_EDIT_QUERY_KEYS.lists(),
-      });
-
-      queryClient.invalidateQueries({
-        queryKey: RECURRING_EDIT_QUERY_KEYS.scheduledLists(),
-      });
-
-      queryClient.invalidateQueries({
-        queryKey: RECURRING_EDIT_QUERY_KEYS.historyLists(),
-      });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["recurring-list-summary"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["recurring-history-list"],
+        }),
+      ]);
     },
   });
 }

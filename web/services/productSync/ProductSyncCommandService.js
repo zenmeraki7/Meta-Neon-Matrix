@@ -4,9 +4,13 @@ import { addProductSyncClearProductTypesJob } from "../../Jobs/Queues/productSyn
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import { assertFeatureEntitlement } from "../entitlement/featureEntitlementService.js";
 import { normalizeShopDomain } from "../../utils/shopDomainUtils.js";
+import { buildImmutablePayloadMetadata } from "../../utils/immutablePayloadUtils.js";
 
 function buildPayloadHash(payload) {
-  return crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+  return buildImmutablePayloadMetadata({
+    payload,
+    operationType: "OPERATION_ENQUEUE_INTENT",
+  }).payloadHash;
 }
 
 function buildCodedError(code, message) {
@@ -95,19 +99,25 @@ export class ProductSyncCommandService {
         },
       });
 
-      await tx.operationEnqueueIntent.create({
-        data: {
+      const intentPayload = {
+        shop: canonicalShop,
+        operationId: commandId,
+        executionId,
+        source: "product_sync_controller",
+      };
+      await tx.operationEnqueueIntent.createMany({
+        data: [{
+          id: crypto.randomUUID(),
           shop: canonicalShop,
           queueRoutingKey: "product_sync_clear_types",
           queueJobName: "addProductSyncClearProductTypesJob",
-          payload: {
-            shop: canonicalShop,
-            operationId: commandId,
-            executionId,
-            source: "product_sync_controller",
-          },
+          dispatchScope: "product_sync_clear_types",
+          dispatchDedupeKey: `product-sync-clear-types:${commandId}:${executionId}`,
+          payload: intentPayload,
+          ...buildImmutablePayloadMetadata({ payload: intentPayload, operationType: "OPERATION_ENQUEUE_INTENT" }),
           status: "PENDING",
-        },
+        }],
+        skipDuplicates: true,
       });
 
       return {

@@ -10,7 +10,10 @@ function read(filePath) {
 }
 
 test("history list hides worker lifecycle details while details keeps lifecycle timeline", () => {
-  const historyTable = read("web/frontend/Domain/History/components/HistoryTable.jsx");
+  const historyTablePath = fs.existsSync(path.join(ROOT, "web/frontend/Domain/History/components/HistoryTable.tsx"))
+    ? "web/frontend/Domain/History/components/HistoryTable.tsx"
+    : "web/frontend/Domain/History/components/HistoryTable.jsx";
+  const historyTable = read(historyTablePath);
   const jobProgressCell = read("web/frontend/Domain/History/components/JobProgressCell.tsx");
   const editDetails = read("web/frontend/Domain/products/edit/pages/EditDetails.jsx");
 

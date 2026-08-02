@@ -495,7 +495,7 @@ export class ProductBulkPreviewService {
       where: {
         id: String(previewId),
         shop: this.session.shop,
-        filterTrackType: "preview",
+        type: "preview",
         changeSource: "manual_preview",
       },
       select: {
@@ -654,7 +654,7 @@ export class ProductBulkPreviewService {
       where: {
         shop: this.session.shop,
         userId: actorId ? String(actorId) : null,
-        filterTrackType: "preview",
+        type: "preview",
         changeSource: "manual_preview",
         searchKey: previewSignatureHash,
         createdAt: { gte: dedupeCutoff },
@@ -709,7 +709,7 @@ export class ProductBulkPreviewService {
           id: previewId,
           shop: this.session.shop,
           userId: actorId ? String(actorId) : null,
-          filterTrackType: "preview",
+          type: "preview",
           rawFilterInput: Array.isArray(rawFilterInput) ? rawFilterInput : [],
           previewResCount: target.count,
           searchKey: previewSignatureHash,

@@ -103,7 +103,7 @@ export async function findHistoryForRecurringFinalize(historyId) {
       recurringRunId: true,
       recurringEditId: true,
       completedAt: true,
-      status: true,
+      statusNormalized: true,
       shop: true,
     },
   });

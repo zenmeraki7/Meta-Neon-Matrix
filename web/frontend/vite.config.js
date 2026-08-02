@@ -69,47 +69,11 @@ export default defineConfig({
     preserveSymlinks: true,
   },
   build: {
+    manifest: true,
     target: "es2020",
     minify: "esbuild",
     sourcemap: false,
     chunkSizeWarningLimit: 300,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (!id.includes("node_modules")) {
-            if (id.includes("/Domain/products/exports/") || id.includes("/pages/ExportDetails")) {
-              return "route-export";
-            }
-            if (id.includes("/Domain/History/") || id.includes("/pages/history")) {
-              return "route-history";
-            }
-            if (id.includes("/Domain/products/edit/") || id.includes("/pages/edit")) {
-              return "route-edit";
-            }
-            return null;
-          }
-          if (id.includes("@shopify/app-bridge")) {
-            return "vendor-app-bridge";
-          }
-          if (id.includes("@shopify/polaris") || id.includes("@shopify/polaris-icons")) {
-            return "vendor-polaris";
-          }
-          if (id.includes("@tanstack/react-query")) {
-            return "vendor-react-query";
-          }
-          if (id.includes("react-router-dom")) {
-            return "vendor-router";
-          }
-          if (id.includes("i18next")) {
-            return "vendor-i18n";
-          }
-          if (id.includes("react") || id.includes("scheduler")) {
-            return "vendor-react";
-          }
-          return "vendor";
-        },
-      },
-    },
   },
   server: {
     host: "localhost",

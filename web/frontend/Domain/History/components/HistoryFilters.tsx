@@ -1,108 +1,124 @@
-import React, { memo } from "react";
-import {
-  TextField,
-  Button,
-  InlineStack,
-  BlockStack,
-  Tabs,
-  Text,
-  Box,
-  Card,
-  Badge,
-} from "@shopify/polaris";
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
+
+type HistoryTab = {
+  id: string;
+  content: string;
+};
 
 interface HistoryFiltersProps {
   searchValue: string;
   onSearchChange: (value: string) => void;
+
   onExport: () => void;
+  canExport: boolean;
+  isExporting?: boolean;
+
   onSaveView: () => void;
-  selectedTabIndex: number;
-  onTabChange: (index: number) => void;
-  tabs: Array<{ id: string; content: string }>;
+  canSaveView: boolean;
+  isSavingView?: boolean;
+
+  selectedTabId: string;
+  onTabChange: (id: string) => void;
+  tabs: HistoryTab[];
 }
 
 const HistoryFilters = memo<HistoryFiltersProps>(
-  ({
+  function HistoryFilters({
     searchValue,
     onSearchChange,
     onExport,
+    canExport,
+    isExporting = false,
     onSaveView,
-    selectedTabIndex,
+    canSaveView,
+    isSavingView = false,
+    selectedTabId,
     onTabChange,
     tabs,
-  }) => {
-    const { t } = useTranslation(["history", "common"]);
+  }) {
+    const { t } = useTranslation([
+      "history",
+      "common",
+    ]);
+
     return (
-      <Card>
-        <Box padding="500">
-          <BlockStack gap="400">
-            <InlineStack
-              align="space-between"
-              blockAlign="start"
-              wrap
-              gap="300"
-            >
-              <BlockStack gap="100">
-                <InlineStack gap="200" blockAlign="center" wrap>
-                  <Text as="h3" variant="headingMd">
-                    {t("historyFiltersTitle")}
-                  </Text>
+      <s-section
+        heading={t("historyFiltersTitle")}
+      >
+        <s-stack gap="base">
+          <s-paragraph color="subdued">
+            {t("historyFiltersText")}
+          </s-paragraph>
 
-                  <Badge tone="new">{t("historyFiltersBadge")}</Badge>
-                </InlineStack>
-                <Box paddingBlockStart="100">
-                  <Text as="p" variant="bodySm" tone="subdued">
-                    {t("historyFiltersText")}
-                  </Text>
-                </Box>
-              </BlockStack>
-            </InlineStack>
+          <s-button-group gap="none">
+            {tabs.map((tab) => {
+              const selected =
+                tab.id === selectedTabId;
 
-            <Box
-              background="bg-surface-secondary"
-              borderRadius="300"
-              padding="200"
-            >
-              <Tabs
-                tabs={tabs}
-                selected={selectedTabIndex}
-                onSelect={onTabChange}
-              />
-            </Box>
+              return (
+                <s-button
+                  key={tab.id}
+                  variant="secondary"
+                  aria-pressed={selected}
+                  onClick={() => {
+                    onTabChange(tab.id);
+                  }}
+                >
+                  {tab.content}
+                </s-button>
+              );
+            })}
+          </s-button-group>
 
-            <InlineStack
-              align="space-between"
-              blockAlign="center"
-              gap="300"
-              wrap
-            >
-              <Box width="100%" maxWidth="380px" minWidth="260px">
-                <TextField
-                  label={t("search", { defaultValue: "Search" })}
-                  labelHidden
-                  placeholder={t("searchHistory")}
-                  value={searchValue}
-                  onChange={onSearchChange}
-                  clearButton
-                  onClearButtonClick={() => onSearchChange("")}
-                  autoComplete="off"
-                />
-              </Box>
+          <s-grid
+            gridTemplateColumns="repeat(auto-fit, minmax(min(100%, 280px), 1fr))"
+            gap="base"
+            alignItems="end"
+          >
+            <s-search-field
+              label={t("search", {
+                defaultValue: "Search",
+              })}
+              labelAccessibilityVisibility="exclusive"
+              name="history-search"
+              placeholder={t("searchHistory")}
+              value={searchValue}
+              autocomplete="off"
+              onInput={(event) => {
+                onSearchChange(
+                  event.currentTarget.value,
+                );
+              }}
+            />
 
-              <InlineStack gap="200" wrap>
-                <Button onClick={onSaveView}>
-                  {t("historySaveViewButton")}
-                </Button>
+            <s-button-group gap="base">
+              <s-button
+                loading={isSavingView}
+                disabled={
+                  !canSaveView ||
+                  isSavingView
+                }
+                onClick={onSaveView}
+              >
+                {t("historySaveViewButton")}
+              </s-button>
 
-                <Button variant="primary" onClick={onExport}>
-                  {t("historyExportButton")}
-                </Button>
-              </InlineStack>
-            </InlineStack>
-          </BlockStack>
-        </Box>
-      </Card>
+              <s-button
+                variant="primary"
+                loading={isExporting}
+                disabled={
+                  !canExport ||
+                  isExporting
+                }
+                onClick={onExport}
+              >
+                {t("historyExportButton")}
+              </s-button>
+            </s-button-group>
+          </s-grid>
+        </s-stack>
+      </s-section>
     );
   },
 );

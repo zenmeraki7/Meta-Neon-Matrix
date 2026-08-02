@@ -3,12 +3,6 @@ import { db } from "../../repositories/repositoryDb.js";
 import { PLANS } from "../SubscriptionService/SubscriptionService.js";
 import { addSubscriptionBillingJob } from "../../Jobs/Queues/subscriptionBillingJob.js";
 
-const COMMAND_TYPE = "subscription_command";
-
-function parseValue(value) {
-  return value && typeof value === "object" ? value : {};
-}
-
 export class SubscriptionCommandService {
   async createSubscriptionCommand({ shop, command, idempotencyKey }) {
     if (!shop) throw new Error("SHOP_REQUIRED");
@@ -18,50 +12,49 @@ export class SubscriptionCommandService {
     if (!plan) throw new Error("INVALID_PLAN_SELECTED");
 
     const idemKey = String(idempotencyKey || "").trim();
+    const idempotencyKeyHash = idemKey
+      ? crypto.createHash("sha256").update(idemKey, "utf8").digest("hex")
+      : null;
     if (idemKey) {
-      const existing = await db.filterTrack.findFirst({
-        where: {
-          shop,
-          filterTrackType: COMMAND_TYPE,
-          field: planKey,
-          searchKey: idemKey,
-        },
+      const existing = await db.subscriptionCommand.findFirst({
+        where: { shop, idempotencyKeyHash },
       });
       if (existing) {
-        const value = parseValue(existing.value);
         return {
           commandId: existing.id,
-          status: String(value.status || "PENDING_CONFIRMATION"),
-          confirmationUrl: value.confirmationUrl || null,
+          status: existing.status,
+          confirmationUrl: existing.confirmationUrl,
         };
       }
     }
 
     const commandId = crypto.randomUUID();
-    await db.filterTrack.create({
-      data: {
+    await db.subscriptionCommand.createMany({
+      data: [{
         id: commandId,
         shop,
-        filterTrackType: COMMAND_TYPE,
-        field: planKey,
-        searchKey: idemKey || null,
-        value: {
-          status: "PENDING_CONFIRMATION",
-          planKey,
-          returnUrl,
-        },
-      },
+        planKey,
+        returnUrl,
+        status: "PENDING_CONFIRMATION",
+        idempotencyKeyHash,
+      }],
+      skipDuplicates: true,
     });
 
+    const persisted = idempotencyKeyHash
+      ? await db.subscriptionCommand.findFirst({ where: { shop, idempotencyKeyHash } })
+      : await db.subscriptionCommand.findFirst({ where: { shop, id: commandId } });
+    if (!persisted) throw new Error("SUBSCRIPTION_COMMAND_PERSIST_FAILED");
+
     await addSubscriptionBillingJob({
-      commandId,
+      commandId: persisted.id,
       shop,
     });
 
     return {
-      commandId,
-      status: "PENDING_CONFIRMATION",
-      confirmationUrl: null,
+      commandId: persisted.id,
+      status: persisted.status,
+      confirmationUrl: persisted.confirmationUrl,
     };
   }
 }

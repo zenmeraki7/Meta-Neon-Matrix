@@ -19,19 +19,22 @@ try {
 
 export function createRedisConnection() {
   try {
+    const options = {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+      enableOfflineQueue: false,
+      retryStrategy: (times) => (process.env.NODE_ENV === "test" || times > 1 ? null : 100),
+    };
+
     if (process.env.REDIS_URL) {
-      return new IORedisClass(process.env.REDIS_URL, {
-        maxRetriesPerRequest: null,
-        enableReadyCheck: true,
-      });
+      return new IORedisClass(process.env.REDIS_URL, options);
     }
 
     return new IORedisClass({
-      host: process.env.REDIS_HOST,
-      port: process.env.REDIS_PORT,
+      host: process.env.REDIS_HOST || "127.0.0.1",
+      port: process.env.REDIS_PORT || 6379,
       password: process.env.REDIS_PASSWORD,
-      maxRetriesPerRequest: null,
-      enableReadyCheck: true,
+      ...options,
     });
   } catch {
     return new IORedisClass();
@@ -42,7 +45,9 @@ export const connection = createRedisConnection();
 
 if (connection && typeof connection.on === "function") {
   connection.on("connect", () => {});
-  connection.on("error", () => {});
+  connection.on("error", (err) => {
+    // Silent catch in test environments
+  });
 }
 
 class DummyMetric {

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "../../../../hooks/useApiClient";
 import { ALL_FILTERS } from "../constants";
 
-function normalizeRegistryData(data, { allowFallback = true } = {}) {
+export function normalizeRegistryData(data, { allowFallback = true } = {}) {
   if (!data || !Array.isArray(data.fields)) {
     if (!allowFallback) {
       throw new Error("Malformed product filter registry response");

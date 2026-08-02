@@ -8,7 +8,6 @@ import {
   parseSerializedExportError,
 } from "./exportExecutionStateService.js";
 import { OPERATION_LIFECYCLE_STATES } from "./operationLifecycleStateMachine.js";
-import { normalizeExecutionStateLiteral } from "../utils/normalizedStateUtils.js";
 const LEGACY_COMPAT = Object.freeze({
   undoStatusFallback:
     String(
@@ -165,11 +164,8 @@ function buildStatusSummary({
 }
 
 function buildMerchantSafetyState(record, undo, primaryStatus) {
-  const rawExecutionState = normalizeExecutionStateLiteral(
-    record.executionState
-  );
   const normalizedExecutionState = String(
-    record.executionStateNormalized || ""
+    record.executionStateNormalized || "UNKNOWN"
   ).toUpperCase();
   const statusNormalized = String(record.statusNormalized || "").toUpperCase();
   const processedCount = Number(record.processedCount || 0);
@@ -183,31 +179,30 @@ function buildMerchantSafetyState(record, undo, primaryStatus) {
     ? undo.conflicts.length
     : 0;
 
-  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING)
+  if (normalizedExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FREEZING)
     return "Preparing targets";
-  if (rawExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN)
+  if (normalizedExecutionState === OPERATION_LIFECYCLE_STATES.TARGET_FROZEN)
     return "Targets frozen";
   if (
-    rawExecutionState === OPERATION_LIFECYCLE_STATES.PLANNED ||
+    normalizedExecutionState === OPERATION_LIFECYCLE_STATES.PLANNED ||
     normalizedExecutionState === "PLANNED"
   ) {
     return "Waiting to prepare targets";
   }
-  if (rawExecutionState === "PAUSED") return "Paused";
+  if (normalizedExecutionState === "PAUSED") return "Paused";
   if (
-    rawExecutionState === OPERATION_LIFECYCLE_STATES.QUEUED ||
+    normalizedExecutionState === OPERATION_LIFECYCLE_STATES.QUEUED ||
     normalizedExecutionState === "QUEUED"
   ) {
     return "Queued";
   }
   if (
-    normalizedExecutionState === "DISPATCHING" ||
-    normalizedExecutionState === "AWAITING_SHOPIFY"
+    ["DISPATCHING", "EXECUTING", "RECONCILE_SUBMITTED", "SHOPIFY_BULK_SUBMITTED", "SHOPIFY_RUNNING", "AWAITING_SHOPIFY"].includes(normalizedExecutionState)
   ) {
     return "Editing products";
   }
   if (
-    normalizedExecutionState === "FINALIZING" ||
+    ["FINALIZING", "SHOPIFY_COMPLETED", "INGESTING_RESULTS", "VERIFYING", "MIRROR_UPDATING"].includes(normalizedExecutionState) ||
     verificationStatus === "PENDING"
   ) {
     return "Verifying changes";
@@ -743,6 +738,8 @@ export function projectEditHistoryStatus(record) {
 
   return {
     ...record,
+    status: String(record.statusNormalized || "UNKNOWN").toLowerCase(),
+    executionState,
     // Temporary response compatibility. Persisted and internal code use requestedAt.
     editTime: record.requestedAt || record.createdAt || null,
     primaryStatus,
@@ -790,6 +787,8 @@ export function projectExportHistoryStatus(record) {
 
   return {
     ...record,
+    status: String(record.statusNormalized || "UNKNOWN").toUpperCase(),
+    executionState,
     _id: record.id,
     primaryStatus,
     progressSummary: progress,

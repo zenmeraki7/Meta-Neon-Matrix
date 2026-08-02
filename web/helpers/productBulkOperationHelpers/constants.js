@@ -1,3 +1,10 @@
+import {
+  addMoney,
+  applyMoneyPercentage,
+  canonicalizeMoney,
+  percentageOfMoney,
+} from "../../utils/decimalArithmetic.js";
+
 export const FIELD_CONFIGS = {
   title: {
     fieldName: "title",
@@ -358,30 +365,29 @@ export const TEXT_OPERATIONS = {
 
 export const NUMERIC_OPERATIONS = {
   "Increase by percent": {
-    apply: (current, value) => toFixed00(current * (1 + Number(value) / 100)),
+    apply: (current, value) => applyMoneyPercentage(current, value, 1n),
     getTitle: (value, fieldName) => `${fieldName} Increased by ${value}%`,
   },
 
   "Decrease by percent": {
-    apply: (current, value) => toFixed00(current * (1 - Number(value) / 100)),
+    apply: (current, value) => applyMoneyPercentage(current, value, -1n),
     getTitle: (value, fieldName) => `${fieldName} Decreased by ${value}%`,
   },
 
   "Changed by fixed amount": {
-    apply: (current, value) => toFixed00(current + Number(value)),
+    apply: (current, value) => addMoney(current, value),
     getTitle: (value, fieldName) =>
       `${fieldName} Increased by Amount ${Number(value).toFixed(2)}`,
   },
 
   "Set to fixed value": {
-    apply: (_current, value) => toFixed00(Number(value)),
+    apply: (_current, value) => canonicalizeMoney(value),
     getTitle: (value, fieldName) =>
       `${fieldName} Set to ${Number(value).toFixed(2)}`,
   },
 
   "Set to percentage of compare-at-price": {
-    apply: (current, value) =>
-      toFixed00(Number(current) * (Number(value) / 100)),
+    apply: (current, value) => percentageOfMoney(current, value),
 
     getTitle: (value, fieldName) =>
       `${fieldName} set to ${value}% of Compare-at price`,
@@ -430,11 +436,6 @@ export const TAG_OPERATIONS = {
 function escapeRegExp(string = "") {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-const toFixed00 = (num) => {
-  const value = Number(num);
-  return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
-};
 
 function removeStripHtmlTags(html) {
   if (!html) return "";

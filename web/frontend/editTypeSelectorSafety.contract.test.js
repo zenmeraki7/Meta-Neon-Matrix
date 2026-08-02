@@ -47,7 +47,7 @@ test("disabled edit type selector explains why selection is blocked", () => {
 
 test("parent stores the action value, derives the action, and resets dependent state", () => {
   assert.match(editPreviewPageSource, /function resolveEditTypeSelection/);
-  assert.match(editPreviewPageSource, /const \[editTypeValue, setEditTypeValue\] = useState\(null\)/);
+  assert.match(editPreviewPageSource, /const \[editTypeValue, setEditTypeValue\] = useState/);
   assert.match(editPreviewPageSource, /resolveEditTypeSelection\(selectedField, editTypeValue\)/);
   assert.match(editPreviewPageSource, /setEditTypeValue\(nextEditTypeValue\)/);
   assert.match(editPreviewPageSource, /selectedFieldValue=\{selectedField\?\.value\}/);

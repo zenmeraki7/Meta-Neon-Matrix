@@ -83,18 +83,6 @@ async function resolveActiveProductCount(shop, store) {
 function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount, mirrorReady }) {
   const safeProductCount = Number(productCount || 0);
   const hasActiveMirror = Boolean(store?.currentProductMirrorBatchId);
-  const hasCompletedSync = latestCompletedSync?.status === "completed";
-  const productsSynced =
-    hasActiveMirror &&
-    (
-      hasCompletedSync ||
-      store?.hasCompletedShopifyBulkJob === true ||
-      Boolean(store?.lastProductSyncAt)
-    );
-
-function buildProductSyncTruth({ store, latestSync, latestCompletedSync, productCount, mirrorReady }) {
-  const safeProductCount = Number(productCount || 0);
-  const hasActiveMirror = Boolean(store?.currentProductMirrorBatchId);
   const hasCompletedSync = latestCompletedSync?.status === "completed" || latestCompletedSync?.status === "COMPLETED";
   const productsSynced =
     hasActiveMirror &&

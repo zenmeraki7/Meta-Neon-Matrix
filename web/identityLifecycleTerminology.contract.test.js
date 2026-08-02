@@ -94,7 +94,7 @@ test("integrity, mirror, source, and queue fields expose qualified logical names
   assert.match(schema, /sourceEventOccurredAt\s+DateTime\? @map\("sourceEventAt"\)/);
   assert.match(schema, /queueRoutingKey\s+String @map\("queueKey"\)/);
   assert.match(schema, /queueJobName\s+String @map\("jobName"\)/);
-  assert.match(schema, /availableAt\s+DateTime.*@map\("runAt"\)/);
+  assert.match(schema, /nextAttemptAt\s+DateTime\s+@default\(now\(\)\)/);
 });
 
 test("dynamic automatic rules fail closed without a normalized AST", () => {

@@ -1,4 +1,5 @@
 import { prisma } from "../config/database.js";
+import { requireVariantGid } from "../utils/shopifyVariantGid.js";
 
 const WRITABLE_SYNC_STATUSES = ["SYNCED", "WRITTEN"];
 
@@ -15,7 +16,7 @@ function assertSessionScope(sessionId, shop) {
  * Stages/commits per-cell ledger rows and projects pending UI state.
  * @param {string} sessionId
  * @param {string} shop
- * @param {Array<{variantId:string|number|bigint,definitionId?:string|null,namespace:string,key:string,type:string,newValue:string,compareDigest:string|null,shopifyOwnerId?:string|null}>} cells
+ * @param {Array<{variantGid?:string,variantId?:string,definitionId?:string|null,namespace:string,key:string,type:string,newValue:string,compareDigest:string|null,shopifyOwnerId?:string|null}>} cells
  * @returns {Promise<{staged:number}>}
  */
 export async function stageChanges(sessionId, shop, cells) {
@@ -25,7 +26,7 @@ export async function stageChanges(sessionId, shop, cells) {
 
   await prisma.$transaction(async (tx) => {
     for (const cell of list) {
-      const variantId = BigInt(cell.variantId).toString();
+      const variantGid = requireVariantGid(cell.variantGid ?? cell.variantId);
       const namespace = String(cell.namespace || "").trim();
       const key = String(cell.key || "").trim();
       const type = String(cell.type || "").trim();
@@ -33,7 +34,10 @@ export async function stageChanges(sessionId, shop, cells) {
       const compareDigest = cell.compareDigest == null ? null : String(cell.compareDigest);
       const shopifyOwnerId =
         String(cell.shopifyOwnerId || "").trim()
-        || `gid://shopify/ProductVariant/${variantId}`;
+        || variantGid;
+      if (shopifyOwnerId !== variantGid) {
+        throw new Error("shopifyOwnerId must match variantGid");
+      }
       const definitionId = cell.definitionId ? String(cell.definitionId) : null;
 
       // Immutable ledger row upsert (one row identity per session+variant+namespace+key).
@@ -43,6 +47,7 @@ export async function stageChanges(sessionId, shop, cells) {
           session_id,
           shop_id,
           variant_id,
+          variant_gid,
           definition_id,
           namespace,
           key,
@@ -59,6 +64,7 @@ export async function stageChanges(sessionId, shop, cells) {
           ${resolvedSessionId}::uuid,
           vm.shop_id,
           vm.variant_id,
+          vm.variant_gid,
           COALESCE(${definitionId}::uuid, vm.definition_id),
           vm.namespace,
           vm.key,
@@ -72,7 +78,7 @@ export async function stageChanges(sessionId, shop, cells) {
           now()
         FROM variant_metafields vm
         WHERE vm.shop_id = ${resolvedShop}
-          AND vm.variant_id = ${variantId}::bigint
+          AND vm.variant_gid = ${variantGid}
           AND vm.namespace = ${namespace}
           AND vm.key = ${key}
           AND EXISTS (
@@ -81,7 +87,7 @@ export async function stageChanges(sessionId, shop, cells) {
             WHERE bes.id = ${resolvedSessionId}::uuid
               AND bes.shop_id = vm.shop_id
           )
-        ON CONFLICT (session_id, variant_id, namespace, key)
+        ON CONFLICT (session_id, variant_gid, namespace, key)
         DO UPDATE SET
           new_value = EXCLUDED.new_value,
           compare_digest = EXCLUDED.compare_digest,
@@ -97,7 +103,7 @@ export async function stageChanges(sessionId, shop, cells) {
           edit_status = 'PENDING',
           last_edited_at = now()
         WHERE shop_id = ${resolvedShop}
-          AND variant_id = ${variantId}::bigint
+          AND variant_gid = ${variantGid}
           AND namespace = ${namespace}
           AND key = ${key}
       `;
@@ -114,7 +120,7 @@ export async function stageChanges(sessionId, shop, cells) {
  * @param {string} namespace
  * @param {string} key
  * @param {string|null} value
- * @param {Array<string|number|bigint>} variantIds
+ * @param {Array<string>} variantIds
  * @returns {Promise<{staged:number}>}
  */
 export async function columnApplyFanout(sessionId, shop, namespace, key, value, variantIds) {
@@ -124,7 +130,7 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
   if (!resolvedNamespace || !resolvedKey) {
     throw new Error("namespace and key are required");
   }
-  const ids = (Array.isArray(variantIds) ? variantIds : []).map((id) => BigInt(id).toString());
+  const ids = (Array.isArray(variantIds) ? variantIds : []).map((id) => requireVariantGid(id));
   if (!ids.length) return { staged: 0 };
 
   const newValue = value == null ? null : String(value);
@@ -139,7 +145,7 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
       WHERE shop_id = ${resolvedShop}
         AND namespace = ${resolvedNamespace}
         AND key = ${resolvedKey}
-        AND variant_id = ANY(${ids}::bigint[])
+        AND variant_gid = ANY(${ids}::text[])
     `;
 
     const rows = await tx.$queryRaw`
@@ -147,6 +153,7 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
         session_id,
         shop_id,
         variant_id,
+        variant_gid,
         definition_id,
         namespace,
         key,
@@ -163,11 +170,12 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
         ${resolvedSessionId}::uuid,
         vm.shop_id,
         vm.variant_id,
+        vm.variant_gid,
         vm.definition_id,
         vm.namespace,
         vm.key,
         vm.type,
-        'gid://shopify/ProductVariant/' || vm.variant_id::text,
+        vm.variant_gid,
         vm.value,
         ${newValue},
         vm.compare_digest,
@@ -178,14 +186,14 @@ export async function columnApplyFanout(sessionId, shop, namespace, key, value, 
       WHERE vm.shop_id = ${resolvedShop}
         AND vm.namespace = ${resolvedNamespace}
         AND vm.key = ${resolvedKey}
-        AND vm.variant_id = ANY(${ids}::bigint[])
+        AND vm.variant_gid = ANY(${ids}::text[])
         AND EXISTS (
           SELECT 1
           FROM bulk_edit_sessions bes
           WHERE bes.id = ${resolvedSessionId}::uuid
             AND bes.shop_id = vm.shop_id
         )
-      ON CONFLICT (session_id, variant_id, namespace, key)
+      ON CONFLICT (session_id, variant_gid, namespace, key)
       DO UPDATE SET
         new_value = EXCLUDED.new_value,
         compare_digest = EXCLUDED.compare_digest,
@@ -213,6 +221,7 @@ export async function listPendingLedgerRows(sessionId, shop) {
       bec.session_id,
       bec.shop_id,
       bec.variant_id,
+      bec.variant_gid,
       bec.definition_id,
       bec.namespace,
       bec.key,
@@ -230,7 +239,7 @@ export async function listPendingLedgerRows(sessionId, shop) {
     FROM bulk_edit_changes bec
     LEFT JOIN variant_metafields vm
       ON vm.shop_id = bec.shop_id
-     AND vm.variant_id = bec.variant_id
+     AND vm.variant_gid = bec.variant_gid
      AND vm.namespace = bec.namespace
      AND vm.key = bec.key
     WHERE bec.session_id = ${resolvedSessionId}::uuid
@@ -319,7 +328,7 @@ export async function markRowWriting(changeId, shop) {
         attempt_count = COALESCE(attempt_count, 0) + 1
       WHERE id = ${resolvedId}::uuid
         AND shop_id = ${resolvedShop}
-      RETURNING shop_id, variant_id, namespace, key
+      RETURNING shop_id, variant_gid, namespace, key
     `;
     if (!changed.length) return [];
     const row = changed[0];
@@ -327,7 +336,7 @@ export async function markRowWriting(changeId, shop) {
       UPDATE variant_metafields
       SET edit_status = 'WRITING'
       WHERE shop_id = ${String(row.shop_id)}
-        AND variant_id = ${BigInt(row.variant_id).toString()}::bigint
+        AND variant_gid = ${String(row.variant_gid)}
         AND namespace = ${String(row.namespace)}
         AND key = ${String(row.key)}
     `;
@@ -357,7 +366,7 @@ export async function markRowWritten(changeId, shop, confirmedValue, digest) {
         shopify_error = NULL
       WHERE id = ${resolvedId}::uuid
         AND shop_id = ${resolvedShop}
-      RETURNING shop_id, variant_id, namespace, key, new_value
+      RETURNING shop_id, variant_gid, namespace, key, new_value
     `;
     if (!rows.length) return 0;
     const row = rows[0];
@@ -373,7 +382,7 @@ export async function markRowWritten(changeId, shop, confirmedValue, digest) {
         edit_status = 'WRITTEN',
         last_synced_at = now()
       WHERE shop_id = ${String(row.shop_id)}
-        AND variant_id = ${BigInt(row.variant_id).toString()}::bigint
+        AND variant_gid = ${String(row.variant_gid)}
         AND namespace = ${String(row.namespace)}
         AND key = ${String(row.key)}
     `;
@@ -405,7 +414,7 @@ export async function markRowError(changeId, shop, errorCode, retryable) {
         retryable = ${Boolean(retryable)}
       WHERE id = ${resolvedId}::uuid
         AND shop_id = ${resolvedShop}
-      RETURNING shop_id, variant_id, namespace, key
+      RETURNING shop_id, variant_gid, namespace, key
     `;
     if (!updated.length) return [];
     const row = updated[0];
@@ -414,7 +423,7 @@ export async function markRowError(changeId, shop, errorCode, retryable) {
       SET
         edit_status = 'ERROR'
       WHERE shop_id = ${String(row.shop_id)}
-        AND variant_id = ${BigInt(row.variant_id).toString()}::bigint
+        AND variant_gid = ${String(row.variant_gid)}
         AND namespace = ${String(row.namespace)}
         AND key = ${String(row.key)}
     `;
@@ -475,7 +484,7 @@ export async function getErrorVariantIdsForColumn(sessionId, shop, namespace, ke
   }
 
   const rows = await prisma.$queryRaw`
-    SELECT DISTINCT variant_id
+    SELECT DISTINCT variant_gid
     FROM bulk_edit_changes
     WHERE session_id = ${resolvedSessionId}::uuid
       AND shop_id = ${resolvedShop}
@@ -483,14 +492,14 @@ export async function getErrorVariantIdsForColumn(sessionId, shop, namespace, ke
       AND namespace = ${resolvedNamespace}
       AND key = ${resolvedKey}
   `;
-  return rows.map((r) => String(r.variant_id));
+  return rows.map((r) => String(r.variant_gid));
 }
 
 export async function discardPendingChanges(sessionId, shop) {
   const { resolvedSessionId, resolvedShop } = assertSessionScope(sessionId, shop);
   return prisma.$transaction(async (tx) => {
     const touched = await tx.$queryRaw`
-      SELECT DISTINCT variant_id, namespace, key
+      SELECT DISTINCT variant_gid, namespace, key
       FROM bulk_edit_changes
       WHERE session_id = ${resolvedSessionId}::uuid
         AND shop_id = ${resolvedShop}
@@ -504,14 +513,14 @@ export async function discardPendingChanges(sessionId, shop) {
         edit_status = 'SYNCED',
         is_dirty = false
       FROM (
-        SELECT DISTINCT variant_id, namespace, key
+        SELECT DISTINCT variant_gid, namespace, key
         FROM bulk_edit_changes
         WHERE session_id = ${resolvedSessionId}::uuid
           AND shop_id = ${resolvedShop}
           AND status = 'PENDING'
       ) pend
       WHERE vm.shop_id = ${resolvedShop}
-        AND vm.variant_id = pend.variant_id
+        AND vm.variant_gid = pend.variant_gid
         AND vm.namespace = pend.namespace
         AND vm.key = pend.key
     `;

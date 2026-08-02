@@ -6,6 +6,9 @@ import {
   TAG_OPERATIONS,
   COLLECTION_OPERATIONS,
 } from "./constants.js";
+import { canonicalizeMoney, parseDecimalUnits } from "../../utils/decimalArithmetic.js";
+
+const MONEY_FIELDS = new Set(["price", "compareAtPrice", "cost"]);
 
 export const editProductField = ({
   product,
@@ -390,18 +393,21 @@ function handleVariantField(
           operation,
           value
         );
-        const numericNewValue = Number(newValue);
+        const isMoneyField = MONEY_FIELDS.has(config.fieldName);
+        const numericNewValue = isMoneyField ? null : Number(newValue);
         const isNegativePrice =
-          config.fieldName === "price" &&
-          Number.isFinite(numericNewValue) &&
-          numericNewValue < 0;
+          isMoneyField && parseDecimalUnits(newValue) < 0n;
 
         const finalNewValue =
-          config.isNumeric && Number.isFinite(numericNewValue)
+          isMoneyField
+            ? canonicalizeMoney(newValue)
+            : config.isNumeric && Number.isFinite(numericNewValue)
             ? numericNewValue.toFixed(2)
             : newValue;
         const formattedCurrentValue =
-          config.isNumeric && Number.isFinite(Number(currentValue))
+          isMoneyField
+            ? canonicalizeMoney(currentValue)
+            : config.isNumeric && Number.isFinite(Number(currentValue))
             ? Number(currentValue).toFixed(2)
             : currentValue;
 
@@ -444,7 +450,9 @@ function handleVariantField(
         value
       );
 
-      const formattedValue = config.isNumeric
+      const formattedValue = MONEY_FIELDS.has(config.fieldName)
+        ? canonicalizeMoney(newValue)
+        : config.isNumeric
         ? Number(newValue).toFixed(2)
         : newValue;
 
@@ -482,7 +490,9 @@ function handleVariantField(
           value
         );
 
-        const formattedValue = config.isNumeric
+        const formattedValue = MONEY_FIELDS.has(config.fieldName)
+          ? canonicalizeMoney(newValue)
+          : config.isNumeric
           ? Number(newValue).toFixed(2)
           : newValue;
 

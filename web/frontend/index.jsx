@@ -5,7 +5,13 @@ import { Provider } from "react-redux";
 import store from "./store";
 import { reportWebVitals } from "./webVitals";
 
-function bootstrap() {
+async function bootstrap() {
+  try {
+    await initI18n();
+  } catch (error) {
+    console.error("Failed to initialize app translations", error);
+  }
+
   const rootElement = document.getElementById("app");
   const root = createRoot(rootElement);
 
@@ -14,10 +20,6 @@ function bootstrap() {
       <App />
     </Provider>,
   );
-
-  void initI18n().catch((error) => {
-    console.error("Failed to initialize app translations", error);
-  });
 
   reportWebVitals((metric) => {
     if (import.meta.env.DEV) {

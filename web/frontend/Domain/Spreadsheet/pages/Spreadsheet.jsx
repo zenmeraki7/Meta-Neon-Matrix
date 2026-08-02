@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
     Page,
     Card,
@@ -44,6 +44,13 @@ export default function Spreadsheet() {
     const navigate = useNavigate();
     const apiClient = useApiClient();
 
+    const previewRequestRef = useRef(null);
+    const previewRequestIdRef = useRef(0);
+
+    useEffect(() => {
+        return () => previewRequestRef.current?.abort();
+    }, []);
+
     useEffect(() => {
         if (!status?.message) return;
         if (status.type === "error") {
@@ -77,6 +84,13 @@ export default function Spreadsheet() {
 
     const loadPreviewPage = async ({ selectedFile = file, cursor = null, resetMappings = false } = {}) => {
         if (!selectedFile) return;
+
+        previewRequestRef.current?.abort();
+
+        const controller = new AbortController();
+        const requestId = ++previewRequestIdRef.current;
+        previewRequestRef.current = controller;
+
         try {
             setPreviewLoading(true);
             let result;
@@ -87,7 +101,9 @@ export default function Spreadsheet() {
                     method: "POST",
                     idempotent: true,
                     body: formData,
+                    signal: controller.signal,
                 });
+                if (requestId !== previewRequestIdRef.current) return;
                 setPreviewUploadToken(result?.uploadToken || null);
             } else {
                 const params = new URLSearchParams();
@@ -96,7 +112,9 @@ export default function Spreadsheet() {
                 if (cursor) params.set("cursor", cursor);
                 result = await apiClient.request(`/api/products/csv/preview?${params.toString()}`, {
                     method: "GET",
+                    signal: controller.signal,
                 });
+                if (requestId !== previewRequestIdRef.current) return;
             }
 
             const headers = Array.isArray(result?.headers) ? result.headers : [];
@@ -122,12 +140,17 @@ export default function Spreadsheet() {
                 setColumnMappings(buildInitialColumnMappings(headers));
             }
         } catch (err) {
+            if (err?.name === "AbortError") return;
+            if (requestId !== previewRequestIdRef.current) return;
+
             setStatus({
                 type: "error",
                 message: err.message || t("spreadsheetSomethingWentWrong"),
             });
         } finally {
-            setPreviewLoading(false);
+            if (requestId === previewRequestIdRef.current) {
+                setPreviewLoading(false);
+            }
         }
     };
 
@@ -137,22 +160,30 @@ export default function Spreadsheet() {
 
     const handleUpload = async () => {
         try {
-            if (!file) {
+            if (!file && !previewUploadToken) {
                 throw new Error(t("spreadsheetNoFileSelected"));
             }
 
             const effectiveMappings = buildImportColumnMappings(previewHeaders, columnMappings);
             setUploading(true);
 
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("columnMappings", JSON.stringify(effectiveMappings));
+            let result;
+            if (previewUploadToken) {
+                result = await apiClient.post("/api/products/csv/import", {
+                    uploadToken: previewUploadToken,
+                    columnMappings: effectiveMappings,
+                });
+            } else {
+                const formData = new FormData();
+                formData.append("file", file);
+                formData.append("columnMappings", JSON.stringify(effectiveMappings));
 
-            const result = await apiClient.request("/api/products/csv/import", {
-                method: "POST",
-                idempotent: true,
-                body: formData,
-            });
+                result = await apiClient.request("/api/products/csv/import", {
+                    method: "POST",
+                    idempotent: true,
+                    body: formData,
+                });
+            }
 
             setStatus({
                 type: "success",

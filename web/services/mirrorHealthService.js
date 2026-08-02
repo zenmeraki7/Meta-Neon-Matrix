@@ -30,12 +30,14 @@ function buildUnsafeUpdate(reason, summary = null) {
 }
 
 export async function getStoreMirrorState(shop, tx = db) {
-  return tx.store.findUnique({
+  const state = await tx.store.findUnique({
     where: { shopUrl: shop },
     select: {
       shopUrl: true,
       currentProductMirrorBatchId: true,
       currentCollectionMirrorBatchId: true,
+      currentProductMirrorBatch: { select: { status: true, mirrorResourceType: true, shop: true } },
+      currentCollectionMirrorBatch: { select: { status: true, mirrorResourceType: true, shop: true } },
       mirrorHealthState: true,
       staleReason: true,
       requiresMirrorRepair: true,
@@ -55,6 +57,17 @@ export async function getStoreMirrorState(shop, tx = db) {
       storeTotalProducts: true,
     },
   });
+  if (state?.currentProductMirrorBatchId && (
+    state.currentProductMirrorBatch?.shop !== shop
+    || state.currentProductMirrorBatch?.status !== "ACTIVE"
+    || state.currentProductMirrorBatch?.mirrorResourceType !== "PRODUCT_CATALOG"
+  )) throw new Error("ACTIVE_PRODUCT_MIRROR_POINTER_INVALID");
+  if (state?.currentCollectionMirrorBatchId && (
+    state.currentCollectionMirrorBatch?.shop !== shop
+    || state.currentCollectionMirrorBatch?.status !== "ACTIVE"
+    || state.currentCollectionMirrorBatch?.mirrorResourceType !== "COLLECTION_CATALOG"
+  )) throw new Error("ACTIVE_COLLECTION_MIRROR_POINTER_INVALID");
+  return state;
 }
 
 export async function assertMirrorSafeForTargeting(shop, { purpose = "PREVIEW" } = {}) {
@@ -141,60 +154,14 @@ export async function markFullSyncCompleted({
   productCount,
   reconciliationAt = new Date(),
 }, tx = db) {
-  const store = await ensureStoreForShop({ shop }, tx);
-  logStoreMutation("markFullSyncCompleted.updateMany", {
-    shop,
-    storeId: store.id,
-    mirrorBatchId: batchId,
-  });
-
-  const promoteOperation = async (client) => {
-    // 1. Promote MirrorBatch status to ACTIVE atomically
-    await client.mirrorBatch.updateMany({
-      where: {
-        shop,
-        id: batchId,
-      },
-      data: {
-        status: "ACTIVE",
-        activatedAt: reconciliationAt,
-      },
-    });
-
-    // 2. Update store currentProductMirrorBatchId and sync status
-    await client.store.updateMany({
-      where: { shopUrl: shop },
-      data: {
-        currentProductMirrorBatchId: batchId,
-        mirrorHealthState: "HEALTHY",
-        staleReason: null,
-        requiresMirrorRepair: false,
-        mirrorUnsafeSince: null,
-        lastSyncErrorSummary: null,
-        lastFullSyncAt: reconciliationAt,
-        lastReconcileAt: reconciliationAt,
-        lastIncrementalSyncAt: reconciliationAt,
-        lastWebhookProcessedAt: reconciliationAt,
-        isProductSyncing: false,
-        isProductInitiallySyncing: false,
-        syncProgressStage: "IDLE",
-        hasCompletedShopifyBulkJob: true,
-        storeTotalProducts: productCount,
-        productInitialSyncProgress: productCount,
-        lastProductSyncAt: reconciliationAt,
-        productSyncStartedAt: null,
-        requiresProductSyncRecovery: false,
-      },
-    });
-
-    return client.store.findUnique({ where: { shopUrl: shop } });
-  };
-
-  if (tx && typeof tx.$transaction !== "function") {
-    return promoteOperation(tx);
-  }
-
-  return db.$transaction(promoteOperation);
+  void shop;
+  void batchId;
+  void productCount;
+  void reconciliationAt;
+  void tx;
+  const error = new Error("DIRECT_MIRROR_POINTER_WRITE_FORBIDDEN");
+  error.code = "DIRECT_MIRROR_POINTER_WRITE_FORBIDDEN";
+  throw error;
 }
 
 export async function markFullSyncFailed({
@@ -349,4 +316,3 @@ export async function markRepairRequired({
 export function createMirrorBatchId(prefix = "mirror") {
   return `${prefix}_${Date.now()}_${crypto.randomUUID()}`;
 }
-

@@ -26,7 +26,11 @@ function normalizeTargetIdentity(row) {
   ).trim() || null;
 }
 
-function extractRowResult(row = {}, fallbackTargetIdentity = null) {
+function changeRecordKey(targetIdentity, fieldPath) {
+  return `${String(targetIdentity || "")}\u001f${String(fieldPath || "")}`;
+}
+
+function extractRowResult(row = {}, fallbackTarget = null) {
   const payload = row?.data && typeof row.data === "object" ? row.data : row;
   const productSet = payload?.productSet || null;
   const userErrors =
@@ -37,13 +41,15 @@ function extractRowResult(row = {}, fallbackTargetIdentity = null) {
     || [];
   const normalizedErrors = Array.isArray(userErrors) ? userErrors : [];
 
-  const targetIdentity = normalizeTargetIdentity(row) || fallbackTargetIdentity;
+  const targetIdentity =
+    normalizeTargetIdentity(row) || fallbackTarget?.targetIdentity || null;
   const product = productSet?.product || payload?.product || null;
   const productIdRaw = payload?.productId || payload?.id || product?.id || null;
   const variantIdRaw = payload?.variantId || payload?.variant?.id || null;
 
   return {
     targetIdentity,
+    fieldPath: String(fallbackTarget?.fieldPath || row?.fieldPath || "").trim() || null,
     productId: productIdRaw ? String(productIdRaw) : null,
     variantId: variantIdRaw ? String(variantIdRaw) : null,
     status: normalizedErrors.length > 0 ? "FAILED" : "SUCCESS",
@@ -129,7 +135,7 @@ export class BulkEditResultIngestionService {
       : null;
     try {
     const history = await db.editHistory.findUnique({
-      where: { id: historyId },
+      where: { shop_id: { shop, id: historyId } },
       select: {
         id: true,
         shop: true,
@@ -283,6 +289,7 @@ export class BulkEditResultIngestionService {
       },
       select: {
         targetIdentity: true,
+        fieldPath: true,
         status: true,
         options: true,
       },
@@ -291,11 +298,17 @@ export class BulkEditResultIngestionService {
       batchChangeRecords.map((record, index) => {
         const configured = Number(record?.options?.shopifyBulkLineNumber);
         const lineNumber = Number.isInteger(configured) ? configured : index;
-        return [lineNumber, record.targetIdentity];
+        return [lineNumber, {
+          targetIdentity: record.targetIdentity,
+          fieldPath: record.fieldPath,
+        }];
       }),
     );
     const changeRecordByTargetIdentity = new Map(
-      batchChangeRecords.map((record) => [record.targetIdentity, record]),
+      batchChangeRecords.map((record) => [
+        changeRecordKey(record.targetIdentity, record.fieldPath),
+        record,
+      ]),
     );
     const snapshotSetId = String(
       history.batch?.targetSnapshotRef?.snapshotSetId || "",
@@ -308,11 +321,14 @@ export class BulkEditResultIngestionService {
     if (isCsvImport && snapshotSetId) {
       const frozenRows = await db.targetSnapshotItem.findMany({
         where: { shop, snapshotSetId },
-        orderBy: [{ targetKey: "asc" }],
-        select: { targetKey: true },
+        orderBy: [{ targetKey: "asc" }, { fieldPath: "asc" }],
+        select: { targetKey: true, fieldPath: true },
       });
       targetIdentityByLineNumber = new Map(
-        frozenRows.map((row, index) => [index, row.targetKey]),
+        frozenRows.map((row, index) => [index, {
+          targetIdentity: row.targetKey,
+          fieldPath: row.fieldPath,
+        }]),
       );
     }
 
@@ -355,13 +371,15 @@ export class BulkEditResultIngestionService {
       const results = await db.$transaction(async (tx) => {
         const transitionResults = [];
         for (const item of updates) {
-          const existingRecord = changeRecordByTargetIdentity.get(item.targetIdentity);
+          const itemKey = changeRecordKey(item.targetIdentity, item.fieldPath);
+          const existingRecord = changeRecordByTargetIdentity.get(itemKey);
           const changed = await tx.changeRecord.updateMany({
             where: {
               editHistoryId: historyId,
               shop,
               ...(!isCsvImport && batchId ? { batchId } : {}),
               targetIdentity: item.targetIdentity,
+              fieldPath: item.fieldPath,
               status: { in: ["pending", "PENDING", "failed", "FAILED"] },
             },
             data: {
@@ -392,6 +410,7 @@ export class BulkEditResultIngestionService {
                 shop,
                 snapshotSetId,
                 targetKey: item.targetIdentity,
+                fieldPath: item.fieldPath,
                 executionStatus: { in: ["PENDING", "SUBMITTED", "FAILED"] },
               },
               data: {
@@ -406,6 +425,18 @@ export class BulkEditResultIngestionService {
                 executedAt: new Date(),
               },
             });
+            if (item.status === "SUCCESS") {
+              await tx.$executeRaw`
+                UPDATE "TargetSnapshotItem"
+                SET "writtenValueHash" = "plannedValueHash"
+                WHERE "shop" = ${shop}
+                  AND "snapshotSetId" = ${snapshotSetId}
+                  AND "targetKey" = ${item.targetIdentity}
+                  AND "fieldPath" = ${item.fieldPath}
+                  AND "executionStatus" = 'SUCCEEDED'::"TargetSnapshotItemExecutionStatus"
+                  AND "writtenValueHash" IS NULL
+              `;
+            }
           }
         }
 
@@ -419,7 +450,9 @@ export class BulkEditResultIngestionService {
         const row = updates[i];
         if (!count) {
           const existingStatus = String(
-            changeRecordByTargetIdentity.get(row.targetIdentity)?.status || "",
+            changeRecordByTargetIdentity.get(
+              changeRecordKey(row.targetIdentity, row.fieldPath)
+            )?.status || "",
           ).toUpperCase();
           if (
             row.status === "SUCCESS"
@@ -433,8 +466,9 @@ export class BulkEditResultIngestionService {
           unmappedRowCount += 1;
           continue;
         }
-        changeRecordByTargetIdentity.set(row.targetIdentity, {
-          ...(changeRecordByTargetIdentity.get(row.targetIdentity) || {}),
+        const rowKey = changeRecordKey(row.targetIdentity, row.fieldPath);
+        changeRecordByTargetIdentity.set(rowKey, {
+          ...(changeRecordByTargetIdentity.get(rowKey) || {}),
           status: row.status,
         });
         if (row.status === "SUCCESS") successCount += count;
@@ -475,11 +509,12 @@ export class BulkEditResultIngestionService {
       }
       checkpoint.ingestionRollingChecksum = checkpointChecksum(
         checkpoint.ingestionRollingChecksum,
-        `${rowCount}:${item.targetIdentity}:${item.status}`,
+        `${rowCount}:${item.targetIdentity}:${item.fieldPath}:${item.status}`,
       );
 
       pendingUpdates.push({
         targetIdentity: item.targetIdentity,
+        fieldPath: item.fieldPath,
         productId: item.productId,
         variantId: item.variantId,
         status: item.status === "SUCCESS" ? "SUCCESS" : "FAILED",
@@ -560,6 +595,7 @@ export class BulkEditResultIngestionService {
       id: historyId,
       shop,
       expectedExecutionStates: [OPERATION_LIFECYCLE_STATES.INGESTING_RESULTS],
+      expectedStateVersion: history?.stateVersion ?? 0,
       extraWhere: {
         batch: {
           path: ["resultIngestion", "ingestedAt"],
@@ -592,7 +628,7 @@ export class BulkEditResultIngestionService {
       },
       db: db,
     });
-    if (!completedUpdate) {
+    if (!completedUpdate || !completedUpdate.success) {
       return {
         skipped: true,
         reason: "already_ingested",

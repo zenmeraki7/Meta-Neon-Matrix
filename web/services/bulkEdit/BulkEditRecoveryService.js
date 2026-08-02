@@ -78,7 +78,7 @@ export class BulkEditRecoveryService {
           id: true,
           shop: true,
           executionIdentity: true,
-          executionState: true,
+          executionStateNormalized: true,
           batch: true,
           shopifyBulkOperationId: true,
           updatedAt: true,
@@ -86,7 +86,7 @@ export class BulkEditRecoveryService {
       });
       if (!history) throw new Error("EDIT_HISTORY_NOT_FOUND");
 
-      const currentState = String(history.executionState || "");
+      const currentState = String(history.executionStateNormalized || "UNKNOWN");
       const selectedMode = String(mode || "auto").toLowerCase();
 
       if (
@@ -259,4 +259,3 @@ export class BulkEditRecoveryService {
 }
 
 export default BulkEditRecoveryService;
-

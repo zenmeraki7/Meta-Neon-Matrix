@@ -32,6 +32,53 @@ import {
   normalizeRuleCreateData,
 } from "../automaticProductRulePersistence.js";
 
+export async function reserveFeatureQuota({
+  tx,
+  shop,
+  feature,
+  limit,
+}) {
+  await tx.shopFeatureQuota.upsert({
+    where: { shop_feature: { shop, feature } },
+    create: { shop, feature, used: 0, limit },
+    update: { limit },
+  });
+
+  const reserved = await tx.shopFeatureQuota.updateMany({
+    where: {
+      shop,
+      feature,
+      used: { lt: limit },
+    },
+    data: {
+      used: { increment: 1 },
+      version: { increment: 1 },
+    },
+  });
+
+  if (reserved.count !== 1) {
+    throw publicError("AUTOMATIC_RULE_LIMIT_REACHED", 403, `Feature limit reached for ${feature}`);
+  }
+}
+
+export async function releaseFeatureQuota({
+  tx,
+  shop,
+  feature,
+}) {
+  await tx.shopFeatureQuota.updateMany({
+    where: {
+      shop,
+      feature,
+      used: { gt: 0 },
+    },
+    data: {
+      used: { decrement: 1 },
+      version: { increment: 1 },
+    },
+  });
+}
+
 function buildRevisionSnapshot(rule) {
   return {
     commandVersion: rule.commandVersion,
@@ -185,6 +232,22 @@ export async function createAutomaticProductRule({ shop, actor, command, entitle
   assertDangerousActiveRuleIsConfirmed(command);
 
   return db.$transaction(async (tx) => {
+    await reserveFeatureQuota({
+      tx,
+      shop: safeShop,
+      feature: "AUTOMATIC_RULES_TOTAL",
+      limit: safeEntitlement?.limits?.maxAutomaticRules || 10,
+    });
+
+    if (command.status === "ACTIVE" || command.initialStatus === "ACTIVE") {
+      await reserveFeatureQuota({
+        tx,
+        shop: safeShop,
+        feature: "AUTOMATIC_RULES_ACTIVE",
+        limit: safeEntitlement?.limits?.maxActiveAutomaticRules || 5,
+      });
+    }
+
     await assertAutomaticRuleQuota({
       tx,
       shop: safeShop,
@@ -343,6 +406,14 @@ export async function pauseAutomaticProductRule({
       to: RULE_STATUS.PAUSED,
     });
 
+    if (rule.status === RULE_STATUS.ACTIVE) {
+      await releaseFeatureQuota({
+        tx,
+        shop: safeShop,
+        feature: "AUTOMATIC_RULES_ACTIVE",
+      });
+    }
+
     const now = new Date();
 
     const updateResult = await tx.automaticProductRule.updateMany({
@@ -431,6 +502,15 @@ export async function resumeAutomaticProductRule({ shop, actor, automaticProduct
       entitlement: safeEntitlement,
     });
 
+    if (rule.status !== RULE_STATUS.ACTIVE) {
+      await reserveFeatureQuota({
+        tx,
+        shop: safeShop,
+        feature: "AUTOMATIC_RULES_ACTIVE",
+        limit: safeEntitlement?.limits?.maxActiveAutomaticRules || 5,
+      });
+    }
+
     await assertMirrorSafeForTargeting({
       tx,
       shop: safeShop,
@@ -510,6 +590,20 @@ export async function softDeleteAutomaticProductRule({
     assertDeleteConfirmationIfActiveRule(rule, {
       ...deleteCommand,
       deletePolicy,
+    });
+
+    if (rule.status === RULE_STATUS.ACTIVE) {
+      await releaseFeatureQuota({
+        tx,
+        shop: safeShop,
+        feature: "AUTOMATIC_RULES_ACTIVE",
+      });
+    }
+
+    await releaseFeatureQuota({
+      tx,
+      shop: safeShop,
+      feature: "AUTOMATIC_RULES_TOTAL",
     });
 
     const now = new Date();

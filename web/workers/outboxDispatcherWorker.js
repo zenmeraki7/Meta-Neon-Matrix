@@ -4,6 +4,7 @@ import { enqueueTargetFreezeRequestedJob } from "../Jobs/Queues/targetFreezeQueu
 import { addbulkUndoJob } from "../Jobs/Queues/bulkUndoJob.js";
 import logger from "../utils/loggerUtils.js";
 import { requireAggregateIdentity } from "../utils/polymorphicIdentity.js";
+import { verifyImmutablePayload } from "../utils/immutablePayloadUtils.js";
 
 const OUTBOX_STATUS = Object.freeze({
   PENDING: "PENDING",
@@ -21,7 +22,7 @@ function retryDelayMs(attemptCount) {
   return Math.min(MAX_RETRY_MS, BASE_RETRY_MS * (2 ** Math.max(0, attemptCount - 1)));
 }
 
-async function claimDueEvents({ limit, workerId, staleBefore }) {
+async function claimDueEvents({ limit, workerId, lockToken, staleBefore, lockExpiresAt }) {
   return db.$queryRaw`
     WITH candidates AS (
       SELECT "id"
@@ -29,18 +30,23 @@ async function claimDueEvents({ limit, workerId, staleBefore }) {
       WHERE (
         ("statusNormalized" = 'PENDING'::"OutboxEventStatus" AND "nextAttemptAt" <= NOW())
         OR
-        ("statusNormalized" = 'DISPATCHING'::"OutboxEventStatus" AND "lockedAt" < ${staleBefore})
+        ("statusNormalized" = 'DISPATCHING'::"OutboxEventStatus" AND (
+          ("lockExpiresAt" IS NOT NULL AND "lockExpiresAt" < NOW())
+          OR ("lockExpiresAt" IS NULL AND "lockedAt" < ${staleBefore})
+        ))
       )
       ORDER BY "nextAttemptAt" ASC, "createdAt" ASC
       FOR UPDATE SKIP LOCKED
       LIMIT ${limit}
     )
     UPDATE "OutboxEvent" AS event
-    SET "status" = 'DISPATCHING',
-        "statusNormalized" = 'DISPATCHING'::"OutboxEventStatus",
+    SET "statusNormalized" = 'DISPATCHING'::"OutboxEventStatus",
         "attemptCount" = event."attemptCount" + 1,
         "lockedAt" = NOW(),
         "lockedBy" = ${workerId},
+        "lockToken" = ${lockToken},
+        "lockExpiresAt" = ${lockExpiresAt},
+        "fencingToken" = event."fencingToken" + 1,
         "lastErrorCode" = NULL,
         "updatedAt" = NOW()
     FROM candidates
@@ -51,14 +57,25 @@ async function claimDueEvents({ limit, workerId, staleBefore }) {
 
 export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
   const workerId = `outbox:${process.pid}:${crypto.randomUUID()}`;
+  const lockToken = crypto.randomUUID();
   const claimedEvents = await claimDueEvents({
     limit: Math.max(1, Number(limit) || 50),
     workerId,
+    lockToken,
     staleBefore: new Date(Date.now() - LOCK_TIMEOUT_MS),
+    lockExpiresAt: new Date(Date.now() + LOCK_TIMEOUT_MS),
   });
 
   for (const event of claimedEvents) {
     try {
+      verifyImmutablePayload(event.payloadJson, {
+        operationType: "OUTBOX_EVENT",
+        payloadHash: event.payloadHash,
+        payloadByteSize: event.payloadByteSize,
+        payloadSchemaVersion: event.payloadSchemaVersion,
+        payloadCompression: event.payloadCompression,
+        payloadStorageKey: event.payloadStorageKey,
+      });
       logger.info("undo.outbox.dispatch_started", {
         outboxEventId: event.id,
         shop: event.shop,
@@ -90,13 +107,21 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
       }
 
       await db.outboxEvent.updateMany({
-        where: { id: event.id, lockedBy: workerId, statusNormalized: OUTBOX_STATUS.DISPATCHING },
+        where: {
+          id: event.id,
+          shop: event.shop,
+          lockedBy: workerId,
+          lockToken: event.lockToken,
+          fencingToken: event.fencingToken,
+          statusNormalized: OUTBOX_STATUS.DISPATCHING,
+        },
         data: {
-          status: OUTBOX_STATUS.DISPATCHED,
           statusNormalized: OUTBOX_STATUS.DISPATCHED,
           dispatchedAt: new Date(),
           lockedAt: null,
           lockedBy: null,
+          lockToken: null,
+          lockExpiresAt: null,
           lastErrorCode: null,
           updatedAt: new Date(),
         },
@@ -104,15 +129,24 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
     } catch (error) {
       const exhausted = Number(event.attemptCount || 0) >= MAX_ATTEMPTS;
       await db.outboxEvent.updateMany({
-        where: { id: event.id, lockedBy: workerId, statusNormalized: OUTBOX_STATUS.DISPATCHING },
+        where: {
+          id: event.id,
+          shop: event.shop,
+          lockedBy: workerId,
+          lockToken: event.lockToken,
+          fencingToken: event.fencingToken,
+          statusNormalized: OUTBOX_STATUS.DISPATCHING,
+        },
         data: {
-          status: exhausted ? OUTBOX_STATUS.DEAD_LETTER : OUTBOX_STATUS.PENDING,
           statusNormalized: exhausted ? OUTBOX_STATUS.DEAD_LETTER : OUTBOX_STATUS.PENDING,
           nextAttemptAt: exhausted
             ? new Date()
             : new Date(Date.now() + retryDelayMs(Number(event.attemptCount || 1))),
           lockedAt: null,
           lockedBy: null,
+          lockToken: null,
+          lockExpiresAt: null,
+          deadLetteredAt: exhausted ? new Date() : null,
           lastErrorCode: String(error?.code || "OUTBOX_DISPATCH_FAILED").slice(
             0,
             120
@@ -124,6 +158,21 @@ export async function dispatchPendingOutboxEvents({ limit = 50 } = {}) {
       await logDispatchError(event, error);
     }
   }
+}
+
+export async function heartbeatOutboxClaim({ eventId, shop, workerId, lockToken, fencingToken }) {
+  const now = new Date();
+  return db.outboxEvent.updateMany({
+    where: {
+      id: eventId,
+      shop,
+      lockedBy: workerId,
+      lockToken,
+      fencingToken,
+      statusNormalized: OUTBOX_STATUS.DISPATCHING,
+    },
+    data: { lockedAt: now, lockExpiresAt: new Date(now.getTime() + LOCK_TIMEOUT_MS) },
+  });
 }
 
 async function logDispatchError(event, error) {

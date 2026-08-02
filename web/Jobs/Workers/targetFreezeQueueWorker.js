@@ -4,6 +4,7 @@ import { db } from "../../repositories/repositoryDb.js";
 import logger from "../../utils/loggerUtils.js";
 import { logWorkerError } from "../../utils/errorLogUtils.js";
 import { enqueueAutomaticProductRuleExecutionJob } from "../../services/automaticProductRuleExecutionService.js";
+import { verifyTargetFreezeCommand } from "../../helpers/immutableTargetFreezeCommand.js";
 
 const QUEUE_NAME = process.env.TARGET_FREEZE_QUEUE || "target-freeze";
 
@@ -76,6 +77,7 @@ async function processTargetFreezeRequested(payload) {
   const { shop, operationId, automaticRuleRunId } = payload;
 
   const { run, command } = await loadRunAndCommand({ shop, automaticRuleRunId, operationId });
+  verifyTargetFreezeCommand(command);
   assertCommandStillSafe({
     run,
     rule: run.automaticProductRule,
@@ -85,6 +87,7 @@ async function processTargetFreezeRequested(payload) {
   const claimed = await db.targetFreezeCommand.updateMany({
     where: {
       id: command.id,
+      shop,
       status: TARGET_FREEZE_COMMAND_STATUS.PENDING,
     },
     data: {
@@ -106,6 +109,7 @@ async function processTargetFreezeRequested(payload) {
     const movedDispatched = await db.targetFreezeCommand.updateMany({
       where: {
         id: command.id,
+        shop,
         status: TARGET_FREEZE_COMMAND_STATUS.DISPATCHING,
       },
       data: {
@@ -122,6 +126,7 @@ async function processTargetFreezeRequested(payload) {
     await db.targetFreezeCommand.updateMany({
       where: {
         id: command.id,
+        shop,
         status: TARGET_FREEZE_COMMAND_STATUS.DISPATCHING,
       },
       data: {
@@ -170,4 +175,3 @@ targetFreezeQueueWorker.on("failed", async (job, error) => {
 });
 
 export default targetFreezeQueueWorker;
-

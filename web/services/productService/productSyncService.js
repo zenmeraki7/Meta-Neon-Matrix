@@ -26,6 +26,7 @@ import {
 import { db } from "../../repositories/repositoryDb.js";
 import { ensureStoreForShop } from "../../repositories/storeRepository.js";
 import { recordMirrorAnomaly } from "../mirrorAnomalyService.js";
+import { getCurrentBulkOperationStatus } from "../../utils/bulkOperationHelper.js";
 
 function boundedInteger(value, fallback, min, max) {
   const parsed = Number(value);
@@ -194,6 +195,71 @@ function attachChildToOwner({
   return false;
 }
 
+export async function reconcileBulkOperationAndSyncHistory({ session, shop = null }) {
+  const resolvedShop = shop || String(session?.shop || "").trim();
+  if (!resolvedShop) return { reconciled: false };
+
+  try {
+    const currentOp = await getCurrentBulkOperationStatus(session, "QUERY");
+    if (!currentOp || !currentOp.id) {
+      return { reconciled: false };
+    }
+
+    const currentStatus = String(currentOp.status || "").toUpperCase();
+
+    const existingSync = await db.syncHistory.findFirst({
+      where: {
+        shop: resolvedShop,
+        shopifyBulkOperationId: currentOp.id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (["RUNNING", "CREATED", "PENDING"].includes(currentStatus)) {
+      if (existingSync) {
+        return {
+          reconciled: true,
+          action: "ADOPT_RUNNING",
+          syncHistoryId: existingSync.id,
+          mirrorBatchId: existingSync.mirrorBatchId,
+          shopifyBulkOperationId: currentOp.id,
+        };
+      } else {
+        const syncHistory = await queueProductSyncStart({
+          shop: resolvedShop,
+          shopifyBulkOperationId: currentOp.id,
+          isInitialSync: true,
+        });
+        return {
+          reconciled: true,
+          action: "ADOPT_NEW",
+          syncHistoryId: syncHistory.id,
+          mirrorBatchId: syncHistory.mirrorBatchId,
+          shopifyBulkOperationId: currentOp.id,
+        };
+      }
+    }
+
+    if (existingSync && ["COMPLETED", "FAILED", "CANCELED"].includes(currentStatus)) {
+      const dbStatus = currentStatus === "COMPLETED" ? "completed" : "failed";
+      if (existingSync.status !== dbStatus) {
+        await db.syncHistory.update({
+          where: { id: existingSync.id },
+          data: {
+            status: dbStatus,
+            error: currentOp.errorCode || (currentStatus === "FAILED" ? "Shopify bulk operation failed" : null),
+            completedAt: currentOp.completedAt ? new Date(currentOp.completedAt) : new Date(),
+          },
+        });
+      }
+    }
+  } catch (error) {
+    // Ignore error if GraphQL lookup fails and proceed with normal bulk operation
+  }
+
+  return { reconciled: false };
+}
+
 export async function startBulkOperationToFetchProducts({
   session,
   isInitialSync = false,
@@ -206,6 +272,17 @@ export async function startBulkOperationToFetchProducts({
     accessToken: session.accessToken,
     oauthScopes: session.scope,
   });
+
+  const reconciliation = await reconcileBulkOperationAndSyncHistory({ session, shop });
+  if (reconciliation.reconciled) {
+    return {
+      message: "Bulk product sync reconciled with existing operation",
+      shopifyBulkOperationId: reconciliation.shopifyBulkOperationId,
+      syncHistoryId: reconciliation.syncHistoryId,
+      mirrorBatchId: reconciliation.mirrorBatchId,
+      reconciled: true,
+    };
+  }
 
   await markProductSyncStarted({ shop });
 
@@ -369,6 +446,10 @@ export async function formatAndSyncProductsToDB({
             shop,
             productId: product.id,
             collectionId: collection.id,
+            sourceEntityUpdatedAt: product.updatedAt ? new Date(product.updatedAt) : null,
+            sourceVersion: product.updatedAt ? String(product.updatedAt) : null,
+            lastChangeSource: "BULK_SYNC",
+            isDeleted: false,
           });
         }
 
@@ -413,6 +494,10 @@ export async function formatAndSyncProductsToDB({
               null,
             position: product.featuredMedia.position ?? null,
             status: product.featuredMedia.status ?? null,
+            sourceEntityUpdatedAt: product.updatedAt ? new Date(product.updatedAt) : null,
+            sourceVersion: product.updatedAt ? String(product.updatedAt) : null,
+            lastChangeSource: "BULK_SYNC",
+            isDeleted: false,
           });
         }
 
@@ -612,6 +697,7 @@ export async function formatAndSyncProductsToDB({
       where: { shopUrl: shop },
       select: {
         currentProductMirrorBatchId: true,
+        mirrorMutationVersion: true,
         storeTotalProducts: true,
       },
     });
@@ -678,6 +764,7 @@ export async function formatAndSyncProductsToDB({
       mirrorBatchId,
       expectedPreviousActiveBatchId:
         previousState?.currentProductMirrorBatchId ?? null,
+      expectedMirrorMutationVersion: previousState?.mirrorMutationVersion ?? 0n,
       syncHistoryId,
     });
 

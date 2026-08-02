@@ -192,7 +192,7 @@ function toEditHistoryEmbeddedSummaryDto(summary) {
 
 function toExportHistoryListItemDto(history) {
   const safe = asObject(history) || {};
-  const status = toStringOrNull(safe.statusNormalized ?? safe.status, 120);
+  const status = toStringOrNull(safe.statusNormalized ?? "UNKNOWN", 120);
   const downloadUrl = toSafeText(
     safe.downloadUrl ?? safe.downloadUrl,
     MAX_URL_LENGTH
@@ -226,9 +226,9 @@ function toExportHistoryListItemDto(history) {
 
 function toExportHistoryDetailDto(history) {
   const safe = asObject(history) || {};
-  const status = toStringOrNull(safe.statusNormalized ?? safe.status, 120);
+  const status = toStringOrNull(safe.statusNormalized ?? "UNKNOWN", 120);
   const executionState = toStringOrNull(
-    safe.executionStateNormalized ?? safe.executionState,
+    safe.executionStateNormalized ?? "UNKNOWN",
     120
   );
   const downloadUrl = toSafeText(

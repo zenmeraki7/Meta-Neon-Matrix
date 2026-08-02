@@ -3,6 +3,7 @@ import { getDefinitions } from "../db/metafieldDefinitions.js";
 import { getVariantsByProductIds } from "../db/productGrid.js";
 import { getMetafieldsForVariants } from "../db/variantMetafields.js";
 import { requireShopScope } from "../utils/shopScope.js";
+import { variantGidFromVerifiedLegacyId } from "../utils/shopifyVariantGid.js";
 
 export async function fetchProductGridRows(shopDomain, filters) {
   const scopedShop = requireShopScope(shopDomain, "shopDomain");
@@ -23,7 +24,7 @@ export async function fetchProductGridRows(shopDomain, filters) {
 
   const productIds = tagFilteredProducts.map((p) => BigInt(p.id));
   const variants = await getVariantsByProductIds(scopedShop, productIds);
-  const variantIds = variants.map((v) => BigInt(v.id));
+  const variantIds = variants.map((v) => variantGidFromVerifiedLegacyId(v.id));
   const [definitions, metafields] = await Promise.all([
     getDefinitions(scopedShop),
     getMetafieldsForVariants(scopedShop, variantIds),

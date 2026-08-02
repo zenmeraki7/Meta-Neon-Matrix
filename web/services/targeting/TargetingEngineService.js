@@ -1219,6 +1219,7 @@ async function resolveAndMaybeFreeze({
               vendor: true,
               productType: true,
               handle: true,
+              updatedAt: true,
             },
             orderBy: { id: "asc" },
           });
@@ -1233,12 +1234,14 @@ async function resolveAndMaybeFreeze({
               mirrorBatchId: resolved.mirrorBatchId,
               targetResourceType: TARGET_TYPES.PRODUCT,
               targetGranularity: normalized.targetGranularity,
+              targetResolutionOnly: true,
               changeSource: source,
               productId: p.id,
               variantId: null,
               targetIdentity: `PRODUCT:${p.id}`,
               ordinal: ordinal + idx,
               normalizedFilterHash,
+              sourceUpdatedAt: p.updatedAt,
               beforeValues: {
                 title: p.title ?? null,
                 status: p.status ?? null,
@@ -1280,6 +1283,7 @@ async function resolveAndMaybeFreeze({
               option3Value: true,
               weight: true,
               weightUnit: true,
+              updatedAt: true,
             },
             orderBy: { id: "asc" },
           });
@@ -1294,12 +1298,14 @@ async function resolveAndMaybeFreeze({
               mirrorBatchId: resolved.mirrorBatchId,
               targetResourceType: TARGET_TYPES.VARIANT,
               targetGranularity: normalized.targetGranularity,
+              targetResolutionOnly: true,
               changeSource: source,
               productId: v.productId,
               variantId: v.id,
               targetIdentity: `VARIANT:${v.id}`,
               ordinal: ordinal + idx,
               normalizedFilterHash,
+              sourceUpdatedAt: v.updatedAt,
               beforeValues: {
                 title: v.title ?? null,
                 sku: v.sku ?? null,
@@ -1650,7 +1656,9 @@ export const TargetingEngineService = {
 
   async resolveAndFreezeRecurringRunTargets(input) {
     const allowLegacyForRecurring =
-      !input?.filterAst && Array.isArray(input?.legacyFilterParams);
+      !input?.filterAst &&
+      Array.isArray(input?.legacyFilterParams) &&
+      Boolean(input?.legacyMigrationConfirmed === true || input?.allowLegacyFilterParams === true);
     return resolveAndMaybeFreeze({
       flow: "RECURRING",
       freeze: true,

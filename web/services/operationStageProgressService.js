@@ -1,5 +1,14 @@
 import { db } from "../repositories/repositoryDb.js";
 
+function nonNegativeCount(value, fieldName) {
+  if (value === null || value === undefined) return null;
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error(`${fieldName} must be a non-negative safe integer`);
+  }
+  return count;
+}
+
 export async function upsertOperationStageProgress({
   shop,
   operationType,
@@ -7,9 +16,9 @@ export async function upsertOperationStageProgress({
   executionId = null,
   workflowStageKey,
   stageStatus,
-  counterA = null,
-  counterB = null,
-  counterC = null,
+  succeededItemCount = null,
+  failedItemCount = null,
+  observedItemCount = null,
   detail = null,
   completed = false,
 }) {
@@ -29,9 +38,9 @@ export async function upsertOperationStageProgress({
   const base = {
     executionId,
     stageStatus,
-    counterA,
-    counterB,
-    counterC,
+    succeededItemCount: nonNegativeCount(succeededItemCount, "succeededItemCount"),
+    failedItemCount: nonNegativeCount(failedItemCount, "failedItemCount"),
+    observedItemCount: nonNegativeCount(observedItemCount, "observedItemCount"),
     detail,
     ...(completed ? { completedAt: new Date() } : {}),
   };
@@ -49,5 +58,3 @@ export async function upsertOperationStageProgress({
     update: base,
   });
 }
-
-

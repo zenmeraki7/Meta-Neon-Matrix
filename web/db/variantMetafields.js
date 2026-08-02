@@ -1,4 +1,5 @@
 import { prisma } from "../config/database.js";
+import { requireVariantGid } from "../utils/shopifyVariantGid.js";
 
 const SYNC_SAFE_STATUSES = Object.freeze(["SYNCED", "WRITTEN"]);
 
@@ -8,7 +9,7 @@ const SYNC_SAFE_STATUSES = Object.freeze(["SYNCED", "WRITTEN"]);
  *
  * @param {string} shop
  * @param {Array<{
- *   variantId: string|number|bigint,
+ *   variantGid: string,
  *   definitionId?: string|null,
  *   namespace: string,
  *   key: string,
@@ -32,7 +33,7 @@ export async function upsertFromSync(shop, rows) {
 
   await prisma.$transaction(async (tx) => {
     for (const row of list) {
-      const variantId = BigInt(row.variantId).toString();
+      const variantGid = requireVariantGid(row.variantGid);
       const namespace = String(row.namespace || "").trim();
       const key = String(row.key || "").trim();
       const type = row.type == null ? null : String(row.type);
@@ -71,12 +72,12 @@ export async function upsertFromSync(shop, rows) {
           last_synced_at = now(),
           updated_at = now()
         WHERE shop_id = ${resolvedShop}
-          AND variant_id = ${variantId}::bigint
+          AND variant_gid = ${variantGid}
           AND namespace = ${namespace}
           AND key = ${key}
           AND (${shopifyVersion}::bigint = 0 OR COALESCE(shopify_version, 0) < ${shopifyVersion}::bigint)
           AND edit_status = ANY(${SYNC_SAFE_STATUSES}::text[])
-        RETURNING variant_id
+        RETURNING variant_gid
       `;
       if (changed.length > 0) {
         updated += changed.length;
@@ -86,7 +87,7 @@ export async function upsertFromSync(shop, rows) {
       const created = await tx.$queryRaw`
         INSERT INTO variant_metafields (
           shop_id,
-          variant_id,
+          variant_gid,
           definition_id,
           namespace,
           key,
@@ -102,7 +103,7 @@ export async function upsertFromSync(shop, rows) {
         )
         VALUES (
           ${resolvedShop},
-          ${variantId}::bigint,
+          ${variantGid},
           ${definitionId}::uuid,
           ${namespace},
           ${key},
@@ -116,9 +117,9 @@ export async function upsertFromSync(shop, rows) {
           now(),
           now()
         )
-        ON CONFLICT (shop_id, variant_id, namespace, key)
+        ON CONFLICT (shop_id, variant_gid, namespace, key)
         DO NOTHING
-        RETURNING variant_id
+        RETURNING variant_gid
       `;
       inserted += created.length;
     }
@@ -130,22 +131,22 @@ export async function upsertFromSync(shop, rows) {
 /**
  * Gets current confirmed value for one variant metafield cell.
  * @param {string} shop
- * @param {string|number|bigint} variantId
+ * @param {string} variantGid
  * @param {string} namespace
  * @param {string} key
  * @returns {Promise<string|null>}
  */
-export async function getCurrentValue(shop, variantId, namespace, key) {
+export async function getCurrentValue(shop, variantGid, namespace, key) {
   const resolvedShop = String(shop || "").trim();
   const resolvedNamespace = String(namespace || "").trim();
   const resolvedKey = String(key || "").trim();
   if (!resolvedShop || !resolvedNamespace || !resolvedKey) return null;
-  const resolvedVariantId = BigInt(variantId).toString();
+  const resolvedVariantGid = requireVariantGid(variantGid);
   const rows = await prisma.$queryRaw`
     SELECT value
     FROM variant_metafields
     WHERE shop_id = ${resolvedShop}
-      AND variant_id = ${resolvedVariantId}::bigint
+      AND variant_gid = ${resolvedVariantGid}
       AND namespace = ${resolvedNamespace}
       AND key = ${resolvedKey}
     LIMIT 1
@@ -158,17 +159,18 @@ export const getPendingValue = getCurrentValue;
 /**
  * Gets variant metafield rows for variant ids scoped to shop.
  * @param {string} shop
- * @param {Array<bigint>} variantIds
+ * @param {Array<string>} variantGids
  * @returns {Promise<Array<object>>}
  */
-export async function getMetafieldsForVariants(shop, variantIds) {
+export async function getMetafieldsForVariants(shop, variantGids) {
   const resolvedShop = String(shop || "").trim();
   if (!resolvedShop) throw new Error("getMetafieldsForVariants requires shop");
-  if (!Array.isArray(variantIds) || variantIds.length === 0) return [];
-  const ids = variantIds.map((id) => BigInt(id).toString());
+  if (!Array.isArray(variantGids) || variantGids.length === 0) return [];
+  const gids = variantGids.map((gid) => requireVariantGid(gid));
   return prisma.$queryRaw`
     SELECT
       variant_id,
+      variant_gid,
       namespace,
       key,
       value,
@@ -179,7 +181,7 @@ export async function getMetafieldsForVariants(shop, variantIds) {
       shopify_metafield_id
     FROM variant_metafields
     WHERE shop_id = ${resolvedShop}
-      AND variant_id = ANY(${ids}::bigint[])
+      AND variant_gid = ANY(${gids}::text[])
   `;
 }
 
@@ -212,6 +214,7 @@ export async function getForGrid(shop, filters = {}) {
     SELECT
       vm.id,
       vm.variant_id,
+      vm.variant_gid,
       v.product_id,
       vm.namespace,
       vm.key,
