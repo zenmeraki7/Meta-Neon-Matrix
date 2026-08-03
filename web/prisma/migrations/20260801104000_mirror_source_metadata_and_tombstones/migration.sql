@@ -5,7 +5,8 @@ UPDATE "Product" SET "lastSourceUpdatedAt" = COALESCE("lastSourceUpdatedAt", "up
 ALTER TABLE "Variant" ADD COLUMN "sourceEntityUpdatedAt" TIMESTAMP(3), ADD COLUMN "sourceEventOccurredAt" TIMESTAMP(3),
   ADD COLUMN "sourceVersion" TEXT, ADD COLUMN "lastChangeSource" TEXT,
   ADD COLUMN "reconciliationCompletedAt" TIMESTAMP(3), ADD COLUMN "isDeleted" BOOLEAN NOT NULL DEFAULT FALSE;
-UPDATE "Variant" SET "sourceEntityUpdatedAt" = "updatedAt", "sourceEventOccurredAt" = "updatedAt";
+-- Variant has no legacy createdAt/updatedAt authority. Existing rows retain
+-- NULL source timestamps until an authoritative source event supplies them.
 
 ALTER TABLE "Collection" ADD COLUMN "sourceEntityUpdatedAt" TIMESTAMP(3), ADD COLUMN "sourceEventOccurredAt" TIMESTAMP(3),
   ADD COLUMN "sourceVersion" TEXT, ADD COLUMN "lastChangeSource" TEXT,

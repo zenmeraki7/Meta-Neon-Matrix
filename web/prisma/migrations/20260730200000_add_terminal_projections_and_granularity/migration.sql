@@ -1,12 +1,12 @@
 -- CreateEnum
 DO $$ BEGIN
-    CREATE TYPE "ScheduledExportRunStatus" AS ENUM ('PENDING', 'PROCESSING', 'SUCCESS', 'FAILED', 'SKIPPED', 'CANCELLED');
+    CREATE TYPE "ScheduledExportRunStatus" AS ENUM ('PENDING', 'PROCESSING', 'RETRY_WAIT', 'SUCCESS', 'FAILED', 'SKIPPED', 'CANCELLED');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
 DO $$ BEGIN
-    CREATE TYPE "RecurringEditRunStatus" AS ENUM ('PENDING', 'PROCESSING', 'SUCCESS', 'FAILED', 'SKIPPED', 'CANCELLED', 'PARTIAL');
+    CREATE TYPE "RecurringEditRunStatus" AS ENUM ('PENDING', 'PROCESSING', 'RETRY_WAIT', 'SUCCESS', 'FAILED', 'SKIPPED', 'CANCELLED', 'PARTIAL');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;

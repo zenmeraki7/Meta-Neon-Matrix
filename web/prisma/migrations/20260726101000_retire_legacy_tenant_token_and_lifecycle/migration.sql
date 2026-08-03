@@ -24,7 +24,7 @@ BEGIN
   END IF;
 END $$;
 
-DROP INDEX CONCURRENTLY IF EXISTS "Store_isUnInstalled_idx";
+DROP INDEX IF EXISTS "Store_isUnInstalled_idx";
 
 ALTER TABLE "Store"
   DROP COLUMN IF EXISTS "accessToken",

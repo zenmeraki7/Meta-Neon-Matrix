@@ -122,6 +122,39 @@ SET "statusNormalized" = (
     THEN upper("status") ELSE 'UNKNOWN' END
 )::"WebhookDeliveryStatus";
 
+-- The payload immutability triggers share one function across tables with
+-- different row shapes. Resolve fields through JSONB so a branch never asks a
+-- generic record for a column that does not exist on the current trigger table.
+CREATE OR REPLACE FUNCTION prevent_immutable_payload_update()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  new_row jsonb := to_jsonb(NEW);
+  old_row jsonb := to_jsonb(OLD);
+BEGIN
+  IF TG_TABLE_NAME = 'OperationEnqueueIntent' AND
+    jsonb_build_array(new_row->'payload', new_row->'payloadHash', new_row->'payloadByteSize', new_row->'payloadSchemaVersion', new_row->'payloadCompression', new_row->'payloadStorageKey') IS DISTINCT FROM
+    jsonb_build_array(old_row->'payload', old_row->'payloadHash', old_row->'payloadByteSize', old_row->'payloadSchemaVersion', old_row->'payloadCompression', old_row->'payloadStorageKey') THEN
+    RAISE EXCEPTION 'IMMUTABLE_OPERATION_ENQUEUE_PAYLOAD';
+  ELSIF TG_TABLE_NAME = 'OutboxEvent' AND
+    jsonb_build_array(new_row->'payloadJson', new_row->'payloadHash', new_row->'payloadByteSize', new_row->'payloadSchemaVersion', new_row->'payloadCompression', new_row->'payloadStorageKey') IS DISTINCT FROM
+    jsonb_build_array(old_row->'payloadJson', old_row->'payloadHash', old_row->'payloadByteSize', old_row->'payloadSchemaVersion', old_row->'payloadCompression', old_row->'payloadStorageKey') THEN
+    RAISE EXCEPTION 'IMMUTABLE_OUTBOX_PAYLOAD';
+  ELSIF TG_TABLE_NAME = 'UndoCommand' AND
+    jsonb_build_array(new_row->'commandJson', new_row->'commandHash', new_row->'payloadByteSize', new_row->'payloadSchemaVersion', new_row->'payloadCompression', new_row->'payloadStorageKey') IS DISTINCT FROM
+    jsonb_build_array(old_row->'commandJson', old_row->'commandHash', old_row->'payloadByteSize', old_row->'payloadSchemaVersion', old_row->'payloadCompression', old_row->'payloadStorageKey') THEN
+    RAISE EXCEPTION 'IMMUTABLE_UNDO_COMMAND_PAYLOAD';
+  ELSIF TG_TABLE_NAME = 'UndoOperationConflictChunk' AND
+    jsonb_build_array(new_row->'payload', new_row->'payloadHash', new_row->'payloadByteSize', new_row->'payloadSchemaVersion', new_row->'payloadCompression', new_row->'payloadStorageKey') IS DISTINCT FROM
+    jsonb_build_array(old_row->'payload', old_row->'payloadHash', old_row->'payloadByteSize', old_row->'payloadSchemaVersion', old_row->'payloadCompression', old_row->'payloadStorageKey') THEN
+    RAISE EXCEPTION 'IMMUTABLE_UNDO_CONFLICT_PAYLOAD';
+  ELSIF TG_TABLE_NAME = 'TargetFreezeCommand' AND
+    jsonb_build_array(new_row->'shop', new_row->'operationId', new_row->'sourceType', new_row->'sourceId', new_row->'sourceRevision', new_row->'configFingerprint', new_row->'mirrorBatchId', new_row->'targetMode', new_row->'filterAstJson', new_row->'savedTargetSetId', new_row->'editOperationJson', new_row->'payloadHash', new_row->'payloadByteSize', new_row->'payloadSchemaVersion', new_row->'payloadCompression', new_row->'payloadStorageKey') IS DISTINCT FROM
+    jsonb_build_array(old_row->'shop', old_row->'operationId', old_row->'sourceType', old_row->'sourceId', old_row->'sourceRevision', old_row->'configFingerprint', old_row->'mirrorBatchId', old_row->'targetMode', old_row->'filterAstJson', old_row->'savedTargetSetId', old_row->'editOperationJson', old_row->'payloadHash', old_row->'payloadByteSize', old_row->'payloadSchemaVersion', old_row->'payloadCompression', old_row->'payloadStorageKey') THEN
+    RAISE EXCEPTION 'IMMUTABLE_TARGET_FREEZE_COMMAND_PAYLOAD';
+  END IF;
+  RETURN NEW;
+END $$;
+
 UPDATE "OutboxEvent"
 SET "statusNormalized" = (
   CASE WHEN upper("status") IN ('PENDING','DISPATCHING','DISPATCHED','DEAD_LETTER')

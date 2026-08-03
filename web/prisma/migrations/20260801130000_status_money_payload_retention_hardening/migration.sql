@@ -89,7 +89,7 @@ ALTER TABLE "Variant" ADD CONSTRAINT "Variant_shop_domain_ck"
 CHECK (length("shop") <= 255 AND "shop" ~ '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$') NOT VALID;
 ALTER TABLE "Variant" ADD CONSTRAINT "Variant_gid_ck"
 CHECK (length("id") <= 255 AND "id" ~ '^gid://shopify/ProductVariant/[1-9][0-9]*$') NOT VALID;
-ALTER TABLE "VariantMetafield" ADD CONSTRAINT "VariantMetafield_namespace_key_length_ck"
+ALTER TABLE "variant_metafields" ADD CONSTRAINT "VariantMetafield_namespace_key_length_ck"
 CHECK (length("namespace") BETWEEN 1 AND 255 AND length("key") BETWEEN 1 AND 64) NOT VALID;
 ALTER TABLE "MetafieldMirror" ADD CONSTRAINT "MetafieldMirror_namespace_key_length_ck"
 CHECK (length("namespace") BETWEEN 1 AND 255 AND length("key") BETWEEN 1 AND 64) NOT VALID;
@@ -148,10 +148,16 @@ ALTER TABLE "UndoCommand"
   ADD COLUMN "payloadStorageKey" varchar(1024),
   ADD COLUMN "retentionUntil" timestamptz DEFAULT (now() + interval '7 years'),
   ADD COLUMN "redactedAt" timestamptz;
+
+-- The existing authority trigger correctly rejects application changes to the
+-- immutable command hash. This controlled migration backfill canonicalizes that
+-- hash from the already-immutable commandJson, then restores protection.
+ALTER TABLE "UndoCommand" DISABLE TRIGGER "UndoCommand_reject_authority_update";
 UPDATE "UndoCommand" SET
   "payloadByteSize" = octet_length(canonical_jsonb_text("commandJson")),
   "commandHash" = encode(digest(convert_to(canonical_jsonb_text("commandJson"), 'UTF8'), 'sha256'), 'hex'),
   "retentionUntil" = "createdAt" + interval '7 years';
+ALTER TABLE "UndoCommand" ENABLE TRIGGER "UndoCommand_reject_authority_update";
 ALTER TABLE "UndoCommand" ALTER COLUMN "payloadByteSize" SET NOT NULL;
 
 ALTER TABLE "UndoOperationConflictChunk"
@@ -308,4 +314,4 @@ WHERE "status" IN ('DISPATCHED', 'DEAD_LETTER') AND "retentionUntil" IS NOT NULL
 CREATE INDEX "EditHistory_terminal_retention_idx" ON "EditHistory" ("shop", "retentionUntil", "id")
 WHERE "status" IN ('completed', 'failed', 'cancelled', 'partial') AND "retentionUntil" IS NOT NULL;
 CREATE INDEX "UndoOperation_terminal_retention_idx" ON "UndoOperation" ("shop", "retentionUntil", "id")
-WHERE "outcomeStatus" IN ('completed', 'partial', 'failed', 'cancelled') AND "retentionUntil" IS NOT NULL;
+WHERE "status" IN ('completed', 'partial', 'failed', 'cancelled') AND "retentionUntil" IS NOT NULL;

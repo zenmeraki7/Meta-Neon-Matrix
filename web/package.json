@@ -12,6 +12,7 @@
     "start:worker": "cross-env WORKER_PROCESS=true node worker.js",
     "worker": "npm run start:worker",
     "debug": "node --inspect-brk index.js",
+    "predev": "npm --prefix frontend run build",
     "dev": "concurrently -k -n web,worker \"npm:dev:web\" \"npm:dev:worker\"",
     "dev:web": "cross-env NODE_ENV=development WEB_PROCESS=true nodemon index.js --ignore ./frontend",
     "dev:worker": "cross-env NODE_ENV=development WORKER_PROCESS=true nodemon worker.js --ignore ./frontend",

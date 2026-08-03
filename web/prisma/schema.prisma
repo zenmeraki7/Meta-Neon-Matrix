@@ -2766,6 +2766,7 @@ enum RecurringScheduleType {
 enum RecurringEditRunStatus {
   PENDING
   PROCESSING
+  RETRY_WAIT
   SUCCESS
   FAILED
   SKIPPED
@@ -2867,6 +2868,7 @@ enum ScheduledExportStatus {
 enum ScheduledExportRunStatus {
   PENDING
   PROCESSING
+  RETRY_WAIT
   SUCCESS
   FAILED
   SKIPPED

@@ -2,6 +2,34 @@
 -- The preflight deliberately aborts before constraints are changed if legacy
 -- orphaned or cross-tenant rows exist. Repair those rows, then rerun migration.
 
+-- Legacy product-collection membership imports could arrive before the
+-- collection mirror. Preserve those memberships by materializing the minimal
+-- parent identity in the same tenant and mirror batch. A later collection sync
+-- can enrich the nullable collection metadata.
+INSERT INTO "Collection" (
+  "id", "shop", "shopifyId", "mirrorBatchId", "createdAt", "updatedAt"
+)
+SELECT DISTINCT
+  'legacy-collection-' || md5(
+    link."shop" || ':' || link."collectionId" || ':' || link."mirrorBatchId"
+  ),
+  link."shop",
+  link."collectionId",
+  link."mirrorBatchId",
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+FROM "ProductCollection" link
+JOIN "Product" product
+  ON product."shop" = link."shop"
+ AND product."id" = link."productId"
+ AND product."mirrorBatchId" = link."mirrorBatchId"
+LEFT JOIN "Collection" collection
+  ON collection."shop" = link."shop"
+ AND collection."shopifyId" = link."collectionId"
+ AND collection."mirrorBatchId" = link."mirrorBatchId"
+WHERE collection."id" IS NULL
+ON CONFLICT ("shop", "shopifyId", "mirrorBatchId") DO NOTHING;
+
 DO $$
 BEGIN
   IF EXISTS (

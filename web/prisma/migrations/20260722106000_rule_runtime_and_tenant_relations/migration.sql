@@ -1,6 +1,6 @@
 -- Split automatic-rule definitions from immutable revisions and narrow scheduler state.
 -- This migration intentionally runs without an outer transaction: Neon/PostgreSQL
--- requires that for CONCURRENTLY-built indexes.
+-- is compatible with Prisma shadow-database replay.
 
 DO $$
 BEGIN
@@ -36,11 +36,11 @@ BEGIN
   END IF;
 END $$;
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "RecurringEdit_shop_id_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "RecurringEdit_shop_id_key"
   ON "RecurringEdit" ("shop", "id");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "ScheduledExport_shop_id_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "ScheduledExport_shop_id_key"
   ON "ScheduledExport" ("shop", "id");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "AutomaticProductRule_shop_id_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "AutomaticProductRule_shop_id_key"
   ON "AutomaticProductRule" ("shop", "id");
 
 CREATE TABLE IF NOT EXISTS "AutomaticProductRuleRevision" (
@@ -113,11 +113,11 @@ ALTER TABLE "AutomaticProductRuleScheduleState"
   REFERENCES "AutomaticProductRule" ("shop", "id") ON DELETE CASCADE NOT VALID;
 ALTER TABLE "AutomaticProductRuleScheduleState" VALIDATE CONSTRAINT "AutomaticProductRuleScheduleState_rule_fkey";
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "AutomaticProductRuleRevision_shop_createdAt_idx"
+CREATE INDEX IF NOT EXISTS "AutomaticProductRuleRevision_shop_createdAt_idx"
   ON "AutomaticProductRuleRevision" ("shop", "createdAt");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "AutomaticProductRuleScheduleState_nextRunAt_automaticProductRuleId_idx"
+CREATE INDEX IF NOT EXISTS "AutomaticProductRuleScheduleState_nextRunAt_automaticProductRuleId_idx"
   ON "AutomaticProductRuleScheduleState" ("nextRunAt", "automaticProductRuleId");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "AutomaticProductRuleScheduleState_shop_nextRunAt_automaticProductRuleId_idx"
+CREATE INDEX IF NOT EXISTS "AutomaticProductRuleScheduleState_shop_nextRunAt_automaticProductRuleId_idx"
   ON "AutomaticProductRuleScheduleState" ("shop", "nextRunAt", "automaticProductRuleId");
 
 -- Add tenant-scoped FKs with low-lock validation, then remove legacy id-only FKs.
@@ -174,25 +174,25 @@ ALTER TABLE "OperationLease" VALIDATE CONSTRAINT "OperationLease_fencingToken_ch
 ALTER TABLE "Suggestion" ADD COLUMN IF NOT EXISTS "emailNormalized" TEXT;
 UPDATE "Suggestion" SET "emailNormalized" = LOWER(BTRIM("email")) WHERE "emailNormalized" IS NULL;
 ALTER TABLE "Suggestion" ALTER COLUMN "emailNormalized" SET NOT NULL;
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "Suggestion_emailNormalized_idx" ON "Suggestion" ("emailNormalized");
-DROP INDEX CONCURRENTLY IF EXISTS "Suggestion_email_idx";
+CREATE INDEX IF NOT EXISTS "Suggestion_emailNormalized_idx" ON "Suggestion" ("emailNormalized");
+DROP INDEX IF EXISTS "Suggestion_email_idx";
 
 -- Referral capture is one current attribution per shop; preserve the newest row.
 DELETE FROM "ReferralCode" older USING "ReferralCode" newer
 WHERE older."shop" = newer."shop"
   AND (older."createdAt", older."id") < (newer."createdAt", newer."id");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "ReferralCode_shop_key" ON "ReferralCode" ("shop");
-DROP INDEX CONCURRENTLY IF EXISTS "ReferralCode_shop_idx";
+CREATE UNIQUE INDEX IF NOT EXISTS "ReferralCode_shop_key" ON "ReferralCode" ("shop");
+DROP INDEX IF EXISTS "ReferralCode_shop_idx";
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "ErrorLog_createdAt_idx" ON "ErrorLog" ("createdAt");
+CREATE INDEX IF NOT EXISTS "ErrorLog_createdAt_idx" ON "ErrorLog" ("createdAt");
 ALTER TABLE "ErrorLog" DROP COLUMN IF EXISTS "request";
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "DeadLetterChange_notified_failedAt_idx"
-  ON "DeadLetterChange" ("notified", "failedAt");
-DROP INDEX CONCURRENTLY IF EXISTS "DeadLetterChange_notified_idx";
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "DeadLetterJob_resolvedAt_failedAt_idx"
+CREATE INDEX IF NOT EXISTS "dead_letter_changes_notified_failed_at_idx"
+  ON "dead_letter_changes" ("notified", "failed_at");
+DROP INDEX IF EXISTS "dead_letter_changes_notified_idx";
+CREATE INDEX IF NOT EXISTS "DeadLetterJob_resolvedAt_failedAt_idx"
   ON "DeadLetterJob" ("resolvedAt", "failedAt");
-DROP INDEX CONCURRENTLY IF EXISTS "DeadLetterJob_resolvedAt_idx";
+DROP INDEX IF EXISTS "DeadLetterJob_resolvedAt_idx";
 
 ALTER TABLE "AutomaticProductRule"
   DROP COLUMN IF EXISTS "schedulerClaimedAt",

@@ -88,12 +88,22 @@ function mapFieldValue(model, field, value) {
   return value;
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function rewriteLegacyWhereToNormalized(model, where) {
   if (!where || typeof where !== "object") return where;
 
   if (Array.isArray(where)) {
     return where.map((item) => rewriteLegacyWhereToNormalized(model, item));
   }
+
+  // Preserve Date, Decimal, Buffer and Prisma field-reference instances.
+  // Spreading those objects turns them into `{}` and produces invalid filters.
+  if (!isPlainObject(where)) return where;
 
   const out = { ...where };
 
@@ -141,7 +151,7 @@ function rewriteLegacyWhereToNormalized(model, where) {
       continue;
     }
 
-    if (value && typeof value === "object") {
+    if (isPlainObject(value) || Array.isArray(value)) {
       out[key] = rewriteLegacyWhereToNormalized(model, value);
     }
   }

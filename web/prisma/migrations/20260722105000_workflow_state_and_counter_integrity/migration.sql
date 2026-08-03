@@ -31,6 +31,11 @@ BEGIN
   END IF;
 END $$;
 
+-- Normalize the legacy terminal spelling to the authoritative lifecycle value.
+UPDATE "MirrorReconcileSignal"
+SET "status" = 'RECONCILED'
+WHERE UPPER("status") = 'RESOLVED';
+
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM "TargetFreezeCommand" WHERE UPPER("status") NOT IN ('PENDING','DISPATCHING','DISPATCHED')) THEN
@@ -98,7 +103,7 @@ BEGIN
 END $$;
 
 ALTER TABLE "BulkApplyItem" ALTER COLUMN "requestId" SET NOT NULL;
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "BulkApplyRequest_shop_id_key" ON "BulkApplyRequest" ("shop", "id");
+CREATE UNIQUE INDEX IF NOT EXISTS "BulkApplyRequest_shop_id_key" ON "BulkApplyRequest" ("shop", "id");
 ALTER TABLE "BulkApplyItem" ADD CONSTRAINT "BulkApplyItem_shop_requestId_fkey"
   FOREIGN KEY ("shop", "requestId") REFERENCES "BulkApplyRequest" ("shop", "id")
   ON DELETE CASCADE ON UPDATE CASCADE NOT VALID;
@@ -178,21 +183,21 @@ ALTER TABLE "Store" ADD CONSTRAINT "Store_sync_stage_projection_check" CHECK (
 ) NOT VALID;
 ALTER TABLE "Store" VALIDATE CONSTRAINT "Store_sync_stage_projection_check";
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "Store_syncProgressStage_updatedAt_idx" ON "Store" ("syncProgressStage", "updatedAt");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "BulkApplyRequest_shop_status_createdAt_id_idx" ON "BulkApplyRequest" ("shop", "status", "createdAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "BulkApplyItem_shop_requestId_status_createdAt_id_idx" ON "BulkApplyItem" ("shop", "requestId", "status", "createdAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "BulkApplyItem_shop_status_createdAt_id_idx" ON "BulkApplyItem" ("shop", "status", "createdAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "TargetFreezeCommand_status_createdAt_id_idx" ON "TargetFreezeCommand" ("status", "createdAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "MirrorReconcileSignal_shop_status_updatedAt_entityId_idx" ON "MirrorReconcileSignal" ("shop", "status", "updatedAt", "entityId");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "OperationEnqueueIntent_shop_status_runAt_id_idx" ON "OperationEnqueueIntent" ("shop", "status", "runAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "OperationEnqueueIntent_status_runAt_id_idx" ON "OperationEnqueueIntent" ("status", "runAt", "id");
+CREATE INDEX IF NOT EXISTS "Store_syncProgressStage_updatedAt_idx" ON "Store" ("syncProgressStage", "updatedAt");
+CREATE INDEX IF NOT EXISTS "BulkApplyRequest_shop_status_createdAt_id_idx" ON "BulkApplyRequest" ("shop", "status", "createdAt", "id");
+CREATE INDEX IF NOT EXISTS "BulkApplyItem_shop_requestId_status_createdAt_id_idx" ON "BulkApplyItem" ("shop", "requestId", "status", "createdAt", "id");
+CREATE INDEX IF NOT EXISTS "BulkApplyItem_shop_status_createdAt_id_idx" ON "BulkApplyItem" ("shop", "status", "createdAt", "id");
+CREATE INDEX IF NOT EXISTS "TargetFreezeCommand_status_createdAt_id_idx" ON "TargetFreezeCommand" ("status", "createdAt", "id");
+CREATE INDEX IF NOT EXISTS "MirrorReconcileSignal_shop_status_updatedAt_entityId_idx" ON "MirrorReconcileSignal" ("shop", "status", "updatedAt", "entityId");
+CREATE INDEX IF NOT EXISTS "OperationEnqueueIntent_shop_status_runAt_id_idx" ON "OperationEnqueueIntent" ("shop", "status", "runAt", "id");
+CREATE INDEX IF NOT EXISTS "OperationEnqueueIntent_status_runAt_id_idx" ON "OperationEnqueueIntent" ("status", "runAt", "id");
 
-DROP INDEX CONCURRENTLY IF EXISTS "BulkApplyRequest_shop_status_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "BulkApplyItem_shop_status_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "TargetFreezeCommand_status_createdAt_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "MirrorReconcileSignal_shop_status_updatedAt_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "OperationEnqueueIntent_shop_status_runAt_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "OperationEnqueueIntent_status_runAt_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "shop_status_type_recent";
-DROP INDEX CONCURRENTLY IF EXISTS "EditHistory_shop_executionState_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "WebhookDelivery_status_createdAt_idx";
+DROP INDEX IF EXISTS "BulkApplyRequest_shop_status_idx";
+DROP INDEX IF EXISTS "BulkApplyItem_shop_status_idx";
+DROP INDEX IF EXISTS "TargetFreezeCommand_status_createdAt_idx";
+DROP INDEX IF EXISTS "MirrorReconcileSignal_shop_status_updatedAt_idx";
+DROP INDEX IF EXISTS "OperationEnqueueIntent_shop_status_runAt_idx";
+DROP INDEX IF EXISTS "OperationEnqueueIntent_status_runAt_idx";
+DROP INDEX IF EXISTS "shop_status_type_recent";
+DROP INDEX IF EXISTS "EditHistory_shop_executionState_idx";
+DROP INDEX IF EXISTS "WebhookDelivery_status_createdAt_idx";

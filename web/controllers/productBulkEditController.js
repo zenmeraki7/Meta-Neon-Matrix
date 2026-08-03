@@ -5,8 +5,8 @@ import {
   getRequiredIdempotencyKey,
   handleControllerError,
   requireShopifySession,
-  setPrivateNoStore,
 } from "./controllerUtils.js";
+import { setPrivateNoStore } from "../http/cacheHeaders.js";
 
 import {
   buildBulkEditPreviewCommand,

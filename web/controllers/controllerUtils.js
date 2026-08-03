@@ -145,6 +145,12 @@ export function getRequiredIdempotencyKey(req) {
   return value;
 }
 
+// Compatibility name used by recurring-edit controllers. These mutations
+// require the same validated Idempotency-Key contract as bulk-edit commands.
+export function getIdempotencyKey(req) {
+  return getRequiredIdempotencyKey(req);
+}
+
 export function capReportedLength(value) {
   const num = Number(value);
   const safeInt = Number.isSafeInteger(num) ? Math.max(0, num) : 0;
@@ -242,6 +248,22 @@ export function handleControllerError(
   });
 
   return response;
+}
+
+export function handleLoggedControllerError({
+  req,
+  res,
+  error,
+  fallbackCode,
+  source,
+}) {
+  return handleControllerError(
+    req,
+    res,
+    error,
+    fallbackCode,
+    source || fallbackCode,
+  );
 }
 
 function safelyLogControllerError({

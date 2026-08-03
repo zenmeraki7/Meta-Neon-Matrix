@@ -8,8 +8,10 @@ const configDir = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(configDir, "../../.env") });
 dotenv.config({ path: resolve(configDir, "../.env"), override: false });
 
+const isProductionBundle = process.env.npm_lifecycle_event === "build";
+
 if (
-  process.env.npm_lifecycle_event === "build" &&
+  isProductionBundle &&
   !process.env.CI &&
   !process.env.SHOPIFY_API_KEY
 ) {
@@ -19,9 +21,18 @@ if (
   );
 }
 
-process.env.VITE_SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY;
+const runtimeShopifyApiKeyPlugin = {
+  name: "runtime-shopify-api-key",
+  transformIndexHtml(html, context) {
+    if (!context?.server) return html;
+    return html.replaceAll(
+      "__SHOPIFY_API_KEY__",
+      process.env.SHOPIFY_API_KEY || "",
+    );
+  },
+};
 
-const plugins = [react()];
+const plugins = [react(), runtimeShopifyApiKeyPlugin];
 if (process.env.BUNDLE_ANALYZE === "true") {
   const { visualizer } = await import("rollup-plugin-visualizer");
   plugins.push(

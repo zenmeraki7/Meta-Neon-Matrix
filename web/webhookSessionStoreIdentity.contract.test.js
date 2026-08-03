@@ -49,8 +49,8 @@ test("migration swaps natural identity indexes and removes duplicate expiry", ()
   );
 
   assert.match(migration, /PRIMARY KEY USING INDEX "MirrorReconcileSignal_shop_entityType_entityId_key"/);
-  assert.match(migration, /CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "WebhookDelivery_shop_dedupeKey_key"/);
-  assert.match(migration, /DROP INDEX CONCURRENTLY IF EXISTS "WebhookDelivery_dedupeKey_key"/);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS "WebhookDelivery_shop_dedupeKey_key"/);
+  assert.match(migration, /DROP INDEX IF EXISTS "WebhookDelivery_dedupeKey_key"/);
   assert.match(migration, /DROP COLUMN IF EXISTS "expiresAt"/);
   assert.match(migration, /ALTER COLUMN "shopEmail" DROP NOT NULL/);
 });

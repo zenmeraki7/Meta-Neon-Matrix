@@ -1,4 +1,4 @@
--- Neon/PostgreSQL: this migration uses CONCURRENTLY and must not be wrapped in a transaction.
+-- Kept transaction-safe so Prisma Migrate can replay it in the shadow database.
 
 DO $$
 BEGIN
@@ -29,24 +29,24 @@ ALTER TABLE "OutboxEvent"
   ALTER COLUMN "nextAttemptAt" SET DEFAULT CURRENT_TIMESTAMP,
   ALTER COLUMN "nextAttemptAt" SET NOT NULL;
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "OutboxEvent_shop_eventIdentity_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "OutboxEvent_shop_eventIdentity_key"
   ON "OutboxEvent" ("shop", "eventIdentity");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "OutboxEvent_statusNormalized_nextAttemptAt_createdAt_idx"
+CREATE INDEX IF NOT EXISTS "OutboxEvent_statusNormalized_nextAttemptAt_createdAt_idx"
   ON "OutboxEvent" ("statusNormalized", "nextAttemptAt", "createdAt");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "OutboxEvent_shop_statusNormalized_nextAttemptAt_idx"
+CREATE INDEX IF NOT EXISTS "OutboxEvent_shop_statusNormalized_nextAttemptAt_idx"
   ON "OutboxEvent" ("shop", "statusNormalized", "nextAttemptAt");
-DROP INDEX CONCURRENTLY IF EXISTS "OutboxEvent_eventIdentity_key";
-DROP INDEX CONCURRENTLY IF EXISTS "OutboxEvent_status_createdAt_idx";
+DROP INDEX IF EXISTS "OutboxEvent_eventIdentity_key";
+DROP INDEX IF EXISTS "OutboxEvent_status_createdAt_idx";
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "EditHistory_shop_id_key" ON "EditHistory" ("shop", "id");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "EditHistory_shop_executionIdentity_key" ON "EditHistory" ("shop", "executionIdentity");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "UndoOperation_shop_id_key" ON "UndoOperation" ("shop", "id");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "UndoOperation_shop_executionIdentity_key" ON "UndoOperation" ("shop", "executionIdentity");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "UndoCommand_shop_commandHash_key" ON "UndoCommand" ("shop", "commandHash");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "RecurringEditRun_shop_executionKey_key" ON "RecurringEditRun" ("shop", "executionKey");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "ScheduledExportRun_shop_executionKey_key" ON "ScheduledExportRun" ("shop", "executionKey");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "AutomaticProductRuleRun_shop_executionKey_key" ON "AutomaticProductRuleRun" ("shop", "executionKey");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "TargetSnapshotSet_shop_id_key" ON "TargetSnapshotSet" ("shop", "id");
+CREATE UNIQUE INDEX IF NOT EXISTS "EditHistory_shop_id_key" ON "EditHistory" ("shop", "id");
+CREATE UNIQUE INDEX IF NOT EXISTS "EditHistory_shop_executionIdentity_key" ON "EditHistory" ("shop", "executionIdentity");
+CREATE UNIQUE INDEX IF NOT EXISTS "UndoOperation_shop_id_key" ON "UndoOperation" ("shop", "id");
+CREATE UNIQUE INDEX IF NOT EXISTS "UndoOperation_shop_executionIdentity_key" ON "UndoOperation" ("shop", "executionIdentity");
+CREATE UNIQUE INDEX IF NOT EXISTS "UndoCommand_shop_commandHash_key" ON "UndoCommand" ("shop", "commandHash");
+CREATE UNIQUE INDEX IF NOT EXISTS "RecurringEditRun_shop_executionKey_key" ON "RecurringEditRun" ("shop", "executionKey");
+CREATE UNIQUE INDEX IF NOT EXISTS "ScheduledExportRun_shop_executionKey_key" ON "ScheduledExportRun" ("shop", "executionKey");
+CREATE UNIQUE INDEX IF NOT EXISTS "AutomaticProductRuleRun_shop_executionKey_key" ON "AutomaticProductRuleRun" ("shop", "executionKey");
+CREATE UNIQUE INDEX IF NOT EXISTS "TargetSnapshotSet_shop_id_key" ON "TargetSnapshotSet" ("shop", "id");
 
 DO $$
 BEGIN
@@ -86,19 +86,19 @@ ALTER TABLE "TargetSnapshotItem" ADD CONSTRAINT "TargetSnapshotItem_shop_snapsho
   FOREIGN KEY ("shop", "snapshotSetId") REFERENCES "TargetSnapshotSet" ("shop", "id") ON DELETE CASCADE ON UPDATE CASCADE NOT VALID;
 ALTER TABLE "TargetSnapshotItem" VALIDATE CONSTRAINT "TargetSnapshotItem_shop_snapshotSetId_fkey";
 
-DROP INDEX CONCURRENTLY IF EXISTS "EditHistory_executionIdentity_key";
-DROP INDEX CONCURRENTLY IF EXISTS "EditHistory_shop_executionIdentity_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "UndoOperation_executionIdentity_key";
-DROP INDEX CONCURRENTLY IF EXISTS "UndoCommand_commandHash_key";
-DROP INDEX CONCURRENTLY IF EXISTS "RecurringEditRun_executionKey_key";
-DROP INDEX CONCURRENTLY IF EXISTS "ScheduledExportRun_executionKey_key";
-DROP INDEX CONCURRENTLY IF EXISTS "AutomaticProductRuleRun_executionKey_key";
+DROP INDEX IF EXISTS "EditHistory_executionIdentity_key";
+DROP INDEX IF EXISTS "EditHistory_shop_executionIdentity_idx";
+DROP INDEX IF EXISTS "UndoOperation_executionIdentity_key";
+DROP INDEX IF EXISTS "UndoCommand_commandHash_key";
+DROP INDEX IF EXISTS "RecurringEditRun_executionKey_key";
+DROP INDEX IF EXISTS "ScheduledExportRun_executionKey_key";
+DROP INDEX IF EXISTS "AutomaticProductRuleRun_executionKey_key";
 
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel0_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel1_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel2_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel3_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel4_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_categoryFabric_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_categoryFit_idx";
-DROP INDEX CONCURRENTLY IF EXISTS "Product_shop_mirrorBatchId_categoryWaistRise_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel0_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel1_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel2_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel3_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_googleShoppingCustomLabel4_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_categoryFabric_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_categoryFit_idx";
+DROP INDEX IF EXISTS "Product_shop_mirrorBatchId_categoryWaistRise_idx";

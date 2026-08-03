@@ -1,16 +1,16 @@
 -- Neon/PostgreSQL identity and session hardening.
--- CREATE INDEX CONCURRENTLY requires this migration to run without an outer transaction.
+-- CREATE INDEX requires this migration to run without an outer transaction.
 
 -- Build replacement indexes before taking the brief locks needed for constraint swaps.
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "WebhookDelivery_shop_dedupeKey_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "WebhookDelivery_shop_dedupeKey_key"
   ON "WebhookDelivery" ("shop", "dedupeKey");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "WebhookDelivery_shop_webhookId_idx"
+CREATE INDEX IF NOT EXISTS "WebhookDelivery_shop_webhookId_idx"
   ON "WebhookDelivery" ("shop", "webhookId");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "shopify_sessions_shop_idx"
+CREATE INDEX IF NOT EXISTS "shopify_sessions_shop_idx"
   ON "shopify_sessions" ("shop");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "shopify_sessions_shop_isOnline_idx"
+CREATE INDEX IF NOT EXISTS "shopify_sessions_shop_isOnline_idx"
   ON "shopify_sessions" ("shop", "isOnline");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "shopify_sessions_shop_expires_idx"
+CREATE INDEX IF NOT EXISTS "shopify_sessions_shop_expires_idx"
   ON "shopify_sessions" ("shop", "expires");
 
 DO $$
@@ -40,7 +40,7 @@ ALTER TABLE "MirrorReconcileSignal" ADD CONSTRAINT "MirrorReconcileSignal_pkey"
 ALTER TABLE "MirrorReconcileSignal" DROP COLUMN "id";
 
 -- Prisma's former @unique generated this globally-scoped standalone index.
-DROP INDEX CONCURRENTLY IF EXISTS "WebhookDelivery_dedupeKey_key";
+DROP INDEX IF EXISTS "WebhookDelivery_dedupeKey_key";
 
 -- The Shopify PostgreSQL session adapter owns `expires` and `accessToken`.
 -- `expiresAt` was an unused application duplicate and is safe to remove.

@@ -35,9 +35,18 @@ function getEmbeddedRouterBasename() {
   return match?.[1] || "/";
 }
 
+function hasRuntimeShopifyApiKey() {
+  if (typeof document === "undefined") return false;
+  const value = document
+    .querySelector('meta[name="shopify-api-key"]')
+    ?.getAttribute("content")
+    ?.trim();
+  return Boolean(value && value !== "__SHOPIFY_API_KEY__");
+}
+
 export default function App() {
   const { host } = getShopifyContext();
-  const hasApiKey = Boolean(import.meta.env.VITE_SHOPIFY_API_KEY);
+  const hasApiKey = hasRuntimeShopifyApiKey();
 
   const [isSyncing, setIsSyncing] = useState(false);
   const { t } = useTranslation();

@@ -29,11 +29,11 @@ test("migration drops only the two redundant ordinary indexes concurrently", () 
 
   assert.match(
     migration,
-    /DROP INDEX CONCURRENTLY IF EXISTS[\s\S]*"UndoOperationConflictChunk_shop_undoOperationId_chunkType_c_idx"/,
+    /DROP INDEX IF EXISTS[\s\S]*"UndoOperationConflictChunk_shop_undoOperationId_chunkType_c_idx"/,
   );
   assert.match(
     migration,
-    /DROP INDEX CONCURRENTLY IF EXISTS[\s\S]*"AutomaticProductRule_shop_id_idx"/,
+    /DROP INDEX IF EXISTS[\s\S]*"AutomaticProductRule_shop_id_idx"/,
   );
   assert.equal((migration.match(/DROP INDEX/g) || []).length, 2);
 });

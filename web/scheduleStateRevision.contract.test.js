@@ -10,8 +10,8 @@ test("typed scheduler state is narrow, fenced, revision-bound and tenant indexed
     assert.match(schema, new RegExp(`model ${model} \\{[\\s\\S]*definitionRevision\\s+Int[\\s\\S]*scheduleVersion\\s+Int[\\s\\S]*claimExpiresAt\\s+DateTime\\?[\\s\\S]*fencingToken\\s+BigInt[\\s\\S]*missedRunPolicy\\s+String`));
   }
   const indexes = read("./prisma/migrations/20260801121000_scheduler_indexes_concurrently/migration.sql");
-  assert.match(indexes, /CREATE INDEX CONCURRENTLY IF NOT EXISTS "RecurringEditScheduleState_due_active_idx"[\s\S]*\("shop","nextRunAt","recurringEditId"\)[\s\S]*WHERE "disabledAt" IS NULL/);
-  assert.match(indexes, /CREATE INDEX CONCURRENTLY IF NOT EXISTS "ScheduledExportScheduleState_due_active_idx"/);
+  assert.match(indexes, /CREATE INDEX IF NOT EXISTS "RecurringEditScheduleState_due_active_idx"[\s\S]*\("shop","nextRunAt","recurringEditId"\)[\s\S]*WHERE "disabledAt" IS NULL/);
+  assert.match(indexes, /CREATE INDEX IF NOT EXISTS "ScheduledExportScheduleState_due_active_idx"/);
 });
 
 test("scheduler claims use one SKIP LOCKED statement and fenced completion", () => {

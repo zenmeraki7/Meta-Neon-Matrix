@@ -83,6 +83,10 @@ for (const modPath of workerModulePaths) {
   }
 }
 
+console.log(
+  `[worker] All ${workerModulePaths.length} worker modules started successfully`,
+);
+
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;

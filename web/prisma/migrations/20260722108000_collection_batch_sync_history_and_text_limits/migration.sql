@@ -30,9 +30,9 @@ BEGIN
   END IF;
 END $$;
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "SyncHistory_shop_id_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "SyncHistory_shop_id_key"
   ON "SyncHistory" ("shop", "id");
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "MirrorBatch_shop_syncHistoryId_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "MirrorBatch_shop_syncHistoryId_key"
   ON "MirrorBatch" ("shop", "syncHistoryId");
 
 ALTER TABLE "Store" ADD CONSTRAINT "Store_activeCollectionBatch_fkey"
@@ -46,7 +46,7 @@ ALTER TABLE "MirrorBatch" ADD CONSTRAINT "MirrorBatch_shop_syncHistoryId_fkey"
 ALTER TABLE "MirrorBatch" VALIDATE CONSTRAINT "MirrorBatch_shop_syncHistoryId_fkey";
 
 ALTER TABLE "MirrorBatch" DROP CONSTRAINT IF EXISTS "MirrorBatch_syncHistoryId_fkey";
-DROP INDEX CONCURRENTLY IF EXISTS "MirrorBatch_syncHistoryId_key";
+DROP INDEX IF EXISTS "MirrorBatch_syncHistoryId_key";
 
 -- NOT VALID first keeps the initial lock short; validation reports legacy rows
 -- that must be trimmed instead of silently accepting additional oversized data.

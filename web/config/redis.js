@@ -1,5 +1,6 @@
 // web/config/redis.js
 import EventEmitter from "events";
+import logger from "../utils/loggerUtils.js";
 
 let IORedisClass = null;
 
@@ -45,6 +46,11 @@ export const connection = createRedisConnection();
 
 if (connection && typeof connection.on === "function") {
   connection.on("connect", () => {});
+  connection.on("ready", () => {
+    logger.info("Redis connected successfully", {
+      process: process.env.WORKER_PROCESS === "true" ? "worker" : "web",
+    });
+  });
   connection.on("error", (err) => {
     // Silent catch in test environments
   });

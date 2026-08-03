@@ -45,7 +45,9 @@ SELECT (
   jsonb_populate_record(
     NULL::"TargetSnapshotItem",
     to_jsonb(item) || jsonb_build_object(
-      'id', item."id" || ':pf:' || md5(change.value->>'field' || ':' || change.ordinality::text),
+      'id', item."id" || ':pf:' || md5(
+        (change.value->>'field') || ':' || change.ordinality::text
+      ),
       'targetType', 'PRODUCT',
       'variantId', NULL,
       'inventoryItemId', NULL,
@@ -82,7 +84,11 @@ SELECT (
   jsonb_populate_record(
     NULL::"TargetSnapshotItem",
     to_jsonb(item) || jsonb_build_object(
-      'id', item."id" || ':vf:' || md5(group_row.value->>'variantId' || ':' || change.value->>'field' || ':' || change.ordinality::text),
+      'id', item."id" || ':vf:' || md5(
+        (group_row.value->>'variantId') || ':' ||
+        (change.value->>'field') || ':' ||
+        change.ordinality::text
+      ),
       'targetType', 'VARIANT',
       'variantId', group_row.value->>'variantId',
       'inventoryItemId', NULL,

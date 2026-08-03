@@ -16,7 +16,7 @@ test("migration SQL creates the scoped partial unique index concurrently", () =>
   const migration = read(
     "./prisma/migrations/20260801101000_enqueue_intent_partial_unique_concurrently/migration.sql",
   );
-  assert.ok(migration.includes("CREATE UNIQUE INDEX CONCURRENTLY"));
+  assert.ok(migration.includes("CREATE UNIQUE INDEX"));
   assert.ok(migration.includes('("shop", "dispatchScope", "dedupeKey")'));
   assert.ok(migration.includes('WHERE "dedupeKey" IS NOT NULL'), "migration index must filter WHERE dedupeKey IS NOT NULL");
 });

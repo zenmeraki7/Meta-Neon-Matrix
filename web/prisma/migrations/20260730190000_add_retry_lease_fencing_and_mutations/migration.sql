@@ -11,29 +11,18 @@ CREATE INDEX IF NOT EXISTS "RecurringEditRun_retry_idx"
 ON "RecurringEditRun" ("nextAttemptAt")
 WHERE "status" = 'RETRY_WAIT';
 
--- CreateTable
-CREATE TABLE IF NOT EXISTS "ScheduledExportRun" (
-    "id" TEXT NOT NULL,
-    "shop" TEXT NOT NULL,
-    "scheduledExportId" TEXT NOT NULL,
-    "scheduledFor" TIMESTAMP(3) NOT NULL,
-    "status" TEXT NOT NULL DEFAULT 'PENDING',
-    "executionDedupeKey" TEXT NOT NULL,
-    "retryGeneration" INTEGER NOT NULL DEFAULT 0,
-    "nextAttemptAt" TIMESTAMP(3),
-    "lastDeferralReason" TEXT,
-    "executionOwnerId" TEXT,
-    "executionLeaseUntil" TIMESTAMP(3),
-    "executionFence" BIGINT NOT NULL DEFAULT 0,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "ScheduledExportRun_pkey" PRIMARY KEY ("id")
-);
+-- AlterTable: ScheduledExportRun already exists from the initial migration.
+ALTER TABLE "ScheduledExportRun"
+  ADD COLUMN IF NOT EXISTS "retryGeneration" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS "nextAttemptAt" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "lastDeferralReason" TEXT,
+  ADD COLUMN IF NOT EXISTS "executionOwnerId" TEXT,
+  ADD COLUMN IF NOT EXISTS "executionLeaseUntil" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "executionFence" BIGINT NOT NULL DEFAULT 0;
 
 -- CreateIndex
-CREATE UNIQUE INDEX IF NOT EXISTS "ScheduledExportRun_shop_executionDedupeKey_key"
-ON "ScheduledExportRun" ("shop", "executionDedupeKey");
+CREATE UNIQUE INDEX IF NOT EXISTS "ScheduledExportRun_shop_executionKey_key"
+ON "ScheduledExportRun" ("shop", "executionKey");
 
 -- CreateTable
 CREATE TABLE IF NOT EXISTS "RecurringEditMutation" (

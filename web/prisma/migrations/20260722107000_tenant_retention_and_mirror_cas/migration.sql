@@ -1,5 +1,5 @@
 -- Tenant, retention, export-resume, and mirror-promotion hardening for Neon.
--- CONCURRENTLY statements require execution without an outer transaction.
+-- Statements are kept transaction-safe for Prisma shadow-database replay.
 
 DO $$
 BEGIN
@@ -51,7 +51,7 @@ ALTER TABLE "MirrorMutationJournal" ADD COLUMN IF NOT EXISTS "payloadStorageKey"
 ALTER TABLE "MirrorMutationJournal" ADD COLUMN IF NOT EXISTS "replayedAt" TIMESTAMP(3);
 ALTER TABLE "MirrorMutationJournal" ADD COLUMN IF NOT EXISTS "purgeAfter" TIMESTAMP(3);
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "ExportJob_shop_id_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "ExportJob_shop_id_key"
   ON "ExportJob" ("shop", "id");
 
 ALTER TABLE "Store" ADD CONSTRAINT "Store_activeMirrorBatch_fkey"
@@ -59,30 +59,30 @@ ALTER TABLE "Store" ADD CONSTRAINT "Store_activeMirrorBatch_fkey"
   REFERENCES "MirrorBatch" ("shop", "id") ON DELETE RESTRICT NOT VALID;
 ALTER TABLE "Store" VALIDATE CONSTRAINT "Store_activeMirrorBatch_fkey";
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "MirrorBatch_one_active_product_catalog_per_shop_uq"
+CREATE UNIQUE INDEX IF NOT EXISTS "MirrorBatch_one_active_product_catalog_per_shop_uq"
   ON "MirrorBatch" ("shop")
   WHERE "status" = 'ACTIVE' AND "resourceType" = 'PRODUCT_CATALOG';
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "Product_tags_gin_idx"
+CREATE INDEX IF NOT EXISTS "Product_tags_gin_idx"
   ON "Product" USING GIN ("tags");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "FilterTrack_shop_type_createdAt_idx"
+CREATE INDEX IF NOT EXISTS "FilterTrack_shop_type_createdAt_idx"
   ON "FilterTrack" ("shop", "type", "createdAt");
-DROP INDEX CONCURRENTLY IF EXISTS "FilterTrack_type_idx";
+DROP INDEX IF EXISTS "FilterTrack_type_idx";
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "ProductCodeSnippet_live_title_uq"
+CREATE UNIQUE INDEX IF NOT EXISTS "ProductCodeSnippet_live_title_uq"
   ON "ProductCodeSnippet" ("shop", LOWER(BTRIM("title")))
   WHERE "isDeleted" = false;
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "RecurringEdit_active_due_idx"
+CREATE INDEX IF NOT EXISTS "RecurringEdit_active_due_idx"
   ON "RecurringEdit" ("nextRunAt", "id")
   WHERE "status" = 'ACTIVE' AND "isDeleted" = false AND "nextRunAt" IS NOT NULL;
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "ScheduledExport_active_due_idx"
+CREATE INDEX IF NOT EXISTS "ScheduledExport_active_due_idx"
   ON "ScheduledExport" ("nextRunAt", "id")
   WHERE "status" = 'ACTIVE' AND "isDeleted" = false AND "nextRunAt" IS NOT NULL;
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "AutomaticProductRule_active_due_idx"
+CREATE INDEX IF NOT EXISTS "AutomaticProductRule_active_due_idx"
   ON "AutomaticProductRule" ("nextRunAt", "id")
   WHERE "status" = 'ACTIVE' AND "isDeleted" = false AND "nextRunAt" IS NOT NULL;
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "ProductCodeSnippet_live_updated_idx"
+CREATE INDEX IF NOT EXISTS "ProductCodeSnippet_live_updated_idx"
   ON "ProductCodeSnippet" ("shop", "updatedAt", "id")
   WHERE "isDeleted" = false;
 
@@ -99,22 +99,22 @@ CREATE TABLE IF NOT EXISTS "ExportJobCheckpoint" (
   CONSTRAINT "ExportJobCheckpoint_exportJob_fkey"
     FOREIGN KEY ("shop", "exportJobId") REFERENCES "ExportJob" ("shop", "id") ON DELETE CASCADE
 );
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "ExportJobCheckpoint_shop_exportJobId_status_ordinal_idx"
+CREATE INDEX IF NOT EXISTS "ExportJobCheckpoint_shop_exportJobId_status_ordinal_idx"
   ON "ExportJobCheckpoint" ("shop", "exportJobId", "status", "ordinal");
 
 ALTER TABLE "ScheduledExportRun" ADD CONSTRAINT "ScheduledExportRun_shop_exportJobId_fkey"
   FOREIGN KEY ("shop", "exportJobId") REFERENCES "ExportJob" ("shop", "id") ON DELETE RESTRICT NOT VALID;
 ALTER TABLE "ScheduledExportRun" VALIDATE CONSTRAINT "ScheduledExportRun_shop_exportJobId_fkey";
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "SpreadsheetFile_expiresAt_id_idx"
+CREATE INDEX IF NOT EXISTS "SpreadsheetFile_expiresAt_id_idx"
   ON "SpreadsheetFile" ("expiresAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "ExportHistory_expiresAt_id_idx"
+CREATE INDEX IF NOT EXISTS "ExportHistory_expiresAt_id_idx"
   ON "ExportHistory" ("expiresAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "ExportJob_expiresAt_id_idx"
+CREATE INDEX IF NOT EXISTS "ExportJob_expiresAt_id_idx"
   ON "ExportJob" ("expiresAt", "id");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "MirrorMutationJournal_createdAt_idx"
+CREATE INDEX IF NOT EXISTS "MirrorMutationJournal_createdAt_idx"
   ON "MirrorMutationJournal" ("createdAt");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "MirrorMutationJournal_purgeAfter_sequence_idx"
+CREATE INDEX IF NOT EXISTS "MirrorMutationJournal_purgeAfter_sequence_idx"
   ON "MirrorMutationJournal" ("purgeAfter", "sequence");
 
 -- Stable state invariants. NOT VALID minimizes lock duration before validation.

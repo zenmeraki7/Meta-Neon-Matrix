@@ -10,7 +10,7 @@ test("enqueue intents use scoped partial uniqueness and fenced claims", () => {
   const migration = read("web/prisma/migrations/20260801101000_enqueue_intent_partial_unique_concurrently/migration.sql");
   assert.match(schema, /dispatchScope\s+String/);
   assert.doesNotMatch(schema, /@@unique\(\[shop, dispatchDedupeKey\]/);
-  assert.match(migration, /CREATE UNIQUE INDEX CONCURRENTLY/);
+  assert.match(migration, /CREATE UNIQUE INDEX/);
   assert.match(migration, /WHERE "dedupeKey" IS NOT NULL/);
   assert.match(service, /createMany\([\s\S]*skipDuplicates: true/);
   assert.match(service, /FOR UPDATE SKIP LOCKED/);
@@ -43,7 +43,7 @@ test("mirror activation is CAS fenced and database-enforced", () => {
   assert.match(repository, /queueRoutingKey: "MIRROR_CLEANUP"/);
   assert.match(triggerMigration, /DEFERRABLE INITIALLY DEFERRED/);
   assert.match(triggerMigration, /COLLECTION_CATALOG/);
-  assert.match(indexMigration, /CREATE UNIQUE INDEX CONCURRENTLY "MirrorBatch_one_active_per_shop_resource_uq"/);
+  assert.match(indexMigration, /CREATE UNIQUE INDEX "MirrorBatch_one_active_per_shop_resource_uq"/);
 });
 
 test("merchant relations and mirror rows carry tenant and source authority", () => {

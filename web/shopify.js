@@ -47,6 +47,7 @@ if (shopifyApp && PostgreSQLSessionStorage && process.env.DATABASE_URL) {
         billing: billingConfig,
       },
       auth: { path: "/api/auth", callbackPath: "/api/auth/callback", isOnline: false },
+      webhooks: { path: "/api/webhooks" },
       sessionStorage,
     });
   } catch {

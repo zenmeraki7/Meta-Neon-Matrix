@@ -216,7 +216,7 @@ export const buildApp = (_server, io) => {
 
   const rawIndex = readFileSync(join(STATIC_PATH, "index.html"), "utf-8");
   const indexHTML = rawIndex.replace(
-    "%VITE_SHOPIFY_API_KEY%",
+    "__SHOPIFY_API_KEY__",
     process.env.SHOPIFY_API_KEY,
   );
 

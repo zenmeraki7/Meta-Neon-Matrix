@@ -1,4 +1,4 @@
-﻿-- Add stateVersion column to EditHistory and ExportJob
+-- Add stateVersion column to EditHistory and ExportJob
 ALTER TABLE "EditHistory" ADD COLUMN IF NOT EXISTS "stateVersion" INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE "ExportJob"   ADD COLUMN IF NOT EXISTS "stateVersion" INTEGER NOT NULL DEFAULT 0;
 
@@ -20,5 +20,5 @@ CREATE TABLE IF NOT EXISTS "IdempotencyRecord" (
   CONSTRAINT "IdempotencyRecord_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "IdempotencyRecord_shop_scope_key_key" ON "IdempotencyRecord"("shop", "scope", "key");
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "IdempotencyRecord_state_lockedUntil_idx" ON "IdempotencyRecord"("state", "lockedUntil");
+CREATE UNIQUE INDEX IF NOT EXISTS "IdempotencyRecord_shop_scope_key_key" ON "IdempotencyRecord"("shop", "scope", "key");
+CREATE INDEX IF NOT EXISTS "IdempotencyRecord_state_lockedUntil_idx" ON "IdempotencyRecord"("state", "lockedUntil");

@@ -40,3 +40,9 @@ WHERE "status" IN (
   'UNDO_PENDING',
   'UNDO_EXECUTING'
 );
+
+-- Commit this enum addition before the next migration uses RETRY_WAIT in a
+-- partial-index predicate. PostgreSQL cannot use a newly added enum value in
+-- the same transaction in which it was introduced.
+ALTER TYPE "RecurringEditRunStatus" ADD VALUE IF NOT EXISTS 'RETRY_WAIT';
+ALTER TYPE "ScheduledExportRunStatus" ADD VALUE IF NOT EXISTS 'RETRY_WAIT';
