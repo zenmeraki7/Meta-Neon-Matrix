@@ -1,22 +1,27 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "8080a194096cb602f516d4bb1841df93"
-name = "test-meta-new"
-application_url = "https://winners-decimal-heath-imposed.trycloudflare.com"
+client_id = "6f9d8710bcea15a9a7814c24bb5404be"
+name = "new"
+application_url = "https://lecture-options-demonstrates-camcorder.trycloudflare.com"
 embedded = true
-
-[build]
-automatically_update_urls_on_dev = true
-
-[webhooks]
-api_version = "2026-07"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_locations,read_products,write_products"
+scopes = "read_inventory,read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://winners-decimal-heath-imposed.trycloudflare.com/auth/callback",
-  "https://winners-decimal-heath-imposed.trycloudflare.com/auth/shopify/callback"
+  "https://lecture-options-demonstrates-camcorder.trycloudflare.com/auth/callback",
+  "https://lecture-options-demonstrates-camcorder.trycloudflare.com/auth/shopify/callback",
+  "https://lecture-options-demonstrates-camcorder.trycloudflare.com/api/auth/callback"
 ]
+
+[webhooks]
+api_version = "2026-01"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/bulk-operations-finish"
+  topics = [ "bulk_operations/finish" ]
+
+[build]
+automatically_update_urls_on_dev = true
