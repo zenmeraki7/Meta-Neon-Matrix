@@ -2,7 +2,7 @@
 
 client_id = "8080a194096cb602f516d4bb1841df93"
 name = "test-meta-new"
-application_url = "https://engineers-ntsc-cams-subjects.trycloudflare.com"
+application_url = "https://winners-decimal-heath-imposed.trycloudflare.com"
 embedded = true
 
 [build]
@@ -17,6 +17,6 @@ scopes = "read_locations,read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://engineers-ntsc-cams-subjects.trycloudflare.com/auth/callback",
-  "https://engineers-ntsc-cams-subjects.trycloudflare.com/auth/shopify/callback"
+  "https://winners-decimal-heath-imposed.trycloudflare.com/auth/callback",
+  "https://winners-decimal-heath-imposed.trycloudflare.com/auth/shopify/callback"
 ]
