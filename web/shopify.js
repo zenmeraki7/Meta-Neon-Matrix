@@ -89,3 +89,4 @@ const shopify = shopifyApp({
 });
 
 export default shopify;
+
