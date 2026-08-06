@@ -93,6 +93,70 @@ export async function findDistinctVariantFieldValues({
   });
 }
 
+export async function findDistinctProductGoogleShoppingFieldValues({
+  shop,
+  field,
+  mirrorBatchId = null,
+  search = "",
+  take = 20,
+}) {
+  return prisma.productGoogleShopping.findMany({
+    where: {
+      shop,
+      ...(mirrorBatchId ? { mirrorBatchId } : {}),
+      NOT: [{ [field]: null }, { [field]: "" }],
+      ...(search
+        ? {
+            [field]: {
+              contains: search,
+              mode: "insensitive",
+            },
+          }
+        : {}),
+    },
+    select: {
+      [field]: true,
+    },
+    distinct: [field],
+    orderBy: {
+      [field]: "asc",
+    },
+    take,
+  });
+}
+
+export async function findDistinctProductCategoryFieldValues({
+  shop,
+  field,
+  mirrorBatchId = null,
+  search = "",
+  take = 20,
+}) {
+  return prisma.productCategory.findMany({
+    where: {
+      shop,
+      ...(mirrorBatchId ? { mirrorBatchId } : {}),
+      NOT: [{ [field]: null }, { [field]: "" }],
+      ...(search
+        ? {
+            [field]: {
+              contains: search,
+              mode: "insensitive",
+            },
+          }
+        : {}),
+    },
+    select: {
+      [field]: true,
+    },
+    distinct: [field],
+    orderBy: {
+      [field]: "asc",
+    },
+    take,
+  });
+}
+
 export async function findDistinctCollectionTitles({
   shop,
   mirrorBatchId = null,

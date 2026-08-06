@@ -1,5 +1,6 @@
 import { prisma } from "../../config/database.js";
 import { clearKeyCaches } from "../../utils/cacheUtils.js";
+import { splitProductData } from "../../utils/webhookTransformers.js";
 import {
   createMirrorBatchId,
   markFullSyncStarted,
@@ -97,9 +98,40 @@ export async function insertProductMirrorBatch({
   syncBatchId,
 }) {
   if (productRows.length > 0) {
-    await prisma.product.createMany({
-      data: productRows.map((row) => ({ ...row, mirrorBatchId: syncBatchId })),
-      skipDuplicates: true,
+    const splitRows = productRows.map((row) => {
+      const { core, googleShopping, category } = splitProductData(row);
+      return {
+        core: { ...core, mirrorBatchId: syncBatchId },
+        googleShopping: {
+          ...googleShopping,
+          shop: row.shop,
+          productId: row.id,
+          mirrorBatchId: syncBatchId,
+        },
+        category: {
+          ...category,
+          shop: row.shop,
+          productId: row.id,
+          mirrorBatchId: syncBatchId,
+        },
+      };
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.product.createMany({
+        data: splitRows.map((r) => r.core),
+        skipDuplicates: true,
+      });
+
+      await tx.productGoogleShopping.createMany({
+        data: splitRows.map((r) => r.googleShopping),
+        skipDuplicates: true,
+      });
+
+      await tx.productCategory.createMany({
+        data: splitRows.map((r) => r.category),
+        skipDuplicates: true,
+      });
     });
   }
 

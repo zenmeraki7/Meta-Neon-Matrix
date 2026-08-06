@@ -58,13 +58,21 @@ function isVariantLevelField(field) {
 }
 
 function buildProductInclude(fields = []) {
+  const include = {};
+  
   if (fields.some((field) => isVariantLevelField(field) || OPTION_NAME_FIELDS.has(field))) {
-    return {
-      variants: true,
-    };
+    include.variants = true;
   }
-
-  return undefined;
+  
+  if (fields.some((field) => field?.startsWith('googleShopping'))) {
+    include.googleShopping = true;
+  }
+  
+  if (fields.some((field) => field?.startsWith('category') && field !== 'categoryName')) {
+    include.category = true;
+  }
+  
+  return Object.keys(include).length > 0 ? include : undefined;
 }
 
 function normalizeField(field) {
@@ -718,13 +726,15 @@ export default class ProductBulkService {
 
 
       // In trackEditProducts
-      const include = isVariant
+      const baseInclude = buildProductInclude([field]);
+      const include = baseInclude?.variants
         ? {
-          variants: target.mirrorBatchId
-            ? { where: { mirrorBatchId: target.mirrorBatchId } }
-            : true,
-        }
-        : undefined;
+            ...baseInclude,
+            variants: target.mirrorBatchId
+              ? { where: { mirrorBatchId: target.mirrorBatchId } }
+              : true,
+          }
+        : baseInclude;
       const productIds = target.sampleProducts.map((product) => product.id);
       let products = await prisma.product.findMany({
         where: {

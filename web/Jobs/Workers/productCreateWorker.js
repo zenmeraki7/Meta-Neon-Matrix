@@ -7,6 +7,7 @@ import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import {
   extractVariantsForPrisma,
   transformWebhookPayload,
+  splitProductData,
 } from "../../utils/webhookTransformers.js";
 import { enqueueAutomaticProductRuleSignalJob } from "../../services/automaticProductRuleExecutionService.js";
 import { prisma } from "../../config/database.js";
@@ -59,12 +60,32 @@ const productCreateWorker = new Worker(
           });
         }
 
+        const { core, googleShopping, category } = splitProductData(product);
+
         await tx.product.create({
           data: {
             shop,
             id,
             mirrorBatchId: activeMirrorBatchId || "legacy",
-            ...product,
+            ...core,
+          },
+        });
+
+        await tx.productGoogleShopping.create({
+          data: {
+            shop,
+            productId: id,
+            mirrorBatchId: activeMirrorBatchId || "legacy",
+            ...googleShopping,
+          },
+        });
+
+        await tx.productCategory.create({
+          data: {
+            shop,
+            productId: id,
+            mirrorBatchId: activeMirrorBatchId || "legacy",
+            ...category,
           },
         });
 

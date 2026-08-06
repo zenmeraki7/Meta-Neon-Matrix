@@ -2,7 +2,7 @@
 
 client_id = "8080a194096cb602f516d4bb1841df93"
 name = "test-meta-new"
-application_url = "https://background-pattern-guidance-subscription.trycloudflare.com"
+application_url = "https://functioning-tribes-content-interaction.trycloudflare.com"
 embedded = true
 
 [webhooks]
@@ -14,8 +14,8 @@ scopes = "read_locations,read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://background-pattern-guidance-subscription.trycloudflare.com/auth/callback",
-  "https://background-pattern-guidance-subscription.trycloudflare.com/auth/shopify/callback"
+  "https://functioning-tribes-content-interaction.trycloudflare.com/auth/callback",
+  "https://functioning-tribes-content-interaction.trycloudflare.com/auth/shopify/callback"
 ]
 
 [build]

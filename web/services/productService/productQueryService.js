@@ -4,6 +4,8 @@ import {
   findDistinctProductFieldValues,
   findDistinctProductTagValues,
   findDistinctVariantFieldValues,
+  findDistinctProductGoogleShoppingFieldValues,
+  findDistinctProductCategoryFieldValues,
 } from "./productQueryRepository.js";
 import {
   getActiveMirrorBatchId,
@@ -20,23 +22,23 @@ const FILTER_VALUE_FIELD_MAP = {
   option_name_2: { source: "product", field: "option2Name" },
   option_name_3: { source: "product", field: "option3Name" },
   collection: { source: "collection", field: "title" },
-  googleShoppingCategory: { source: "product", field: "googleShoppingCategory" },
-  googleShoppingColor: { source: "product", field: "googleShoppingColor" },
-  googleShoppingCustomLabel0: { source: "product", field: "googleShoppingCustomLabel0" },
-  googleShoppingCustomLabel1: { source: "product", field: "googleShoppingCustomLabel1" },
-  googleShoppingCustomLabel2: { source: "product", field: "googleShoppingCustomLabel2" },
-  googleShoppingCustomLabel3: { source: "product", field: "googleShoppingCustomLabel3" },
-  googleShoppingCustomLabel4: { source: "product", field: "googleShoppingCustomLabel4" },
-  googleShoppingMpn: { source: "product", field: "googleShoppingMpn" },
-  googleShoppingMaterial: { source: "product", field: "googleShoppingMaterial" },
-  googleShoppingSize: { source: "product", field: "googleShoppingSize" },
-  categoryAgeGroup: { source: "product", field: "categoryAgeGroup", splitValues: true },
-  categoryColor: { source: "product", field: "categoryColor", splitValues: true },
-  categoryFabric: { source: "product", field: "categoryFabric", splitValues: true },
-  categoryFit: { source: "product", field: "categoryFit", splitValues: true },
-  categorySize: { source: "product", field: "categorySize", splitValues: true },
-  categoryTargetGender: { source: "product", field: "categoryTargetGender", splitValues: true },
-  categoryWaistRise: { source: "product", field: "categoryWaistRise", splitValues: true },
+  googleShoppingCategory: { source: "productGoogleShopping", field: "googleShoppingCategory" },
+  googleShoppingColor: { source: "productGoogleShopping", field: "googleShoppingColor" },
+  googleShoppingCustomLabel0: { source: "productGoogleShopping", field: "googleShoppingCustomLabel0" },
+  googleShoppingCustomLabel1: { source: "productGoogleShopping", field: "googleShoppingCustomLabel1" },
+  googleShoppingCustomLabel2: { source: "productGoogleShopping", field: "googleShoppingCustomLabel2" },
+  googleShoppingCustomLabel3: { source: "productGoogleShopping", field: "googleShoppingCustomLabel3" },
+  googleShoppingCustomLabel4: { source: "productGoogleShopping", field: "googleShoppingCustomLabel4" },
+  googleShoppingMpn: { source: "productGoogleShopping", field: "googleShoppingMpn" },
+  googleShoppingMaterial: { source: "productGoogleShopping", field: "googleShoppingMaterial" },
+  googleShoppingSize: { source: "productGoogleShopping", field: "googleShoppingSize" },
+  categoryAgeGroup: { source: "productCategory", field: "categoryAgeGroup", splitValues: true },
+  categoryColor: { source: "productCategory", field: "categoryColor", splitValues: true },
+  categoryFabric: { source: "productCategory", field: "categoryFabric", splitValues: true },
+  categoryFit: { source: "productCategory", field: "categoryFit", splitValues: true },
+  categorySize: { source: "productCategory", field: "categorySize", splitValues: true },
+  categoryTargetGender: { source: "productCategory", field: "categoryTargetGender", splitValues: true },
+  categoryWaistRise: { source: "productCategory", field: "categoryWaistRise", splitValues: true },
   option_value_1: { source: "variant", field: "option1Value" },
   option_value_2: { source: "variant", field: "option2Value" },
   option_value_3: { source: "variant", field: "option3Value" },
@@ -130,6 +132,22 @@ export async function getDistinctProductFilterValues({
     });
   } else if (fieldConfig.source === "variant") {
     rows = await findDistinctVariantFieldValues({
+      shop,
+      field: fieldConfig.field,
+      mirrorBatchId,
+      search,
+      take,
+    });
+  } else if (fieldConfig.source === "productGoogleShopping") {
+    rows = await findDistinctProductGoogleShoppingFieldValues({
+      shop,
+      field: fieldConfig.field,
+      mirrorBatchId,
+      search,
+      take,
+    });
+  } else if (fieldConfig.source === "productCategory") {
+    rows = await findDistinctProductCategoryFieldValues({
       shop,
       field: fieldConfig.field,
       mirrorBatchId,

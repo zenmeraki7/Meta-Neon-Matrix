@@ -9,20 +9,20 @@ datasource db {
 }
 
 model Product {
-  shop                        String
-  id                          String
-  mirrorBatchId               String
-  title                       String
-  handle                      String?
-  status                      String
-  productType                 String?
-  vendor                      String?
-  tags                        String[]
-  templateSuffix              String?
+  shop           String
+  id             String
+  mirrorBatchId  String
+  title          String
+  handle         String?
+  status         String
+  productType    String?
+  vendor         String?
+  tags           String[]
+  templateSuffix String?
 
   // split raw html from filterable text
-  descriptionHtml             String?
-  descriptionText             String?
+  descriptionHtml String?
+  descriptionText String?
 
   createdAt                   DateTime?
   updatedAt                   DateTime?
@@ -32,30 +32,8 @@ model Product {
   totalInventory              Int?
   categoryId                  String?
   categoryName                String?
-  googleShoppingEnabled       Boolean?
-  googleShoppingAgeGroup      String?
-  googleShoppingCategory      String?
-  googleShoppingColor         String?
-  googleShoppingCondition     String?
-  googleShoppingCustomLabel0  String?
-  googleShoppingCustomLabel1  String?
-  googleShoppingCustomLabel2  String?
-  googleShoppingCustomLabel3  String?
-  googleShoppingCustomLabel4  String?
-  googleShoppingCustomProduct Boolean?
-  googleShoppingGender        String?
-  googleShoppingMpn           String?
-  googleShoppingMaterial      String?
-  googleShoppingSize          String?
-  googleShoppingSizeSystem    String?
-  googleShoppingSizeType      String?
-  categoryAgeGroup            String?
-  categoryColor               String?
-  categoryFabric              String?
-  categoryFit                 String?
-  categorySize                String?
-  categoryTargetGender        String?
-  categoryWaistRise           String?
+  googleShopping ProductGoogleShopping?
+  category       ProductCategory?
   featuredImageUrl            String?
   featuredImageAltText        String?
   optionsJson                 Json?
@@ -82,17 +60,9 @@ model Product {
   @@index([shop, updatedAt])
   @@index([shop, publishedAt])
   @@index([shop, categoryName])
-  @@index([shop, googleShoppingEnabled])
-  @@index([shop, googleShoppingCategory])
-  @@index([shop, googleShoppingCondition])
-  @@index([shop, googleShoppingGender])
-  @@index([shop, googleShoppingAgeGroup])
-  @@index([shop, categoryColor])
-  @@index([shop, categorySize])
-  @@index([shop, categoryTargetGender])
   @@index([shop, templateSuffix])
   @@index([shop, option1Name])
-  @@index([shop, option2Name])
+  @@index([shop, option2Name]) 
   @@index([shop, option3Name])
   @@index([shop, variantCount])
   @@index([shop, visibleOnlineStore])
@@ -100,30 +70,12 @@ model Product {
   @@index([shop, lastSourceEventAt])
   @@index([shop, lastSourceKind])
   @@index([shop, lastSourceUpdatedAt])
-  @@index([shop, mirrorBatchId, categoryAgeGroup])
-  @@index([shop, mirrorBatchId, categoryColor])
-  @@index([shop, mirrorBatchId, categoryFabric])
-  @@index([shop, mirrorBatchId, categoryFit])
   @@index([shop, mirrorBatchId, categoryName])
-  @@index([shop, mirrorBatchId, categorySize])
-  @@index([shop, mirrorBatchId, categoryTargetGender])
-  @@index([shop, mirrorBatchId, categoryWaistRise])
-  @@index([shop, mirrorBatchId, googleShoppingCategory])
-  @@index([shop, mirrorBatchId, googleShoppingColor])
-  @@index([shop, mirrorBatchId, googleShoppingCustomLabel0])
-  @@index([shop, mirrorBatchId, googleShoppingCustomLabel1])
-  @@index([shop, mirrorBatchId, googleShoppingCustomLabel2])
-  @@index([shop, mirrorBatchId, googleShoppingCustomLabel3])
-  @@index([shop, mirrorBatchId, googleShoppingCustomLabel4])
-  @@index([shop, mirrorBatchId, googleShoppingMaterial])
-  @@index([shop, mirrorBatchId, googleShoppingMpn])
-  @@index([shop, mirrorBatchId, googleShoppingSize])
   @@index([shop, mirrorBatchId, option1Name])
   @@index([shop, mirrorBatchId, option2Name])
   @@index([shop, mirrorBatchId, option3Name])
   @@index([shop, mirrorBatchId, productType])
   @@index([shop, mirrorBatchId, vendor])
-
   // add this because search/filter now uses descriptionText
   @@index([shop, mirrorBatchId, descriptionText])
 }
@@ -567,8 +519,8 @@ model ExportHistory {
   scheduledTask String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  @@unique([scheduledTask])
 
+  @@unique([scheduledTask])
   @@index([shop, createdAt])
   @@index([shop, status])
   @@index([shop, isFavourite])
@@ -845,42 +797,6 @@ model MirrorReconcileSignal {
   @@index([status, updatedAt])
 }
 
-model OperationFingerprint {
-  id            String   @id
-  shop          String
-  operationType String
-  fingerprint   String
-  resourceType  String
-  resourceId    String?
-  status        String   @default("RESERVED")
-  lastError     String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @default(now())
-
-  @@unique([shop, operationType, fingerprint])
-  @@index([resourceType, resourceId], map: "OperationFingerprint_resource_idx")
-  @@index([shop, status, createdAt])
-}
-
-model ProductTombstone {
-  id               String    @id
-  shop             String
-  productId        String
-  sourceUpdatedAt  DateTime?
-  sourceEventAt    DateTime?
-  deletedAt        DateTime?
-  sourceKind       String?
-  lastReconciledAt DateTime?
-  purgeAfter       DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @default(now())
-
-  @@unique([shop, productId])
-  @@index([shop, deletedAt])
-  @@index([shop, purgeAfter])
-  @@index([shop, updatedAt])
-}
-
 model WebhookDelivery {
   id           String    @id
   topic        String
@@ -1046,4 +962,75 @@ enum ScheduledExportRunStatus {
 enum ExportJobTriggerType {
   MANUAL
   SCHEDULED
+}
+
+model ProductGoogleShopping {
+  shop                        String
+  productId                   String
+  mirrorBatchId               String
+  googleShoppingEnabled       Boolean?
+  googleShoppingAgeGroup      String?
+  googleShoppingCategory      String?
+  googleShoppingColor         String?
+  googleShoppingCondition     String?
+  googleShoppingCustomLabel0  String?
+  googleShoppingCustomLabel1  String?
+  googleShoppingCustomLabel2  String?
+  googleShoppingCustomLabel3  String?
+  googleShoppingCustomLabel4  String?
+  googleShoppingCustomProduct Boolean?
+  googleShoppingGender        String?
+  googleShoppingMpn           String?
+  googleShoppingMaterial      String?
+  googleShoppingSize          String?
+  googleShoppingSizeSystem    String?
+  googleShoppingSizeType      String?
+
+  product Product @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+
+  @@id([shop, productId, mirrorBatchId])
+  @@index([shop, mirrorBatchId])
+  @@index([shop, googleShoppingEnabled])
+  @@index([shop, googleShoppingCategory])
+  @@index([shop, googleShoppingCondition])
+  @@index([shop, googleShoppingGender])
+  @@index([shop, googleShoppingAgeGroup])
+  @@index([shop, mirrorBatchId, googleShoppingCategory])
+  @@index([shop, mirrorBatchId, googleShoppingColor])
+  @@index([shop, mirrorBatchId, googleShoppingCustomLabel0], map: "idx_pgs_shop_mb_label0")
+  @@index([shop, mirrorBatchId, googleShoppingCustomLabel1], map: "idx_pgs_shop_mb_label1")
+  @@index([shop, mirrorBatchId, googleShoppingCustomLabel2], map: "idx_pgs_shop_mb_label2")
+  @@index([shop, mirrorBatchId, googleShoppingCustomLabel3], map: "idx_pgs_shop_mb_label3")
+  @@index([shop, mirrorBatchId, googleShoppingCustomLabel4], map: "idx_pgs_shop_mb_label4")
+  @@index([shop, mirrorBatchId, googleShoppingMaterial])
+  @@index([shop, mirrorBatchId, googleShoppingMpn])
+  @@index([shop, mirrorBatchId, googleShoppingSize])
+}
+
+model ProductCategory {
+  shop                 String
+  productId            String
+  mirrorBatchId        String
+  categoryAgeGroup     String?
+  categoryColor        String?
+  categoryFabric       String?
+  categoryFit          String?
+  categorySize         String?
+  categoryTargetGender String?
+  categoryWaistRise    String?
+
+  product Product @relation(fields: [shop, productId, mirrorBatchId], references: [shop, id, mirrorBatchId], onDelete: Cascade)
+
+  @@id([shop, productId, mirrorBatchId])
+  @@index([shop, mirrorBatchId])
+  @@index([shop, categoryColor])
+  @@index([shop, categorySize])
+  @@index([shop, categoryTargetGender])
+  @@index([shop, mirrorBatchId, categoryAgeGroup])
+  @@index([shop, mirrorBatchId, categoryColor])
+  @@index([shop, mirrorBatchId, categoryFabric])
+  @@index([shop, mirrorBatchId, categoryFit])
+  @@index([shop, mirrorBatchId, categorySize])
+  @@index([shop, mirrorBatchId, categoryTargetGender])
+  @@index([shop, mirrorBatchId, categoryWaistRise])
 }

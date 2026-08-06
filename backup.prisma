@@ -845,41 +845,6 @@ model MirrorReconcileSignal {
   @@index([status, updatedAt])
 }
 
-model OperationFingerprint {
-  id            String   @id
-  shop          String
-  operationType String
-  fingerprint   String
-  resourceType  String
-  resourceId    String?
-  status        String   @default("RESERVED")
-  lastError     String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @default(now())
-
-  @@unique([shop, operationType, fingerprint])
-  @@index([resourceType, resourceId], map: "OperationFingerprint_resource_idx")
-  @@index([shop, status, createdAt])
-}
-
-model ProductTombstone {
-  id               String    @id
-  shop             String
-  productId        String
-  sourceUpdatedAt  DateTime?
-  sourceEventAt    DateTime?
-  deletedAt        DateTime?
-  sourceKind       String?
-  lastReconciledAt DateTime?
-  purgeAfter       DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @default(now())
-
-  @@unique([shop, productId])
-  @@index([shop, deletedAt])
-  @@index([shop, purgeAfter])
-  @@index([shop, updatedAt])
-}
 
 model WebhookDelivery {
   id           String    @id

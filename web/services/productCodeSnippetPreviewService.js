@@ -33,6 +33,8 @@ export async function previewProductCodeSnippet({
     },
     include: {
       variants: true,
+      googleShopping: true,
+      category: true,
     },
   });
 

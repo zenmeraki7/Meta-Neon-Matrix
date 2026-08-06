@@ -31,7 +31,15 @@ function buildProductInclude(actions = []) {
     ].includes(action?.field),
   );
 
-  return needsVariants ? { variants: true } : undefined;
+  const needsGoogleShopping = actions.some((action) => action?.field?.startsWith('googleShopping'));
+  const needsCategory = actions.some((action) => action?.field?.startsWith('category') && action?.field !== 'categoryName');
+
+  const include = {};
+  if (needsVariants) include.variants = true;
+  if (needsGoogleShopping) include.googleShopping = true;
+  if (needsCategory) include.category = true;
+
+  return Object.keys(include).length > 0 ? include : undefined;
 }
 
 function buildBaseWhere(where, cursorId) {

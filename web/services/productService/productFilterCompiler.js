@@ -385,156 +385,170 @@ export function getProductPrismaWhere(filterParams = [], shop) {
 
       case "googleShoppingEnabled":
       case "google_shopping_enabled":
-        AND.push(
-          buildPrismaBooleanFilter("googleShoppingEnabled", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaBooleanFilter("googleShoppingEnabled", operator, value),
+        });
         break;
 
       case "googleShoppingAgeGroup":
       case "google_shopping_age_group":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingAgeGroup", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingAgeGroup", operator, value),
+        });
         break;
 
       case "googleShoppingCategory":
       case "google_shopping_category":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingCategory", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingCategory", operator, value),
+        });
         break;
 
       case "googleShoppingColor":
       case "google_shopping_color":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingColor", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingColor", operator, value),
+        });
         break;
 
       case "googleShoppingCondition":
       case "google_shopping_condition":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingCondition", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingCondition", operator, value),
+        });
         break;
 
       case "googleShoppingCustomLabel0":
       case "google_shopping_custom_label_0":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingCustomLabel0", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingCustomLabel0", operator, value),
+        });
         break;
 
       case "googleShoppingCustomLabel1":
       case "google_shopping_custom_label_1":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingCustomLabel1", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingCustomLabel1", operator, value),
+        });
         break;
 
       case "googleShoppingCustomLabel2":
       case "google_shopping_custom_label_2":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingCustomLabel2", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingCustomLabel2", operator, value),
+        });
         break;
 
       case "googleShoppingCustomLabel3":
       case "google_shopping_custom_label_3":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingCustomLabel3", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingCustomLabel3", operator, value),
+        });
         break;
 
       case "googleShoppingCustomLabel4":
       case "google_shopping_custom_label_4":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingCustomLabel4", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingCustomLabel4", operator, value),
+        });
         break;
 
       case "googleShoppingCustomProduct":
       case "google_shopping_custom_product":
-        AND.push(
-          buildPrismaBooleanFilter("googleShoppingCustomProduct", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaBooleanFilter("googleShoppingCustomProduct", operator, value),
+        });
         break;
 
       case "googleShoppingGender":
       case "google_shopping_gender":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingGender", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingGender", operator, value),
+        });
         break;
 
       case "googleShoppingMpn":
       case "google_shopping_mpn":
-        AND.push(buildPrismaStringFilter("googleShoppingMpn", operator, value));
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingMpn", operator, value),
+        });
         break;
 
       case "googleShoppingMaterial":
       case "google_shopping_material":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingMaterial", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingMaterial", operator, value),
+        });
         break;
 
       case "googleShoppingSize":
       case "google_shopping_size":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingSize", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingSize", operator, value),
+        });
         break;
 
       case "googleShoppingSizeSystem":
       case "google_shopping_size_system":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingSizeSystem", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingSizeSystem", operator, value),
+        });
         break;
 
       case "googleShoppingSizeType":
       case "google_shopping_size_type":
-        AND.push(
-          buildPrismaStringFilter("googleShoppingSizeType", operator, value),
-        );
+        AND.push({
+          googleShopping: buildPrismaStringFilter("googleShoppingSizeType", operator, value),
+        });
         break;
 
       case "categoryAgeGroup":
       case "category_age_group":
-        AND.push(buildPrismaStringFilter("categoryAgeGroup", operator, value));
+        AND.push({
+          category: buildPrismaStringFilter("categoryAgeGroup", operator, value),
+        });
         break;
 
       case "categoryColor":
       case "category_color":
-        AND.push(buildPrismaStringFilter("categoryColor", operator, value));
+        AND.push({
+          category: buildPrismaStringFilter("categoryColor", operator, value),
+        });
         break;
 
       case "categoryFabric":
       case "category_fabric":
-        AND.push(buildPrismaStringFilter("categoryFabric", operator, value));
+        AND.push({
+          category: buildPrismaStringFilter("categoryFabric", operator, value),
+        });
         break;
 
       case "categoryFit":
       case "category_fit":
-        AND.push(buildPrismaStringFilter("categoryFit", operator, value));
+        AND.push({
+          category: buildPrismaStringFilter("categoryFit", operator, value),
+        });
         break;
 
       case "categorySize":
       case "category_size":
-        AND.push(buildPrismaStringFilter("categorySize", operator, value));
+        AND.push({
+          category: buildPrismaStringFilter("categorySize", operator, value),
+        });
         break;
 
       case "categoryTargetGender":
       case "category_target_gender":
-        AND.push(
-          buildPrismaStringFilter("categoryTargetGender", operator, value),
-        );
+        AND.push({
+          category: buildPrismaStringFilter("categoryTargetGender", operator, value),
+        });
         break;
 
       case "categoryWaistRise":
       case "category_waist_rise":
-        AND.push(buildPrismaStringFilter("categoryWaistRise", operator, value));
+        AND.push({
+          category: buildPrismaStringFilter("categoryWaistRise", operator, value),
+        });
         break;
 
       case "sku":

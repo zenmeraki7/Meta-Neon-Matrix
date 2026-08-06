@@ -6,6 +6,7 @@ import { clearKeyCaches } from "../../utils/cacheUtils.js";
 import {
   extractVariantsForPrisma,
   transformWebhookPayload,
+  splitProductData,
 } from "../../utils/webhookTransformers.js";
 import { enqueueAutomaticProductRuleSignalJob } from "../../services/automaticProductRuleExecutionService.js";
 import { prisma } from "../../config/database.js";
@@ -89,6 +90,8 @@ const productUpdateWorker = new Worker(
         }).catch(() => { });
       }
 
+      const { core, googleShopping, category } = splitProductData(transformedData);
+
       await prisma.$transaction(async (tx) => {
         const updated = await tx.product.updateMany({
           where: {
@@ -96,9 +99,7 @@ const productUpdateWorker = new Worker(
             id,
             mirrorBatchId: activeBatchId,
           },
-          data: {
-            ...transformedData,
-          },
+          data: core,
         });
 
         if (!updated.count) {
@@ -107,10 +108,44 @@ const productUpdateWorker = new Worker(
               shop,
               id,
               mirrorBatchId: activeBatchId,
-              ...transformedData,
+              ...core,
             },
           });
         }
+
+        await tx.productGoogleShopping.upsert({
+          where: {
+            shop_productId_mirrorBatchId: {
+              shop,
+              productId: id,
+              mirrorBatchId: activeBatchId,
+            },
+          },
+          create: {
+            shop,
+            productId: id,
+            mirrorBatchId: activeBatchId,
+            ...googleShopping,
+          },
+          update: googleShopping,
+        });
+
+        await tx.productCategory.upsert({
+          where: {
+            shop_productId_mirrorBatchId: {
+              shop,
+              productId: id,
+              mirrorBatchId: activeBatchId,
+            },
+          },
+          create: {
+            shop,
+            productId: id,
+            mirrorBatchId: activeBatchId,
+            ...category,
+          },
+          update: category,
+        });
 
         // ↓ REPLACE everything below this line inside the transaction
         if (variants && variants.length > 0) {

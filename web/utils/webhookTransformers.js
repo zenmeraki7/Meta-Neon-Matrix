@@ -450,3 +450,52 @@ export const extractVariantsForPrisma = (payload, productId, shop) => {
   option3Value: variant.option3 ?? null,
 }));
 };
+
+export const GOOGLE_SHOPPING_FIELDS = [
+  "googleShoppingEnabled",
+  "googleShoppingAgeGroup",
+  "googleShoppingCategory",
+  "googleShoppingColor",
+  "googleShoppingCondition",
+  "googleShoppingCustomLabel0",
+  "googleShoppingCustomLabel1",
+  "googleShoppingCustomLabel2",
+  "googleShoppingCustomLabel3",
+  "googleShoppingCustomLabel4",
+  "googleShoppingCustomProduct",
+  "googleShoppingGender",
+  "googleShoppingMpn",
+  "googleShoppingMaterial",
+  "googleShoppingSize",
+  "googleShoppingSizeSystem",
+  "googleShoppingSizeType"
+];
+
+export const CATEGORY_FIELDS = [
+  "categoryAgeGroup",
+  "categoryColor",
+  "categoryFabric",
+  "categoryFit",
+  "categorySize",
+  "categoryTargetGender",
+  "categoryWaistRise"
+];
+
+export const splitProductData = (flatProduct) => {
+  const googleShopping = {};
+  const category = {};
+  const core = {};
+
+  for (const [key, value] of Object.entries(flatProduct)) {
+    if (GOOGLE_SHOPPING_FIELDS.includes(key)) {
+      googleShopping[key] = value;
+    } else if (CATEGORY_FIELDS.includes(key)) {
+      category[key] = value;
+    } else {
+      core[key] = value;
+    }
+  }
+
+  return { core, googleShopping, category };
+};
+
